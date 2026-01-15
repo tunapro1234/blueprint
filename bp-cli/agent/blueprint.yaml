@@ -1,0 +1,79 @@
+# bp/agent - Agent Entegrasyonu
+
+_meta:
+  version: "0.1.0"
+  updated: 2025-01-15
+  status: draft
+
+intent: bp implement komutu için agent çağırma ve yönetimi
+
+overview: |
+  Bu paket bp implement komutunun agent ile nasıl iletişim
+  kuracağını tanımlar. Detaylar sonra belirlenecek.
+
+  Sorumluluklar:
+  - Agent seçimi (claude, codex, vs.)
+  - Blueprint'i agent'a iletme
+  - Agent çıktısını parse etme
+  - Hata yönetimi
+
+# =============================================================================
+# API
+# =============================================================================
+
+api:
+  exports:
+    - name: implement_blueprint
+      type: function
+      signature: "(blueprint: Blueprint, message: str | None) -> ImplementResult"
+      desc: Blueprint'i agent ile implement et
+
+    - name: ImplementResult
+      type: dataclass
+      fields:
+        - success: bool
+        - message: str          # Agent tarafından üretilen veya user'dan gelen
+        - changes: list[dict]   # created/modified/deleted files
+        - duration: float
+        - error: str | None
+
+# =============================================================================
+# IMPLEMENTATION
+# =============================================================================
+
+implementation:
+  structure:
+    - __init__.py
+    - runner.py
+    - parser.py
+
+  decisions:
+    - q: Hangi agent desteklenecek?
+      a: TODO - Claude Code, OpenAI Codex, vb.
+
+    - q: Agent'a ne gönderilecek?
+      a: TODO - Blueprint yaml? Sadece implementation bölümü?
+
+    - q: Agent nasıl çağrılacak?
+      a: TODO - subprocess, API, vb.
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+tests:
+  scenarios:
+    - id: successful_implement
+      given: Valid blueprint
+      when: implement_blueprint çağrılır
+      then: ImplementResult(success=True) döner
+
+    - id: agent_timeout
+      given: Agent çok uzun sürüyor
+      when: Timeout aşılır
+      then: ImplementResult(success=False, error="timeout")
+
+  verification:
+    - Agent çağrılabiliyor
+    - Çıktı parse edilebiliyor
+    - Hatalar düzgün handle ediliyor

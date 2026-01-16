@@ -1,0 +1,165 @@
+# =============================================================================
+# YAML PARSER - Blueprint Format Parser
+# =============================================================================
+#
+# Bu modül BLUEPRINT.yaml dosyalarını parse eder.
+# Standart YAML parser kullanmıyoruz çünkü:
+# - Virgüller (,) YAML'da flow sequence/mapping başlatır
+# - İki nokta (:) YAML'da key-value ayırıcı
+# - Köşeli parantezler ([]) YAML'da flow sequence
+# - Süslü parantezler ({}) YAML'da flow mapping
+#
+# Bu karakterler blueprint içeriğinde sık kullanılıyor (type annotations,
+# signatures, örnekler vb.) ve her seferinde quote'lamak pratik değil.
+#
+# Çözüm: Blueprint-specific parser
+# - Indentation-based (Python-style)
+# - Scalar değerlerde özel karakterlere toleranslı
+# - YAML subset - sadece ihtiyacımız olan özellikler
+
+_meta:
+  version: "0.1.0"
+  updated: 2025-01-16
+  status: draft
+
+intent: |
+  BLUEPRINT.yaml dosyaları için özel parser.
+  Standart YAML kullanmıyoruz - kendi parser'ımız var.
+  Blueprint formatının özel ihtiyaçlarına göre tasarlanmıştır.
+
+# =============================================================================
+# API
+# =============================================================================
+
+api:
+  exports:
+    - name: parse
+      signature: "(content: string) -> ParseResult"
+      desc: Blueprint YAML string'i parse eder.
+
+    - name: parse_file
+      signature: "(path: string) -> ParseResult"
+      desc: |
+        Dosyadan okuyup parse eder.
+        Encoding: UTF-8 varsayılır.
+
+    - name: ParseResult
+      fields:
+        - data: map<string, any>      # Parse edilmiş veri
+        - warnings: string[]          # Parse sırasında oluşan uyarılar
+        - error: ParseError?          # Hata detayı (başarısızsa)
+
+    - name: ParseError
+      fields:
+        - line: int                   # Hata satırı (1-indexed)
+        - column: int                 # Hata kolonu (1-indexed)
+        - message: string             # Hata açıklaması
+        - context: string             # Hatanın etrafındaki satırlar
+
+# =============================================================================
+# GRAMMAR
+# =============================================================================
+
+grammar:
+  note: |
+    Blueprint format - YAML-inspired, indentation-based.
+    Her satır ya bir key-value pair ya da bir list item.
+
+  rules:
+    document: |
+      document := line*
+      line := empty | comment | key_value | list_item | continuation
+
+    key_value: |
+      key_value := indent key ":" value?
+      key := identifier | quoted_string
+      value := scalar | block_indicator
+
+      Örnekler:
+        name: Blueprint Parser
+        desc: "Virgül, içeren: değer"
+        complex_key: |
+
+    list_item: |
+      list_item := indent "-" value?
+
+      Örnekler:
+        - item1
+        - "item with: colon"
+        - key: value içeren item
+
+    scalar: |
+      scalar := quoted_string | unquoted_value | multiline
+
+      quoted_string := '"' ... '"' | "'" ... "'"
+      unquoted_value := colon/comma içermeyen text
+      multiline := "|" newline indented_lines
+                 | ">" newline indented_lines
+
+    indent: |
+      indent := space*
+      Indentation seviyesi = space sayısı
+      Tab karakteri 2 space olarak sayılır (ama önerilmez)
+
+  special_handling:
+    type_annotations: |
+      Blueprint'lerde type annotation'lar sık kullanılır:
+        field: type
+        field: type?              # nullable
+        field: type[]             # array
+        field: map<K, V>          # generic map
+
+      Bunlar doğrudan scalar olarak parse edilir, quote gerekmez.
+
+    inline_complex_values: |
+      Bazı field'larda karmaşık değerler olabilir:
+        signature: (ctx: Context) -> Result
+        type: map<string, CommandHandler>
+        example: {key: value, other: 123}
+
+      İlk ":" key-value ayırıcı, geri kalanı value olarak alınır.
+
+# =============================================================================
+# IMPLEMENTATION NOTES
+# =============================================================================
+
+implementation_notes:
+  strategy: |
+    Line-by-line parsing:
+    1. Satır satır oku
+    2. Her satır için indent seviyesini hesapla
+    3. Satırı tokenize et (key, value, list marker, comment)
+    4. Indentation stack ile nested structure oluştur
+    5. Multiline string'leri birleştir
+
+  key_value_parsing: |
+    "key: value" formatında:
+    - İLK ":" karakteri key-value ayırıcı
+    - Key: baştaki boşluklar atılır, ":" a kadar
+    - Value: ":" dan sonraki her şey (trim edilir)
+    - Value içinde ":" olabilir, sorun değil
+
+  edge_cases:
+    - Multiline string içinde indent: Base indent'i çıkar
+    - Empty value: null olarak set et
+    - Duplicate key: Son değeri kullan, warning ver
+    - Tab vs space: Tab'ı 2 space'e çevir, warning ver
+
+  performance: |
+    - Dosyalar küçük (<100KB), optimizasyon gereksiz
+    - Her parse'da yeni state oluştur (stateless)
+
+# =============================================================================
+# DEPENDENCIES
+# =============================================================================
+
+dependencies:
+  internal: []
+  external: []  # Standart YAML library kullanmıyoruz, kendi parser'ımız var
+
+# =============================================================================
+# REFERENCES
+# =============================================================================
+
+implementation: "./BLUEPRINT.spec.yaml"
+tests: "./BLUEPRINT.spec.yaml"

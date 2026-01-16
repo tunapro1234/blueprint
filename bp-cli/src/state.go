@@ -11,42 +11,119 @@ import (
 	"strings"
 )
 
-type State struct {
-	BlueprintHash string
-	Files         map[string]string
+type DepState struct {
+	SnapshotID string
+	APIHash    string
 }
 
-func (b *Blueprint) SaveState() error {
+type State struct {
+	SnapshotID    string
+	BlueprintHash string
+	ImplHash      string
+	Files         map[string]string
+	Deps          map[string]DepState
+}
+
+func (b *Blueprint) ComputeFileHashes() (map[string]string, error) {
 	files, err := b.collectTrackedFiles()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	state := State{Files: map[string]string{}}
-	bpHash, err := HashFile(b.Path)
-	if err != nil {
-		return err
-	}
-	state.BlueprintHash = bpHash
+	hashes := map[string]string{}
 	for rel, abs := range files {
 		h, err := HashFile(abs)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		state.Files[rel] = h
+		hashes[rel] = h
+	}
+	return hashes, nil
+}
+
+func ComputeImplHash(files map[string]string) string {
+	if len(files) == 0 {
+		return HashString("")
+	}
+	keys := make([]string, 0, len(files))
+	for k := range files {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteString(":")
+		b.WriteString(files[k])
+		b.WriteString("\n")
+	}
+	return HashString(b.String())
+}
+
+func ComputeDepsHash(deps map[string]DepState) string {
+	if len(deps) == 0 {
+		return HashString("")
+	}
+	keys := make([]string, 0, len(deps))
+	for k := range deps {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteString(":")
+		b.WriteString(deps[k].SnapshotID)
+		b.WriteString("\n")
+	}
+	return HashString(b.String())
+}
+
+func ComputeSnapshotID(blueprintHash, implHash, depsHash string) string {
+	combined := fmt.Sprintf("%s:%s:%s", blueprintHash, implHash, depsHash)
+	sum := sha256.Sum256([]byte(combined))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func HashString(data string) string {
+	sum := sha256.Sum256([]byte(data))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (b *Blueprint) SaveState(state *State) error {
+	if state == nil {
+		return fmt.Errorf("state is nil")
+	}
+	if state.Files == nil {
+		state.Files = map[string]string{}
+	}
+	if state.Deps == nil {
+		state.Deps = map[string]DepState{}
 	}
 	if err := os.MkdirAll(b.StateDir, 0o755); err != nil {
 		return err
 	}
-	content := marshalState(&state)
+	content := marshalState(state)
 	return os.WriteFile(filepath.Join(b.StateDir, "state.yaml"), []byte(content), 0o644)
 }
 
 func marshalState(state *State) string {
 	var b strings.Builder
-	b.WriteString("blueprint_hash: ")
-	b.WriteString(state.BlueprintHash)
-	b.WriteString("\nfiles:\n")
-	// Sort keys for deterministic output
+	if state.SnapshotID != "" {
+		b.WriteString("snapshot_id: ")
+		b.WriteString(state.SnapshotID)
+		b.WriteString("\n")
+	}
+	if state.BlueprintHash != "" {
+		b.WriteString("blueprint_hash: ")
+		b.WriteString(state.BlueprintHash)
+		b.WriteString("\n")
+	}
+	if state.ImplHash != "" {
+		b.WriteString("impl_hash: ")
+		b.WriteString(state.ImplHash)
+		b.WriteString("\n")
+	}
+	b.WriteString("files:\n")
 	keys := make([]string, 0, len(state.Files))
 	for k := range state.Files {
 		keys = append(keys, k)
@@ -58,6 +135,30 @@ func marshalState(state *State) string {
 		b.WriteString("\": ")
 		b.WriteString(state.Files[k])
 		b.WriteString("\n")
+	}
+	if len(state.Deps) > 0 {
+		b.WriteString("deps:\n")
+		depKeys := make([]string, 0, len(state.Deps))
+		for k := range state.Deps {
+			depKeys = append(depKeys, k)
+		}
+		sort.Strings(depKeys)
+		for _, k := range depKeys {
+			dep := state.Deps[k]
+			b.WriteString("  \"")
+			b.WriteString(k)
+			b.WriteString("\":\n")
+			if dep.SnapshotID != "" {
+				b.WriteString("    snapshot_id: ")
+				b.WriteString(dep.SnapshotID)
+				b.WriteString("\n")
+			}
+			if dep.APIHash != "" {
+				b.WriteString("    api_hash: ")
+				b.WriteString(dep.APIHash)
+				b.WriteString("\n")
+			}
+		}
 	}
 	return b.String()
 }
@@ -74,14 +175,45 @@ func LoadState(statePath string) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &State{Files: map[string]string{}}
+	state := &State{
+		Files: map[string]string{},
+		Deps:  map[string]DepState{},
+	}
+	if hash, ok := parsed["snapshot_id"].(string); ok {
+		state.SnapshotID = hash
+	}
 	if hash, ok := parsed["blueprint_hash"].(string); ok {
 		state.BlueprintHash = hash
 	}
-	if files, ok := parsed["files"].(map[string]interface{}); ok {
-		for k, v := range files {
-			if s, ok := v.(string); ok {
-				state.Files[k] = s
+	if hash, ok := parsed["impl_hash"].(string); ok {
+		state.ImplHash = hash
+	}
+	if filesRaw, ok := parsed["files"]; ok {
+		if filesMap, ok := convertYAML(filesRaw).(map[string]interface{}); ok {
+			for k, v := range filesMap {
+				if s, ok := v.(string); ok {
+					state.Files[k] = s
+				}
+			}
+		}
+	}
+	if depsRaw, ok := parsed["deps"]; ok {
+		if depsMap, ok := convertYAML(depsRaw).(map[string]interface{}); ok {
+			for k, v := range depsMap {
+				sub, ok := convertYAML(v).(map[string]interface{})
+				if !ok {
+					continue
+				}
+				dep := DepState{}
+				if s, ok := sub["snapshot_id"].(string); ok {
+					dep.SnapshotID = s
+				}
+				if s, ok := sub["api_hash"].(string); ok {
+					dep.APIHash = s
+				}
+				if dep.SnapshotID != "" || dep.APIHash != "" {
+					state.Deps[k] = dep
+				}
 			}
 		}
 	}
@@ -94,12 +226,28 @@ func (b *Blueprint) GetChangedFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return changedFilesFromState(b, state)
+}
+
+func HashFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func changedFilesFromState(b *Blueprint, state *State) ([]string, error) {
 	currentFiles, err := b.collectTrackedFiles()
 	if err != nil {
 		return nil, err
 	}
 	changed := []string{}
-
 	for rel, oldHash := range state.Files {
 		abs, ok := currentFiles[rel]
 		if !ok {
@@ -119,28 +267,17 @@ func (b *Blueprint) GetChangedFiles() ([]string, error) {
 			changed = append(changed, "new: "+rel)
 		}
 	}
-	bpHash, err := HashFile(b.Path)
-	if err != nil {
-		return nil, err
-	}
-	if bpHash != state.BlueprintHash {
-		changed = append(changed, "BLUEPRINT.yaml")
+	if state.BlueprintHash != "" {
+		bpHash, err := HashFile(b.Path)
+		if err != nil {
+			return nil, err
+		}
+		if bpHash != state.BlueprintHash {
+			changed = append(changed, "BLUEPRINT.yaml")
+		}
 	}
 	sort.Strings(changed)
 	return changed, nil
-}
-
-func HashFile(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, file); err != nil {
-		return "", err
-	}
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {

@@ -33,6 +33,15 @@ func ShowCommand(ctx CommandContext) CommandResult {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		id = current
+	} else {
+		resolved, err := resolveSnapshotID(bpObj.StateDir, id)
+		if err != nil {
+			if errors.Is(err, bp.ErrNoSnapshot) {
+				return CommandResult{ExitCode: 1, Output: "No snapshot history", Errors: []string{"No snapshot history"}}
+			}
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		id = resolved
 	}
 	content, err := readBlueprintContent(bpObj, id)
 	if err != nil {

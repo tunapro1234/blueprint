@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,35 +34,106 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 		out := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), strings.Join(validation.Errors, "; "))
 		return CommandResult{ExitCode: 2, Output: out, Errors: validation.Errors}
 	}
-	if len(validation.Warnings) > 0 {
-		_ = validation.Warnings
+
+	depsState, depWarnings, err := bpObj.DependencyState()
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+
 	if !skipTests {
 		if err := runVerificationCommands(bpObj); err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			return CommandResult{ExitCode: 1, Output: "Tests failed", Errors: []string{"Tests failed"}}
 		}
 	}
-	id, err := nextSnapshotID(bpObj.StateDir)
+
+	files, err := bpObj.ComputeFileHashes()
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	finalID, err := createSnapshotDir(bpObj.StateDir, id)
+	blueprintHash, err := bp.HashFile(bpObj.Path)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := copyBlueprintSnapshot(bpObj.Path, snapshotBlueprintPath(bpObj.StateDir, finalID)); err != nil {
+	implHash := bp.ComputeImplHash(files)
+	depsHash := bp.ComputeDepsHash(depsState)
+	snapshotID := bp.ComputeSnapshotID(blueprintHash, implHash, depsHash)
+
+	state := &bp.State{
+		SnapshotID:    snapshotID,
+		BlueprintHash: blueprintHash,
+		ImplHash:      implHash,
+		Files:         files,
+		Deps:          depsState,
+	}
+
+	created, err := ensureSnapshotDir(bpObj.StateDir, snapshotID)
+	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := writeMeta(bpObj.StateDir, finalID, message); err != nil {
+
+	if !created {
+		if err := bpObj.SaveState(state); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := os.WriteFile(filepath.Join(bpObj.StateDir, "current"), []byte(snapshotID), 0o644); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		out := formatSnapshotOutput(depWarnings, "Already exists")
+		return CommandResult{
+			ExitCode: 0,
+			Output:   out,
+			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ImplHash: implHash, DepsHash: depsHash},
+		}
+	}
+
+	if err := copyBlueprintSnapshot(bpObj.Path, snapshotBlueprintPath(bpObj.StateDir, snapshotID)); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := bpObj.SaveState(); err != nil {
+	if err := writeMeta(bpObj.StateDir, snapshotID, message, implHash, depsHash); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := os.WriteFile(filepath.Join(bpObj.StateDir, "current"), []byte(finalID), 0o644); err != nil {
+	if err := bpObj.SaveState(state); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	return CommandResult{ExitCode: 0, Output: fmt.Sprintf("Snapshot #%s created", finalID), Data: SnapshotInfo{ID: finalID, Path: snapshotDir(bpObj.StateDir, finalID)}}
+	if err := os.WriteFile(filepath.Join(bpObj.StateDir, "current"), []byte(snapshotID), 0o644); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	out := formatSnapshotOutput(depWarnings, fmt.Sprintf("Snapshot #%s created", snapshotID))
+	return CommandResult{
+		ExitCode: 0,
+		Output:   out,
+		Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ImplHash: implHash, DepsHash: depsHash},
+	}
+}
+
+func formatSnapshotOutput(warnings []string, main string) string {
+	lines := []string{}
+	for _, w := range warnings {
+		if strings.TrimSpace(w) == "" {
+			continue
+		}
+		lines = append(lines, "⚠ "+w)
+	}
+	if main != "" {
+		lines = append(lines, main)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func ensureSnapshotDir(stateDir, id string) (bool, error) {
+	base := filepath.Join(stateDir, "history")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return false, err
+	}
+	target := filepath.Join(base, id)
+	err := os.Mkdir(target, 0o755)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func runVerificationCommands(bpObj *bp.Blueprint) error {
@@ -130,62 +200,6 @@ func runWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
 	}
 }
 
-func nextSnapshotID(stateDir string) (string, error) {
-	historyDir := filepath.Join(stateDir, "history")
-	entries, err := os.ReadDir(historyDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "0001", nil
-		}
-		return "", err
-	}
-	maxID := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !isSnapshotID(name) {
-			continue
-		}
-		val, _ := strconv.Atoi(name)
-		if val > maxID {
-			maxID = val
-		}
-	}
-	next := maxID + 1
-	if next > 9999 {
-		return "", fmt.Errorf("Snapshot limit exceeded")
-	}
-	return fmt.Sprintf("%04d", next), nil
-}
-
-func createSnapshotDir(stateDir, id string) (string, error) {
-	base := filepath.Join(stateDir, "history")
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return "", err
-	}
-	for i := 0; i < 3; i++ {
-		target := filepath.Join(base, id)
-		err := os.Mkdir(target, 0o755)
-		if err == nil {
-			return id, nil
-		}
-		if os.IsExist(err) {
-			// try next id
-			val, _ := strconv.Atoi(id)
-			val++
-			if val > 9999 {
-				return "", fmt.Errorf("Snapshot limit exceeded")
-			}
-			id = fmt.Sprintf("%04d", val)
-			continue
-		}
-		return "", err
-	}
-	return "", fmt.Errorf("Snapshot ID collision")
-}
-
 func copyBlueprintSnapshot(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
@@ -206,11 +220,13 @@ func copyBlueprintSnapshot(src, dst string) error {
 	return dstFile.Sync()
 }
 
-func writeMeta(stateDir, id string, message any) error {
+func writeMeta(stateDir, id string, message any, implHash, depsHash string) error {
 	meta := bp.HistoryEntry{
 		ID:        id,
 		Timestamp: time.Now().Format("2006-01-02T15:04:05"),
 		Message:   resolveMessage(time.Now().Format("2006-01-02"), message),
+		ImplHash:  implHash,
+		DepsHash:  depsHash,
 	}
 	var b strings.Builder
 	b.WriteString("id: ")
@@ -219,6 +235,10 @@ func writeMeta(stateDir, id string, message any) error {
 	b.WriteString(meta.Timestamp)
 	b.WriteString("\nmessage: ")
 	b.WriteString(meta.Message)
+	b.WriteString("\nimpl_hash: ")
+	b.WriteString(meta.ImplHash)
+	b.WriteString("\ndeps_hash: ")
+	b.WriteString(meta.DepsHash)
 	b.WriteString("\n")
 	metaPath := filepath.Join(stateDir, "history", id, "meta.yaml")
 	return os.WriteFile(metaPath, []byte(b.String()), 0o644)

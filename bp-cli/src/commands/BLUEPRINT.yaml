@@ -37,9 +37,8 @@ api:
           "diff": diff_command,
           "show": show_command,
           "ss": ss_command,
-          # Agentic (devre dışı):
-          # "implement": implement_command,
-          # "fix": fix_command,
+          "implement": implement_command,
+          "work": work_command,
         }
 
     - name: CommandHandler
@@ -65,9 +64,8 @@ api:
         - diff: {id1: string?, id2: string?}
         - show: {id: string?}           # null = son snapshot
         - ss: {message: string?, skip_tests: bool}
-        # Agentic (devre dışı):
-        # - implement: {message: string?, dry_run: bool, force: bool}
-        # - fix: {dry_run: bool}
+        - implement: {recursive: bool, list: bool, done: string?}
+        - work: {session: string, blueprints: bool, status: bool}
 
     - name: CommandResult
       fields:
@@ -85,6 +83,8 @@ api:
         - show: string (blueprint content)
         - ss: SnapshotInfo
         - init: null
+        - implement: WorkSession (--list için WorkSession[])
+        - work: WorkSession
 
     - name: DiffResult
       fields:
@@ -97,11 +97,15 @@ api:
       fields:
         - state: string                 # "fresh" | "stale" | "no_snapshot"
         - changed_files: string[]       # Değişen dosya listesi (stale ise)
+        - changed_deps: string[]        # Değişen dependency'ler
+        - stale_reason: string?         # "files_changed" | "blueprint_changed" | "deps_changed" | "deps_api_changed"
 
     - name: SnapshotInfo
       fields:
-        - id: string                    # "0001", "0002", ...
-        - path: string                  # .blueprint/history/XXXX/
+        - id: string                    # Content hash, örn "a1b2c3d4e5f6"
+        - path: string                  # .blueprint/history/{hash}/
+        - impl_hash: string             # Implementation dosyalarının hash'i
+        - deps_hash: string             # Dependency'lerin hash'i
 
 # =============================================================================
 # DEPENDENCIES

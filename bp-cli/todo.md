@@ -1,29 +1,12 @@
-# todo
+# tood
 
-- [ ] websitesi
-
-- [ ] claude code plugin
-- [ ] codex plugin
-
-- [ ] npm
-- [ ] pip
-
-- [ ] apt
-- [ ] yay
-- [ ] aur
-
-
-# Commands
-- [ ] validate
-- [ ] fix
-- [ ] tree
-- [ ] info
-- [ ] 
+- [ ] api limit 300 lines
+- [ ] spec limit 900 lines
 - [ ] 
 
 
-# Agentic
-- [ ] worker
-- [ ] tester
-- [ ] judge
-
+- [ ] implement snapshot
+- [ ] visualization
+- [ ] 
+- [ ] 
+- [ ] 

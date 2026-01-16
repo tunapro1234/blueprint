@@ -28,9 +28,27 @@ type DiffResult struct {
 type StatusInfo struct {
 	State        string
 	ChangedFiles []string
+	ChangedDeps  []string
+	StaleReason  string
 }
 
 type SnapshotInfo struct {
-	ID   string
-	Path string
+	ID       string
+	Path     string
+	ImplHash string
+	DepsHash string
+}
+
+type WorkSession struct {
+	ID       string
+	Created  string
+	Status   string
+	Packages []WorkPackage
+}
+
+type WorkPackage struct {
+	Path          string
+	WorkPath      string
+	Reason        string
+	BlueprintHash string
 }

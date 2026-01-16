@@ -123,13 +123,119 @@ func readCurrentSnapshotID(stateDir string) (string, error) {
 }
 
 func isSnapshotID(id string) bool {
-	if len(id) != 4 {
+	if len(id) != 12 {
 		return false
 	}
 	for _, r := range id {
-		if r < '0' || r > '9' {
-			return false
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
 		}
+		return false
+	}
+	return true
+}
+
+func resolveSnapshotID(stateDir, input string) (string, error) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		return "", fmt.Errorf("Snapshot #%s not found", input)
+	}
+	if strings.EqualFold(raw, "current") {
+		return "current", nil
+	}
+	id := strings.ToLower(raw)
+	if len(id) < 4 || !isHexString(id) {
+		return "", fmt.Errorf("Snapshot #%s not found", raw)
+	}
+	if isSnapshotID(id) {
+		hasHistory, err := hasSnapshotHistory(stateDir)
+		if err != nil {
+			return "", err
+		}
+		if !hasHistory {
+			return "", bp.ErrNoSnapshot
+		}
+		if _, err := os.Stat(snapshotDir(stateDir, id)); err != nil {
+			if os.IsNotExist(err) {
+				return "", fmt.Errorf("Snapshot #%s not found", raw)
+			}
+			return "", err
+		}
+		return id, nil
+	}
+	matches, err := matchSnapshotPrefix(stateDir, id)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("Snapshot #%s not found", raw)
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("Snapshot #%s is ambiguous", raw)
+	}
+	return matches[0], nil
+}
+
+func matchSnapshotPrefix(stateDir, prefix string) ([]string, error) {
+	historyDir := filepath.Join(stateDir, "history")
+	entries, err := os.ReadDir(historyDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, bp.ErrNoSnapshot
+		}
+		return nil, err
+	}
+	matches := []string{}
+	found := false
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isSnapshotID(name) {
+			continue
+		}
+		found = true
+		if strings.HasPrefix(strings.ToLower(name), prefix) {
+			matches = append(matches, name)
+		}
+	}
+	if !found {
+		return nil, bp.ErrNoSnapshot
+	}
+	sort.Strings(matches)
+	return matches, nil
+}
+
+func hasSnapshotHistory(stateDir string) (bool, error) {
+	historyDir := filepath.Join(stateDir, "history")
+	entries, err := os.ReadDir(historyDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if isSnapshotID(entry.Name()) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isHexString(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
 	}
 	return true
 }

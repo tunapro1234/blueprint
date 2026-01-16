@@ -25,6 +25,8 @@ overview: |
   - bp diff: İki snapshot arasındaki fark
   - bp show: Belirli snapshot'ın blueprint'ini göster
   - bp ss: Snapshot al (testler geçerse kaydet)
+  - bp implement: Worker için iş oturumu başlat
+  - bp work: Aktif work session'ları listele/oku
 
 # =============================================================================
 # API
@@ -56,7 +58,7 @@ api:
           2: Sadece warning
 
       - name: status
-        desc: Kod değişmiş mi kontrolü (son snapshot'a göre)
+        desc: Kod ve dependency değişiklik kontrolü
         usage: bp status [path] [-r]
         flags:
           - name: -r, --recursive
@@ -64,11 +66,18 @@ api:
         output:
           fresh: "✓ {path} (fresh)"
           stale: "⚠ {path} (stale, {n} files changed)"
+          deps_stale: "⚠ {path} (deps changed: {dep_names})"
           no_state: "○ {path} (no snapshot)"
         exit_codes:
           0: Fresh (değişiklik yok)
-          1: Stale (değişiklik var)
+          1: Stale (kod veya dependency değişmiş)
           2: No snapshot (henüz ss alınmamış)
+        staleness_sources: |
+          Stale durumu şu kaynaklardan gelebilir:
+          1. Kendi dosyaları değişmiş (mevcut davranış)
+          2. BLUEPRINT.yaml değişmiş (mevcut davranış)
+          3. Dependency'nin impl_hash'i değişmiş
+          4. Dependency'nin api section'ı değişmiş
 
       - name: deps
         desc: Dependency graph göster
@@ -100,9 +109,9 @@ api:
             default: 10
             desc: Gösterilecek snapshot sayısı
         output: |
-          #0003 2025-01-15 10:30 "Add validation logic"
-          #0002 2025-01-14 15:00 "Fix edge cases"
-          #0001 2025-01-13 09:00 "Initial snapshot"
+          a1b2c3d4e5f6 2025-01-15 10:30 "Add validation logic"
+          9f8e7d6c5b4a 2025-01-14 15:00 "Fix edge cases"
+          1234abcd5678 2025-01-13 09:00 "Initial snapshot"
         exit_codes:
           0: Başarılı (boş geçmiş dahil)
           1: Hata
@@ -141,18 +150,76 @@ api:
             desc: Testleri atla, direkt kaydet
         behavior:
           - Blueprint'i validate et (hata varsa exit 2)
+          - Dependency'lerin snapshot durumunu kontrol et
           - tests.verification komutlarını çalıştır (varsa)
           - Testler geçerse:
-            - .blueprint/history/XXXX/ oluştur (XXXX = 4 haneli, 0-padded)
+            - Content hash hesapla (blueprint + impl + deps_hash)
+            - .blueprint/history/{hash}/ oluştur (hash = ilk 12 karakter)
             - BLUEPRINT.yaml snapshot'ı kaydet
-            - meta.yaml oluştur (id, timestamp, message)
-            - state.yaml güncelle (dosya hash'leri)
-            - .blueprint/current güncelle (yeni ID)
+            - meta.yaml oluştur (id, timestamp, message, impl_hash, deps_hash)
+            - state.yaml güncelle (dosya hash'leri + dep bilgileri)
+            - .blueprint/current güncelle (yeni hash ID)
           - Testler geçmezse hata ver, snapshot alma
         exit_codes:
           0: Snapshot alındı
           1: Testler başarısız
           2: Validation hatası
+
+      - name: implement
+        desc: Worker için izole çalışma oturumu başlat
+        usage: bp implement [path] [-r] [--list] [--done SESSION]
+        flags:
+          - name: -r, --recursive
+            desc: Alt paketleri de dahil et
+          - name: --list
+            desc: Aktif work session'ları listele
+          - name: --done SESSION
+            desc: Session'ı tamamlandı olarak işaretle
+        behavior: |
+          1. Stale olan blueprint'leri tespit et (bp status -r ile)
+          2. Benzersiz session ID oluştur (timestamp + random, örn "20260116-a1b2")
+          3. .blueprint/work/{session_id}/ klasörü oluştur
+          4. Her stale blueprint için:
+             - BLUEPRINT.yaml'ı work klasörüne kopyala
+             - Mevcut implementasyonu da kopyala (referans için)
+          5. work/manifest.yaml oluştur (hangi paketler, ne zaman)
+          6. Session ID'yi stdout'a yaz
+
+          Worker bu session ID ile çalışır:
+          - Blueprint'leri .blueprint/work/{session}/ içinden okur
+          - Ana BLUEPRINT.yaml'ı DEĞİŞTİRMEZ
+          - Kullanıcı ana dosyaları düzenlemeye devam edebilir
+        output:
+          success: "Work session started: {session_id}"
+          list: |
+            Active sessions:
+            20260116-a1b2  3 packages  2h ago
+            20260115-x9y8  1 package   1d ago
+        exit_codes:
+          0: Session oluşturuldu veya listelendi
+          1: Hata
+          2: Stale paket yok (implement edilecek bir şey yok)
+
+      - name: work
+        desc: Work session bilgilerini oku
+        usage: bp work <session_id> [--blueprints] [--status]
+        flags:
+          - name: --blueprints
+            desc: Session'daki blueprint'leri listele
+          - name: --status
+            desc: Session durumunu göster
+        behavior: |
+          Session içindeki blueprint'leri ve durumu gösterir.
+          Worker bu komutu kullanarak ne yapması gerektiğini öğrenir.
+        output: |
+          Session: 20260116-a1b2
+          Created: 2026-01-16 10:30
+          Packages:
+            ./commands (stale, 3 files changed)
+            ./yamlparser (stale, api changed)
+        exit_codes:
+          0: Başarılı
+          1: Session bulunamadı
 
   library:
     note: |
@@ -198,13 +265,19 @@ api:
         fields:
           - name: id
             type: string
-            desc: "0001", "0002", ...
+            desc: Content hash (ilk 12 karakter), örn "a1b2c3d4e5f6"
           - name: timestamp
             type: string
             desc: ISO 8601 format
           - name: message
             type: string
             desc: Snapshot mesajı
+          - name: impl_hash
+            type: string
+            desc: Implementation dosyalarının birleşik hash'i
+          - name: deps_hash
+            type: string
+            desc: Dependency'lerin snapshot hash'lerinin birleşimi
 
       - name: BlueprintTree
         desc: Klasör hiyerarşisindeki tüm blueprint'ler
@@ -236,6 +309,38 @@ api:
           - name: warnings
             type: string[]
             desc: Uyarı mesajları
+
+      - name: WorkSession
+        desc: Worker için izole çalışma oturumu
+        fields:
+          - name: id
+            type: string
+            desc: Session ID, örn "20260116-a1b2"
+          - name: created
+            type: string
+            desc: ISO 8601 timestamp
+          - name: packages
+            type: WorkPackage[]
+            desc: Bu session'da çalışılacak paketler
+          - name: status
+            type: string
+            desc: "active" | "done" | "abandoned"
+
+      - name: WorkPackage
+        desc: Work session içindeki tek paket
+        fields:
+          - name: path
+            type: string
+            desc: Paketin orijinal yolu (örn "./commands")
+          - name: work_path
+            type: string
+            desc: Work klasöründeki yolu
+          - name: reason
+            type: string
+            desc: Neden implement edilmesi gerekiyor
+          - name: blueprint_hash
+            type: string
+            desc: Kopyalanan blueprint'in hash'i
 
 # =============================================================================
 # DEPENDENCIES

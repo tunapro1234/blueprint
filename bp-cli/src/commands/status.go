@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	bp "blueprint"
@@ -57,6 +56,8 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	counts := map[string]int{"fresh": 0, "stale": 0, "no_snapshot": 0}
 	var singleState string
 	var singleChanged []string
+	var singleDeps []string
+	var singleReason string
 	for _, target := range targets {
 		bpObj, err := bp.LoadBlueprint(target)
 		if err != nil {
@@ -66,7 +67,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			counts["stale"]++
 			continue
 		}
-		statusLine, state, changed, err := statusForBlueprint(bpObj)
+		statusLine, info, err := statusForBlueprint(bpObj)
 		if err != nil {
 			msg := err.Error()
 			line := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), msg)
@@ -74,11 +75,13 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			counts["stale"]++
 			continue
 		}
-		counts[state]++
+		counts[info.State]++
 		lines = append(lines, statusLine)
 		if !recursive {
-			singleState = state
-			singleChanged = changed
+			singleState = info.State
+			singleChanged = info.ChangedFiles
+			singleDeps = info.ChangedDeps
+			singleReason = info.Reason
 		}
 	}
 	if recursive {
@@ -100,7 +103,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	}
 	data := any(nil)
 	if !recursive {
-		data = StatusInfo{State: singleState, ChangedFiles: singleChanged}
+		data = StatusInfo{State: singleState, ChangedFiles: singleChanged, ChangedDeps: singleDeps, StaleReason: singleReason}
 	}
 	return CommandResult{ExitCode: exitCode, Output: strings.Join(lines, "\n"), Data: data}
 }
@@ -115,24 +118,38 @@ func statusState(counts map[string]int) string {
 	return "fresh"
 }
 
-func statusForBlueprint(bpObj *bp.Blueprint) (string, string, []string, error) {
-	changed, err := bpObj.GetChangedFiles()
+func statusForBlueprint(bpObj *bp.Blueprint) (string, bp.StalenessInfo, error) {
+	info, err := bpObj.StalenessInfo()
 	if err != nil {
-		if errors.Is(err, bp.ErrNoSnapshot) {
-			line := fmt.Sprintf("○ %s (no snapshot)", formatPath(bpObj.Dir))
-			return line, "no_snapshot", nil, nil
-		}
-		return "", "", nil, err
+		return "", info, err
 	}
-	if len(changed) == 0 {
+	switch info.State {
+	case "no_snapshot":
+		line := fmt.Sprintf("○ %s (no snapshot)", formatPath(bpObj.Dir))
+		return line, info, nil
+	case "fresh":
 		line := fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
-		return line, "fresh", changed, nil
+		return line, info, nil
+	case "stale":
+		switch info.Reason {
+		case "deps_changed", "deps_api_changed":
+			deps := strings.Join(info.ChangedDeps, ", ")
+			line := fmt.Sprintf("⚠ %s (deps changed: %s)", formatPath(bpObj.Dir), deps)
+			return line, info, nil
+		case "blueprint_changed":
+			line := fmt.Sprintf("⚠ %s (stale, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
+			return line, info, nil
+		default:
+			count := len(info.ChangedFiles)
+			if count == 0 {
+				line := fmt.Sprintf("⚠ %s (stale)", formatPath(bpObj.Dir))
+				return line, info, nil
+			}
+			line := fmt.Sprintf("⚠ %s (stale, %d files changed)", formatPath(bpObj.Dir), count)
+			return line, info, nil
+		}
+	default:
+		line := fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
+		return line, info, nil
 	}
-	sort.Strings(changed)
-	if len(changed) == 1 && changed[0] == "BLUEPRINT.yaml" {
-		line := fmt.Sprintf("⚠ %s (stale, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
-		return line, "stale", changed, nil
-	}
-	line := fmt.Sprintf("⚠ %s (stale, %d files changed)", formatPath(bpObj.Dir), len(changed))
-	return line, "stale", changed, nil
 }

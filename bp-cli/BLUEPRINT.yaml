@@ -2,240 +2,66 @@
 
 _meta:
   version: "0.1.0"
-  updated: 2025-01-15
+  updated: 2026-01-16
   status: draft
 
-intent: Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool
+intent: |
+  Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool.
+  Kod ile dökümentasyon arasındaki tutarlılığı sağlar.
 
 overview: |
-  bp tool, YAML formatındaki blueprint dosyalarını yönetir.
+  bp, yazılım projelerinde YAML formatında blueprint dosyaları kullanarak
+  kod organizasyonunu ve versiyonlamayı yönetir.
 
-  Temel konseptler:
-  - Her klasör bir paket
-  - Alt klasörler implicit dependency
-  - BLUEPRINT.yaml kullanıcı düzenler
-  - .blueprint/ tool yönetir (state, history)
-
-  Komutlar:
-  - bp validate: YAML syntax + schema check
-  - bp status: Kod değişmiş mi? (son snapshot'a göre)
-  - bp deps: Dependency graph
-  - bp init: Yeni blueprint oluştur
-  - bp log: Snapshot geçmişi
-  - bp diff: İki snapshot arasındaki fark
-  - bp show: Belirli snapshot'ın blueprint'ini göster
-  - bp ss: Snapshot al (testler geçerse kaydet)
+  Temel özellikler:
+  - Blueprint validation ve schema kontrolü
+  - Hash-based snapshot sistemi
+  - Dependency tracking
+  - Worker isolation (implement/work komutları)
 
 # =============================================================================
-# API
+# PROJECT STRUCTURE
 # =============================================================================
 
-api:
-  cli:
-    name: bp
-    usage: bp <command> [path] [flags]
+structure:
+  directories:
+    src/:
+      desc: Tüm kaynak kodlar ve iç blueprint'ler
+      has_blueprint: true
+    .blueprint/:
+      desc: bp tool'un internal state'i (history, snapshots, work sessions)
+      managed_by: bp tool
+    .git/:
+      desc: Git version control
 
-    commands:
-      - name: validate
-        desc: YAML syntax ve schema kontrolü
-        usage: bp validate [path] [-r|--recursive]
-        args:
-          - name: path
-            default: "."
-            desc: Blueprint dosyası veya klasör
-        flags:
-          - name: -r, --recursive
-            desc: Alt klasörleri de tara
-        output:
-          success: "✓ {path}"
-          warning: "⚠ {path}: {message}"
-          error: "✗ {path}: {message}"
-        exit_codes:
-          0: Valid
-          1: Error var
-          2: Sadece warning
+  files:
+    README.md:
+      desc: Proje açıklaması ve kullanım kılavuzu
+    .gitignore:
+      desc: Git tarafından ignore edilecek dosyalar
+    bp:
+      desc: Derlenmiş binary (gitignore'da)
+    todo.md:
+      desc: Geçici notlar (gitignore'da olabilir)
 
-      - name: status
-        desc: Kod değişmiş mi kontrolü (son snapshot'a göre)
-        usage: bp status [path] [-r]
-        flags:
-          - name: -r, --recursive
-            desc: Alt klasörleri de kontrol et
-        output:
-          fresh: "✓ {path} (fresh)"
-          stale: "⚠ {path} (stale, {n} files changed)"
-          no_state: "○ {path} (no snapshot)"
-        exit_codes:
-          0: Fresh (değişiklik yok)
-          1: Stale (değişiklik var)
-          2: No snapshot (henüz ss alınmamış)
+# =============================================================================
+# BUILD & RUN
+# =============================================================================
 
-      - name: deps
-        desc: Dependency graph göster
-        usage: bp deps [path]
-        output: |
-          Topological sırada dependency listesi:
-          1. leaf/package
-          2. mid/package
-          3. root/package (current)
-        exit_codes:
-          0: Başarılı
-          1: Circular dependency veya hata
+build:
+  command: "cd src && go build -o ../bp ./cmd/bp"
+  output: "./bp"
+  requirements:
+    - Go 1.22+
 
-      - name: init
-        desc: Yeni BLUEPRINT.yaml oluştur
-        usage: bp init [path]
-        behavior:
-          - Zaten varsa hata ver, üzerine yazma
-          - Template BLUEPRINT.yaml oluştur
-        exit_codes:
-          0: Oluşturuldu
-          1: Zaten var veya hata
-
-      - name: log
-        desc: Snapshot geçmişi
-        usage: bp log [path] [-n count]
-        flags:
-          - name: -n, --count
-            default: 10
-            desc: Gösterilecek snapshot sayısı
-        output: |
-          #0003 2025-01-15 10:30 "Add validation logic"
-          #0002 2025-01-14 15:00 "Fix edge cases"
-          #0001 2025-01-13 09:00 "Initial snapshot"
-        exit_codes:
-          0: Başarılı (boş geçmiş dahil)
-          1: Hata
-
-      - name: diff
-        desc: İki snapshot arasındaki blueprint farkı
-        usage: bp diff [path] [id1] [id2]
-        behavior:
-          - Argüman yok: current blueprint vs son snapshot
-          - Tek ID: o snapshot vs current blueprint
-          - İki ID: iki snapshot'ın blueprint'leri karşılaştırılır
-        output: |
-          Unified diff formatı (--- / +++ / @@ ile)
-          Fark yoksa "No changes" mesajı
-        exit_codes:
-          0: Başarılı (fark var veya yok)
-          1: ID bulunamadı veya hata
-
-      - name: show
-        desc: Belirli snapshot'ın blueprint'ini göster
-        usage: bp show [path] [id]
-        behavior:
-          - ID verilmezse son snapshot
-          - .blueprint/history/XXXX/BLUEPRINT.yaml içeriğini stdout'a yazar
-        exit_codes:
-          0: Başarılı
-          1: ID bulunamadı veya hata
-
-      - name: ss
-        desc: Snapshot al - testleri çalıştır, geçerse kaydet
-        usage: bp ss [path] [-m "message"] [--skip-tests]
-        flags:
-          - name: -m, --message
-            desc: Snapshot mesajı (opsiyonel, yoksa tarih kullanılır)
-          - name: --skip-tests
-            desc: Testleri atla, direkt kaydet
-        behavior:
-          - Blueprint'i validate et (hata varsa exit 2)
-          - tests.verification komutlarını çalıştır (varsa)
-          - Testler geçerse:
-            - .blueprint/history/XXXX/ oluştur (XXXX = 4 haneli, 0-padded)
-            - BLUEPRINT.yaml snapshot'ı kaydet
-            - meta.yaml oluştur (id, timestamp, message)
-            - state.yaml güncelle (dosya hash'leri)
-            - .blueprint/current güncelle (yeni ID)
-          - Testler geçmezse hata ver, snapshot alma
-        exit_codes:
-          0: Snapshot alındı
-          1: Testler başarısız
-          2: Validation hatası
-
-  library:
-    note: |
-      Aşağıdaki tipler language-agnostic tanımlanmıştır.
-      Implementasyon diline göre class, struct, record, interface vb. kullanılabilir.
-
-    types:
-      - name: Blueprint
-        desc: Tek BLUEPRINT.yaml dosyasını temsil eder
-        fields:
-          - name: path
-            type: string
-            desc: BLUEPRINT.yaml dosyasının tam yolu
-          - name: data
-            type: map<string, any>
-            desc: Parse edilmiş YAML içeriği
-          - name: state_dir
-            type: string
-            desc: .blueprint/ klasörünün yolu
-        methods:
-          - name: validate
-            returns: ValidationResult
-            desc: YAML syntax + schema check
-          - name: is_stale
-            returns: bool?
-            desc: Kod değişmiş mi? (null = snapshot yok)
-          - name: get_changed_files
-            returns: string[]
-            desc: Değişen dosyaların listesi
-          - name: get_section
-            args: [section: string]
-            returns: map<string, any>?
-            desc: api, implementation, tests bölümünü al
-          - name: get_history
-            returns: HistoryEntry[]
-            desc: Snapshot geçmişi
-          - name: save_state
-            returns: void
-            desc: .blueprint/state.yaml güncelle
-
-      - name: HistoryEntry
-        desc: Tek bir snapshot kaydı
-        fields:
-          - name: id
-            type: string
-            desc: "0001", "0002", ...
-          - name: timestamp
-            type: string
-            desc: ISO 8601 format
-          - name: message
-            type: string
-            desc: Snapshot mesajı
-
-      - name: BlueprintTree
-        desc: Klasör hiyerarşisindeki tüm blueprint'ler
-        fields:
-          - name: root
-            type: string
-            desc: Root klasör yolu
-        methods:
-          - name: walk
-            returns: Blueprint[]
-            desc: Tüm blueprint'leri listele (iterable)
-          - name: resolve_deps
-            args: [bp: Blueprint]
-            returns: Blueprint[]
-            desc: Bir blueprint'in dependency'lerini bul
-          - name: topological_sort
-            returns: Blueprint[]
-            desc: Dependency sırasına göre sırala
-
-      - name: ValidationResult
-        desc: Validation sonucu
-        fields:
-          - name: valid
-            type: bool
-            desc: Geçerli mi?
-          - name: errors
-            type: string[]
-            desc: Hata mesajları
-          - name: warnings
-            type: string[]
-            desc: Uyarı mesajları
+usage:
+  examples:
+    - "bp validate"
+    - "bp validate -r"
+    - "bp status"
+    - "bp ss -m 'Initial snapshot'"
+    - "bp implement -r"
+    - "bp work <session_id>"
 
 # =============================================================================
 # DEPENDENCIES
@@ -243,19 +69,5 @@ api:
 
 dependencies:
   internal:
-    - path: ./yamlparser
-      desc: Blueprint-aware YAML parser (fallback destekli)
-    - path: ./commands
-      desc: CLI komut handler'ları
-
-# =============================================================================
-# IMPLEMENTATION
-# =============================================================================
-
-implementation: "./BLUEPRINT.spec.yaml"
-
-# =============================================================================
-# TESTS
-# =============================================================================
-
-tests: "./BLUEPRINT.spec.yaml"
+    - path: ./src
+      desc: Ana kaynak kod ve library

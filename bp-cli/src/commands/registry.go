@@ -9,4 +9,6 @@ var COMMANDS = map[string]CommandHandler{
 	"diff":     DiffCommand,
 	"show":     ShowCommand,
 	"ss":       SnapshotCommand,
+	"implement": ImplementCommand,
+	"work":      WorkCommand,
 }

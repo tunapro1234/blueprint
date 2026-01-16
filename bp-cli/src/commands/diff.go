@@ -26,9 +26,15 @@ func DiffCommand(ctx CommandContext) CommandResult {
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	leftID, rightID := resolveDiffIDs(bpObj, id1, id2)
-	if leftID == "" {
-		return CommandResult{ExitCode: 1, Output: "No snapshot history", Errors: []string{"No snapshot history"}}
+	leftID, rightID, err := resolveDiffIDs(bpObj, id1, id2)
+	if err != nil {
+		if errors.Is(err, bp.ErrNoSnapshot) {
+			return CommandResult{ExitCode: 1, Output: "No snapshot history", Errors: []string{"No snapshot history"}}
+		}
+		if errors.Is(err, ErrInvalidCurrentID) {
+			return CommandResult{ExitCode: 1, Output: "Invalid current snapshot ID", Errors: []string{"Invalid current snapshot ID"}}
+		}
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	leftContent, err := readBlueprintContent(bpObj, leftID)
 	if err != nil {
@@ -60,28 +66,30 @@ func DiffCommand(ctx CommandContext) CommandResult {
 	return CommandResult{ExitCode: 0, Output: text, Data: result}
 }
 
-func resolveDiffIDs(bpObj *bp.Blueprint, id1, id2 string) (string, string) {
+func resolveDiffIDs(bpObj *bp.Blueprint, id1, id2 string) (string, string, error) {
 	if id1 == "" && id2 == "" {
 		currentID, err := readCurrentSnapshotID(bpObj.StateDir)
 		if err != nil {
-			return "", ""
+			return "", "", err
 		}
-		return currentID, "current"
+		return currentID, "current", nil
 	}
 	if id1 != "" && id2 == "" {
-		return normalizeID(id1), "current"
+		leftID, err := resolveSnapshotID(bpObj.StateDir, id1)
+		if err != nil {
+			return "", "", err
+		}
+		return leftID, "current", nil
 	}
-	return normalizeID(id1), normalizeID(id2)
-}
-
-func normalizeID(id string) string {
-	if id == "" {
-		return "current"
+	leftID, err := resolveSnapshotID(bpObj.StateDir, id1)
+	if err != nil {
+		return "", "", err
 	}
-	if strings.EqualFold(id, "current") {
-		return "current"
+	rightID, err := resolveSnapshotID(bpObj.StateDir, id2)
+	if err != nil {
+		return "", "", err
 	}
-	return id
+	return leftID, rightID, nil
 }
 
 func readBlueprintContent(bpObj *bp.Blueprint, id string) (string, error) {
@@ -91,9 +99,6 @@ func readBlueprintContent(bpObj *bp.Blueprint, id string) (string, error) {
 			return "", err
 		}
 		return string(data), nil
-	}
-	if !isSnapshotID(id) {
-		return "", fmt.Errorf("Snapshot #%s not found", id)
 	}
 	path := snapshotBlueprintPath(bpObj.StateDir, id)
 	file, err := os.Open(path)

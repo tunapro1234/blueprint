@@ -21,29 +21,60 @@ implementation:
   data_structures:
     blueprint_dir: |
       .blueprint/
-      ├── current                 # Son snapshot ID (sadece "0003" gibi, newline yok)
-      ├── state.yaml              # Track edilen dosyaların hash'leri
-      └── history/
-          ├── 0001/
-          │   ├── BLUEPRINT.yaml  # O anki blueprint snapshot (tam kopya)
-          │   └── meta.yaml       # id, timestamp, message
-          ├── 0002/
-          │   └── ...
+      ├── current                 # Son snapshot ID (hash, örn "a1b2c3d4e5f6")
+      ├── state.yaml              # Track edilen dosyaların hash'leri + dep state
+      ├── history/
+      │   ├── a1b2c3d4e5f6/       # Hash-based ID (ilk 12 karakter)
+      │   │   ├── BLUEPRINT.yaml  # O anki blueprint snapshot (tam kopya)
+      │   │   └── meta.yaml       # id, timestamp, message, impl_hash, deps_hash
+      │   └── ...
+      └── work/                   # Worker isolation area
+          ├── 20260116-a1b2/      # Session ID (timestamp-random)
+          │   ├── manifest.yaml   # Session metadata
+          │   ├── commands/       # Kopyalanan paket
+          │   │   ├── BLUEPRINT.yaml
+          │   │   └── impl/       # Mevcut impl kopyası (referans)
+          │   └── yamlparser/
+          │       └── ...
           └── ...
 
     meta_yaml: |
-      # .blueprint/history/XXXX/meta.yaml
-      id: "0001"                        # 4 haneli, 0-padded string
+      # .blueprint/history/{hash}/meta.yaml
+      id: "a1b2c3d4e5f6"               # Content hash (ilk 12 karakter)
       timestamp: "2025-01-15T10:30:00"  # ISO 8601 format
       message: "Initial snapshot"       # User -m ile veya otomatik tarih
+      impl_hash: "sha256:abc123..."     # Implementation dosyalarının birleşik hash'i
+      deps_hash: "sha256:def456..."     # Dependency'lerin snapshot hash'lerinin hash'i
 
     state_yaml: |
       # .blueprint/state.yaml
-      # Snapshot anındaki dosya hash'leri
+      # Snapshot anındaki dosya hash'leri ve dependency state
+      snapshot_id: "a1b2c3d4e5f6"         # Mevcut snapshot hash
       blueprint_hash: "sha256:abc123..."  # BLUEPRINT.yaml'ın hash'i
+      impl_hash: "sha256:xyz789..."       # Tüm impl dosyalarının birleşik hash'i
       files:
         "src/main": "sha256:def456..."
         "src/core": "sha256:ghi789..."
+      deps:                                # Dependency state (snapshot anında)
+        "./commands":
+          snapshot_id: "b2c3d4e5f6a7"     # Dependency'nin snapshot hash'i
+          api_hash: "sha256:aaa111..."    # Dependency'nin api section hash'i
+        "./yamlparser":
+          snapshot_id: "c3d4e5f6a7b8"
+          api_hash: "sha256:bbb222..."
+
+    work_manifest_yaml: |
+      # .blueprint/work/{session}/manifest.yaml
+      id: "20260116-a1b2"
+      created: "2026-01-16T10:30:00"
+      status: "active"                     # active | done | abandoned
+      packages:
+        - path: "./commands"
+          reason: "3 files changed"
+          blueprint_hash: "sha256:abc..."
+        - path: "./yamlparser"
+          reason: "api changed in dependency"
+          blueprint_hash: "sha256:def..."
 
     blueprint_template: |
       # {folder_name}
@@ -69,12 +100,22 @@ implementation:
 
   algorithms:
     staleness_check: |
-      1. .blueprint/state.yaml oku
-      2. Her tracked_file için:
-         - Dosya hash'ini hesapla (SHA-256)
+      1. .blueprint/state.yaml oku (yoksa → no_snapshot)
+      2. Dosya kontrolü:
+         - Her tracked_file için hash hesapla
          - State'teki hash ile karşılaştır
-      3. Herhangi biri farklıysa → stale
-      4. BLUEPRINT.yaml değiştiyse → stale
+         - Farklıysa → stale (files_changed)
+      3. Blueprint kontrolü:
+         - BLUEPRINT.yaml hash hesapla
+         - Farklıysa → stale (blueprint_changed)
+      4. Dependency kontrolü:
+         - Her dep için mevcut snapshot_id ve api_hash al
+         - State'teki ile karşılaştır
+         - snapshot_id farklıysa → stale (dep_changed)
+         - api_hash farklıysa → stale (dep_api_changed, daha kritik)
+      5. Hiçbiri değişmediyse → fresh
+
+      Öncelik: files_changed > blueprint_changed > dep_api_changed > dep_changed
 
     dependency_resolution: |
       1. Alt dizinleri tara
@@ -93,11 +134,52 @@ implementation:
       7. Result.length != node_count ise cycle var
 
     hash_calculation: |
+      Dosya hash:
       1. Dosya içeriğini binary olarak oku
       2. SHA-256 hash hesapla
       3. Hex string'e çevir
       4. "sha256:" prefix ekle
-      Örnek: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      Örnek: "sha256:e3b0c44298fc1c149afbf4c..."
+
+    impl_hash_calculation: |
+      Implementation hash (tüm impl dosyalarının birleşik hash'i):
+      1. implementation.structure'daki dosyaları topla
+      2. Dosyaları alfabetik sırala
+      3. Her dosya için: "{relative_path}:{file_hash}\n" string oluştur
+      4. Tüm string'leri birleştir
+      5. Birleşik string'in SHA-256 hash'ini al
+      Örnek: "sha256:abc123..."
+
+    snapshot_id_calculation: |
+      Snapshot ID (content hash):
+      1. Şu değerleri birleştir (sırayla):
+         - blueprint_hash (BLUEPRINT.yaml'ın hash'i)
+         - impl_hash (implementation hash)
+         - deps_hash (dependency'lerin hash'i)
+      2. Birleşik string: "{blueprint_hash}:{impl_hash}:{deps_hash}"
+      3. SHA-256 hash al
+      4. İlk 12 karakteri kullan
+      Örnek: "a1b2c3d4e5f6"
+
+      Aynı içerik = aynı hash:
+      - Blueprint, impl ve dep'ler aynıysa hash aynı olur
+      - Bu sayede implementasyonların aynı olup olmadığı karşılaştırılabilir
+
+    deps_hash_calculation: |
+      Dependency hash:
+      1. Dependency'leri alfabetik sırala
+      2. Her dep için: "{dep_path}:{dep_snapshot_id}\n" string oluştur
+      3. Birleştir ve SHA-256 hash al
+      4. Dependency yoksa: empty string hash'i kullanılır
+
+    api_hash_calculation: |
+      API section hash (dependency tracking için):
+      1. Blueprint'in api section'ını al
+      2. JSON-like canonical format'a çevir (sorted keys)
+      3. SHA-256 hash al
+
+      Bu hash dependency'nin "public interface"ini temsil eder.
+      api_hash değiştiyse → dependent paketler stale olur
 
     unified_diff: |
       Standart unified diff formatı:
@@ -107,6 +189,32 @@ implementation:
       - Silinen satırlar: - prefix
       - Eklenen satırlar: + prefix
       - Context satırları: space prefix
+
+    work_session_creation: |
+      bp implement algoritması:
+      1. Recursive olarak stale paketleri tespit et (bp status -r)
+      2. Stale paket yoksa → exit 2 "Nothing to implement"
+      3. Session ID oluştur: YYYYMMDD-XXXX (tarih + 4 random hex)
+      4. .blueprint/work/{session_id}/ oluştur
+      5. Her stale paket için:
+         a. Paket klasörü oluştur (work/{session}/commands/)
+         b. BLUEPRINT.yaml kopyala
+         c. Mevcut implementasyonu impl/ altına kopyala (referans)
+         d. manifest.yaml'a ekle
+      6. manifest.yaml yaz
+      7. Session ID'yi stdout'a yaz
+
+      İzolasyon garantisi:
+      - Worker sadece work/ içindeki dosyaları okur
+      - Ana BLUEPRINT.yaml değiştirilmez
+      - Kullanıcı ana dosyaları düzenlemeye devam edebilir
+      - Session tamamlandığında worker notify eder
+
+    work_session_completion: |
+      bp implement --done {session} algoritması:
+      1. manifest.yaml oku
+      2. status = "done" olarak güncelle
+      3. Opsiyonel: work klasörünü arşivle veya sil
 
   decisions:
     - q: Paketler arası iletişim nasıl?
@@ -280,15 +388,23 @@ implementation:
 
     - q: Snapshot ID kuralları nedir?
       a: |
-        Format: 4 haneli, 0-padded string ("0001", "0002", ...)
-        Hesaplama: mevcut max ID + 1
-        Boşluk/delik: Sorun değil. 0001, 0003 varsa sonraki 0004 olur.
-        Üst limit: 9999 (aşılırsa hata)
+        Format: Content hash'in ilk 12 karakteri (hex)
+        Örnek: "a1b2c3d4e5f6"
+
+        Hash hesaplama:
+        - blueprint_hash + impl_hash + deps_hash birleştirilir
+        - SHA-256 hash alınır
+        - İlk 12 karakter kullanılır
+
+        Avantajlar:
+        - Aynı içerik = aynı ID (idempotent snapshot)
+        - İki paketin impl'i karşılaştırılabilir (impl_hash)
+        - Collision ihtimali çok düşük (12 hex = 48 bit)
 
         Bozuk history davranışı:
         - meta.yaml eksik/bozuk → o snapshot atlanır, warning
         - BLUEPRINT.yaml eksik → o snapshot atlanır, warning
-        - Klasör adı sayı değil → atlanır
+        - Klasör adı geçersiz format → atlanır
 
     - q: Snapshot eşzamanlılığı nasıl yönetilir?
       a: |
@@ -328,10 +444,17 @@ implementation:
       handle: Açıklayıcı hata mesajı, hangi dosya olduğunu belirt
 
     - case: Snapshot ID collision
-      handle: Atomik klasör oluşturma, çakışırsa retry (max 3)
+      handle: |
+        Content hash aynıysa zaten aynı snapshot.
+        Klasör varsa yeni snapshot oluşturulmaz, mevcut ID döner.
+        (Idempotent davranış)
 
-    - case: Snapshot ID limit aşımı (>9999)
-      handle: '"Snapshot limit exceeded" hatası'
+    - case: Dependency snapshot yok
+      handle: |
+        Dependency'nin .blueprint/current dosyası yoksa:
+        - Warning ver: "Dependency {path} has no snapshot"
+        - deps_hash hesaplamasında bu dep atlanır
+        - Snapshot yine alınabilir (soft dependency)
 
     - case: Section referans bulunamadı
       handle: '"Section #xyz not found in file" hatası'
@@ -554,12 +677,17 @@ tests:
     - id: ss_create_first
       given: .blueprint/history/ yok
       when: bp ss
-      then: history/0001/ oluşur
+      then: history/{hash}/ oluşur (hash = content hash)
 
-    - id: ss_increment_id
-      given: history/0001/ ve history/0002/ var
+    - id: ss_same_content_same_id
+      given: Aynı blueprint, impl ve deps
+      when: bp ss iki kez çalışır
+      then: Aynı hash ID, ikinci çalışmada "Already exists" (idempotent)
+
+    - id: ss_different_content_different_id
+      given: Blueprint veya impl değişmiş
       when: bp ss
-      then: history/0003/ oluşur
+      then: Farklı hash ID ile yeni snapshot
 
     - id: ss_tests_fail
       given: tests.verification başarısız
@@ -570,6 +698,92 @@ tests:
       given: tests.verification başarısız
       when: bp ss --skip-tests
       then: Snapshot alınır
+
+    - id: ss_records_dep_state
+      given: Dependency'ler var ve snapshot'ları var
+      when: bp ss
+      then: state.yaml'da deps section'ı dolu (snapshot_id + api_hash)
+
+    - id: ss_dep_no_snapshot_warning
+      given: Dependency'nin snapshot'ı yok
+      when: bp ss
+      then: Warning verilir, snapshot yine alınır
+
+    # =========================================================================
+    # DEPENDENCY TRACKING TESTS
+    # =========================================================================
+
+    - id: status_deps_changed
+      given: Dependency'nin snapshot'ı değişmiş
+      when: bp status
+      then: stale, "deps changed" mesajı
+
+    - id: status_deps_api_changed
+      given: Dependency'nin api section'ı değişmiş
+      when: bp status
+      then: stale, "deps api changed" mesajı (daha kritik)
+
+    - id: status_deps_fresh
+      given: Dependency'ler değişmemiş
+      when: bp status
+      then: fresh (dependency kontrolü geçti)
+
+    - id: impl_hash_same_content
+      given: Aynı impl dosyaları
+      when: İki farklı pakette impl_hash hesaplanır
+      then: Aynı impl_hash (karşılaştırılabilir)
+
+    # =========================================================================
+    # WORK SESSION TESTS (implement/work)
+    # =========================================================================
+
+    - id: implement_creates_session
+      given: Stale paketler var
+      when: bp implement -r
+      then: |
+        - .blueprint/work/{session}/ oluşur
+        - manifest.yaml yazılır
+        - Session ID stdout'a yazılır
+
+    - id: implement_no_stale
+      given: Tüm paketler fresh
+      when: bp implement
+      then: exit 2, "Nothing to implement"
+
+    - id: implement_copies_blueprint
+      given: Stale paket var
+      when: bp implement
+      then: BLUEPRINT.yaml work klasörüne kopyalanır
+
+    - id: implement_copies_impl
+      given: Stale paket var, mevcut impl var
+      when: bp implement
+      then: Mevcut impl dosyaları impl/ altına kopyalanır
+
+    - id: implement_list
+      given: Aktif session'lar var
+      when: bp implement --list
+      then: Session listesi gösterilir
+
+    - id: implement_done
+      given: Aktif session var
+      when: bp implement --done {session}
+      then: manifest.yaml'da status = "done"
+
+    - id: work_read_session
+      given: Aktif session var
+      when: bp work {session}
+      then: Session bilgileri gösterilir
+
+    - id: work_not_found
+      given: Session yok
+      when: bp work invalid-session
+      then: exit 1, "Session not found"
+
+    - id: isolation_main_unchanged
+      given: Session oluşturuldu, worker çalışıyor
+      when: Kullanıcı ana BLUEPRINT.yaml'ı düzenler
+      then: work/ içindeki kopyalar etkilenmez
 
     # =========================================================================
     # YAML PARSER TESTS

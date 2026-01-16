@@ -4,14 +4,16 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
+	"time"
 )
 
 type HistoryEntry struct {
 	ID        string
 	Timestamp string
 	Message   string
+	ImplHash  string
+	DepsHash  string
 }
 
 func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
@@ -29,7 +31,7 @@ func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
 			continue
 		}
 		name := entry.Name()
-		if len(name) != 4 || !isDigits(name) {
+		if !isSnapshotID(name) {
 			continue
 		}
 		metaPath := filepath.Join(historyDir, name, "meta.yaml")
@@ -45,38 +47,32 @@ func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
 			ID:        getString(parsed, "id"),
 			Timestamp: getString(parsed, "timestamp"),
 			Message:   getString(parsed, "message"),
+			ImplHash:  getString(parsed, "impl_hash"),
+			DepsHash:  getString(parsed, "deps_hash"),
 		}
 		if meta.ID == "" {
 			meta.ID = name
 		}
+		if meta.ID == "" || meta.Timestamp == "" || !isSnapshotID(meta.ID) {
+			continue
+		}
 		history = append(history, meta)
 	}
 	sort.Slice(history, func(i, j int) bool {
-		iid := parseSnapshotID(history[i].ID)
-		jid := parseSnapshotID(history[j].ID)
-		return iid > jid
-	})
-	return history, nil
-}
-
-func parseSnapshotID(id string) int {
-	i, err := strconv.Atoi(strings.TrimLeft(id, "0"))
-	if err != nil {
-		if id == "0000" {
-			return 0
+		ti, err1 := time.Parse("2006-01-02T15:04:05", history[i].Timestamp)
+		tj, err2 := time.Parse("2006-01-02T15:04:05", history[j].Timestamp)
+		if err1 == nil && err2 == nil {
+			return ti.After(tj)
 		}
-		return -1
-	}
-	return i
-}
-
-func isDigits(s string) bool {
-	for _, r := range s {
-		if r < '0' || r > '9' {
+		if err1 == nil {
+			return true
+		}
+		if err2 == nil {
 			return false
 		}
-	}
-	return true
+		return strings.Compare(history[i].Timestamp, history[j].Timestamp) > 0
+	})
+	return history, nil
 }
 
 func getString(m map[string]interface{}, key string) string {

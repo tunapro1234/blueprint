@@ -1,7 +1,6 @@
 package bp
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -232,14 +231,18 @@ func (b *Blueprint) Dependencies() ([]string, error) {
 	return deps, nil
 }
 
+func (b *Blueprint) TrackedFiles() (map[string]string, error) {
+	return b.collectTrackedFiles()
+}
+
 func (b *Blueprint) IsStale() (*bool, error) {
-	changed, err := b.GetChangedFiles()
+	info, err := b.StalenessInfo()
 	if err != nil {
-		if errors.Is(err, ErrNoSnapshot) {
-			return nil, ErrNoSnapshot
-		}
 		return nil, err
 	}
-	stale := len(changed) > 0
+	if info.State == "no_snapshot" {
+		return nil, ErrNoSnapshot
+	}
+	stale := info.State == "stale"
 	return &stale, nil
 }

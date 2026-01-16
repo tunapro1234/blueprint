@@ -29,3 +29,126 @@ The cleanest workflow seems to be: Use Claude Code as the planner to iterate qui
 
 If this project gains traction, I plan to integrate this agent structure directly into the bp (blueprint-cli) tool and establish a multi-agent worker team. By developing a Worker + Tester + Judge (or similar) system, the implementation process could be streamlined significantly. Incredible agentic setups can be built around this. I’m also thinking of adding tunnels and different systems for inter-agent communication.
 
+---
+# AI-generated README
+
+## Overview
+Blueprint (`bp`) is a local, file-system based tool for authoring and tracking `BLUEPRINT.yaml` files across a repository. Each folder is treated as a package; a blueprint captures intent, API, implementation structure, and tests. `bp` validates blueprints, checks staleness, snapshots blueprint history, and shows diffs between snapshots.
+
+This tool is **snapshot-based** (not Git-based): it stores state under `.blueprint/` alongside each package.
+
+## Features
+- **Validate** blueprint files (syntax + minimal schema rules)
+- **Status** check for changes vs. last snapshot
+- **Snapshot history** with logs and diffs
+- **Dependency graph** across nested packages
+- **Show** a specific snapshot’s blueprint
+- **Blueprint parser** tailored for Blueprint content (tolerant of commas, colons, type annotations, etc.)
+
+## Install / Build
+Requires Go 1.22+
+
+```
+cd src && go build -o ../bp ./cmd/bp
+```
+
+## Quick Start
+```
+./bp init
+./bp validate
+./bp ss -m "initial"
+./bp status
+./bp log
+./bp diff
+```
+
+Recursive validation:
+```
+./bp validate -r
+```
+
+## Commands
+- `bp validate [path] [-r|--recursive]`
+- `bp status [path] [-r|--recursive]`
+- `bp deps [path]`
+- `bp init [path]`
+- `bp log [path] [-n|--count]`
+- `bp diff [path] [id1] [id2]`
+- `bp show [path] [id]`
+- `bp ss [path] [-m|--message] [--skip-tests]`
+
+## Snapshot Model
+Each package keeps its own snapshot state under:
+```
+.blueprint/
+  current
+  state.yaml
+  history/
+    0001/
+      BLUEPRINT.yaml
+      meta.yaml
+```
+
+`bp ss` will:
+1) Validate the blueprint  
+2) Run `tests.verification` commands (unless `--skip-tests`)  
+3) Write the snapshot and update state
+
+## Blueprint File Discovery
+Supported patterns include:
+- `BLUEPRINT.yaml`, `.BLUEPRINT.yaml`
+- `BLUEPRINT.*.yaml`, `.BLUEPRINT.*.yaml`
+- `*.BP.yaml`, `*.bp.yaml`
+
+If multiple are present, the tool prefers `BLUEPRINT.yaml`.
+
+## Parser Behavior (Blueprint-specific)
+Blueprints often contain values like:
+```
+type: map<string, any>
+signature: "(ctx: Context) -> Result"
+```
+The custom parser:
+- Uses indentation as structure
+- Accepts colons/commas inside scalar values
+- Preserves numbers as strings (unless explicitly boolean/null)
+- Supports literal (`|`) and folded (`>`) blocks
+- Converts tabs to 2 spaces and emits a warning
+
+## Repo Layout
+```
+BLUEPRINT.yaml     # Root project blueprint
+README.md          # This file
+.gitignore         # Git ignore rules
+src/               # All source code
+  BLUEPRINT.yaml   # Library blueprint (API, types, algorithms)
+  cmd/bp/          # CLI entrypoint
+  commands/        # CLI command handlers
+  yamlparser/      # Blueprint-specific parser package
+  *.go             # Core library files
+```
+
+## Development
+Run tests:
+```
+cd src && go test ./...
+```
+
+Validate all blueprints:
+```
+./bp validate -r
+```
+
+Build:
+```
+cd src && go build -o ../bp ./cmd/bp
+```
+
+## Notes
+- This tool intentionally does **not** require Git.
+- Snapshot history lives next to each package and is independent.
+- `tests.verification` is executed in the blueprint’s directory and must be valid shell commands.
+
+---
+If you want this README to focus on a specific audience (contributors vs. users), say the word and I’ll refine it. (this is codex i dont know why it decided to write this but iwont delete this)
+

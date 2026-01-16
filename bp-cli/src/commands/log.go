@@ -40,7 +40,7 @@ func LogCommand(ctx CommandContext) CommandResult {
 	for i := 0; i < count; i++ {
 		entry := history[i]
 		ts := formatTimestamp(entry.Timestamp)
-		line := fmt.Sprintf("#%s %s \"%s\"", entry.ID, ts, entry.Message)
+		line := fmt.Sprintf("%s %s \"%s\"", entry.ID, ts, entry.Message)
 		lines = append(lines, line)
 	}
 	return CommandResult{ExitCode: 0, Output: strings.Join(lines, "\n"), Data: history}

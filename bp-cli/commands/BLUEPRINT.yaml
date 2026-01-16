@@ -1,0 +1,125 @@
+# bp/commands - CLI Komutları
+
+_meta:
+  version: "0.1.0"
+  updated: 2026-01-15
+  status: ready
+
+intent: bp CLI'ın her komutunu ayrı modül olarak implement eder
+
+overview: |
+  Her komut ayrı dosyada, ortak interface ile.
+  Registry pattern ile komutlar dinamik yüklenir.
+
+dependencies:
+  from_parent:
+    - Blueprint         # core.py - tek BLUEPRINT.yaml temsili
+    - BlueprintTree     # core.py - klasör hiyerarşisi
+    - HistoryEntry      # core.py - snapshot geçmişi entry'si
+    - ValidationResult  # core.py - validation sonucu
+
+# =============================================================================
+# API
+# =============================================================================
+
+api:
+  exports:
+    - name: COMMANDS
+      type: "map<string, CommandHandler>"
+      desc: "Komut adı → handler mapping"
+      example: |
+        {
+          "validate": validate_command,
+          "status": status_command,
+          "deps": deps_command,
+          "init": init_command,
+          "log": log_command,
+          "diff": diff_command,
+          "show": show_command,
+          "ss": ss_command,
+          # Agentic (devre dışı):
+          # "implement": implement_command,
+          # "fix": fix_command,
+        }
+
+    - name: CommandHandler
+      type: interface
+      desc: Her komut handler'ının implement ettiği interface
+      signature: "(ctx: CommandContext) -> CommandResult"
+
+    - name: CommandContext
+      desc: Komuta geçirilen tüm context
+      fields:
+        - path: string                  # Hedef path (default: cwd)
+        - blueprint: Blueprint?         # Tek blueprint (varsa)
+        - tree: BlueprintTree?          # Tree (recursive için)
+        - args: map<string, any>        # Komut-spesifik argümanlar
+      note: |
+        path her zaman ctx.path üzerinden gelir (CLI'dan parse edilir).
+        args sadece komut-spesifik flag'ler için:
+        - validate: {recursive: bool}
+        - status: {recursive: bool}
+        - deps: {}                      # Ek args yok, path ctx.path'te
+        - init: {}                      # Ek args yok, path ctx.path'te
+        - log: {count: int}             # default: 10
+        - diff: {id1: string?, id2: string?}
+        - show: {id: string?}           # null = son snapshot
+        - ss: {message: string?, skip_tests: bool}
+        # Agentic (devre dışı):
+        # - implement: {message: string?, dry_run: bool, force: bool}
+        # - fix: {dry_run: bool}
+
+    - name: CommandResult
+      fields:
+        - exit_code: int
+        - output: string                # Human-readable output
+        - data: any                     # Structured data (opsiyonel)
+        - errors: string[]
+      note: |
+        data field komuta göre:
+        - validate: ValidationResult
+        - status: StatusInfo
+        - deps: string[] (topological order)
+        - log: HistoryEntry[]
+        - diff: DiffResult
+        - show: string (blueprint content)
+        - ss: SnapshotInfo
+        - init: null
+
+    - name: DiffResult
+      fields:
+        - has_changes: bool
+        - left_id: string               # "current" veya snapshot ID
+        - right_id: string              # "current" veya snapshot ID
+        - unified_diff: string          # unified diff formatında fark
+
+    - name: StatusInfo
+      fields:
+        - state: string                 # "fresh" | "stale" | "no_snapshot"
+        - changed_files: string[]       # Değişen dosya listesi (stale ise)
+
+    - name: SnapshotInfo
+      fields:
+        - id: string                    # "0001", "0002", ...
+        - path: string                  # .blueprint/history/XXXX/
+
+# =============================================================================
+# DEPENDENCIES
+# =============================================================================
+
+dependencies:
+  internal:
+    - path: ../yamlparser
+      desc: YAML parsing için (BLUEPRINT.yaml okuma)
+
+# =============================================================================
+# IMPLEMENTATION
+# =============================================================================
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+tests: "./BLUEPRINT.spec.yaml"

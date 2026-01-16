@@ -1,0 +1,660 @@
+# bp - Implementation & Test Specification
+
+_meta:
+  version: "0.1.0"
+  type: spec  # Bu bir spec dosyası, ana blueprint değil
+
+# =============================================================================
+# IMPLEMENTATION
+# =============================================================================
+
+implementation:
+  structure:
+    - entry point       # CLI ana giriş noktası
+    - core module       # Blueprint, BlueprintTree tipleri
+    - state module      # State yönetimi (.blueprint/ işlemleri)
+    - yamlparser/:      # YAML parsing (./yamlparser modülü)
+        has_blueprint: true
+    - commands/:
+        has_blueprint: true
+
+  data_structures:
+    blueprint_dir: |
+      .blueprint/
+      ├── current                 # Son snapshot ID (sadece "0003" gibi, newline yok)
+      ├── state.yaml              # Track edilen dosyaların hash'leri
+      └── history/
+          ├── 0001/
+          │   ├── BLUEPRINT.yaml  # O anki blueprint snapshot (tam kopya)
+          │   └── meta.yaml       # id, timestamp, message
+          ├── 0002/
+          │   └── ...
+          └── ...
+
+    meta_yaml: |
+      # .blueprint/history/XXXX/meta.yaml
+      id: "0001"                        # 4 haneli, 0-padded string
+      timestamp: "2025-01-15T10:30:00"  # ISO 8601 format
+      message: "Initial snapshot"       # User -m ile veya otomatik tarih
+
+    state_yaml: |
+      # .blueprint/state.yaml
+      # Snapshot anındaki dosya hash'leri
+      blueprint_hash: "sha256:abc123..."  # BLUEPRINT.yaml'ın hash'i
+      files:
+        "src/main": "sha256:def456..."
+        "src/core": "sha256:ghi789..."
+
+    blueprint_template: |
+      # {folder_name}
+
+      _meta:
+        version: "0.1.0"
+        updated: {date}
+        status: draft
+
+      intent: TODO
+
+      overview: |
+        TODO
+
+      api:
+        exports: []
+
+      implementation:
+        structure: []
+
+      tests:
+        scenarios: []
+
+  algorithms:
+    staleness_check: |
+      1. .blueprint/state.yaml oku
+      2. Her tracked_file için:
+         - Dosya hash'ini hesapla (SHA-256)
+         - State'teki hash ile karşılaştır
+      3. Herhangi biri farklıysa → stale
+      4. BLUEPRINT.yaml değiştiyse → stale
+
+    dependency_resolution: |
+      1. Alt dizinleri tara
+      2. BLUEPRINT.yaml varsa → dependency
+      3. Explicit dependencies: [...] varsa → ekle
+      4. Recursive
+
+    topological_sort: |
+      Kahn's algorithm:
+      1. Dependency graph oluştur (adjacency list)
+      2. Her node için in-degree hesapla
+      3. In-degree 0 olanları queue'ya ekle
+      4. Queue'dan al, result'a ekle
+      5. Komşuların in-degree'sini azalt
+      6. In-degree 0 olanları queue'ya ekle
+      7. Result.length != node_count ise cycle var
+
+    hash_calculation: |
+      1. Dosya içeriğini binary olarak oku
+      2. SHA-256 hash hesapla
+      3. Hex string'e çevir
+      4. "sha256:" prefix ekle
+      Örnek: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    unified_diff: |
+      Standart unified diff formatı:
+      - İlk satır: --- <old_file>
+      - İkinci satır: +++ <new_file>
+      - Hunk header: @@ -start,count +start,count @@
+      - Silinen satırlar: - prefix
+      - Eklenen satırlar: + prefix
+      - Context satırları: space prefix
+
+  decisions:
+    - q: Paketler arası iletişim nasıl?
+      a: |
+        api.type ile belirtilir, serbest string.
+        Belirtilmezse "library" (kod içi import) kabul edilir.
+
+        Örnekler: library, http, cli, grpc, ros, mqtt, websocket...
+        Kısıtlama yok, proje ihtiyacına göre belirlenir.
+
+    - q: Neden tek BLUEPRINT.yaml?
+      a: |
+        Varsayılan olarak tek dosya, bölümler içinde ayrılmış.
+
+        Büyük blueprint'ler için bölümler ayrı dosyalara taşınabilir:
+
+        ```yaml
+        # Ayrı dosyalar:
+        implementation: "./BLUEPRINT.impl.yaml"
+        tests: "./BLUEPRINT.tests.yaml"
+
+        # Veya tek birleşik dosya (önerilen):
+        implementation: "./BLUEPRINT.spec.yaml"
+        tests: "./BLUEPRINT.spec.yaml"
+
+        # Anchor syntax ile spesifik section:
+        implementation: "./BLUEPRINT.spec.yaml#implementation"
+        tests: "./BLUEPRINT.spec.yaml#tests"
+        ```
+
+        String değer verilirse o path'ten yüklenir (relative to BLUEPRINT.yaml).
+        Object verilirse inline kullanılır (mevcut davranış).
+
+    - q: Section referans syntax'ı nasıl çalışır?
+      a: |
+        İki format desteklenir:
+
+        1. Sadece path: "./BLUEPRINT.spec.yaml"
+           - Dosya yüklenir
+           - İlgili section key'i aranır (implementation veya tests)
+           - Bulunamazsa tüm dosya içeriği kullanılır
+
+        2. Anchor syntax: "./BLUEPRINT.spec.yaml#implementation"
+           - Dosya yüklenir
+           - # sonrası key ile section seçilir
+           - Key bulunamazsa hata
+
+    - q: Hangi dosyalar blueprint dosyası olarak tanınır?
+      a: |
+        bp tool şu pattern'lere uyan dosyaları tarar:
+
+        Pattern'ler (hepsi eşdeğer, kullanıcı seçer):
+        - BLUEPRINT.yaml, .BLUEPRINT.yaml (default, büyük harfli)
+        - BLUEPRINT.*.yaml, .BLUEPRINT.*.yaml
+        - *.BP.yaml, .*.BP.yaml
+
+        Küçük harfli alternatifler de desteklenir:
+        - blueprint.yaml, .blueprint.yaml
+        - blueprint.*.yaml, .blueprint.*.yaml
+        - *.bp.yaml, .*.bp.yaml
+
+        Bir klasörde tek ana blueprint olmalı. Birden fazla varsa warning.
+
+    - q: .blueprint/ ne işe yarar?
+      a: Internal state. Son snapshot, file hash'leri. Kullanıcı dokunmaz.
+
+    - q: Dependency nasıl belirlenir?
+      a: |
+        İki tür dependency var:
+
+        1. Implicit (alt klasörler):
+           - Alt klasörde BLUEPRINT.yaml varsa otomatik dependency
+           - Listelemeye gerek yok
+
+        2. Explicit (root level):
+           dependencies:
+             - ../other           # Relative path
+             - ../shared/utils
+
+        Path kuralları:
+        - Relative path'ler BLUEPRINT.yaml'a göre resolve edilir
+        - Path normalize edilir (// → /, /./ → /)
+        - ".." ile üst klasörlere çıkılabilir
+        - Absolute path desteklenmez (hata verir)
+
+        Hata politikası:
+        - Path mevcut değil → warning, atlanır
+        - Path'te BLUEPRINT.yaml yok → warning, atlanır
+        - Absolute path → error
+        - Cycle → error
+
+    - q: has_blueprint nasıl kullanılır?
+      a: |
+        implementation.structure'da klasör için:
+
+        implementation:
+          structure:
+            - src/main             # Dosya (track edilir)
+            - src/core
+            - commands/:           # Klasör, kendi blueprint'i var
+                has_blueprint: true
+            - build/:              # Klasör, blueprint yok
+                has_blueprint: false
+
+        has_blueprint: true → dependency olarak taranır, dosyaları track edilmez
+        has_blueprint: false → tamamen atlanır
+        has_blueprint belirtilmezse: klasörde BLUEPRINT.yaml varsa true, yoksa false
+
+    - q: Git gerekli mi?
+      a: Hayır. Tamamen dosya sistemi bazlı. Hash'ler ile tracking.
+
+    - q: External dependency var mı?
+      a: |
+        Hayır. Kendi YAML parser'ımızı kullanıyoruz (yamlparser/).
+        Standart YAML library kullanmıyoruz çünkü blueprint dosyalarında
+        type annotation, signature gibi değerler var ve bunlar standart
+        YAML syntax'ı ile çakışıyor.
+
+        Parser destekledikleri:
+        - Scalar: string, int, float, bool (true/false/yes/no), null
+        - List: "- item" formatı (nested dahil)
+        - Dict: "key: value" formatı (nested dahil)
+        - Multi-line: | (literal), > (folded)
+        - Yorumlar: # (satır sonu dahil)
+        - Type annotations: map<string, any>, string[], Type?
+        - Signatures: (arg: Type) -> Result
+
+        Desteklenmeyen:
+        - Inline: [a, b], {a: b} - bunlar scalar olarak parse edilir
+        - Anchor/alias: &ref, *ref
+        - Tag: !tag
+
+    - q: Hangi alanlar zorunlu?
+      a: |
+        Zorunlu (error):
+        - _meta.version: Semantic version string
+
+        Önerilen (warning):
+        - intent: Paketin amacı
+
+        Opsiyonel:
+        - _meta.updated, _meta.status
+        - overview, api, implementation, tests, dependencies
+
+        Bilinmeyen alanlar: Sessizce ignore edilir (flexible schema)
+
+    - q: Hangi dosyalar track edilir?
+      a: |
+        implementation.structure'da listelenen:
+        - Dosyalar: Hash hesaplanır, state.yaml'a kaydedilir
+        - Klasörler (has_blueprint: false): İçindeki dosyalar recursive track edilir
+        - Klasörler (has_blueprint: true): Track edilmez, kendi state'leri var
+
+        Symlink: Takip edilir ama cycle kontrolü yapılır
+
+    - q: tests.verification nasıl çalışır?
+      a: |
+        Blueprint'te tanımlanan verification komutları:
+
+        tests:
+          verification:
+            - "test command 1"
+            - "test command 2"
+
+        bp ss davranışı:
+        - Her komutu sırayla shell'de çalıştırır
+        - Working directory: BLUEPRINT.yaml'ın bulunduğu klasör
+        - Timeout: 5 dakika per komut
+        - Herhangi biri exit code != 0 dönerse başarısız
+        - verification boş veya yoksa: testler başarılı kabul edilir
+
+    - q: Snapshot ID kuralları nedir?
+      a: |
+        Format: 4 haneli, 0-padded string ("0001", "0002", ...)
+        Hesaplama: mevcut max ID + 1
+        Boşluk/delik: Sorun değil. 0001, 0003 varsa sonraki 0004 olur.
+        Üst limit: 9999 (aşılırsa hata)
+
+        Bozuk history davranışı:
+        - meta.yaml eksik/bozuk → o snapshot atlanır, warning
+        - BLUEPRINT.yaml eksik → o snapshot atlanır, warning
+        - Klasör adı sayı değil → atlanır
+
+    - q: Snapshot eşzamanlılığı nasıl yönetilir?
+      a: |
+        Lock mekanizması yok (basitlik için).
+
+        Çakışma önleme: Klasör oluşturma atomik olmalı
+        - Klasör zaten varsa hata alınır
+        - Hata alan process ID'yi artırıp tekrar dener (max 3 retry)
+
+    - q: Terminoloji standardı nedir?
+      a: |
+        Durum isimleri:
+        - fresh: Kod snapshot ile aynı
+        - stale: Kod değişmiş
+        - no_snapshot: Henüz snapshot alınmamış (.blueprint/ yok)
+
+  edge_cases:
+    - case: Birden fazla ana blueprint
+      handle: Warning ver, ilk bulunanı kullan (alfabetik sıra)
+
+    - case: YAML parse hatası
+      handle: '"YAML parse error at line {n}: {message}" formatında hata'
+
+    - case: Circular dependency
+      handle: '"Circular dependency detected: a → b → c → a" formatında hata'
+
+    - case: .blueprint/ yok
+      handle: İlk bp ss'te oluştur
+
+    - case: BLUEPRINT.yaml yok
+      handle: '"Not a blueprint package" olarak atla'
+
+    - case: Symlink cycle
+      handle: Visited set ile tespit, hata ver
+
+    - case: Permission denied
+      handle: Açıklayıcı hata mesajı, hangi dosya olduğunu belirt
+
+    - case: Snapshot ID collision
+      handle: Atomik klasör oluşturma, çakışırsa retry (max 3)
+
+    - case: Snapshot ID limit aşımı (>9999)
+      handle: '"Snapshot limit exceeded" hatası'
+
+    - case: Section referans bulunamadı
+      handle: '"Section #xyz not found in file" hatası'
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+tests:
+  scenarios:
+    # =========================================================================
+    # CLI TESTS
+    # =========================================================================
+
+    # Validate
+    - id: cli_validate_valid
+      given: Geçerli BLUEPRINT.yaml
+      when: bp validate
+      then: exit 0, "✓" gösterir
+
+    - id: cli_validate_invalid_yaml
+      given: Bozuk YAML (indent hatası)
+      when: bp validate
+      then: exit 1, satır numarası ile hata
+
+    - id: cli_validate_missing_intent
+      given: intent alanı yok
+      when: bp validate
+      then: exit 2, warning (error değil)
+
+    - id: cli_validate_recursive
+      given: 3 alt klasör, 1'i invalid
+      when: bp validate -r
+      then: Hepsi listelenir, exit 1
+
+    # Status
+    - id: cli_status_fresh
+      given: Kod hiç değişmemiş
+      when: bp status
+      then: exit 0, "✓ . (fresh)"
+
+    - id: cli_status_stale
+      given: Bir dosya değişmiş
+      when: bp status
+      then: exit 1, "⚠ . (stale, 1 files changed)"
+
+    - id: cli_status_no_snapshot
+      given: .blueprint/ yok
+      when: bp status
+      then: exit 2, "○ . (no snapshot)"
+
+    # Deps
+    - id: cli_deps_no_deps
+      given: Alt klasör yok
+      when: bp deps
+      then: Sadece kendisi listelenir
+
+    - id: cli_deps_nested
+      given: a/ → b/ → c/ hiyerarşisi
+      when: bp deps a/
+      then: '"c, b, a" sırasında'
+
+    - id: cli_deps_circular
+      given: a → b, b → a
+      when: bp deps
+      then: Hata mesajı
+
+    # Init
+    - id: cli_init_empty
+      given: Boş klasör
+      when: bp init
+      then: BLUEPRINT.yaml oluşur
+
+    - id: cli_init_existing
+      given: BLUEPRINT.yaml zaten var
+      when: bp init
+      then: Hata, üzerine yazmaz
+
+    # =========================================================================
+    # BLUEPRINT TYPE TESTS
+    # =========================================================================
+
+    - id: blueprint_load_valid
+      given: Geçerli BLUEPRINT.yaml dosyası
+      when: Blueprint oluşturulur
+      then: data parse edilmiş, path doğru set edilmiş
+
+    - id: blueprint_load_not_found
+      given: Dosya yok
+      when: Blueprint oluşturulur
+      then: File not found hatası
+
+    - id: blueprint_load_invalid_yaml
+      given: Bozuk YAML syntax
+      when: Blueprint oluşturulur
+      then: Parse hatası (satır numarası ile)
+
+    - id: blueprint_validate_valid
+      given: Geçerli blueprint (_meta.version ve intent var)
+      when: validate() çağrılır
+      then: valid=true, errors=[], warnings=[]
+
+    - id: blueprint_validate_missing_version
+      given: _meta.version yok
+      when: validate() çağrılır
+      then: valid=false, errors=["missing _meta.version"]
+
+    - id: blueprint_validate_missing_intent
+      given: intent yok
+      when: validate() çağrılır
+      then: valid=true, warnings=["missing intent"]
+
+    - id: blueprint_is_stale_fresh
+      given: state.yaml var, dosyalar değişmemiş
+      when: is_stale() çağrılır
+      then: false
+
+    - id: blueprint_is_stale_changed
+      given: state.yaml var, bir dosya değişmiş
+      when: is_stale() çağrılır
+      then: true
+
+    - id: blueprint_is_stale_no_snapshot
+      given: .blueprint/state.yaml yok
+      when: is_stale() çağrılır
+      then: null (snapshot yok)
+
+    - id: blueprint_get_section_exists
+      given: api bölümü var
+      when: get_section("api") çağrılır
+      then: api map döner
+
+    - id: blueprint_get_section_not_exists
+      given: tests bölümü yok
+      when: get_section("tests") çağrılır
+      then: null
+
+    - id: blueprint_get_changed_files_none
+      given: state.yaml var, dosyalar değişmemiş
+      when: get_changed_files() çağrılır
+      then: boş array
+
+    - id: blueprint_get_changed_files_some
+      given: state.yaml var, 2 dosya değişmiş
+      when: get_changed_files() çağrılır
+      then: 2 elemanlı array
+
+    - id: blueprint_get_history_empty
+      given: .blueprint/history/ yok
+      when: get_history() çağrılır
+      then: boş array
+
+    - id: blueprint_get_history_some
+      given: 3 snapshot var
+      when: get_history() çağrılır
+      then: 3 elemanlı array (yeniden eskiye)
+
+    # =========================================================================
+    # BLUEPRINTTREE TYPE TESTS
+    # =========================================================================
+
+    - id: tree_walk_single
+      given: Tek blueprint, alt klasör yok
+      when: walk() çağrılır
+      then: 1 Blueprint döner
+
+    - id: tree_walk_nested
+      given: root/ + root/sub1/ + root/sub2/
+      when: walk() çağrılır
+      then: 3 Blueprint döner
+
+    - id: tree_walk_skip_no_blueprint
+      given: root/ + root/sub/ (sub'da BLUEPRINT.yaml yok)
+      when: walk() çağrılır
+      then: Sadece root döner
+
+    - id: tree_resolve_deps_implicit
+      given: root/sub/ alt klasör (blueprint var)
+      when: resolve_deps(root_bp) çağrılır
+      then: sub_bp döner
+
+    - id: tree_resolve_deps_explicit
+      given: 'dependencies: [../other] tanımlı'
+      when: resolve_deps(bp) çağrılır
+      then: other_bp listede
+
+    - id: tree_topological_sort_simple
+      given: a → b → c (a en üst)
+      when: topological_sort() çağrılır
+      then: '[c, b, a] sırasında'
+
+    - id: tree_topological_sort_circular
+      given: a → b → c → a
+      when: topological_sort() çağrılır
+      then: Circular dependency hatası
+
+    # =========================================================================
+    # STATE MANAGEMENT TESTS
+    # =========================================================================
+
+    - id: state_yaml_write
+      given: Blueprint ve dosyalar
+      when: save_state() çağrılır
+      then: state.yaml oluşur, hash'ler doğru
+
+    - id: state_hash_consistency
+      given: Aynı içerik
+      when: İki kez hash hesaplanır
+      then: Aynı sonuç
+
+    - id: state_hash_utf8
+      given: Unicode içerikli dosya
+      when: Hash hesaplanır
+      then: UTF-8 encode ile tutarlı hash
+
+    # =========================================================================
+    # SNAPSHOT TESTS
+    # =========================================================================
+
+    - id: ss_create_first
+      given: .blueprint/history/ yok
+      when: bp ss
+      then: history/0001/ oluşur
+
+    - id: ss_increment_id
+      given: history/0001/ ve history/0002/ var
+      when: bp ss
+      then: history/0003/ oluşur
+
+    - id: ss_tests_fail
+      given: tests.verification başarısız
+      when: bp ss
+      then: Snapshot alınmaz, exit 1
+
+    - id: ss_skip_tests
+      given: tests.verification başarısız
+      when: bp ss --skip-tests
+      then: Snapshot alınır
+
+    # =========================================================================
+    # YAML PARSER TESTS
+    # =========================================================================
+
+    - id: yaml_parse_scalar_string
+      given: "key: value"
+      then: {key: "value"}
+
+    - id: yaml_parse_scalar_int
+      given: "count: 42"
+      then: {count: 42}
+
+    - id: yaml_parse_scalar_bool
+      given: "enabled: true"
+      then: {enabled: true}
+
+    - id: yaml_parse_list
+      given: |
+        items:
+          - a
+          - b
+      then: {items: ["a", "b"]}
+
+    - id: yaml_parse_nested
+      given: |
+        parent:
+          child: 1
+      then: {parent: {child: 1}}
+
+    - id: yaml_parse_multiline
+      given: |
+        text: |
+          line1
+          line2
+      then: {text: "line1\nline2\n"}
+
+    # =========================================================================
+    # SECTION REFERENCE TESTS
+    # =========================================================================
+
+    - id: section_ref_simple_path
+      given: 'implementation: "./spec.yaml"'
+      when: spec.yaml'da implementation key'i var
+      then: implementation section yüklenir
+
+    - id: section_ref_anchor_syntax
+      given: 'implementation: "./spec.yaml#implementation"'
+      when: spec.yaml yüklenir
+      then: implementation section'ı alınır
+
+    - id: section_ref_not_found
+      given: 'implementation: "./spec.yaml#nonexistent"'
+      when: Key bulunamazsa
+      then: Hata
+
+    # =========================================================================
+    # EDGE CASE TESTS
+    # =========================================================================
+
+    - id: edge_empty_blueprint
+      given: Boş BLUEPRINT.yaml dosyası
+      when: Blueprint oluşturulur
+      then: Parse hatası veya boş map
+
+    - id: edge_unicode_content
+      given: Unicode içerikli blueprint
+      when: Parse ve hash
+      then: Sorunsuz çalışır
+
+    - id: edge_deep_nesting
+      given: 10 seviye klasör hiyerarşisi
+      when: walk() çağrılır
+      then: Tüm blueprint'ler bulunur
+
+    - id: edge_symlink
+      given: Symlink olan klasör
+      when: walk() çağrılır
+      then: Sonsuz döngüye girmez
+
+  verification:
+    - bp validate kendi blueprint'i üzerinde çalışır
+    - bp status kendi blueprint'i üzerinde çalışır
+    - bp ss kendi blueprint'i üzerinde çalışır
+    - Circular dependency tespit edilir
+    - Windows/Linux/Mac path'leri çalışır
+    - Hash hesaplaması deterministic
+    - Section referansları doğru çözümlenir

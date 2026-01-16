@@ -1,0 +1,563 @@
+# bp/commands - Implementation & Test Specification
+
+_meta:
+  version: "0.1.0"
+  type: spec
+
+# =============================================================================
+# IMPLEMENTATION
+# =============================================================================
+
+implementation:
+  structure:
+    - registry module     # COMMANDS map, komut import/export
+    - validate module
+    - status module
+    - deps module
+    - init module
+    - log module
+    - diff module
+    - show module
+    - ss module
+    # Agentic (devre dışı):
+    # - implement module
+    # - fix module
+
+  decisions:
+    - q: Neden her komut ayrı modül?
+      a: Kolay test, kolay extend. Yeni komut = yeni modül.
+
+    - q: Registry nasıl çalışıyor?
+      a: Ana modülde COMMANDS map'i, her komut modülünden import.
+
+  command_details:
+    validate:
+      checks:
+        - YAML syntax (parse edilebilir mi?)
+        - _meta.version var mı? (zorunlu → error)
+        - intent var mı? (önerilen → warning)
+      output_symbols:
+        success: "✓"
+        warning: "⚠"
+        error: "✗"
+      exit_codes:
+        0: Valid (hata ve warning yok)
+        1: Error var (YAML syntax veya _meta.version eksik)
+        2: Sadece warning var (intent eksik gibi)
+      recursive_behavior: |
+        -r flag ile alt klasörleri de tarar.
+        Her blueprint için ayrı satır.
+        Exit code önceliği: error (1) > warning (2) > success (0)
+        Yani: en az bir error varsa 1, error yok ama warning varsa 2, hiçbiri yoksa 0
+
+    status:
+      states:
+        fresh: Dosyalar snapshot'taki ile aynı
+        stale: En az bir dosya değişmiş
+        no_snapshot: .blueprint/state.yaml yok
+      state_yaml_schema: |
+        # .blueprint/state.yaml formatı:
+        blueprint_hash: "sha256:abc123..."   # BLUEPRINT.yaml'ın hash'i
+        files:                                # implementation.structure'daki dosyalar
+          bp.py: "sha256:def456..."
+          core.py: "sha256:ghi789..."
+
+        Hash'lenen dosyalar:
+        - implementation.structure'da listelenen dosyalar
+        - Klasörler (has_blueprint: false): içindeki tüm dosyalar recursive
+        - Klasörler (has_blueprint: true): dahil edilmez (kendi state'leri var)
+        - BLUEPRINT.yaml: ayrıca blueprint_hash olarak saklanır
+      changed_files_generation: |
+        StatusInfo.changed_files nasıl üretilir:
+        1. state.yaml'daki her dosya için mevcut hash hesapla
+        2. Hash farklıysa → changed_files listesine ekle
+        3. Dosya silinmişse → changed_files'a ekle (prefix: "deleted: ")
+        4. Yeni dosya varsa → changed_files'a ekle (prefix: "new: ")
+        5. BLUEPRINT.yaml değiştiyse → changed_files'a "BLUEPRINT.yaml" ekle
+      staleness_algorithm: |
+        Hash-based karşılaştırma:
+        1. .blueprint/state.yaml oku (yoksa → no_snapshot)
+        2. state.yaml'daki her dosya için:
+           - Mevcut dosyanın SHA256 hash'ini hesapla
+           - Kayıtlı hash ile karşılaştır
+           - Farklıysa → stale, changed_files'a ekle
+        3. BLUEPRINT.yaml'ın hash'ini kontrol et
+           - Farklıysa → stale
+        4. Hiç fark yoksa → fresh
+      output_symbols:
+        fresh: "✓"
+        stale: "⚠"
+        no_snapshot: "○"
+      exit_codes:
+        0: fresh
+        1: stale
+        2: no_snapshot
+      recursive_behavior: |
+        -r flag ile alt paketleri de kontrol eder.
+        Özet satırı en sonda gösterilir.
+        Exit code: en kötü durum (2 > 1 > 0)
+
+    deps:
+      algorithm: Kahn's algorithm (topological sort)
+      dependency_sources: |
+        Edge'ler iki kaynaktan gelir:
+        1. Implicit: Alt klasörlerde BLUEPRINT.yaml varsa → dependency
+           (implementation.structure'da has_blueprint: false olanlar hariç)
+        2. Explicit: BLUEPRINT.yaml'daki dependencies listesi
+           dependencies:
+             - ../other
+             - ../shared/utils
+      output_format: |
+        Numaralı liste, leaf'ler önce:
+        1. ./commands
+        2. . (current)
+      circular_detection: Graph traversal sırasında cycle tespit edilir
+      exit_codes:
+        0: Başarılı
+        1: Circular dependency veya hata
+      error_conditions:
+        - "Circular dependency detected: a → b → a": Döngüsel bağımlılık
+
+    init:
+      template_source: Ana blueprint'teki blueprint_template kullanılır
+      folder_name: Klasör adı template'e {folder_name} olarak eklenir
+      date: Bugünün tarihi {date} olarak eklenir
+      exit_codes:
+        0: Blueprint oluşturuldu
+        1: Zaten var veya hata
+      error_conditions:
+        - "BLUEPRINT.yaml already exists": Dosya zaten mevcut
+
+    log:
+      default_count: 10
+      empty_output: "No snapshot history"
+      sort_order: Yeniden eskiye (son snapshot en üstte)
+      format: "#XXXX YYYY-MM-DD HH:MM \"message\""
+      meta_yaml_schema: |
+        # .blueprint/history/XXXX/meta.yaml formatı:
+        id: "0001"                         # 4 haneli, 0-padded string
+        timestamp: "2025-01-15T10:30:00"   # ISO 8601, local timezone
+        message: "Snapshot message"         # -m ile verilen veya tarih
+
+        Timestamp kuralları:
+        - Format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)
+        - Timezone: Local time (UTC offset yok, basitlik için)
+        - Log çıktısında: sadece tarih ve saat gösterilir (saniye yok)
+      exit_codes:
+        0: Başarılı (boş geçmiş dahil)
+        1: Hata
+
+    diff:
+      algorithm: unified diff (standart unified diff algoritması)
+      id_resolution: |
+        - "current" veya argüman yok → mevcut BLUEPRINT.yaml
+        - "0001", "0002", ... → .blueprint/history/XXXX/BLUEPRINT.yaml
+      output: |
+        Fark varsa: Standart unified diff formatı (--- +++ @@ ile)
+        Fark yoksa: Boş çıktı (stdout'a hiçbir şey yazılmaz)
+      no_changes_behavior: |
+        unified_diff boş döndüğünde:
+        - output: "" (boş string)
+        - DiffResult.has_changes: false
+        - DiffResult.unified_diff: ""
+        - exit_code: 0
+      exit_codes:
+        0: Başarılı (fark var veya yok)
+        1: Hata (ID bulunamadı, history yok)
+      error_conditions:
+        - "Snapshot #XXXX not found": Verilen ID history'de yok
+        - "No snapshot history": .blueprint/history/ yok veya boş
+
+    show:
+      behavior: Snapshot'ın BLUEPRINT.yaml içeriğini stdout'a yazar
+      id_resolution: |
+        - Argüman yok → son snapshot (.blueprint/current'tan oku)
+        - "0001", "0002", ... → ilgili snapshot
+      current_file_handling: |
+        .blueprint/current dosyası:
+        - Yoksa → "No snapshot history" hatası (exit 1)
+        - Boşsa → "No snapshot history" hatası (exit 1)
+        - Geçersiz ID içeriyorsa (örn: "abc") → '"Invalid current snapshot ID" hatası (exit 1)'
+        - Geçerli ID ama klasör yoksa → "Snapshot #XXXX not found" hatası (exit 1)
+      exit_codes:
+        0: Başarılı
+        1: Hata (ID bulunamadı, history yok, current bozuk)
+      error_conditions:
+        - "Snapshot #XXXX not found": Verilen ID history'de yok
+        - "No snapshot history": .blueprint/history/ yok veya boş
+        - "Invalid current snapshot ID": .blueprint/current geçersiz format
+
+    ss:
+      steps:
+        1: |
+          Blueprint'i validate et
+          - Error varsa (exit 1) → ss exit 2, snapshot alınmaz
+          - Warning varsa (exit 2) → devam et, snapshot alınır
+          - Yani sadece error'lar bloke eder, warning'ler geçer
+        2: tests.verification komutlarını çalıştır (--skip-tests ile atlanır)
+        3: Testler başarısızsa exit 1
+        4: Yeni snapshot ID hesapla (mevcut max + 1)
+        5: .blueprint/history/XXXX/ oluştur
+        6: BLUEPRINT.yaml'ı kopyala
+        7: meta.yaml oluştur (id, timestamp, message - yoksa tarih kullanılır)
+        8: .blueprint/state.yaml güncelle
+        9: .blueprint/current güncelle
+      id_format: 4 haneli, zero-padded ("0001", "0002", ...)
+      exit_codes:
+        0: Snapshot başarıyla alındı
+        1: Testler başarısız
+        2: Validation hatası
+      verification_execution:
+        source: BLUEPRINT.yaml içindeki tests.verification listesi
+        format: Her item bir shell komutu (string)
+        cwd: Blueprint'in bulunduğu klasör
+        method: Shell'de komut çalıştırma (working directory = bp klasörü)
+        timeout: 5 dakika per komut (300 saniye)
+        parallel: false (sırayla çalıştırılır)
+        fail_fast: true (ilk hata durur)
+        example: |
+          tests:
+            verification:
+              - make test
+              - ./run_tests.sh
+      skip_tests_flag: |
+        --skip-tests: verification komutlarını atlar
+        Validation hala çalışır (atlanamaz)
+
+    # Agentic (devre dışı):
+    # implement:
+    #   lock_mechanism: PID-based lock dosyası
+    #   force_flag: Aktif kilidi zorla kaldırır
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+tests:
+  scenarios:
+    # =========================================================================
+    # REGISTRY / GENEL
+    # =========================================================================
+    - id: registry_all_commands
+      given: COMMANDS dict
+      then: 8 komut var (validate, status, deps, init, log, diff, show, ss)
+
+    - id: unknown_command
+      given: COMMANDS'ta olmayan komut
+      when: bp xyz
+      then: '"Unknown command: xyz" hatası, exit 1'
+
+    - id: command_error_handling
+      given: Komut exception fırlatır
+      when: Çalıştırılır
+      then: Graceful error message, stack trace değil
+
+    - id: command_returns_result
+      given: Herhangi bir komut
+      when: Çağrılır
+      then: CommandResult döner (exit_code, output, data, errors)
+
+    # =========================================================================
+    # VALIDATE
+    # =========================================================================
+    - id: validate_valid
+      given: Geçerli BLUEPRINT.yaml
+      when: bp validate
+      then: '"✓ ./BLUEPRINT.yaml", exit 0'
+
+    - id: validate_invalid_yaml
+      given: Bozuk YAML syntax (indent hatası)
+      when: bp validate
+      then: '"✗ ./BLUEPRINT.yaml: line 5: ..." hatası, exit 1'
+
+    - id: validate_missing_version
+      given: _meta.version yok
+      when: bp validate
+      then: '"✗ ./BLUEPRINT.yaml: missing _meta.version", exit 1'
+
+    - id: validate_missing_intent
+      given: intent alanı yok (ama _meta.version var)
+      when: bp validate
+      then: '"⚠ ./BLUEPRINT.yaml: missing intent", exit 2'
+
+    - id: validate_recursive
+      given: 2 alt klasör (1 valid, 1 invalid)
+      when: bp validate -r
+      then: |
+        Her blueprint listelenir:
+        ✓ ./BLUEPRINT.yaml
+        ✓ ./commands/BLUEPRINT.yaml
+        ✗ ./other/BLUEPRINT.yaml: missing _meta.version
+        exit 1 (en az bir hata var)
+
+    - id: validate_no_blueprint
+      given: BLUEPRINT.yaml yok
+      when: bp validate
+      then: '"✗ ./BLUEPRINT.yaml: file not found", exit 1'
+
+    # =========================================================================
+    # STATUS
+    # =========================================================================
+    - id: status_fresh
+      given: Snapshot var, dosyalar değişmemiş
+      when: bp status
+      then: '"✓ . (fresh)", exit 0'
+
+    - id: status_stale
+      given: Snapshot var, 2 dosya değişmiş
+      when: bp status
+      then: '"⚠ . (stale, 2 files changed)", exit 1'
+
+    - id: status_no_snapshot
+      given: .blueprint/ yok
+      when: bp status
+      then: '"○ . (no snapshot)", exit 2'
+
+    - id: status_recursive
+      given: 2 alt paket (1 fresh, 1 stale)
+      when: bp status -r
+      then: |
+        ✓ ./commands (fresh)
+        ⚠ ./other (stale, 1 file changed)
+        ---
+        1 fresh, 1 stale
+        exit 1
+
+    - id: status_blueprint_changed
+      given: Snapshot var, BLUEPRINT.yaml değişmiş
+      when: bp status
+      then: '"⚠ . (stale, BLUEPRINT.yaml changed)", exit 1'
+
+    # =========================================================================
+    # DEPS
+    # =========================================================================
+    - id: deps_no_deps
+      given: Alt klasörde blueprint yok
+      when: bp deps
+      then: |
+        1. . (current)
+        exit 0
+
+    - id: deps_with_subdirs
+      given: commands/ alt paketi var
+      when: bp deps
+      then: |
+        1. ./commands
+        2. . (current)
+        exit 0 (topological order)
+
+    - id: deps_circular
+      given: a → b, b → a (explicit dependency ile)
+      when: bp deps
+      then: '"Circular dependency detected: a → b → a", exit 1'
+
+    - id: deps_deep_nesting
+      given: a/b/c/d hiyerarşisi
+      when: bp deps a/
+      then: d, c, b, a sırasında listelenir
+
+    # =========================================================================
+    # INIT
+    # =========================================================================
+    - id: init_empty_dir
+      given: Boş klasör
+      when: bp init
+      then: BLUEPRINT.yaml oluşur (template), exit 0
+
+    - id: init_existing
+      given: BLUEPRINT.yaml zaten var
+      when: bp init
+      then: '"BLUEPRINT.yaml already exists", exit 1'
+
+    - id: init_with_path
+      given: newpkg/ klasörü var, blueprint yok
+      when: bp init newpkg/
+      then: newpkg/BLUEPRINT.yaml oluşur
+
+    - id: init_template_valid
+      given: bp init çalıştı
+      then: Oluşan BLUEPRINT.yaml, bp validate'den geçer
+
+    # =========================================================================
+    # LOG
+    # =========================================================================
+    - id: log_empty
+      given: .blueprint/history/ yok veya boş
+      when: bp log
+      then: '"No snapshot history", exit 0'
+
+    - id: log_default
+      given: 15 snapshot var
+      when: bp log
+      then: Son 10 snapshot gösterilir (default count)
+
+    - id: log_with_count
+      given: 5 snapshot var
+      when: bp log -n 2
+      then: Son 2 snapshot gösterilir
+
+    - id: log_format
+      given: Snapshot'lar var
+      when: bp log
+      then: |
+        Format:
+        #0003 2025-01-15 10:30 "Message here"
+        #0002 2025-01-14 15:00 "Another message"
+
+    # =========================================================================
+    # DIFF
+    # =========================================================================
+    - id: diff_no_args
+      given: Snapshot var
+      when: bp diff
+      then: Current blueprint vs son snapshot, unified diff format
+
+    - id: diff_single_id
+      given: #0002 var
+      when: bp diff 0002
+      then: #0002 vs current blueprint
+
+    - id: diff_two_ids
+      given: #0001 ve #0003 var
+      when: bp diff 0001 0003
+      then: #0001 vs #0003
+
+    - id: diff_no_changes
+      given: Blueprint değişmemiş
+      when: bp diff
+      then: '"No changes", exit 0'
+
+    - id: diff_not_found
+      given: #9999 yok
+      when: bp diff 9999
+      then: '"Snapshot #9999 not found", exit 1'
+
+    - id: diff_no_history
+      given: Hiç snapshot yok
+      when: bp diff
+      then: '"No snapshot history", exit 1'
+
+    # =========================================================================
+    # SHOW
+    # =========================================================================
+    - id: show_default
+      given: Snapshot var
+      when: bp show
+      then: Son snapshot'ın BLUEPRINT.yaml içeriği
+
+    - id: show_specific
+      given: #0002 var
+      when: bp show 0002
+      then: #0002'nin BLUEPRINT.yaml içeriği
+
+    - id: show_not_found
+      given: #9999 yok
+      when: bp show 9999
+      then: '"Snapshot #9999 not found", exit 1'
+
+    - id: show_no_history
+      given: Hiç snapshot yok
+      when: bp show
+      then: '"No snapshot history", exit 1'
+
+    - id: show_current_corrupt
+      given: .blueprint/current içeriği "abc" (geçersiz)
+      when: bp show
+      then: '"Invalid current snapshot ID", exit 1'
+
+    - id: show_current_missing_snapshot
+      given: .blueprint/current = "0005" ama history/0005/ yok
+      when: bp show
+      then: '"Snapshot #0005 not found", exit 1'
+
+    # =========================================================================
+    # SNAPSHOT (ss)
+    # =========================================================================
+    - id: ss_success
+      given: Valid blueprint, testler geçiyor (veya yok)
+      when: bp ss -m "v1.0 release"
+      then: |
+        - .blueprint/history/XXXX/ oluşur
+        - meta.yaml: message = "v1.0 release"
+        - .blueprint/current güncellenir
+        - exit 0
+
+    - id: ss_validation_error
+      given: Invalid blueprint (_meta.version yok)
+      when: bp ss
+      then: '"Validation failed: missing _meta.version", exit 2'
+
+    - id: ss_validation_warning_passes
+      given: Blueprint'te intent yok (warning) ama _meta.version var
+      when: bp ss
+      then: Snapshot alınır (warning bloke etmez), exit 0
+
+    - id: ss_tests_fail
+      given: Valid blueprint, tests.verification başarısız
+      when: bp ss
+      then: '"Tests failed", exit 1, snapshot alınmaz'
+
+    - id: ss_skip_tests
+      given: Valid blueprint, tests.verification başarısız
+      when: bp ss --skip-tests
+      then: Snapshot alınır (testler atlandı), exit 0
+
+    - id: ss_no_message
+      given: Valid blueprint
+      when: bp ss (mesaj verilmedi)
+      then: 'meta.yaml''da message = tarih (örn: "2026-01-15")'
+
+    - id: ss_increments_id
+      given: history/0001/ ve history/0002/ var
+      when: bp ss
+      then: history/0003/ oluşur
+
+    - id: ss_first_snapshot
+      given: .blueprint/ yok
+      when: bp ss
+      then: .blueprint/ ve history/0001/ oluşur
+
+    - id: ss_state_updated
+      given: bp ss başarılı
+      then: .blueprint/state.yaml güncellenir (dosya hash'leri)
+
+    # Agentic (devre dışı):
+    # # Implement
+    # - id: implement_success
+    #   given: Valid blueprint, agent çalışıyor
+    #   when: bp implement -m "test"
+    #   then: exit 0, history'e kaydedilir
+    #
+    # - id: implement_locked
+    #   given: Başka process lock almış
+    #   when: bp implement
+    #   then: "Locked by PID X" hatası
+    #
+    # - id: implement_force_unlock
+    #   given: Stale lock (process yok)
+    #   when: bp implement --force
+    #   then: Lock kaldırılır, devam eder
+    #
+    # # Fix
+    # - id: fix_broken_yaml
+    #   given: Bozuk YAML syntax
+    #   when: bp fix
+    #   then: Agent düzeltir, onay ister
+    #
+    # - id: fix_already_valid
+    #   given: Valid blueprint
+    #   when: bp fix
+    #   then: '"Already valid", exit 2'
+    #
+    # - id: fix_dry_run
+    #   given: Bozuk YAML
+    #   when: bp fix --dry-run
+    #   then: Öneri gösterilir, dosya değişmez
+
+  verification:
+    - Her komut CommandResult döndürür
+    - 'Her komut aynı signature''a sahip: (ctx: CommandContext) -> CommandResult'
+    - COMMANDS dict'i 8 komut içerir
+    - Tüm exit code'lar ana blueprint ile tutarlı
+    - Error durumunda errors listesi dolu, output açıklayıcı
+    - Her komut izole test edilebilir (side effect'ler mocklanabilir)

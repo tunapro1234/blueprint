@@ -14,6 +14,7 @@ func DepsCommand(ctx CommandContext) CommandResult {
 	if path == "" {
 		path = "."
 	}
+	upgrades, _ := ctx.Args["upgrades"].(bool)
 	bpObj, err := bp.LoadBlueprint(path)
 	if err != nil {
 		if errors.Is(err, bp.ErrNotBlueprint) {
@@ -24,6 +25,10 @@ func DepsCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{err.Error()}}
 	}
 	root := bpObj.Dir
+	if upgrades {
+		return depsUpgrades(bpObj)
+	}
+
 	tree := &bp.BlueprintTree{Root: root}
 	ordered, err := tree.TopologicalSort()
 	if err != nil {
@@ -39,6 +44,44 @@ func DepsCommand(ctx CommandContext) CommandResult {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, label))
 	}
 	return CommandResult{ExitCode: 0, Output: strings.Join(lines, "\n"), Data: pathsFromBlueprints(ordered, root)}
+}
+
+func depsUpgrades(bpObj *bp.Blueprint) CommandResult {
+	depsState, warnings, err := bpObj.DependencyState()
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	warnLines := []string{}
+	for _, w := range warnings {
+		if strings.TrimSpace(w) == "" {
+			continue
+		}
+		warnLines = append(warnLines, "⚠ "+w)
+	}
+	deps, _, err := (&bp.BlueprintTree{Root: bpObj.Dir}).ResolveDeps(bpObj)
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	lines := []string{}
+	for _, dep := range deps {
+		label := formatDepLabel(bpObj.Dir, dep.Dir)
+		state, ok := depsState[label]
+		if !ok || state.Pinned == "" || state.Latest == "" {
+			lines = append(lines, fmt.Sprintf("%s: (no snapshot)", label))
+			continue
+		}
+		if state.Pinned == state.Latest {
+			lines = append(lines, fmt.Sprintf("%s: (up to date)", label))
+			continue
+		}
+		line := fmt.Sprintf("%s: %s → %s", label, state.Pinned, state.Latest)
+		if state.APIChanged {
+			line += " (API CHANGED!)"
+		}
+		lines = append(lines, line)
+	}
+	all := append(warnLines, lines...)
+	return CommandResult{ExitCode: 0, Output: strings.Join(all, "\n"), Data: depUpgradesFromState(depsState)}
 }
 
 func formatDepLabel(root, dir string) string {

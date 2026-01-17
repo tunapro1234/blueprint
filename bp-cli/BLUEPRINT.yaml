@@ -1,9 +1,43 @@
 # bp - Blueprint Management Tool
 
 _meta:
-  version: "0.1.0"
-  updated: 2026-01-16
+  version: "0.2.0"
+  updated: 2026-01-17
   status: draft
+  state_dir: "blueprint"
+
+# =============================================================================
+# PROJECT INFO
+# =============================================================================
+
+project:
+  name: bp
+  tagline: File-system based blueprint authoring and tracking tool
+  description: |
+    AI destekli yazılım geliştirme için tasarlanmış, BLUEPRINT.yaml dosyalarını
+    yöneten, versiyonlayan ve takip eden CLI aracı.
+
+license:
+  type: GPL-3.0-or-later
+  file: LICENSE
+  notice: |
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+repository:
+  url: https://github.com/tunapro1234/blueprint
+  issues: https://github.com/tunapro1234/blueprint/issues
+  discussions: https://github.com/tunapro1234/blueprint/discussions
+
+author:
+  name: Tuna Gül
+  github: tunapro1234
+
+# =============================================================================
+# INTENT & OVERVIEW
+# =============================================================================
 
 intent: |
   Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool.
@@ -15,9 +49,42 @@ overview: |
 
   Temel özellikler:
   - Blueprint validation ve schema kontrolü
-  - Hash-based snapshot sistemi
-  - Dependency tracking
-  - Worker isolation (implement/work komutları)
+  - Hash-based snapshot sistemi (YYYYMMDD-HHMM-hash-slug formatında)
+  - Dependency tracking ve reverse tracking
+  - Dependency pinning ve upgrade yönetimi
+
+# =============================================================================
+# PLAN
+# =============================================================================
+
+plan:
+  - id: state_dir_config
+    status: done
+    desc: _meta.state_dir ile state dizini ayarlanabilir; bu repo "blueprint" kullanır.
+  - id: snapshot_imports
+    status: done
+    desc: Paketler snapshot impl dizinlerinden import edilecek şekilde güncellendi.
+  - id: docs_update
+    status: done
+    desc: README ve blueprint/spec dokümanları state_dir için güncellendi.
+  - id: tests_exclude_state_dir
+    status: done
+    desc: Verification komutları state dizinini test kapsamı dışında bırakır.
+  - id: gitignore_state_dir
+    status: done
+    desc: state dizinini (blueprint/) gitignore'a ekle.
+
+# =============================================================================
+# WORKFLOW POLICY
+# =============================================================================
+
+dependency_policy:
+  summary: |
+    Önerilen yaklaşım (enforce edilmez, ekip kuralı):
+    - Working tree (paket klasörü) sadece edit alanıdır
+    - Diğer paketler import/build için pinned snapshot kopyalarını kullanır
+      (örn. blueprint/history/{snapshot_id}/impl)
+    - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
 
 # =============================================================================
 # PROJECT STRUCTURE
@@ -28,21 +95,38 @@ structure:
     src/:
       desc: Tüm kaynak kodlar ve iç blueprint'ler
       has_blueprint: true
-    .blueprint/:
-      desc: bp tool'un internal state'i (history, snapshots, work sessions)
+    blueprint/:
+      desc: bp tool'un internal state'i (history, snapshots, state)
       managed_by: bp tool
     .git/:
       desc: Git version control
 
   files:
+    LICENSE:
+      desc: GNU General Public License v3.0
+      managed_by: project
+      rules:
+        - NEVER_MODIFY: Lisans dosyası değiştirilmemeli
+
     README.md:
       desc: Proje açıklaması ve kullanım kılavuzu
+      structure:
+        - "Notes from the dev" section (en üstte)
+        - Proje açıklaması
+        - Kurulum ve kullanım
+        - Komut referansı
+      rules:
+        - NEVER_DELETE: "Notes from the dev" section - Bu bölüm geliştiricinin kişisel notlarını içerir ve AI tarafından ASLA silinmemeli veya değiştirilmemeli
+        - Bu section'ın içeriği sadece geliştirici tarafından düzenlenir
     .gitignore:
       desc: Git tarafından ignore edilecek dosyalar
     bp:
       desc: Derlenmiş binary (gitignore'da)
     todo.md:
       desc: Geçici notlar (gitignore'da olabilir)
+      rules:
+        - AI bu dosyayı okuyabilir ama içeriğini silmemeli
+        - Yeni item eklenebilir, mevcut itemlar kullanıcı onayı olmadan silinmez
 
 # =============================================================================
 # BUILD & RUN
@@ -60,8 +144,30 @@ usage:
     - "bp validate -r"
     - "bp status"
     - "bp ss -m 'Initial snapshot'"
-    - "bp implement -r"
-    - "bp work <session_id>"
+    - "bp implement"
+    - "bp upgrade --all"
+    - "bp deps --upgrades"
+
+# =============================================================================
+# AI GUIDELINES
+# =============================================================================
+
+ai_rules:
+  protected_content:
+    - section: "Notes from the dev"
+      file: README.md
+      rule: NEVER_DELETE
+      reason: Geliştiricinin kişisel notları, AI tarafından değiştirilemez
+
+    - section: Mevcut todo itemları
+      file: todo.md
+      rule: PRESERVE
+      reason: Kullanıcı onayı olmadan silinmez, sadece yeni ekleme yapılabilir
+
+  general:
+    - Blueprint dosyaları spec ile tutarlı tutulmalı
+    - Kod değişikliği yaparken ilgili blueprint'i de güncelle
+    - Yeni özellik eklerken önce blueprint'e yaz, sonra implement et
 
 # =============================================================================
 # DEPENDENCIES

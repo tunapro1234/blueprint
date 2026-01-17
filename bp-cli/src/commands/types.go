@@ -30,25 +30,33 @@ type StatusInfo struct {
 	ChangedFiles []string
 	ChangedDeps  []string
 	StaleReason  string
+	DepUpdates   []DepUpgrade
+	Dependents   []bp.DepRef
 }
 
 type SnapshotInfo struct {
-	ID       string
-	Path     string
-	ImplHash string
-	DepsHash string
+	ID          string
+	Path        string
+	ContentHash string
+	APIHash     string
+	ImplHash    string
 }
 
-type WorkSession struct {
-	ID       string
-	Created  string
-	Status   string
-	Packages []WorkPackage
+type ImplementResult struct {
+	Ready       bool
+	Deps        []bp.DepState
+	MissingDeps []string
 }
 
-type WorkPackage struct {
-	Path          string
-	WorkPath      string
-	Reason        string
-	BlueprintHash string
+type DepUpgrade struct {
+	Path       string
+	Current    string
+	Latest     string
+	APIChanged bool
+}
+
+type UpgradeResult struct {
+	Upgraded   []string
+	APIChanged []string
+	Skipped    []string
 }

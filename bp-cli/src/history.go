@@ -9,11 +9,12 @@ import (
 )
 
 type HistoryEntry struct {
-	ID        string
-	Timestamp string
-	Message   string
-	ImplHash  string
-	DepsHash  string
+	ID          string
+	Timestamp   string
+	Message     string
+	ContentHash string
+	APIHash     string
+	ImplHash    string
 }
 
 func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
@@ -31,29 +32,17 @@ func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
 			continue
 		}
 		name := entry.Name()
-		if !isSnapshotID(name) {
+		if !IsSnapshotID(name) {
 			continue
 		}
-		metaPath := filepath.Join(historyDir, name, "meta.yaml")
-		data, err := os.ReadFile(metaPath)
+		meta, err := LoadSnapshotMeta(b.StateDir, name)
 		if err != nil {
 			continue
-		}
-		parsed, err := ParseYAML(data)
-		if err != nil {
-			continue
-		}
-		meta := HistoryEntry{
-			ID:        getString(parsed, "id"),
-			Timestamp: getString(parsed, "timestamp"),
-			Message:   getString(parsed, "message"),
-			ImplHash:  getString(parsed, "impl_hash"),
-			DepsHash:  getString(parsed, "deps_hash"),
 		}
 		if meta.ID == "" {
 			meta.ID = name
 		}
-		if meta.ID == "" || meta.Timestamp == "" || !isSnapshotID(meta.ID) {
+		if meta.ID == "" || meta.Timestamp == "" || !IsSnapshotID(meta.ID) {
 			continue
 		}
 		history = append(history, meta)
@@ -73,6 +62,30 @@ func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
 		return strings.Compare(history[i].Timestamp, history[j].Timestamp) > 0
 	})
 	return history, nil
+}
+
+func LoadSnapshotMeta(stateDir, id string) (HistoryEntry, error) {
+	metaPath := filepath.Join(stateDir, "history", id, "meta.yaml")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return HistoryEntry{}, err
+	}
+	parsed, err := ParseYAML(data)
+	if err != nil {
+		return HistoryEntry{}, err
+	}
+	meta := HistoryEntry{
+		ID:          getString(parsed, "id"),
+		Timestamp:   getString(parsed, "timestamp"),
+		Message:     getString(parsed, "message"),
+		ContentHash: getString(parsed, "content_hash"),
+		APIHash:     getString(parsed, "api_hash"),
+		ImplHash:    getString(parsed, "impl_hash"),
+	}
+	if meta.ID == "" {
+		meta.ID = id
+	}
+	return meta, nil
 }
 
 func getString(m map[string]interface{}, key string) string {

@@ -8,12 +8,21 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type DepState struct {
-	SnapshotID string
-	APIHash    string
+	Pinned        string
+	Latest        string
+	APIHash       string
+	LatestAPIHash string
+	APIChanged    bool
+}
+
+type DepRef struct {
+	Using string
 }
 
 type State struct {
@@ -22,6 +31,7 @@ type State struct {
 	ImplHash      string
 	Files         map[string]string
 	Deps          map[string]DepState
+	Dependents    map[string]DepRef
 }
 
 func (b *Blueprint) ComputeFileHashes() (map[string]string, error) {
@@ -70,18 +80,78 @@ func ComputeDepsHash(deps map[string]DepState) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, k := range keys {
+		dep := deps[k]
+		id := dep.Pinned
+		if id == "" {
+			id = dep.Latest
+		}
+		if id == "" {
+			continue
+		}
 		b.WriteString(k)
 		b.WriteString(":")
-		b.WriteString(deps[k].SnapshotID)
+		b.WriteString(id)
 		b.WriteString("\n")
 	}
 	return HashString(b.String())
 }
 
-func ComputeSnapshotID(blueprintHash, implHash, depsHash string) string {
+func ComputeContentHash(blueprintHash, implHash, depsHash string) string {
 	combined := fmt.Sprintf("%s:%s:%s", blueprintHash, implHash, depsHash)
-	sum := sha256.Sum256([]byte(combined))
-	return hex.EncodeToString(sum[:])[:12]
+	return HashString(combined)
+}
+
+func BuildSnapshotID(ts time.Time, contentHash, message string) string {
+	short := shortHash(contentHash)
+	slug := slugify(message)
+	return fmt.Sprintf("%s-%s-%s", ts.Format("20060102-1504"), short, slug)
+}
+
+func shortHash(contentHash string) string {
+	hash := strings.TrimPrefix(contentHash, "sha256:")
+	if len(hash) >= 4 {
+		return hash[:4]
+	}
+	return hash
+}
+
+func slugify(message string) string {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return "snapshot"
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range lower {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+		} else if r == ' ' || r == '-' || r == '_' || r == '\t' || r == '\n' || r == '\r' {
+			if b.Len() > 0 && !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		} else {
+			if b.Len() > 0 && !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+		if b.Len() >= 20 {
+			break
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		return "snapshot"
+	}
+	if len(slug) > 20 {
+		slug = strings.Trim(slug[:20], "-")
+	}
+	if slug == "" {
+		return "snapshot"
+	}
+	return slug
 }
 
 func HashString(data string) string {
@@ -98,6 +168,9 @@ func (b *Blueprint) SaveState(state *State) error {
 	}
 	if state.Deps == nil {
 		state.Deps = map[string]DepState{}
+	}
+	if state.Dependents == nil {
+		state.Dependents = map[string]DepRef{}
 	}
 	if err := os.MkdirAll(b.StateDir, 0o755); err != nil {
 		return err
@@ -148,14 +221,46 @@ func marshalState(state *State) string {
 			b.WriteString("  \"")
 			b.WriteString(k)
 			b.WriteString("\":\n")
-			if dep.SnapshotID != "" {
-				b.WriteString("    snapshot_id: ")
-				b.WriteString(dep.SnapshotID)
+			if dep.Pinned != "" {
+				b.WriteString("    pinned: ")
+				b.WriteString(dep.Pinned)
+				b.WriteString("\n")
+			}
+			if dep.Latest != "" {
+				b.WriteString("    latest: ")
+				b.WriteString(dep.Latest)
 				b.WriteString("\n")
 			}
 			if dep.APIHash != "" {
 				b.WriteString("    api_hash: ")
 				b.WriteString(dep.APIHash)
+				b.WriteString("\n")
+			}
+			if dep.LatestAPIHash != "" {
+				b.WriteString("    latest_api_hash: ")
+				b.WriteString(dep.LatestAPIHash)
+				b.WriteString("\n")
+			}
+			b.WriteString("    api_changed: ")
+			b.WriteString(strconv.FormatBool(dep.APIChanged))
+			b.WriteString("\n")
+		}
+	}
+	if len(state.Dependents) > 0 {
+		b.WriteString("dependents:\n")
+		depKeys := make([]string, 0, len(state.Dependents))
+		for k := range state.Dependents {
+			depKeys = append(depKeys, k)
+		}
+		sort.Strings(depKeys)
+		for _, k := range depKeys {
+			ref := state.Dependents[k]
+			b.WriteString("  \"")
+			b.WriteString(k)
+			b.WriteString("\":\n")
+			if ref.Using != "" {
+				b.WriteString("    using: ")
+				b.WriteString(ref.Using)
 				b.WriteString("\n")
 			}
 		}
@@ -176,8 +281,9 @@ func LoadState(statePath string) (*State, error) {
 		return nil, err
 	}
 	state := &State{
-		Files: map[string]string{},
-		Deps:  map[string]DepState{},
+		Files:      map[string]string{},
+		Deps:       map[string]DepState{},
+		Dependents: map[string]DepRef{},
 	}
 	if hash, ok := parsed["snapshot_id"].(string); ok {
 		state.SnapshotID = hash
@@ -205,14 +311,51 @@ func LoadState(statePath string) (*State, error) {
 					continue
 				}
 				dep := DepState{}
-				if s, ok := sub["snapshot_id"].(string); ok {
-					dep.SnapshotID = s
+				if s, ok := sub["pinned"].(string); ok {
+					dep.Pinned = s
+				}
+				if s, ok := sub["snapshot_id"].(string); ok && dep.Pinned == "" {
+					dep.Pinned = s
+				}
+				if s, ok := sub["latest"].(string); ok {
+					dep.Latest = s
 				}
 				if s, ok := sub["api_hash"].(string); ok {
 					dep.APIHash = s
 				}
-				if dep.SnapshotID != "" || dep.APIHash != "" {
+				if s, ok := sub["latest_api_hash"].(string); ok {
+					dep.LatestAPIHash = s
+				}
+				if dep.Latest == "" {
+					dep.Latest = dep.Pinned
+				}
+				if dep.LatestAPIHash == "" {
+					dep.LatestAPIHash = dep.APIHash
+				}
+				if bval, ok := sub["api_changed"].(bool); ok {
+					dep.APIChanged = bval
+				} else if dep.APIHash != "" && dep.LatestAPIHash != "" && dep.APIHash != dep.LatestAPIHash {
+					dep.APIChanged = true
+				}
+				if dep.Pinned != "" || dep.Latest != "" || dep.APIHash != "" || dep.LatestAPIHash != "" {
 					state.Deps[k] = dep
+				}
+			}
+		}
+	}
+	if depsRaw, ok := parsed["dependents"]; ok {
+		if depsMap, ok := convertYAML(depsRaw).(map[string]interface{}); ok {
+			for k, v := range depsMap {
+				sub, ok := convertYAML(v).(map[string]interface{})
+				if !ok {
+					continue
+				}
+				ref := DepRef{}
+				if s, ok := sub["using"].(string); ok {
+					ref.Using = s
+				}
+				if ref.Using != "" {
+					state.Dependents[k] = ref
 				}
 			}
 		}
@@ -285,11 +428,16 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	files := map[string]string{}
-	if len(entries) == 0 {
-		return files, nil
+	stateDirRel := b.StateDirRel
+	if stateDirRel == "" {
+		stateDirRel = ".blueprint"
 	}
+	files := map[string]string{}
 	visited := map[string]struct{}{}
+	seenExisting := false
+	if len(entries) == 0 {
+		return collectFallbackFiles(b.Dir, stateDirRel, visited)
+	}
 	for _, entry := range entries {
 		if entry.Path == "" {
 			continue
@@ -306,6 +454,7 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 			}
 			return nil, err
 		}
+		seenExisting = true
 		isDir := entry.DirHint || info.IsDir()
 		if isDir {
 			hasBlueprint := entry.HasBlueprint
@@ -318,15 +467,19 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 			if hasBlueprint != nil && *hasBlueprint {
 				continue
 			}
-			err = walkFiles(abs, visited, func(path string, info os.FileInfo) error {
+			err = walkFiles(abs, stateDirRel, visited, func(path string, info os.FileInfo) error {
 				if info.IsDir() {
+					return nil
+				}
+				name := info.Name()
+				if shouldSkipFileName(name) {
 					return nil
 				}
 				rel, err := relPath(b.Dir, path)
 				if err != nil {
 					return err
 				}
-				if isUnderBlueprintState(rel) {
+				if isUnderBlueprintState(rel, stateDirRel) {
 					return nil
 				}
 				files[rel] = path
@@ -337,19 +490,78 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 			}
 			continue
 		}
+		name := info.Name()
+		if shouldSkipFileName(name) {
+			continue
+		}
 		rel, err := relPath(b.Dir, abs)
 		if err != nil {
 			return nil, err
 		}
-		if isUnderBlueprintState(rel) {
+		if isUnderBlueprintState(rel, stateDirRel) {
 			continue
 		}
 		files[rel] = abs
 	}
+	if len(files) == 0 && !seenExisting {
+		return collectFallbackFiles(b.Dir, stateDirRel, visited)
+	}
 	return files, nil
 }
 
-func walkFiles(root string, visited map[string]struct{}, fn func(path string, info os.FileInfo) error) error {
+func collectFallbackFiles(root, stateDirRel string, visited map[string]struct{}) (map[string]string, error) {
+	files := map[string]string{}
+	err := walkFiles(root, stateDirRel, visited, func(path string, info os.FileInfo) error {
+		if info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		if shouldSkipFileName(name) {
+			return nil
+		}
+		rel, err := relPath(root, path)
+		if err != nil {
+			return err
+		}
+		if isUnderBlueprintState(rel, stateDirRel) {
+			return nil
+		}
+		files[rel] = path
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func shouldSkipDir(name, stateDirRel string) bool {
+	if isStateDirName(name, stateDirRel) {
+		return true
+	}
+	switch name {
+	case ".git", "node_modules", "__pycache__":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldSkipFileName(name string) bool {
+	if name == "" {
+		return false
+	}
+	lower := strings.ToLower(name)
+	if IsBlueprintFile(name) {
+		return true
+	}
+	if strings.HasSuffix(lower, "_test.go") {
+		return true
+	}
+	return false
+}
+
+func walkFiles(root, stateDirRel string, visited map[string]struct{}, fn func(path string, info os.FileInfo) error) error {
 	info, err := os.Lstat(root)
 	if err != nil {
 		return err
@@ -368,11 +580,17 @@ func walkFiles(root string, visited map[string]struct{}, fn func(path string, in
 				return nil
 			}
 			visited[real] = struct{}{}
-			return walkDirEntries(root, visited, fn)
+			return walkDirEntries(root, stateDirRel, visited, fn)
+		}
+		if shouldSkipFileName(stat.Name()) {
+			return nil
 		}
 		return fn(root, stat)
 	}
 	if info.IsDir() {
+		if shouldSkipDir(info.Name(), stateDirRel) {
+			return nil
+		}
 		real, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			return err
@@ -381,19 +599,25 @@ func walkFiles(root string, visited map[string]struct{}, fn func(path string, in
 			return nil
 		}
 		visited[real] = struct{}{}
-		return walkDirEntries(root, visited, fn)
+		return walkDirEntries(root, stateDirRel, visited, fn)
+	}
+	if shouldSkipFileName(info.Name()) {
+		return nil
 	}
 	return fn(root, info)
 }
 
-func walkDirEntries(dir string, visited map[string]struct{}, fn func(path string, info os.FileInfo) error) error {
+func walkDirEntries(dir, stateDirRel string, visited map[string]struct{}, fn func(path string, info os.FileInfo) error) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == ".blueprint" {
+		if shouldSkipDir(name, stateDirRel) {
+			continue
+		}
+		if !entry.IsDir() && shouldSkipFileName(name) {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -402,12 +626,12 @@ func walkDirEntries(dir string, visited map[string]struct{}, fn func(path string
 			return err
 		}
 		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			if err := walkFiles(path, visited, fn); err != nil {
+			if err := walkFiles(path, stateDirRel, visited, fn); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := walkFiles(path, visited, fn); err != nil {
+		if err := walkFiles(path, stateDirRel, visited, fn); err != nil {
 			return err
 		}
 	}

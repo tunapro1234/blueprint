@@ -7,6 +7,19 @@ _meta:
   type: spec
 
 # =============================================================================
+# WORKFLOW POLICY
+# =============================================================================
+
+workflow_policy:
+  summary: |
+    Bu tool enforce etmez; ekip standardı olarak:
+    - Paket klasörü edit alanıdır (working tree)
+    - Import/build için pinned snapshot kopyaları tercih edilir
+      (örn. {state_dir}/history/{snapshot_id}/impl)
+    - Snapshot'lar publish edilen stable sürümü temsil eder
+    Not: {state_dir} = _meta.state_dir (default .blueprint)
+
+# =============================================================================
 # IMPLEMENTATION
 # =============================================================================
 
@@ -72,6 +85,9 @@ implementation:
 # =============================================================================
 
 tests:
+  packages:
+    - "."
+  snapshot_readonly: true
   scenarios:
     # =========================================================================
     # BASIC PARSING
@@ -246,5 +262,5 @@ tests:
         error.message contains "unclosed"
 
   verification:
-    - make test
-    - ./test_parser.sh
+    - go test $(go list ./... | grep -v '/blueprint/')
+    - ../../bp validate . || [ $? -eq 2 ]

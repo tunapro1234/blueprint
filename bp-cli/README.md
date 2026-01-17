@@ -35,7 +35,7 @@ If this project gains traction, I plan to integrate this agent structure directl
 ## Overview
 Blueprint (`bp`) is a local, file-system based tool for authoring and tracking `BLUEPRINT.yaml` files across a repository. Each folder is treated as a package; a blueprint captures intent, API, implementation structure, and tests. `bp` validates blueprints, checks staleness, snapshots blueprint history, and shows diffs between snapshots.
 
-This tool is **snapshot-based** (not Git-based): it stores state under `.blueprint/` alongside each package.
+This tool is **snapshot-based** (not Git-based): it stores state alongside each package under a configurable state dir (`_meta.state_dir`, default: `.blueprint/`).
 
 ## Features
 - **Validate** blueprint files (syntax + minimal schema rules)
@@ -78,9 +78,9 @@ Recursive validation:
 - `bp ss [path] [-m|--message] [--skip-tests]`
 
 ## Snapshot Model
-Each package keeps its own snapshot state under:
+Each package keeps its own snapshot state under the configured state dir:
 ```
-.blueprint/
+{state_dir}/
   current
   state.yaml
   history/
@@ -151,4 +151,3 @@ cd src && go build -o ../bp ./cmd/bp
 
 ---
 If you want this README to focus on a specific audience (contributors vs. users), say the word and I’ll refine it. (this is codex i dont know why it decided to write this but iwont delete this)
-

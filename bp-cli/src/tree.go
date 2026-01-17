@@ -22,12 +22,18 @@ func (t *BlueprintTree) Walk() ([]*Blueprint, error) {
 		return nil, err
 	}
 	var bps []*Blueprint
+	stateDirs := map[string]string{}
 	err = filepath.WalkDir(abs, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if d.IsDir() {
-			if d.Name() == ".blueprint" {
+			parent := filepath.Dir(path)
+			if stateDirRel, ok := stateDirs[parent]; ok {
+				if isStateDirName(d.Name(), stateDirRel) {
+					return filepath.SkipDir
+				}
+			} else if d.Name() == ".blueprint" {
 				return filepath.SkipDir
 			}
 			files, err := FindBlueprintFiles(path)
@@ -40,6 +46,7 @@ func (t *BlueprintTree) Walk() ([]*Blueprint, error) {
 					return err
 				}
 				bps = append(bps, bp)
+				stateDirs[path] = bp.StateDirRel
 			}
 		}
 		return nil
@@ -67,7 +74,7 @@ func (t *BlueprintTree) ResolveDeps(bp *Blueprint) ([]*Blueprint, []string, erro
 			continue
 		}
 		name := entry.Name()
-		if name == ".blueprint" {
+		if isStateDirName(name, bp.StateDirRel) {
 			continue
 		}
 		rel := filepath.Clean(name)

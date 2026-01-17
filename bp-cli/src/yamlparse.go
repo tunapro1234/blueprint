@@ -1,7 +1,7 @@
 package bp
 
 import (
-	"blueprint/yamlparser"
+	yamlparser "blueprint/yamlparser/blueprint/history/20260117-1448-139f-2026-01-17/impl"
 )
 
 // ParseResult is an alias for yamlparser.ParseResult.

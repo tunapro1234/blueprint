@@ -19,13 +19,38 @@
 
 _meta:
   version: "0.1.0"
-  updated: 2025-01-16
+  updated: 2026-01-17
   status: draft
+  state_dir: "blueprint"
 
 intent: |
   BLUEPRINT.yaml dosyaları için özel parser.
   Standart YAML kullanmıyoruz - kendi parser'ımız var.
   Blueprint formatının özel ihtiyaçlarına göre tasarlanmıştır.
+
+# =============================================================================
+# PLAN
+# =============================================================================
+
+plan:
+  - id: tests_exclude_state_dir
+    status: done
+    desc: tests.verification komutları state dizinini test kapsamı dışında bırakır.
+  - id: state_dir_config
+    status: done
+    desc: _meta.state_dir ile state dizini bu paket için ayarlanır.
+
+# =============================================================================
+# WORKFLOW POLICY
+# =============================================================================
+
+dependency_policy:
+  summary: |
+    Önerilen kullanım (enforce edilmez, ekip standardı):
+    - Paket klasörü sadece edit alanıdır
+    - Import/build pinned snapshot kopyalarından yapılır
+      (örn. blueprint/history/{snapshot_id}/impl)
+    - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
 
 # =============================================================================
 # API

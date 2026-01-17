@@ -78,12 +78,18 @@ func findBlueprintsRecursive(root string) ([]string, error) {
 		root = filepath.Dir(root)
 	}
 	var files []string
+	stateDirs := map[string]string{}
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == ".blueprint" {
+			parent := filepath.Dir(path)
+			if stateDirRel, ok := stateDirs[parent]; ok {
+				if isStateDirName(d.Name(), stateDirRel) {
+					return filepath.SkipDir
+				}
+			} else if d.Name() == ".blueprint" {
 				return filepath.SkipDir
 			}
 			bps, err := bp.FindBlueprintFiles(path)
@@ -92,6 +98,7 @@ func findBlueprintsRecursive(root string) ([]string, error) {
 			}
 			if len(bps) > 0 {
 				files = append(files, bps[0])
+				stateDirs[path] = bp.StateDirRelFromFile(bps[0])
 			}
 		}
 		return nil
@@ -101,6 +108,19 @@ func findBlueprintsRecursive(root string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func isStateDirName(name, stateDirRel string) bool {
+	if stateDirRel == "" {
+		stateDirRel = ".blueprint"
+	}
+	if name == stateDirRel {
+		return true
+	}
+	if stateDirRel != ".blueprint" && name == ".blueprint" {
+		return true
+	}
+	return false
 }
 
 func readCurrentSnapshotID(stateDir string) (string, error) {
@@ -116,23 +136,10 @@ func readCurrentSnapshotID(stateDir string) (string, error) {
 	if id == "" {
 		return "", bp.ErrNoSnapshot
 	}
-	if !isSnapshotID(id) {
+	if !bp.IsSnapshotID(id) {
 		return "", ErrInvalidCurrentID
 	}
 	return id, nil
-}
-
-func isSnapshotID(id string) bool {
-	if len(id) != 12 {
-		return false
-	}
-	for _, r := range id {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 func resolveSnapshotID(stateDir, input string) (string, error) {
@@ -144,10 +151,7 @@ func resolveSnapshotID(stateDir, input string) (string, error) {
 		return "current", nil
 	}
 	id := strings.ToLower(raw)
-	if len(id) < 4 || !isHexString(id) {
-		return "", fmt.Errorf("Snapshot #%s not found", raw)
-	}
-	if isSnapshotID(id) {
+	if bp.IsSnapshotID(id) {
 		hasHistory, err := hasSnapshotHistory(stateDir)
 		if err != nil {
 			return "", err
@@ -162,6 +166,9 @@ func resolveSnapshotID(stateDir, input string) (string, error) {
 			return "", err
 		}
 		return id, nil
+	}
+	if len(id) < len("20060102") {
+		return "", fmt.Errorf("Snapshot #%s not found", raw)
 	}
 	matches, err := matchSnapshotPrefix(stateDir, id)
 	if err != nil {
@@ -192,7 +199,7 @@ func matchSnapshotPrefix(stateDir, prefix string) ([]string, error) {
 			continue
 		}
 		name := entry.Name()
-		if !isSnapshotID(name) {
+		if !bp.IsSnapshotID(name) {
 			continue
 		}
 		found = true
@@ -220,24 +227,11 @@ func hasSnapshotHistory(stateDir string) (bool, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		if isSnapshotID(entry.Name()) {
+		if bp.IsSnapshotID(entry.Name()) {
 			return true, nil
 		}
 	}
 	return false, nil
-}
-
-func isHexString(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 func formatTimestamp(ts string) string {

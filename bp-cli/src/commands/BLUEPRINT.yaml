@@ -1,9 +1,10 @@
 # bp/commands - CLI Komutları
 
 _meta:
-  version: "0.1.0"
-  updated: 2026-01-15
+  version: "0.2.0"
+  updated: 2026-01-17
   status: ready
+  state_dir: "blueprint"
 
 intent: bp CLI'ın her komutunu ayrı modül olarak implement eder
 
@@ -11,12 +12,38 @@ overview: |
   Her komut ayrı dosyada, ortak interface ile.
   Registry pattern ile komutlar dinamik yüklenir.
 
+# =============================================================================
+# PLAN
+# =============================================================================
+
+plan:
+  - id: tests_exclude_state_dir
+    status: done
+    desc: tests.verification komutları state dizinini test kapsamı dışında bırakır.
+  - id: state_dir_config
+    status: done
+    desc: _meta.state_dir ile state dizini bu paket için ayarlanır.
+
+# =============================================================================
+# WORKFLOW POLICY
+# =============================================================================
+
+dependency_policy:
+  summary: |
+    Önerilen kullanım (enforce edilmez, ekip standardı):
+    - Paket klasörü sadece edit alanıdır
+    - Import/build pinned snapshot kopyalarından yapılır
+      (örn. blueprint/history/{snapshot_id}/impl)
+    - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
+
 dependencies:
   from_parent:
-    - Blueprint         # core.py - tek BLUEPRINT.yaml temsili
-    - BlueprintTree     # core.py - klasör hiyerarşisi
-    - HistoryEntry      # core.py - snapshot geçmişi entry'si
-    - ValidationResult  # core.py - validation sonucu
+    - Blueprint         # core - tek BLUEPRINT.yaml temsili
+    - BlueprintTree     # core - klasör hiyerarşisi
+    - HistoryEntry      # core - snapshot geçmişi entry'si
+    - ValidationResult  # core - validation sonucu
+    - DepState          # core - dependency pin durumu
+    - DepRef            # core - reverse dependency bilgisi
 
 # =============================================================================
 # API
@@ -38,7 +65,7 @@ api:
           "show": show_command,
           "ss": ss_command,
           "implement": implement_command,
-          "work": work_command,
+          "upgrade": upgrade_command,
         }
 
     - name: CommandHandler
@@ -58,14 +85,14 @@ api:
         args sadece komut-spesifik flag'ler için:
         - validate: {recursive: bool}
         - status: {recursive: bool}
-        - deps: {}                      # Ek args yok, path ctx.path'te
+        - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10
         - diff: {id1: string?, id2: string?}
         - show: {id: string?}           # null = son snapshot
         - ss: {message: string?, skip_tests: bool}
-        - implement: {recursive: bool, list: bool, done: string?}
-        - work: {session: string, blueprints: bool, status: bool}
+        - implement: {}                 # Sadece path, dependency kontrol
+        - upgrade: {dep_path: string?, safe: bool, all: bool}
 
     - name: CommandResult
       fields:
@@ -77,14 +104,14 @@ api:
         data field komuta göre:
         - validate: ValidationResult
         - status: StatusInfo
-        - deps: string[] (topological order)
+        - deps: string[] (topological order) veya DepUpgrade[] (--upgrades)
         - log: HistoryEntry[]
         - diff: DiffResult
         - show: string (blueprint content)
         - ss: SnapshotInfo
         - init: null
-        - implement: WorkSession (--list için WorkSession[])
-        - work: WorkSession
+        - implement: ImplementResult
+        - upgrade: UpgradeResult
 
     - name: DiffResult
       fields:
@@ -99,13 +126,36 @@ api:
         - changed_files: string[]       # Değişen dosya listesi (stale ise)
         - changed_deps: string[]        # Değişen dependency'ler
         - stale_reason: string?         # "files_changed" | "blueprint_changed" | "deps_changed" | "deps_api_changed"
+        - dep_updates: DepUpgrade[]     # Upgrade mevcut dependency'ler
+        - dependents: DepRef[]          # Kim bize bağlı (reverse tracking)
 
     - name: SnapshotInfo
       fields:
-        - id: string                    # Content hash, örn "a1b2c3d4e5f6"
-        - path: string                  # .blueprint/history/{hash}/
+        - id: string                    # Snapshot ID, örn "20260116-1430-a1b2-add-feat"
+        - path: string                  # blueprint/history/{id}/
+        - content_hash: string          # Tam content hash
+        - api_hash: string              # API section hash
         - impl_hash: string             # Implementation dosyalarının hash'i
-        - deps_hash: string             # Dependency'lerin hash'i
+
+    - name: ImplementResult
+      fields:
+        - ready: bool                   # Implementation başlatılabilir mi?
+        - deps: DepState[]              # Pin'lenmiş dependency'ler
+        - missing_deps: string[]        # Snapshot'ı olmayan dependency'ler
+
+    - name: UpgradeResult
+      fields:
+        - upgraded: string[]            # Upgrade edilen dependency'ler
+        - api_changed: string[]         # API değişen dependency'ler (uyarı)
+        - skipped: string[]             # --safe ile atlanan dependency'ler
+
+    - name: DepUpgrade
+      desc: Upgrade mevcut bir dependency
+      fields:
+        - path: string                  # Dependency path
+        - current: string               # Mevcut pinned snapshot ID
+        - latest: string                # En son snapshot ID
+        - api_changed: bool             # API değişmiş mi?
 
 # =============================================================================
 # DEPENDENCIES

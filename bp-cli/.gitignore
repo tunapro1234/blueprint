@@ -3,6 +3,8 @@ bp
 
 # Blueprint internal state
 .blueprint/
+blueprint/
+**/blueprint/
 
 # Editor
 *.swp

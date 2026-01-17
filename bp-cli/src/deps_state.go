@@ -17,9 +17,15 @@ func (b *Blueprint) DependencyState() (map[string]DepState, []string, error) {
 		return nil, warnings, err
 	}
 	state := map[string]DepState{}
+	prev := map[string]DepState{}
+	if current, err := LoadState(filepath.Join(b.StateDir, "state.yaml")); err == nil {
+		if current.Deps != nil {
+			prev = current.Deps
+		}
+	}
 	for _, dep := range deps {
 		label := depLabel(b.Dir, dep.Dir)
-		snapshotID, err := readCurrentSnapshotID(dep.StateDir)
+		latestID, err := readCurrentSnapshotID(dep.StateDir)
 		if err != nil {
 			if errors.Is(err, ErrNoSnapshot) {
 				warnings = append(warnings, fmt.Sprintf("Dependency %s has no snapshot", label))
@@ -27,13 +33,39 @@ func (b *Blueprint) DependencyState() (map[string]DepState, []string, error) {
 			}
 			return nil, warnings, err
 		}
-		apiHash, err := dep.APIHash()
+		pinnedID := latestID
+		if prevState, ok := prev[label]; ok && prevState.Pinned != "" {
+			pinnedID = prevState.Pinned
+		}
+		pinnedAPI, err := apiHashForSnapshot(dep, pinnedID)
 		if err != nil {
 			return nil, warnings, err
 		}
-		state[label] = DepState{SnapshotID: snapshotID, APIHash: apiHash}
+		latestAPI, err := apiHashForSnapshot(dep, latestID)
+		if err != nil {
+			return nil, warnings, err
+		}
+		apiChanged := pinnedAPI != "" && latestAPI != "" && pinnedAPI != latestAPI
+		state[label] = DepState{
+			Pinned:        pinnedID,
+			Latest:        latestID,
+			APIHash:       pinnedAPI,
+			LatestAPIHash: latestAPI,
+			APIChanged:    apiChanged,
+		}
 	}
 	return state, warnings, nil
+}
+
+func apiHashForSnapshot(dep *Blueprint, id string) (string, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", nil
+	}
+	meta, err := LoadSnapshotMeta(dep.StateDir, id)
+	if err == nil && meta.APIHash != "" {
+		return meta.APIHash, nil
+	}
+	return dep.APIHash()
 }
 
 func readCurrentSnapshotID(stateDir string) (string, error) {
@@ -49,7 +81,7 @@ func readCurrentSnapshotID(stateDir string) (string, error) {
 	if id == "" {
 		return "", ErrNoSnapshot
 	}
-	if !isSnapshotID(id) {
+	if !IsSnapshotID(id) {
 		return "", errInvalidSnapshotID
 	}
 	return id, nil
@@ -68,17 +100,4 @@ func depLabel(root, dir string) string {
 		rel = "./" + rel
 	}
 	return rel
-}
-
-func isSnapshotID(id string) bool {
-	if len(id) != 12 {
-		return false
-	}
-	for _, r := range id {
-		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
-			continue
-		}
-		return false
-	}
-	return true
 }

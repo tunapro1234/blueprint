@@ -1,0 +1,332 @@
+# =============================================================================
+# API
+# =============================================================================
+
+api:
+  cli:
+    name: bp
+    usage: bp <command> [path] [flags]
+
+    commands:
+      - name: validate
+        desc: YAML syntax ve schema kontrolü
+        usage: bp validate [path] [-r|--recursive]
+        args:
+          - name: path
+            default: "."
+            desc: Blueprint dosyası veya klasör
+        flags:
+          - name: -r, --recursive
+            desc: Alt klasörleri de tara
+        line_limits:
+          api: 300              # Soft limit - aşılırsa warning
+          implementation: 900   # Soft limit - aşılırsa warning
+        output:
+          success: "✓ {path}"
+          warning: "⚠ {path}: {message}"
+          error: "✗ {path}: {message}"
+          line_warning: "⚠ {path}: {section} exceeds {limit} lines ({actual} lines)"
+        exit_codes:
+          0: Valid
+          1: Error var
+          2: Sadece warning (intent eksik, satır limiti aşımı)
+
+      - name: status
+        desc: Kod, dependency ve dependent değişiklik kontrolü
+        usage: bp status [path] [-r]
+        flags:
+          - name: -r, --recursive
+            desc: Alt klasörleri de kontrol et
+        output:
+          fresh: "✓ {path} (fresh)"
+          stale: "⚠ {path} (stale, {n} files changed)"
+          deps_stale: "⚠ {path} (deps changed: {dep_names})"
+          deps_upgrade: "⚠ {dep}: {pinned} → {latest}"
+          deps_upgrade_api: "⚠ {dep}: {pinned} → {latest} (API CHANGED!)"
+          no_state: "○ {path} (no snapshot)"
+          dependents: |
+            Dependents:
+              ../consumer using 20260115-xxxx (OUTDATED - 2 behind)
+              ../other using 20260116-yyyy (current)
+        exit_codes:
+          0: Fresh (değişiklik yok)
+          1: Stale (kod veya dependency değişmiş)
+          2: No snapshot (henüz ss alınmamış)
+        staleness_sources: |
+          Stale durumu şu kaynaklardan gelebilir:
+          1. Kendi dosyaları değişmiş (files_changed)
+          2. BLUEPRINT.yaml değişmiş (blueprint_changed)
+          3. Dependency'nin snapshot'ı değişmiş - pinned != latest (deps_changed)
+          4. Dependency'nin api_hash'i değişmiş (deps_api_changed, daha kritik)
+
+      - name: deps
+        desc: Dependency graph göster
+        usage: bp deps [path] [--upgrades]
+        flags:
+          - name: --upgrades
+            desc: Upgrade mevcut dependency'leri göster
+        output:
+          graph: |
+            Topological sırada dependency listesi:
+            1. leaf/package
+            2. mid/package
+            3. root/package (current)
+          upgrades: |
+            ./yamlparser: 20260115-xxxx → 20260116-yyyy (API CHANGED!)
+            ./commands: (up to date)
+        exit_codes:
+          0: Başarılı
+          1: Circular dependency veya hata
+
+      - name: init
+        desc: Yeni BLUEPRINT.yaml oluştur
+        usage: bp init [path]
+        behavior:
+          - Zaten varsa hata ver, üzerine yazma
+          - Template BLUEPRINT.yaml oluştur
+        exit_codes:
+          0: Oluşturuldu
+          1: Zaten var veya hata
+
+      - name: log
+        desc: Snapshot geçmişi
+        usage: bp log [path] [-n count]
+        flags:
+          - name: -n, --count
+            default: 10
+            desc: Gösterilecek snapshot sayısı
+        output: |
+          20260116-1430-a1b2-add-validation   "Add validation logic"
+          20260115-1500-c3d4-fix-edge-cases   "Fix edge cases"
+          20260114-0900-e5f6-initial          "Initial snapshot"
+        exit_codes:
+          0: Başarılı (boş geçmiş dahil)
+          1: Hata
+
+      - name: diff
+        desc: İki snapshot arasındaki blueprint farkı
+        usage: bp diff [path] [id1] [id2]
+        behavior:
+          - Argüman yok: current blueprint vs son snapshot
+          - Tek ID: o snapshot vs current blueprint
+          - İki ID: iki snapshot'ın blueprint'leri karşılaştırılır
+        output: |
+          Unified diff formatı (--- / +++ / @@ ile)
+          Fark yoksa boş çıktı (stdout'a hiçbir şey yazılmaz)
+        exit_codes:
+          0: Başarılı (fark var veya yok)
+          1: ID bulunamadı veya hata
+
+      - name: show
+        desc: Belirli snapshot'ın blueprint'ini göster
+        usage: bp show [path] [id]
+        behavior:
+          - ID verilmezse son snapshot
+          - blueprint/history/XXXX/BLUEPRINT.yaml içeriğini stdout'a yazar
+        exit_codes:
+          0: Başarılı
+          1: ID bulunamadı veya hata
+
+      - name: ss
+        desc: Snapshot al - testleri çalıştır, geçerse kaydet + impl kopyala
+        usage: bp ss [path] [-m "message"] [--skip-tests]
+        flags:
+          - name: -m, --message
+            desc: Snapshot mesajı (opsiyonel, yoksa tarih kullanılır)
+          - name: --skip-tests
+            desc: Testleri atla, direkt kaydet
+        behavior: |
+          1. Blueprint'i validate et (hata varsa exit 2)
+          2. Dependency'lerin snapshot durumunu kontrol et
+          3. tests.verification komutlarını çalıştır (varsa)
+          4. Testler geçerse:
+             - Snapshot ID oluştur: YYYYMMDD-HHMM-{4-char-hash}-{slug}
+             - blueprint/history/{id}/ klasörü oluştur
+             - BLUEPRINT.yaml snapshot'ı kopyala
+             - impl/ klasörüne tüm kaynak dosyaları kopyala (TAM KOPYA)
+             - meta.yaml oluştur (id, timestamp, message, content_hash, api_hash, impl_hash)
+             - state.yaml güncelle (files, deps, dependents)
+             - blueprint/current güncelle
+          5. Testler geçmezse hata ver, snapshot alma
+        output:
+          success: "Snapshot created: 20260116-1430-a1b2-add-feature"
+        exit_codes:
+          0: Snapshot alındı
+          1: Testler başarısız
+          2: Validation hatası
+
+      - name: implement
+        desc: Implementation başlat - dependency kontrol + reverse tracking
+        usage: bp implement [path]
+        behavior: |
+          1. Blueprint'i oku, dependencies bölümünü kontrol et
+          2. Her dependency için:
+             - Pin'lenmiş snapshot mevcut mu kontrol et
+             - Snapshot yoksa hata: "Dependency {dep} has no snapshot"
+             - Dependency'nin blueprint/state.yaml'ına kendini kaydet (reverse tracking)
+               dependents:
+                 "{my_path}":
+                   using: "{pinned_snapshot_id}"
+          3. "Ready to implement" mesajı ver
+
+          Implementation bitince: bp ss -m "message" ile snapshot al.
+
+          NOT: Çalışma alanı repo içindeki paket klasörüdür.
+          Her paket dependency'lerini stable snapshot'a pin'ler.
+        output:
+          success: |
+            Dependencies:
+              ./yamlparser @ 20260115-1000-a1b2-stable ✓
+              ./commands   @ 20260116-0900-c3d4-init   ✓
+            Ready to implement.
+          missing_dep: "✗ Dependency {dep} has no snapshot. Run 'bp ss' in {dep} first."
+        exit_codes:
+          0: Ready to implement
+          1: Dependency snapshot eksik
+          2: Blueprint bulunamadı
+
+      - name: upgrade
+        desc: Dependency'leri güncelle
+        usage: bp upgrade [dep-path] [--safe] [--all]
+        flags:
+          - name: --safe
+            desc: Sadece API değişmeyenleri upgrade et
+          - name: --all
+            desc: Tüm dependency'leri upgrade et
+        behavior: |
+          1. dep-path verilmişse sadece o dependency'yi upgrade et
+          2. --all verilmişse tüm dependency'leri upgrade et
+          3. --safe verilmişse sadece api_changed=false olanları upgrade et
+          4. Her upgrade için:
+             - Dependency'nin en son snapshot'ını al
+             - API hash'leri karşılaştır
+             - API değişmişse uyarı göster (ama bloklamak)
+             - state.yaml deps section'ını güncelle
+             - Dependency'nin dependents section'ını güncelle
+        output:
+          success: "Upgraded {dep}: {pinned} → {latest}"
+          success_api: "Upgraded {dep}: {pinned} → {latest} (API CHANGED!)"
+          api_hint: "  Review: bp diff {dep} {pinned} {latest}"
+          no_upgrade: "No upgrades available"
+        exit_codes:
+          0: Upgrade başarılı
+          1: Hata
+
+  library:
+    note: |
+      Aşağıdaki tipler language-agnostic tanımlanmıştır.
+      Implementasyon diline göre class, struct, record, interface vb. kullanılabilir.
+
+    types:
+      - name: Blueprint
+        desc: Tek BLUEPRINT.yaml dosyasını temsil eder
+        fields:
+          - name: path
+            type: string
+            desc: BLUEPRINT.yaml dosyasının tam yolu
+          - name: data
+            type: map<string, any>
+            desc: Parse edilmiş YAML içeriği
+          - name: state_dir
+            type: string
+            desc: blueprint/ klasörünün yolu (_meta.state_dir, default .blueprint)
+        methods:
+          - name: validate
+            returns: ValidationResult
+            desc: YAML syntax + schema check
+          - name: is_stale
+            returns: bool?
+            desc: Kod değişmiş mi? (null = snapshot yok)
+          - name: get_changed_files
+            returns: string[]
+            desc: Değişen dosyaların listesi
+          - name: get_section
+            args: [section: string]
+            returns: map<string, any>?
+            desc: api, implementation, tests bölümünü al
+          - name: get_history
+            returns: HistoryEntry[]
+            desc: Snapshot geçmişi
+          - name: save_state
+            returns: void
+            desc: blueprint/state.yaml güncelle
+
+      - name: HistoryEntry
+        desc: Tek bir snapshot kaydı
+        fields:
+          - name: id
+            type: string
+            desc: "Snapshot ID: YYYYMMDD-HHMM-{4-char-hash}-{slug}, örn '20260116-1430-a1b2-add-validate'"
+          - name: timestamp
+            type: string
+            desc: ISO 8601 format
+          - name: message
+            type: string
+            desc: Snapshot mesajı
+          - name: content_hash
+            type: string
+            desc: Tam content hash (referans için)
+          - name: api_hash
+            type: string
+            desc: API section'ın hash'i
+          - name: impl_hash
+            type: string
+            desc: Implementation dosyalarının birleşik hash'i
+
+      - name: DepState
+        desc: Bir dependency'nin pin durumu (state.yaml deps içinde)
+        fields:
+          - name: pinned
+            type: string
+            desc: Pin'lenmiş snapshot ID
+          - name: latest
+            type: string
+            desc: Dependency'nin en son snapshot ID'si
+          - name: api_hash
+            type: string
+            desc: Pin'lenmiş versiyonun API hash'i
+          - name: latest_api_hash
+            type: string
+            desc: En son versiyonun API hash'i
+          - name: api_changed
+            type: bool
+            desc: API değişmiş mi? (convenience flag)
+
+      - name: DepRef
+        desc: Reverse dependency bilgisi (state.yaml dependents içinde)
+        fields:
+          - name: using
+            type: string
+            desc: Hangi snapshot'ımı kullanıyor
+
+      - name: BlueprintTree
+        desc: Klasör hiyerarşisindeki tüm blueprint'ler
+        fields:
+          - name: root
+            type: string
+            desc: Root klasör yolu
+        methods:
+          - name: walk
+            returns: Blueprint[]
+            desc: Tüm blueprint'leri listele (iterable)
+          - name: resolve_deps
+            args: [bp: Blueprint]
+            returns: Blueprint[]
+            desc: Bir blueprint'in dependency'lerini bul
+          - name: topological_sort
+            returns: Blueprint[]
+            desc: Dependency sırasına göre sırala
+
+      - name: ValidationResult
+        desc: Validation sonucu
+        fields:
+          - name: valid
+            type: bool
+            desc: Geçerli mi?
+          - name: errors
+            type: string[]
+            desc: Hata mesajları
+          - name: warnings
+            type: string[]
+            desc: Uyarı mesajları
+

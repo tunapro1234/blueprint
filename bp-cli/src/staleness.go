@@ -76,6 +76,10 @@ func compareDeps(b *Blueprint, state *State) ([]string, bool) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		depState := state.Deps[key]
+		pinned := depState.Pinned
+		if pinned == "" {
+			pinned = depState.Latest
+		}
 		depDir := filepath.Join(b.Dir, filepath.FromSlash(key))
 		depDir = filepath.Clean(depDir)
 		bpPath, err := FindBlueprintFile(depDir)
@@ -97,8 +101,8 @@ func compareDeps(b *Blueprint, state *State) ([]string, bool) {
 			changed = append(changed, key)
 			continue
 		}
-		depChanged := currentID != depState.SnapshotID
-		apiHash, err := depBp.APIHash()
+		depChanged := currentID != pinned
+		apiHash, err := apiHashForSnapshot(depBp, currentID)
 		if err != nil {
 			changed = append(changed, key)
 			continue

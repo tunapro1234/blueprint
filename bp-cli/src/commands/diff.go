@@ -48,7 +48,7 @@ func DiffCommand(ctx CommandContext) CommandResult {
 	if leftContent == rightContent {
 		result.HasChanges = false
 		result.UnifiedDiff = ""
-		return CommandResult{ExitCode: 0, Output: "No changes", Data: result}
+		return CommandResult{ExitCode: 0, Output: "", Data: result}
 	}
 	diff := difflib.UnifiedDiff{
 		A:        splitLines(leftContent),

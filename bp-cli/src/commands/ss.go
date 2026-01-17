@@ -35,17 +35,27 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 2, Output: out, Errors: validation.Errors}
 	}
 
-	depsState, depWarnings, err := bpObj.DependencyState()
+	testCfg, err := readTestConfig(bpObj)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
+	depsState, depWarnings, err := bpObj.DependencyState()
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	upgradeWarnings := formatDepUpgradeWarnings(depsState)
+
 	if !skipTests {
-		if err := runVerificationCommands(bpObj); err != nil {
+		if err := runBlueprintTests(bpObj, testCfg); err != nil {
 			return CommandResult{ExitCode: 1, Output: "Tests failed", Errors: []string{"Tests failed"}}
 		}
 	}
 
+	trackedFiles, err := bpObj.TrackedFiles()
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
 	files, err := bpObj.ComputeFileHashes()
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
@@ -56,7 +66,21 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 	}
 	implHash := bp.ComputeImplHash(files)
 	depsHash := bp.ComputeDepsHash(depsState)
-	snapshotID := bp.ComputeSnapshotID(blueprintHash, implHash, depsHash)
+	apiHash, err := bpObj.APIHash()
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	contentHash := bp.ComputeContentHash(blueprintHash, implHash, depsHash)
+	now := time.Now()
+	messageText := resolveMessage(now.Format("2006-01-02"), message)
+	snapshotID := bp.BuildSnapshotID(now, contentHash, messageText)
+
+	dependents := map[string]bp.DepRef{}
+	if existing, err := bp.LoadState(filepath.Join(bpObj.StateDir, "state.yaml")); err == nil {
+		if existing.Dependents != nil {
+			dependents = existing.Dependents
+		}
+	}
 
 	state := &bp.State{
 		SnapshotID:    snapshotID,
@@ -64,6 +88,7 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 		ImplHash:      implHash,
 		Files:         files,
 		Deps:          depsState,
+		Dependents:    dependents,
 	}
 
 	created, err := ensureSnapshotDir(bpObj.StateDir, snapshotID)
@@ -71,25 +96,38 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
+	warnings := append(depWarnings, upgradeWarnings...)
+
 	if !created {
+		match, err := snapshotMetaMatches(bpObj.StateDir, snapshotID, contentHash)
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if !match {
+			msg := fmt.Sprintf("snapshot id collision: %s", snapshotID)
+			return CommandResult{ExitCode: 1, Output: msg, Errors: []string{msg}}
+		}
 		if err := bpObj.SaveState(state); err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		if err := os.WriteFile(filepath.Join(bpObj.StateDir, "current"), []byte(snapshotID), 0o644); err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
-		out := formatSnapshotOutput(depWarnings, "Already exists")
+		out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot already exists: %s", snapshotID))
 		return CommandResult{
 			ExitCode: 0,
 			Output:   out,
-			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ImplHash: implHash, DepsHash: depsHash},
+			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
 		}
 	}
 
 	if err := copyBlueprintSnapshot(bpObj.Path, snapshotBlueprintPath(bpObj.StateDir, snapshotID)); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := writeMeta(bpObj.StateDir, snapshotID, message, implHash, depsHash); err != nil {
+	if err := writeMeta(bpObj.StateDir, snapshotID, messageText, contentHash, apiHash, implHash, now); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if err := copyImplementationSnapshot(trackedFiles, bpObj.StateDir, snapshotID, testCfg.SnapshotReadOnly); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if err := bpObj.SaveState(state); err != nil {
@@ -98,11 +136,11 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 	if err := os.WriteFile(filepath.Join(bpObj.StateDir, "current"), []byte(snapshotID), 0o644); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	out := formatSnapshotOutput(depWarnings, fmt.Sprintf("Snapshot #%s created", snapshotID))
+	out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot created: %s", snapshotID))
 	return CommandResult{
 		ExitCode: 0,
 		Output:   out,
-		Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ImplHash: implHash, DepsHash: depsHash},
+		Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
 	}
 }
 
@@ -136,6 +174,166 @@ func ensureSnapshotDir(stateDir, id string) (bool, error) {
 	return false, err
 }
 
+func snapshotMetaMatches(stateDir, id, contentHash string) (bool, error) {
+	meta, err := bp.LoadSnapshotMeta(stateDir, id)
+	if err != nil {
+		return false, err
+	}
+	if meta.ContentHash == "" {
+		return false, nil
+	}
+	return meta.ContentHash == contentHash, nil
+}
+
+type testConfig struct {
+	Packages            []string
+	DependencySnapshots bool
+	SnapshotReadOnly    bool
+}
+
+var goTestRunner = runGoTest
+
+func runBlueprintTests(bpObj *bp.Blueprint, cfg testConfig) error {
+	if err := runPackageTests(bpObj.Dir, cfg.Packages); err != nil {
+		return err
+	}
+	if err := runVerificationCommands(bpObj); err != nil {
+		return err
+	}
+	if cfg.DependencySnapshots {
+		if err := runDependencySnapshotTests(bpObj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readTestConfig(bpObj *bp.Blueprint) (testConfig, error) {
+	cfg := testConfig{SnapshotReadOnly: true}
+	section, err := bpObj.GetSection("tests")
+	if err != nil {
+		return cfg, err
+	}
+	if section == nil {
+		return cfg, nil
+	}
+	if raw, ok := section["packages"]; ok && raw != nil {
+		list, err := parseStringList(raw, "tests.packages")
+		if err != nil {
+			return cfg, err
+		}
+		cfg.Packages = list
+	}
+	if raw, ok := section["dependency_snapshots"]; ok && raw != nil {
+		val, ok := raw.(bool)
+		if !ok {
+			return cfg, fmt.Errorf("tests.dependency_snapshots must be a boolean")
+		}
+		cfg.DependencySnapshots = val
+	}
+	if raw, ok := section["snapshot_readonly"]; ok && raw != nil {
+		val, ok := raw.(bool)
+		if !ok {
+			return cfg, fmt.Errorf("tests.snapshot_readonly must be a boolean")
+		}
+		cfg.SnapshotReadOnly = val
+	}
+	return cfg, nil
+}
+
+func parseStringList(raw interface{}, field string) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v, nil
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			str, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s must be a list of strings", field)
+			}
+			out = append(out, str)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s must be a list", field)
+	}
+}
+
+func runPackageTests(workDir string, packages []string) error {
+	if len(packages) == 0 {
+		return nil
+	}
+	return goTestRunner(workDir, packages)
+}
+
+func runGoTest(workDir string, packages []string) error {
+	args := append([]string{"test"}, packages...)
+	cmd := exec.Command("go", args...)
+	cmd.Dir = workDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return runWithTimeout(cmd, 10*time.Minute)
+}
+
+func runDependencySnapshotTests(bpObj *bp.Blueprint) error {
+	tree := &bp.BlueprintTree{Root: bpObj.Dir}
+	deps, _, err := tree.ResolveDeps(bpObj)
+	if err != nil {
+		return err
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+	var state *bp.State
+	if loaded, err := bp.LoadState(filepath.Join(bpObj.StateDir, "state.yaml")); err == nil {
+		state = loaded
+	} else if err != nil && !errors.Is(err, bp.ErrNoSnapshot) {
+		return err
+	}
+	for _, dep := range deps {
+		label, err := relativeLabel(bpObj.Dir, dep.Dir)
+		if err != nil {
+			return err
+		}
+		id := ""
+		if state != nil {
+			if depState, ok := state.Deps[label]; ok {
+				if depState.Pinned != "" {
+					id = depState.Pinned
+				} else if depState.Latest != "" {
+					id = depState.Latest
+				}
+			}
+		}
+		if id == "" {
+			currentID, err := readCurrentSnapshotID(dep.StateDir)
+			if err != nil {
+				return fmt.Errorf("dependency %s has no snapshot", label)
+			}
+			id = currentID
+		}
+		snapshotImpl := filepath.Join(dep.StateDir, "history", id, "impl")
+		if _, err := os.Stat(snapshotImpl); err != nil {
+			return err
+		}
+		depCfg, err := readTestConfig(dep)
+		if err != nil {
+			return err
+		}
+		if len(depCfg.Packages) == 0 {
+			return fmt.Errorf("tests.packages missing for dependency %s", label)
+		}
+		if err := runPackageTests(snapshotImpl, depCfg.Packages); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func runVerificationCommands(bpObj *bp.Blueprint) error {
 	section, err := bpObj.GetSection("tests")
 	if err != nil {
@@ -148,15 +346,11 @@ func runVerificationCommands(bpObj *bp.Blueprint) error {
 	if !ok || verif == nil {
 		return nil
 	}
-	list, ok := verif.([]interface{})
-	if !ok {
-		return fmt.Errorf("tests.verification must be a list")
+	list, err := parseStringList(verif, "tests.verification")
+	if err != nil {
+		return err
 	}
-	for _, raw := range list {
-		cmdStr, ok := raw.(string)
-		if !ok {
-			return fmt.Errorf("tests.verification must be a list of strings")
-		}
+	for _, cmdStr := range list {
 		if strings.TrimSpace(cmdStr) == "" {
 			continue
 		}
@@ -220,13 +414,67 @@ func copyBlueprintSnapshot(src, dst string) error {
 	return dstFile.Sync()
 }
 
-func writeMeta(stateDir, id string, message any, implHash, depsHash string) error {
+func copyImplementationSnapshot(files map[string]string, stateDir, id string, readOnly bool) error {
+	if len(files) == 0 {
+		return nil
+	}
+	base := filepath.Join(stateDir, "history", id, "impl")
+	for rel, abs := range files {
+		dst := filepath.Join(base, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		srcInfo, err := os.Stat(abs)
+		if err != nil {
+			return err
+		}
+		srcFile, err := os.Open(abs)
+		if err != nil {
+			return err
+		}
+		dstFile, err := os.Create(dst)
+		if err != nil {
+			srcFile.Close()
+			return err
+		}
+		if _, err := io.Copy(dstFile, srcFile); err != nil {
+			srcFile.Close()
+			dstFile.Close()
+			return err
+		}
+		srcFile.Close()
+		if err := dstFile.Sync(); err != nil {
+			dstFile.Close()
+			return err
+		}
+		if err := dstFile.Close(); err != nil {
+			return err
+		}
+		if readOnly {
+			if err := makeReadOnly(dst, srcInfo.Mode().Perm()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func makeReadOnly(path string, srcPerm os.FileMode) error {
+	perm := srcPerm &^ 0o222
+	if perm == 0 {
+		perm = 0o444
+	}
+	return os.Chmod(path, perm)
+}
+
+func writeMeta(stateDir, id, message, contentHash, apiHash, implHash string, ts time.Time) error {
 	meta := bp.HistoryEntry{
-		ID:        id,
-		Timestamp: time.Now().Format("2006-01-02T15:04:05"),
-		Message:   resolveMessage(time.Now().Format("2006-01-02"), message),
-		ImplHash:  implHash,
-		DepsHash:  depsHash,
+		ID:          id,
+		Timestamp:   ts.Format("2006-01-02T15:04:05"),
+		Message:     message,
+		ContentHash: contentHash,
+		APIHash:     apiHash,
+		ImplHash:    implHash,
 	}
 	var b strings.Builder
 	b.WriteString("id: ")
@@ -235,10 +483,12 @@ func writeMeta(stateDir, id string, message any, implHash, depsHash string) erro
 	b.WriteString(meta.Timestamp)
 	b.WriteString("\nmessage: ")
 	b.WriteString(meta.Message)
+	b.WriteString("\ncontent_hash: ")
+	b.WriteString(meta.ContentHash)
+	b.WriteString("\napi_hash: ")
+	b.WriteString(meta.APIHash)
 	b.WriteString("\nimpl_hash: ")
 	b.WriteString(meta.ImplHash)
-	b.WriteString("\ndeps_hash: ")
-	b.WriteString(meta.DepsHash)
 	b.WriteString("\n")
 	metaPath := filepath.Join(stateDir, "history", id, "meta.yaml")
 	return os.WriteFile(metaPath, []byte(b.String()), 0o644)

@@ -8,10 +8,11 @@ import (
 )
 
 type Blueprint struct {
-	Path     string
-	Dir      string
-	Data     map[string]interface{}
-	StateDir string
+	Path        string
+	Dir         string
+	Data        map[string]interface{}
+	StateDir    string
+	StateDirRel string
 }
 
 type ValidationResult struct {
@@ -54,11 +55,26 @@ func LoadBlueprint(path string) (*Blueprint, error) {
 		return nil, err
 	}
 	dir := filepath.Dir(abs)
+	stateDirRel := ".blueprint"
+	if metaRaw, ok := data["_meta"]; ok {
+		if meta, ok := convertYAML(metaRaw).(map[string]interface{}); ok {
+			if raw, ok := meta["state_dir"].(string); ok {
+				trimmed := strings.TrimSpace(raw)
+				if trimmed != "" {
+					if err := validateStateDirRel(trimmed); err != nil {
+						return nil, err
+					}
+					stateDirRel = trimmed
+				}
+			}
+		}
+	}
 	return &Blueprint{
-		Path:     abs,
-		Dir:      dir,
-		Data:     data,
-		StateDir: filepath.Join(dir, ".blueprint"),
+		Path:        abs,
+		Dir:         dir,
+		Data:        data,
+		StateDir:    filepath.Join(dir, stateDirRel),
+		StateDirRel: stateDirRel,
 	}, nil
 }
 
@@ -218,17 +234,53 @@ func (b *Blueprint) Dependencies() ([]string, error) {
 	if !ok || val == nil {
 		return nil, nil
 	}
-	list, ok := val.([]interface{})
-	if !ok {
-		return nil, nil
-	}
-	deps := make([]string, 0, len(list))
-	for _, item := range list {
-		if s, ok := item.(string); ok {
-			deps = append(deps, s)
+	switch t := val.(type) {
+	case []interface{}:
+		return collectDepList(t), nil
+	case map[string]interface{}:
+		return collectDepMap(t), nil
+	case map[interface{}]interface{}:
+		if converted, ok := convertYAML(t).(map[string]interface{}); ok {
+			return collectDepMap(converted), nil
 		}
 	}
-	return deps, nil
+	return nil, nil
+}
+
+func collectDepList(list []interface{}) []string {
+	deps := make([]string, 0, len(list))
+	for _, item := range list {
+		switch v := item.(type) {
+		case string:
+			deps = append(deps, v)
+		case map[string]interface{}:
+			if path, ok := v["path"].(string); ok {
+				deps = append(deps, path)
+			}
+		case map[interface{}]interface{}:
+			if converted, ok := convertYAML(v).(map[string]interface{}); ok {
+				if path, ok := converted["path"].(string); ok {
+					deps = append(deps, path)
+				}
+			}
+		}
+	}
+	return deps
+}
+
+func collectDepMap(depMap map[string]interface{}) []string {
+	deps := []string{}
+	for key, value := range depMap {
+		if key == "from_parent" {
+			continue
+		}
+		list, ok := value.([]interface{})
+		if !ok {
+			continue
+		}
+		deps = append(deps, collectDepList(list)...)
+	}
+	return deps
 }
 
 func (b *Blueprint) TrackedFiles() (map[string]string, error) {

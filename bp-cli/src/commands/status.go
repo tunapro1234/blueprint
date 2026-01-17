@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	bp "blueprint"
@@ -58,6 +59,8 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	var singleChanged []string
 	var singleDeps []string
 	var singleReason string
+	var singleUpdates []DepUpgrade
+	var singleDependents []bp.DepRef
 	for _, target := range targets {
 		bpObj, err := bp.LoadBlueprint(target)
 		if err != nil {
@@ -67,7 +70,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			counts["stale"]++
 			continue
 		}
-		statusLine, info, err := statusForBlueprint(bpObj)
+		statusLine, info, upgrades, dependentsLines, dependentsData, err := statusForBlueprint(bpObj)
 		if err != nil {
 			msg := err.Error()
 			line := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), msg)
@@ -78,10 +81,18 @@ func StatusCommand(ctx CommandContext) CommandResult {
 		counts[info.State]++
 		lines = append(lines, statusLine)
 		if !recursive {
+			for _, up := range upgrades {
+				lines = append(lines, formatDepUpgradeLine(up))
+			}
+			if len(dependentsLines) > 0 {
+				lines = append(lines, dependentsLines...)
+			}
 			singleState = info.State
 			singleChanged = info.ChangedFiles
 			singleDeps = info.ChangedDeps
 			singleReason = info.Reason
+			singleUpdates = upgrades
+			singleDependents = dependentsData
 		}
 	}
 	if recursive {
@@ -103,7 +114,14 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	}
 	data := any(nil)
 	if !recursive {
-		data = StatusInfo{State: singleState, ChangedFiles: singleChanged, ChangedDeps: singleDeps, StaleReason: singleReason}
+		data = StatusInfo{
+			State:        singleState,
+			ChangedFiles: singleChanged,
+			ChangedDeps:  singleDeps,
+			StaleReason:  singleReason,
+			DepUpdates:   singleUpdates,
+			Dependents:   singleDependents,
+		}
 	}
 	return CommandResult{ExitCode: exitCode, Output: strings.Join(lines, "\n"), Data: data}
 }
@@ -118,38 +136,99 @@ func statusState(counts map[string]int) string {
 	return "fresh"
 }
 
-func statusForBlueprint(bpObj *bp.Blueprint) (string, bp.StalenessInfo, error) {
+func statusForBlueprint(bpObj *bp.Blueprint) (string, bp.StalenessInfo, []DepUpgrade, []string, []bp.DepRef, error) {
 	info, err := bpObj.StalenessInfo()
 	if err != nil {
-		return "", info, err
+		return "", info, nil, nil, nil, err
 	}
+	line := ""
 	switch info.State {
 	case "no_snapshot":
-		line := fmt.Sprintf("○ %s (no snapshot)", formatPath(bpObj.Dir))
-		return line, info, nil
+		line = fmt.Sprintf("○ %s (no snapshot)", formatPath(bpObj.Dir))
 	case "fresh":
-		line := fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
-		return line, info, nil
+		line = fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
 	case "stale":
 		switch info.Reason {
 		case "deps_changed", "deps_api_changed":
 			deps := strings.Join(info.ChangedDeps, ", ")
-			line := fmt.Sprintf("⚠ %s (deps changed: %s)", formatPath(bpObj.Dir), deps)
-			return line, info, nil
+			line = fmt.Sprintf("⚠ %s (deps changed: %s)", formatPath(bpObj.Dir), deps)
 		case "blueprint_changed":
-			line := fmt.Sprintf("⚠ %s (stale, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
-			return line, info, nil
+			line = fmt.Sprintf("⚠ %s (stale, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
 		default:
 			count := len(info.ChangedFiles)
 			if count == 0 {
-				line := fmt.Sprintf("⚠ %s (stale)", formatPath(bpObj.Dir))
-				return line, info, nil
+				line = fmt.Sprintf("⚠ %s (stale)", formatPath(bpObj.Dir))
+			} else {
+				line = fmt.Sprintf("⚠ %s (stale, %d files changed)", formatPath(bpObj.Dir), count)
 			}
-			line := fmt.Sprintf("⚠ %s (stale, %d files changed)", formatPath(bpObj.Dir), count)
-			return line, info, nil
 		}
 	default:
-		line := fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
-		return line, info, nil
+		line = fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
 	}
+
+	upgrades := []DepUpgrade{}
+	if info.State != "no_snapshot" {
+		if depState, _, err := bpObj.DependencyState(); err == nil {
+			upgrades = depUpgradesFromState(depState)
+		}
+	}
+
+	dependentsLines, dependentsData := buildDependentsOutput(bpObj)
+	return line, info, upgrades, dependentsLines, dependentsData, nil
+}
+
+func formatDepUpgradeLine(up DepUpgrade) string {
+	line := fmt.Sprintf("⚠ %s: %s → %s", up.Path, up.Current, up.Latest)
+	if up.APIChanged {
+		line += " (API CHANGED!)"
+	}
+	return line
+}
+
+func buildDependentsOutput(bpObj *bp.Blueprint) ([]string, []bp.DepRef) {
+	state, err := bp.LoadState(filepath.Join(bpObj.StateDir, "state.yaml"))
+	if err != nil {
+		return nil, nil
+	}
+	if len(state.Dependents) == 0 {
+		return nil, nil
+	}
+	currentID, err := readCurrentSnapshotID(bpObj.StateDir)
+	if err != nil {
+		return nil, nil
+	}
+	history, _ := bpObj.GetHistory()
+	index := map[string]int{}
+	for i, entry := range history {
+		index[entry.ID] = i
+	}
+	keys := make([]string, 0, len(state.Dependents))
+	for k := range state.Dependents {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	lines := []string{"Dependents:"}
+	refs := []bp.DepRef{}
+	for _, key := range keys {
+		ref := state.Dependents[key]
+		suffix := ""
+		if ref.Using == currentID {
+			suffix = " (current)"
+		} else {
+			behind := 0
+			idxUsing, okUsing := index[ref.Using]
+			idxCurrent, okCurrent := index[currentID]
+			if okUsing && okCurrent && idxUsing > idxCurrent {
+				behind = idxUsing - idxCurrent
+			}
+			if behind > 0 {
+				suffix = fmt.Sprintf(" (OUTDATED - %d behind)", behind)
+			} else {
+				suffix = " (OUTDATED)"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("  %s using %s%s", key, ref.Using, suffix))
+		refs = append(refs, ref)
+	}
+	return lines, refs
 }

@@ -1,0 +1,186 @@
+# LLM Client Implementation Spec
+
+_meta:
+  version: "0.1.0"
+  type: spec
+
+implementation:
+  client:
+    pseudocode: |
+      ALLOWED_MODELS = ["gemini-3-flash", "gemini-3-pro"]
+
+      class LLMClient:
+        def __init__(self, api_keys: list[str], model: str = "gemini-3-flash"):
+          # Validate model
+          if model not in ALLOWED_MODELS:
+            raise ValueError(f"Model {model} not allowed. Use: {ALLOWED_MODELS}")
+
+          self.api_keys = api_keys
+          self.current_key_index = 0
+          self.model = model
+
+        def complete(self, messages: list[Message], tools: list[ToolSchema] = None, temperature: float = None) -> LLMResponse:
+          request = self._build_request(messages, tools, temperature)
+
+          while self.current_key_index < len(self.api_keys):
+            try:
+              response = self._send_request(request)
+              return self._parse_response(response)
+
+            except RateLimitError:
+              # Rotate to next key
+              self.current_key_index += 1
+              if self.current_key_index >= len(self.api_keys):
+                raise AllKeysExhaustedError("All API keys exhausted")
+
+          raise AllKeysExhaustedError("All API keys exhausted")
+
+        def _build_request(self, messages: list[Message], tools: list[ToolSchema], temperature: float = None) -> dict:
+          # Convert to Gemini format
+          contents = []
+          system_instruction = None
+
+          for msg in messages:
+            if msg.role == "system":
+              system_instruction = msg.content
+            else:
+              contents.append({
+                "role": "user" if msg.role == "user" else "model",
+                "parts": [{"text": msg.content}]
+              })
+
+          request = {
+            "contents": contents,
+            "generationConfig": {
+              "temperature": temperature if temperature is not None else 0.3
+            }
+          }
+
+          if system_instruction:
+            request["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+          if tools:
+            request["tools"] = [{"functionDeclarations": [
+              {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters
+              } for t in tools
+            ]}]
+
+          return request
+
+        def _send_request(self, request: dict) -> dict:
+          api_key = self.api_keys[self.current_key_index]
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={api_key}"
+
+          response = http.post(url, json=request)
+
+          if response.status == 429:
+            raise RateLimitError()
+
+          if response.status != 200:
+            body = response.body.lower()
+            if "quota" in body or "resource_exhausted" in body:
+              raise RateLimitError()
+            raise APIError(response.body)
+
+          return response.json()
+
+        def _parse_response(self, response: dict) -> LLMResponse:
+          candidate = response["candidates"][0]
+          content = candidate["content"]
+
+          text = ""
+          tool_calls = []
+
+          for part in content.get("parts", []):
+            if "text" in part:
+              text += part["text"]
+            if "functionCall" in part:
+              fc = part["functionCall"]
+              tool_calls.append(ToolCall(
+                name=fc["name"],
+                args=fc.get("args", {})
+              ))
+
+          return LLMResponse(
+            content=text,
+            tool_calls=tool_calls if tool_calls else None
+          )
+
+  types:
+    pseudocode: |
+      @dataclass
+      class Message:
+        role: str  # "user", "assistant", "system"
+        content: str
+
+      @dataclass
+      class LLMResponse:
+        content: str
+        tool_calls: list[ToolCall] = None
+
+      @dataclass
+      class ToolCall:
+        name: str
+        args: dict
+
+      class RateLimitError(Exception):
+        pass
+
+      class AllKeysExhaustedError(Exception):
+        pass
+
+      class APIError(Exception):
+        pass
+
+tests:
+  unit:
+    - name: model_validation
+      test: |
+        # Valid
+        client = LLMClient(["key1"], model="gemini-3-flash")
+        assert client.model == "gemini-3-flash"
+
+        # Invalid - should raise
+        try:
+          LLMClient(["key1"], model="gemini-2.5-pro")
+          assert False, "Should have raised"
+        except ValueError:
+          pass
+
+    - name: key_rotation
+      test: |
+        client = LLMClient(["key1", "key2", "key3"])
+        assert client.current_key_index == 0
+
+        # Simulate rate limit
+        client.current_key_index = 1
+        assert client.api_keys[client.current_key_index] == "key2"
+
+    - name: request_building
+      test: |
+        client = LLMClient(["key"])
+        messages = [
+          Message(role="system", content="Be helpful"),
+          Message(role="user", content="Hello")
+        ]
+        request = client._build_request(messages, None, temperature=0.7)
+        assert "systemInstruction" in request
+        assert len(request["contents"]) == 1
+        assert request["generationConfig"]["temperature"] == 0.7
+
+    - name: response_parsing
+      test: |
+        client = LLMClient(["key"])
+        raw = {
+          "candidates": [{
+            "content": {
+              "parts": [{"text": "Hello!"}]
+            }
+          }]
+        }
+        response = client._parse_response(raw)
+        assert response.content == "Hello!"
+        assert response.tool_calls is None

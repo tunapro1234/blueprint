@@ -1,0 +1,128 @@
+# Agent Implementation Spec
+
+_meta:
+  version: "0.1.0"
+  type: spec
+
+implementation:
+  agent:
+    pseudocode: |
+      class Agent:
+        def __init__(self, name: str, config: AgentConfig = None, system_prompt: str = None):
+          self.name = name
+          self.config = config or AgentConfig()
+          self.system_prompt = system_prompt or "You are a helpful assistant."
+
+          # Dependencies
+          self.llm = LLMClient(
+            api_keys=load_api_keys(),
+            model=self.config.model
+          )
+          self.tools = ToolRegistry()
+          self.tasks = TaskStore() if self.config.enable_task_store else None
+
+        def add_tool(self, name: str, handler: function, schema: ToolSchema):
+          self.tools.register(name, handler, schema)
+
+        def execute(self, instruction: str) -> AgentResult:
+          # 1. Create task
+          task = self.tasks.create(instruction) if self.tasks else None
+
+          # 2. Build initial messages
+          messages = [
+            Message(role="system", content=self.system_prompt),
+            Message(role="user", content=instruction)
+          ]
+
+          # 3. Get tool schemas for LLM
+          tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
+
+          # 4. Execution loop
+          for i in range(self.config.max_iterations):
+            # Call LLM
+            response = self.llm.complete(
+              messages,
+              tools=tool_schemas,
+              temperature=self.config.temperature
+            )
+
+            # No tool calls = done
+            if not response.tool_calls:
+              if self.tasks:
+                self.tasks.update(task.id, status="completed", output=response.content)
+              return AgentResult(success=True, output=response.content, task_id=task.id if task else None)
+
+            # Execute tool calls
+            messages.append(Message(role="assistant", content=response.content))
+
+            for tool_call in response.tool_calls:
+              result = self.tools.execute(tool_call.name, tool_call.args)
+              messages.append(Message(
+                role="user",
+                content=f"Tool {tool_call.name} result: {result.output}"
+              ))
+
+          # Max iterations reached
+          if self.tasks:
+            self.tasks.update(task.id, status="failed", error="Max iterations reached")
+          return AgentResult(success=False, output="", task_id=task.id if task else None)
+
+  config:
+    pseudocode: |
+      @dataclass
+      class AgentConfig:
+        model: str = "gemini-3-flash"
+        max_iterations: int = 10
+        temperature: float = 0.3
+        enable_task_store: bool = True
+
+  result:
+    pseudocode: |
+      @dataclass
+      class AgentResult:
+        success: bool
+        output: str
+        task_id: str = None
+
+  helpers:
+    load_api_keys:
+      pseudocode: |
+        def load_api_keys() -> list[str]:
+          """Load API keys from environment"""
+          keys = []
+
+          # Primary key
+          if key := os.getenv("GEMINI_API_KEY"):
+            keys.append(key)
+
+          # Additional keys (GEMINI_API_KEY_2, _3, etc.)
+          for i in range(2, 10):
+            if key := os.getenv(f"GEMINI_API_KEY_{i}"):
+              keys.append(key)
+
+          if not keys:
+            raise ValueError("No API keys found")
+
+          return keys
+
+tests:
+  unit:
+    - name: agent_creation
+      test: |
+        agent = Agent("test-agent")
+        assert agent.name == "test-agent"
+        assert agent.config.model == "gemini-3-flash"
+
+    - name: execute_simple
+      test: |
+        agent = Agent("test", system_prompt="Say hello")
+        result = agent.execute("Hi")
+        assert result.success == True
+        assert result.output != ""
+
+    - name: execute_with_tools
+      test: |
+        agent = Agent("test")
+        agent.add_tool("add", lambda a, b: a + b, ToolSchema(...))
+        result = agent.execute("What is 2 + 3?")
+        assert "5" in result.output

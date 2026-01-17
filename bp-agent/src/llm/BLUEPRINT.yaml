@@ -1,0 +1,75 @@
+_meta:
+  version: "0.1.0"
+  updated: 2026-01-17
+  status: mvp
+
+intent: |
+  Gemini 3 LLM client. Key rotation destegi.
+
+  SADECE gemini-3-flash ve gemini-3-pro kullanilabilir.
+  Gemini 2.5, 2, 1.5 YASAK.
+
+api:
+  constants:
+    ALLOWED_MODELS:
+      - gemini-3-flash
+      - gemini-3-pro
+
+  types:
+    Message:
+      fields:
+        - name: role
+          type: enum(user, assistant, system)
+        - name: content
+          type: string
+
+    LLMResponse:
+      fields:
+        - name: content
+          type: string
+        - name: tool_calls
+          type: list<ToolCall>
+          nullable: true
+
+    ToolCall:
+      fields:
+        - name: name
+          type: string
+        - name: args
+          type: map<string, any>
+
+  exports:
+    LLMClient:
+      type: class
+
+      constructor:
+        parameters:
+          - name: api_keys
+            type: list<string>
+            description: Rotation icin birden fazla key
+
+          - name: model
+            type: string
+            default: "gemini-3-flash"
+
+      methods:
+        - name: complete
+          parameters:
+            - name: messages
+              type: list<Message>
+            - name: tools
+              type: list<ToolSchema>
+              nullable: true
+            - name: temperature
+              type: float
+              nullable: true
+              description: Generation temperature (default 0.3)
+          returns: LLMResponse
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"
+
+dependencies:
+  external:
+    - google-generativeai SDK (veya REST API)

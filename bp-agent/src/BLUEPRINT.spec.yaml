@@ -9,6 +9,9 @@ implementation:
     pseudocode: |
       class Agent:
         def __init__(self, name: str, config: AgentConfig = None, system_prompt: str = None):
+          # Use pinned dependency snapshots (impl/) instead of working tree
+          inject_snapshot_deps_from_state()
+
           self.name = name
           self.config = config or AgentConfig()
           self.system_prompt = system_prompt or "You are a helpful assistant."
@@ -71,7 +74,7 @@ implementation:
     pseudocode: |
       @dataclass
       class AgentConfig:
-        model: str = "gemini-3-flash"
+        model: str = "gemini-3-flash-preview"
         max_iterations: int = 10
         temperature: float = 0.3
         enable_task_store: bool = True
@@ -111,7 +114,7 @@ tests:
       test: |
         agent = Agent("test-agent")
         assert agent.name == "test-agent"
-        assert agent.config.model == "gemini-3-flash"
+        assert agent.config.model == "gemini-3-flash-preview"
 
     - name: execute_simple
       test: |

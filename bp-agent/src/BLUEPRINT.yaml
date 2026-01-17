@@ -25,7 +25,7 @@ api:
       fields:
         - name: model
           type: string
-          default: "gemini-3-flash"
+          default: "gemini-3-flash-preview"
 
         - name: max_iterations
           type: integer

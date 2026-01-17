@@ -6,14 +6,13 @@ _meta:
 intent: |
   Gemini 3 LLM client. Key rotation destegi.
 
-  SADECE gemini-3-flash ve gemini-3-pro kullanilabilir.
-  Gemini 2.5, 2, 1.5 YASAK.
+  SADECE Gemini 3 modelleri kullanilabilir.
 
 api:
   constants:
     ALLOWED_MODELS:
-      - gemini-3-flash
-      - gemini-3-pro
+      - gemini-3-flash-preview
+      - gemini-3-pro-preview
 
   types:
     Message:
@@ -50,7 +49,7 @@ api:
 
           - name: model
             type: string
-            default: "gemini-3-flash"
+            default: "gemini-3-flash-preview"
 
       methods:
         - name: complete

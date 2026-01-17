@@ -7,10 +7,10 @@ _meta:
 implementation:
   client:
     pseudocode: |
-      ALLOWED_MODELS = ["gemini-3-flash", "gemini-3-pro"]
+      ALLOWED_MODELS = ["gemini-3-flash-preview", "gemini-3-pro-preview"]
 
       class LLMClient:
-        def __init__(self, api_keys: list[str], model: str = "gemini-3-flash"):
+        def __init__(self, api_keys: list[str], model: str = "gemini-3-flash-preview"):
           # Validate model
           if model not in ALLOWED_MODELS:
             raise ValueError(f"Model {model} not allowed. Use: {ALLOWED_MODELS}")
@@ -140,12 +140,12 @@ tests:
     - name: model_validation
       test: |
         # Valid
-        client = LLMClient(["key1"], model="gemini-3-flash")
-        assert client.model == "gemini-3-flash"
+        client = LLMClient(["key1"], model="gemini-3-flash-preview")
+        assert client.model == "gemini-3-flash-preview"
 
         # Invalid - should raise
         try:
-          LLMClient(["key1"], model="gemini-2.5-pro")
+          LLMClient(["key1"], model="invalid-model")
           assert False, "Should have raised"
         except ValueError:
           pass

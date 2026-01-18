@@ -28,6 +28,8 @@ overview: |
   - bp ss: Snapshot al (testler geçerse kaydet + impl/ kopyala)
   - bp implement: Implementation başlat (dependency kontrol + reverse tracking)
   - bp impl: implement alias (kısa)
+  - bp patch: Import/include güncelleme oturumu başlat
+  - bp apply: Oturumu kapat (impl ise snapshot alır, patch ise snapshot günceller)
   - bp plan: Değişen paketleri leaf-first sırada listeler
   - bp cancel: Implementation oturumunu iptal eder (impl.lock temizler)
   - bp upgrade: Dependency'leri güncelle
@@ -61,6 +63,9 @@ dependency_policy:
     - Diğer paketler import/build için pinned snapshot kopyalarını kullanır
       (örn. blueprint/history/{snapshot_id}/impl)
     - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
+    - Dependency snapshot güncellendiğinde dependents import yolları güncellenmelidir
+    - Sadece import güncellemesi yapıldıysa yeni snapshot alınmaz; patch/apply ile mevcut snapshot güncellenir
+    - bp ss legacy'dir; default kapanış için bp apply kullanılır
 
 # =============================================================================
 # API

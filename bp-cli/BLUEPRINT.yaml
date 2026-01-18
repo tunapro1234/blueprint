@@ -145,9 +145,10 @@ usage:
     - "bp status"
     - "bp plan -r"
     - "bp cancel"
-    - "bp ss -m 'Initial snapshot'"
     - "bp implement"
     - "bp impl"
+    - "bp apply -m 'Initial snapshot'"
+    - "bp patch"
     - "bp upgrade --all"
     - "bp deps --upgrades"
 
@@ -160,13 +161,19 @@ workflow:
     Önerilen akış (enforce edilmez):
     1) Önce BLUEPRINT.yaml / BLUEPRINT.spec.yaml güncellenir
     2) bp plan -r ile leaf-first sıra çıkarılır
-    3) Her paket için: bp impl → implementasyon → bp ss
+    3) Her paket için: bp impl → implementasyon → bp apply
     4) bp ss sonrası impl dosyaları working tree'den temizlenir
-    5) Kod görmek için tekrar bp impl gerekir
+    5) bp apply sonrası impl dosyaları working tree'den temizlenir
+    6) Kod görmek için tekrar bp impl gerekir
   notes:
     - BLUEPRINT dosyaları ss sonrası working tree'de kalır
+    - BLUEPRINT dosyaları apply sonrası working tree'de kalır
     - impl.lock aktifse "implementing" state vardır
     - impl.hidden working tree'nin gizli olduğunu belirtir
+    - Importlar daima snapshot path'lerine yapılır (history/{id}/impl); working tree import edilmez
+    - Dependency snapshot güncellendiğinde dependents importları güncellenir
+    - Sadece import yolu güncellemesi varsa yeni snapshot alınmaz; patch/apply ile mevcut snapshot güncellenir
+    - bp ss legacy'dir; default kapanış için bp apply kullanılır
 
 # =============================================================================
 # AI GUIDELINES

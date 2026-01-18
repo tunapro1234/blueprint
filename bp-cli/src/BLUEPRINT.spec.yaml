@@ -181,6 +181,11 @@ workflow_policy:
       3. state "stale" veya "no_snapshot" olanları filtrele
       4. Kalanları aynı sırayla listede göster
 
+    import_update_policy: |
+      Dependency snapshot güncellendiğinde dependents import yolları güncellenir.
+      Sadece import yolu güncellemesi yapıldıysa yeni snapshot alınmaz; patch/apply
+      ile mevcut snapshot güncellenir.
+
     hash_calculation: |
       Dosya hash:
       1. Dosya içeriğini binary olarak oku
@@ -285,10 +290,21 @@ workflow_policy:
       6. impl.lock oluştur (aktif implementasyon)
       7. "Ready to implement" mesajı ver
 
+      Implementation bitince: bp apply -m "message" (tercih edilir) veya bp ss (legacy).
+
       İzolasyon garantisi (yeni model):
       - Her paket kendi dependency'lerinin stable snapshot'ına referans veriyor
       - Dependency kodu: dep/{state_dir}/history/{id}/impl/ içinde
       - Ana klasör = development, history = stable versiyonlar
+
+    patch_apply_algorithm: |
+      Patch akışı (patch/apply):
+      1. bp patch: snapshot restore + impl.lock(mode=patch)
+      2. Sadece import/include yolları güncellenir
+      3. bp apply:
+         - Değişiklikleri ilgili snapshot impl içine geri yazar
+         - Yeni snapshot oluşturmaz (mevcut snapshot mutasyona uğrar)
+         - impl.hidden yazar, impl.lock siler
 
     upgrade_algorithm: |
       bp upgrade [dep-path] [--safe|--all] algoritması:
@@ -308,7 +324,7 @@ workflow_policy:
       3. API değişikliği varsa uyarı göster (bloklamaz)
 
     impl_copy_algorithm: |
-      bp ss impl/ kopyalama algoritması:
+      bp apply (impl mode) / bp ss (legacy) impl/ kopyalama algoritması:
       1. Hangi dosyalar kopyalanacak:
          - implementation.structure'dan dosya listesi al
          - Yoksa: dizindeki kaynak dosyalarını tara (.go, .py, etc.)

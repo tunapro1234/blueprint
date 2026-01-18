@@ -14,6 +14,7 @@ type HistoryEntry struct {
 	Message     string
 	ContentHash string
 	APIHash     string
+	SpecHash    string
 	ImplHash    string
 }
 
@@ -80,6 +81,7 @@ func LoadSnapshotMeta(stateDir, id string) (HistoryEntry, error) {
 		Message:     getString(parsed, "message"),
 		ContentHash: getString(parsed, "content_hash"),
 		APIHash:     getString(parsed, "api_hash"),
+		SpecHash:    getString(parsed, "spec_hash"),
 		ImplHash:    getString(parsed, "impl_hash"),
 	}
 	if meta.ID == "" {

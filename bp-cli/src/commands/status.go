@@ -61,6 +61,12 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	var singleReason string
 	var singleUpdates []DepUpgrade
 	var singleDependents []bp.DepRef
+	var singleImplementing bool
+	var singleImplHidden bool
+	var singleWorkingClean bool
+	var singleBlueprintChanged bool
+	var singleAPIChanged bool
+	var singleSpecChanged bool
 	for _, target := range targets {
 		bpObj, err := bp.LoadBlueprint(target)
 		if err != nil {
@@ -81,6 +87,9 @@ func StatusCommand(ctx CommandContext) CommandResult {
 		counts[info.State]++
 		lines = append(lines, statusLine)
 		if !recursive {
+			implementing, _ := hasImplLock(bpObj.StateDir)
+			implHidden, _ := bp.IsImplHidden(bpObj.StateDir)
+			workingClean, blueprintChanged, apiChanged, specChanged := computeStatusFlags(bpObj, info)
 			for _, up := range upgrades {
 				lines = append(lines, formatDepUpgradeLine(up))
 			}
@@ -93,6 +102,12 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			singleReason = info.Reason
 			singleUpdates = upgrades
 			singleDependents = dependentsData
+			singleImplementing = implementing
+			singleImplHidden = implHidden
+			singleWorkingClean = workingClean
+			singleBlueprintChanged = blueprintChanged
+			singleAPIChanged = apiChanged
+			singleSpecChanged = specChanged
 		}
 	}
 	if recursive {
@@ -121,9 +136,48 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			StaleReason:  singleReason,
 			DepUpdates:   singleUpdates,
 			Dependents:   singleDependents,
+			Implementing: singleImplementing,
+			ImplHidden:   singleImplHidden,
+			WorkingClean: singleWorkingClean,
+			BlueprintChanged: singleBlueprintChanged,
+			APIChanged:       singleAPIChanged,
+			SpecChanged:      singleSpecChanged,
 		}
 	}
 	return CommandResult{ExitCode: exitCode, Output: strings.Join(lines, "\n"), Data: data}
+}
+
+func computeStatusFlags(bpObj *bp.Blueprint, info bp.StalenessInfo) (bool, bool, bool, bool) {
+	blueprintChanged := false
+	workingClean := true
+	for _, entry := range info.ChangedFiles {
+		if entry == "BLUEPRINT.yaml" {
+			blueprintChanged = true
+			continue
+		}
+		workingClean = false
+	}
+	apiChanged := false
+	specChanged := false
+	currentID, err := readCurrentSnapshotID(bpObj.StateDir)
+	if err != nil || currentID == "" {
+		return workingClean, blueprintChanged, apiChanged, specChanged
+	}
+	meta, err := bp.LoadSnapshotMeta(bpObj.StateDir, currentID)
+	if err != nil {
+		return workingClean, blueprintChanged, apiChanged, specChanged
+	}
+	if meta.APIHash != "" {
+		if current, err := bpObj.APIHash(); err == nil && current != meta.APIHash {
+			apiChanged = true
+		}
+	}
+	if meta.SpecHash != "" {
+		if current, err := bpObj.SpecHash(); err == nil && current != meta.SpecHash {
+			specChanged = true
+		}
+	}
+	return workingClean, blueprintChanged, apiChanged, specChanged
 }
 
 func statusState(counts map[string]int) string {
@@ -141,29 +195,61 @@ func statusForBlueprint(bpObj *bp.Blueprint) (string, bp.StalenessInfo, []DepUpg
 	if err != nil {
 		return "", info, nil, nil, nil, err
 	}
+	implementing, err := hasImplLock(bpObj.StateDir)
+	if err != nil {
+		return "", info, nil, nil, nil, err
+	}
 	line := ""
 	switch info.State {
 	case "no_snapshot":
-		line = fmt.Sprintf("○ %s (no snapshot)", formatPath(bpObj.Dir))
+		if implementing {
+			line = fmt.Sprintf("○ %s (no snapshot, implementing)", formatPath(bpObj.Dir))
+		} else {
+			line = fmt.Sprintf("○ %s (no snapshot)", formatPath(bpObj.Dir))
+		}
 	case "fresh":
-		line = fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
+		if implementing {
+			line = fmt.Sprintf("⧗ %s (implementing)", formatPath(bpObj.Dir))
+		} else {
+			line = fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
+		}
 	case "stale":
 		switch info.Reason {
 		case "deps_changed", "deps_api_changed":
 			deps := strings.Join(info.ChangedDeps, ", ")
-			line = fmt.Sprintf("⚠ %s (deps changed: %s)", formatPath(bpObj.Dir), deps)
+			if implementing {
+				line = fmt.Sprintf("⧗ %s (implementing, deps changed: %s)", formatPath(bpObj.Dir), deps)
+			} else {
+				line = fmt.Sprintf("⚠ %s (deps changed: %s)", formatPath(bpObj.Dir), deps)
+			}
 		case "blueprint_changed":
-			line = fmt.Sprintf("⚠ %s (stale, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
+			if implementing {
+				line = fmt.Sprintf("⧗ %s (implementing, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
+			} else {
+				line = fmt.Sprintf("⚠ %s (stale, BLUEPRINT.yaml changed)", formatPath(bpObj.Dir))
+			}
 		default:
 			count := len(info.ChangedFiles)
 			if count == 0 {
-				line = fmt.Sprintf("⚠ %s (stale)", formatPath(bpObj.Dir))
+				if implementing {
+					line = fmt.Sprintf("⧗ %s (implementing)", formatPath(bpObj.Dir))
+				} else {
+					line = fmt.Sprintf("⚠ %s (stale)", formatPath(bpObj.Dir))
+				}
 			} else {
-				line = fmt.Sprintf("⚠ %s (stale, %d files changed)", formatPath(bpObj.Dir), count)
+				if implementing {
+					line = fmt.Sprintf("⧗ %s (implementing, %d files changed)", formatPath(bpObj.Dir), count)
+				} else {
+					line = fmt.Sprintf("⚠ %s (stale, %d files changed)", formatPath(bpObj.Dir), count)
+				}
 			}
 		}
 	default:
-		line = fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
+		if implementing {
+			line = fmt.Sprintf("⧗ %s (implementing)", formatPath(bpObj.Dir))
+		} else {
+			line = fmt.Sprintf("✓ %s (fresh)", formatPath(bpObj.Dir))
+		}
 	}
 
 	upgrades := []DepUpgrade{}

@@ -29,6 +29,14 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	active, err := hasImplLock(bpObj.StateDir)
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if !active {
+		out := "No active implementation. Run 'bp impl' first."
+		return CommandResult{ExitCode: 1, Output: out, Errors: []string{out}}
+	}
 	validation := bpObj.Validate()
 	if len(validation.Errors) > 0 {
 		out := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), strings.Join(validation.Errors, "; "))
@@ -67,6 +75,10 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 	implHash := bp.ComputeImplHash(files)
 	depsHash := bp.ComputeDepsHash(depsState)
 	apiHash, err := bpObj.APIHash()
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	specHash, err := bpObj.SpecHash()
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
@@ -114,17 +126,47 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot already exists: %s", snapshotID))
+		if err := cleanImplementationFiles(trackedFiles); err != nil {
+			msg := fmt.Sprintf("Failed to clean implementation files: %s", err.Error())
+			out = strings.Join([]string{out, "✗ " + msg}, "\n")
+			return CommandResult{
+				ExitCode: 1,
+				Output:   out,
+				Errors:   []string{msg},
+				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
+			}
+		}
+		if err := bp.MarkImplHidden(bpObj.StateDir); err != nil {
+			msg := fmt.Sprintf("Failed to mark implementation hidden: %s", err.Error())
+			out = strings.Join([]string{out, "✗ " + msg}, "\n")
+			return CommandResult{
+				ExitCode: 1,
+				Output:   out,
+				Errors:   []string{msg},
+				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
+			}
+		}
+		if err := clearImplLock(bpObj.StateDir); err != nil {
+			msg := fmt.Sprintf("Failed to clear implementation lock: %s", err.Error())
+			out = strings.Join([]string{out, "✗ " + msg}, "\n")
+			return CommandResult{
+				ExitCode: 1,
+				Output:   out,
+				Errors:   []string{msg},
+				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
+			}
+		}
 		return CommandResult{
 			ExitCode: 0,
 			Output:   out,
-			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
+			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
 		}
 	}
 
 	if err := copyBlueprintSnapshot(bpObj.Path, snapshotBlueprintPath(bpObj.StateDir, snapshotID)); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := writeMeta(bpObj.StateDir, snapshotID, messageText, contentHash, apiHash, implHash, now); err != nil {
+	if err := writeMeta(bpObj.StateDir, snapshotID, messageText, contentHash, apiHash, specHash, implHash, now); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if err := copyImplementationSnapshot(trackedFiles, bpObj.StateDir, snapshotID, testCfg.SnapshotReadOnly); err != nil {
@@ -137,11 +179,50 @@ func SnapshotCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot created: %s", snapshotID))
+	if err := cleanImplementationFiles(trackedFiles); err != nil {
+		msg := fmt.Sprintf("Failed to clean implementation files: %s", err.Error())
+		out = strings.Join([]string{out, "✗ " + msg}, "\n")
+		return CommandResult{
+			ExitCode: 1,
+			Output:   out,
+			Errors:   []string{msg},
+			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
+		}
+	}
+	if err := bp.MarkImplHidden(bpObj.StateDir); err != nil {
+		msg := fmt.Sprintf("Failed to mark implementation hidden: %s", err.Error())
+		out = strings.Join([]string{out, "✗ " + msg}, "\n")
+		return CommandResult{
+			ExitCode: 1,
+			Output:   out,
+			Errors:   []string{msg},
+			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
+		}
+	}
+	if err := clearImplLock(bpObj.StateDir); err != nil {
+		msg := fmt.Sprintf("Failed to clear implementation lock: %s", err.Error())
+		out = strings.Join([]string{out, "✗ " + msg}, "\n")
+		return CommandResult{
+			ExitCode: 1,
+			Output:   out,
+			Errors:   []string{msg},
+			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
+		}
+	}
 	return CommandResult{
 		ExitCode: 0,
 		Output:   out,
-		Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
+		Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
 	}
+}
+
+func cleanImplementationFiles(files map[string]string) error {
+	for _, abs := range files {
+		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func formatSnapshotOutput(warnings []string, main string) string {
@@ -467,13 +548,14 @@ func makeReadOnly(path string, srcPerm os.FileMode) error {
 	return os.Chmod(path, perm)
 }
 
-func writeMeta(stateDir, id, message, contentHash, apiHash, implHash string, ts time.Time) error {
+func writeMeta(stateDir, id, message, contentHash, apiHash, specHash, implHash string, ts time.Time) error {
 	meta := bp.HistoryEntry{
 		ID:          id,
 		Timestamp:   ts.Format("2006-01-02T15:04:05"),
 		Message:     message,
 		ContentHash: contentHash,
 		APIHash:     apiHash,
+		SpecHash:    specHash,
 		ImplHash:    implHash,
 	}
 	var b strings.Builder
@@ -487,6 +569,8 @@ func writeMeta(stateDir, id, message, contentHash, apiHash, implHash string, ts 
 	b.WriteString(meta.ContentHash)
 	b.WriteString("\napi_hash: ")
 	b.WriteString(meta.APIHash)
+	b.WriteString("\nspec_hash: ")
+	b.WriteString(meta.SpecHash)
 	b.WriteString("\nimpl_hash: ")
 	b.WriteString(meta.ImplHash)
 	b.WriteString("\n")

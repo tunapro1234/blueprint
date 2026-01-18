@@ -44,6 +44,7 @@ api:
           deps_upgrade: "⚠ {dep}: {pinned} → {latest}"
           deps_upgrade_api: "⚠ {dep}: {pinned} → {latest} (API CHANGED!)"
           no_state: "○ {path} (no snapshot)"
+          implementing: "⧗ {path} (implementing)"
           dependents: |
             Dependents:
               ../consumer using 20260115-xxxx (OUTDATED - 2 behind)
@@ -58,6 +59,46 @@ api:
           2. BLUEPRINT.yaml değişmiş (blueprint_changed)
           3. Dependency'nin snapshot'ı değişmiş - pinned != latest (deps_changed)
           4. Dependency'nin api_hash'i değişmiş (deps_api_changed, daha kritik)
+        status_flags: |
+          Ayrı flag'ler (staleness reason'a eklenmez):
+          - implementing: impl.lock var mı?
+          - impl_hidden: impl.hidden var mı?
+          - working_clean: tracked dosyalarda değişiklik yok mu?
+          - blueprint_changed: BLUEPRINT.yaml hash değişmiş mi?
+          - api_changed: API section hash değişmiş mi?
+          - spec_changed: Implementation section hash değişmiş mi?
+
+      - name: plan
+        desc: Değişen paketleri dependency sırasına göre listeler (leaf-first)
+        usage: bp plan [path] [-r]
+        flags:
+          - name: -r, --recursive
+            desc: Alt klasörleri de tara
+        behavior: |
+          - Blueprint'leri recursive toplar (flag yoksa sadece verilen path)
+          - Dependency graph'e göre leaf-first sıralar
+          - Sadece stale veya no_snapshot paketleri listeler
+        output: |
+          1. ./yamlparser (no snapshot)
+          2. ./commands (stale, blueprint_changed)
+          3. . (stale, deps_changed)
+        exit_codes:
+          0: Başarılı (liste boş olabilir)
+          1: Hata (circular dependency veya okuma hatası)
+
+      - name: cancel
+        desc: Aktif implementation oturumunu iptal eder
+        usage: bp cancel [path]
+        behavior: |
+          - impl.lock yoksa hata verir
+          - impl.lock varsa silinir
+          - Working tree dosyaları değiştirilmez
+        output:
+          success: "Implementation cancelled."
+          no_active: "No active implementation."
+        exit_codes:
+          0: Başarılı
+          1: Aktif implementasyon yok veya hata
 
       - name: deps
         desc: Dependency graph göster
@@ -136,6 +177,7 @@ api:
           - name: --skip-tests
             desc: Testleri atla, direkt kaydet
         behavior: |
+          0. Aktif implementasyon yoksa hata ver (impl.lock yoksa)
           1. Blueprint'i validate et (hata varsa exit 2)
           2. Dependency'lerin snapshot durumunu kontrol et
           3. tests.verification komutlarını çalıştır (varsa)
@@ -148,6 +190,8 @@ api:
              - state.yaml güncelle (files, deps, dependents)
              - blueprint/current güncelle
           5. Testler geçmezse hata ver, snapshot alma
+          6. Başarılıysa working tree'deki implementation dosyalarını temizle
+          7. Başarılıysa impl.lock silinir (implementasyon kapanır)
         output:
           success: "Snapshot created: 20260116-1430-a1b2-add-feature"
         exit_codes:
@@ -157,17 +201,24 @@ api:
 
       - name: implement
         desc: Implementation başlat - dependency kontrol + reverse tracking
-        usage: bp implement [path]
+        usage: bp implement [path] [snapshot_id] [--clean]
+        note: "Alias: bp impl"
         behavior: |
-          1. Blueprint'i oku, dependencies bölümünü kontrol et
-          2. Her dependency için:
+          0. Blueprint'i validate et (error varsa exit 2)
+          1. Eğer impl.lock varsa hata ver (aktif implementasyon var)
+          2. Blueprint'i oku, dependencies bölümünü kontrol et
+          3. Her dependency için:
              - Pin'lenmiş snapshot mevcut mu kontrol et
              - Snapshot yoksa hata: "Dependency {dep} has no snapshot"
              - Dependency'nin blueprint/state.yaml'ına kendini kaydet (reverse tracking)
                dependents:
                  "{my_path}":
                    using: "{pinned_snapshot_id}"
-          3. "Ready to implement" mesajı ver
+          4. --clean yoksa kendi snapshot'ından impl/ restore et
+             - snapshot_id verilirse o ID restore edilir
+             - verilmezse current snapshot restore edilir
+          5. impl.lock oluştur (aktif implementasyon)
+          6. "Ready to implement" mesajı ver
 
           Implementation bitince: bp ss -m "message" ile snapshot al.
 
@@ -183,7 +234,7 @@ api:
         exit_codes:
           0: Ready to implement
           1: Dependency snapshot eksik
-          2: Blueprint bulunamadı
+          2: Validation hatası veya blueprint bulunamadı
 
       - name: upgrade
         desc: Dependency'leri güncelle
@@ -237,6 +288,12 @@ api:
           - name: is_stale
             returns: bool?
             desc: Kod değişmiş mi? (null = snapshot yok)
+          - name: api_hash
+            returns: string
+            desc: API section hash
+          - name: spec_hash
+            returns: string
+            desc: Implementation section hash
           - name: get_changed_files
             returns: string[]
             desc: Değişen dosyaların listesi
@@ -269,9 +326,32 @@ api:
           - name: api_hash
             type: string
             desc: API section'ın hash'i
+          - name: spec_hash
+            type: string
+            desc: Implementation section'ın hash'i
           - name: impl_hash
             type: string
             desc: Implementation dosyalarının birleşik hash'i
+
+      - name: PlanStep
+        desc: Plan sırasındaki tek adım
+        fields:
+          - name: path
+            type: string
+            desc: Blueprint path (relative)
+          - name: state
+            type: string
+            desc: "stale | no_snapshot"
+          - name: reason
+            type: string
+            desc: "files_changed | blueprint_changed | deps_changed | deps_api_changed"
+
+      - name: PlanResult
+        desc: Plan komutu sonucu
+        fields:
+          - name: steps
+            type: PlanStep[]
+            desc: Leaf-first sıralı adımlar
 
       - name: DepState
         desc: Bir dependency'nin pin durumu (state.yaml deps içinde)
@@ -329,4 +409,3 @@ api:
           - name: warnings
             type: string[]
             desc: Uyarı mesajları
-

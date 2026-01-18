@@ -26,6 +26,8 @@ implementation:
     - registry module     # COMMANDS map, komut import/export
     - validate module
     - status module       # + dependents gösterimi
+    - plan module         # Leaf-first plan listesi
+    - cancel module       # Implementation iptal
     - deps module         # + --upgrades flag
     - init module
     - log module          # Yeni snapshot ID formatı
@@ -72,6 +74,13 @@ implementation:
         fresh: Dosyalar ve dependency'ler snapshot'taki ile aynı
         stale: En az bir dosya veya dependency değişmiş
         no_snapshot: {state_dir}/state.yaml yok
+      flags:
+        implementing: impl.lock varsa true
+        impl_hidden: impl.hidden varsa true (working tree gizli)
+        working_clean: tracked dosyalarda değişiklik yok
+        blueprint_changed: BLUEPRINT.yaml hash değişmiş
+        api_changed: API section hash değişmiş
+        spec_changed: Implementation section hash değişmiş
       staleness_reasons:
         files_changed: Kendi dosyaları değişmiş
         blueprint_changed: BLUEPRINT.yaml değişmiş
@@ -108,6 +117,7 @@ implementation:
         3. Dosya silinmişse → changed_files'a ekle (prefix: "deleted: ")
         4. Yeni dosya varsa → changed_files'a ekle (prefix: "new: ")
         5. BLUEPRINT.yaml değiştiyse → changed_files'a "BLUEPRINT.yaml" ekle
+        6. Eğer impl.hidden varsa, "deleted:" kayıtları ignore edilir
       staleness_algorithm: |
         Hash-based karşılaştırma (pinned/latest modeli):
         1. {state_dir}/state.yaml oku (yoksa → no_snapshot)
@@ -130,6 +140,7 @@ implementation:
         fresh: "✓"
         stale: "⚠"
         no_snapshot: "○"
+        implementing: "⧗"
       exit_codes:
         0: fresh
         1: stale
@@ -138,6 +149,31 @@ implementation:
         -r flag ile alt paketleri de kontrol eder.
         Özet satırı en sonda gösterilir.
         Exit code: en kötü durum (2 > 1 > 0)
+
+    plan:
+      purpose: Değişen paketleri leaf-first sırada listele
+      steps:
+        1: recursive ise BlueprintTree.Walk + TopologicalSort ile sıralama
+        2: Her blueprint için staleness kontrolü
+        3: state "stale" veya "no_snapshot" ise listeye ekle
+        4: Leaf-first sıralı liste yazdır
+      output:
+        format: "{index}. {path} ({state}{reason})"
+        empty: "All blueprints fresh"
+      exit_codes:
+        0: Başarılı (liste boş olabilir)
+        1: Hata (circular dependency veya okuma hatası)
+
+    cancel:
+      purpose: Aktif implementation oturumunu iptal et
+      steps:
+        1: impl.lock var mı kontrol et
+        2: Yoksa: "No active implementation.", exit 1
+        3: Varsa: impl.lock sil
+        4: "Implementation cancelled.", exit 0
+      exit_codes:
+        0: Başarılı
+        1: Aktif implementasyon yok veya hata
 
     deps:
       algorithm: Kahn's algorithm (topological sort)
@@ -185,6 +221,7 @@ implementation:
         message: "Add feature"               # -m ile verilen veya tarih
         content_hash: "sha256:full..."       # Tam content hash
         api_hash: "sha256:abc..."            # API section hash
+        spec_hash: "sha256:def..."           # Implementation section hash
         impl_hash: "sha256:xyz..."           # Implementation hash
 
         Timestamp kuralları:
@@ -238,6 +275,7 @@ implementation:
 
     ss:
       steps:
+        0: Aktif implementasyon yoksa hata ver (impl.lock yoksa)
         1: |
           Blueprint'i validate et
           - Error varsa (exit 1) → ss exit 2, snapshot alınmaz
@@ -250,6 +288,7 @@ implementation:
           Hash'leri hesapla:
           - impl_hash: implementation dosyalarının birleşik hash'i
           - api_hash: api section'ın hash'i
+          - spec_hash: implementation section'ın hash'i
           - content_hash: blueprint_hash + impl_hash + deps_hash → SHA-256
         6: |
           Snapshot ID oluştur: YYYYMMDD-HHMM-{4-char-hash}-{slug}
@@ -260,10 +299,13 @@ implementation:
           Snapshot klasörü oluştur:
           - {state_dir}/history/{id}/ oluştur
           - BLUEPRINT.yaml kopyala
-          - meta.yaml oluştur (id, timestamp, message, content_hash, api_hash, impl_hash)
+          - meta.yaml oluştur (id, timestamp, message, content_hash, api_hash, spec_hash, impl_hash)
           - impl/ klasörüne kaynak dosyaları kopyala (TAM KOPYA)
         8: {state_dir}/state.yaml güncelle (files + deps + dependents)
         9: {state_dir}/current güncelle
+        10: Başarılıysa working tree implementation dosyalarını temizle
+        11: Başarılıysa impl.hidden oluştur (working tree gizli)
+        12: Başarılıysa impl.lock sil (implementasyon kapanır)
       id_format: "YYYYMMDD-HHMM-{4-char-hash}-{slug}"
       exit_codes:
         0: Snapshot başarıyla alındı
@@ -297,16 +339,24 @@ implementation:
     implement:
       purpose: Implementation başlat - dependency kontrol + reverse tracking
       steps:
-        1: Blueprint'i yükle, dependencies bölümünü oku
-        2: Dependency yoksa → "No dependencies, ready to implement"
-        3: |
+        0: Blueprint'i validate et (error varsa exit 2)
+        1: Aktif implementasyon varsa hata ver (impl.lock varsa)
+        2: Blueprint'i yükle, dependencies bölümünü oku
+        3: Dependency yoksa → "No dependencies, ready to implement"
+        4: |
           Her dependency için:
           - Path'i resolve et (relative → absolute)
           - Dependency'nin {state_dir}/state.yaml'ını kontrol et
           - snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
           - Dependency'nin state.yaml dependents'ına kendini ekle (reverse tracking)
           - Kendi state.yaml deps'ine pin bilgisi ekle
-        4: "Ready to implement" mesajı ver
+        5: |
+          --clean yoksa impl restore et:
+          - snapshot_id verilirse o ID restore edilir
+          - verilmezse current snapshot restore edilir
+        6: impl.hidden varsa temizle (working tree tekrar görünür)
+        7: impl.lock oluştur (aktif implementasyon)
+        8: "Ready to implement" mesajı ver
       reverse_tracking: |
         Dependency'nin state.yaml'ına eklenen:
         dependents:
@@ -362,7 +412,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 10 komut var (validate, status, deps, init, log, diff, show, ss, implement, upgrade)
+      then: 13 komut var (validate, status, plan, cancel, deps, init, log, diff, show, ss, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut
@@ -464,6 +514,31 @@ tests:
       given: Snapshot var, BLUEPRINT.yaml değişmiş
       when: bp status
       then: '"⚠ . (stale, BLUEPRINT.yaml changed)", exit 1'
+
+    # =========================================================================
+    # PLAN
+    # =========================================================================
+    - id: plan_lists_stale_leaf_first
+      given: Root paketin 2 dependency'si var (leaf + mid), root stale
+      when: bp plan -r
+      then: |
+        1. ./leaf (no snapshot)
+        2. ./mid (stale, deps_changed)
+        3. . (stale, deps_changed)
+        exit 0
+
+    # =========================================================================
+    # CANCEL
+    # =========================================================================
+    - id: cancel_no_active
+      given: impl.lock yok
+      when: bp cancel
+      then: '"No active implementation.", exit 1'
+
+    - id: cancel_success
+      given: impl.lock var
+      when: bp cancel
+      then: '"Implementation cancelled.", exit 0'
 
     # =========================================================================
     # DEPS
@@ -615,7 +690,7 @@ tests:
       when: bp ss -m "v1.0 release"
       then: |
         - {state_dir}/history/20260116-HHMM-xxxx-v10-release/ oluşur
-        - meta.yaml: id, timestamp, message, content_hash, api_hash, impl_hash
+        - meta.yaml: id, timestamp, message, content_hash, api_hash, spec_hash, impl_hash
         - impl/ klasörüne kaynak dosyalar kopyalanır
         - {state_dir}/current güncellenir
         - exit 0

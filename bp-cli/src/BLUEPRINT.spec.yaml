@@ -22,6 +22,8 @@ implementation:
     blueprint_dir: |
       {state_dir}/                         # _meta.state_dir (default .blueprint)
       ├── current                           # Son snapshot ID
+      ├── impl.lock                         # Aktif implementasyon kilidi
+      ├── impl.hidden                       # Working tree gizli işareti
       ├── state.yaml                        # Files, deps, dependents
       └── history/
           ├── 20260116-1430-a1b2-add-feat/  # Snapshot ID (timestamp-hash-slug)
@@ -44,6 +46,7 @@ implementation:
       message: "Add feature"              # User -m ile veya otomatik tarih
       content_hash: "sha256:full..."      # Tam content hash (referans için)
       api_hash: "sha256:abc123..."        # API section hash
+      spec_hash: "sha256:def456..."       # Implementation section hash
       impl_hash: "sha256:xyz789..."       # Implementation dosyalarının birleşik hash'i
 
     state_yaml: |
@@ -128,6 +131,10 @@ workflow_policy:
       - deps_changed: Dependency'nin yeni versiyonu var (pinned != latest)
       - deps_api_changed: Dependency'nin API'si değişmiş (api_changed == true)
 
+      Notlar:
+      - API/spec hash farkları staleness reason'a eklenmez; status flag'leriyle raporlanır.
+      - impl.hidden varsa silinmiş dosyalar changed_files listesine eklenmez.
+
       Öncelik: files_changed > blueprint_changed > deps_api_changed > deps_changed
 
     dependency_resolution: |
@@ -166,6 +173,13 @@ workflow_policy:
       5. Komşuların in-degree'sini azalt
       6. In-degree 0 olanları queue'ya ekle
       7. Result.length != node_count ise cycle var
+
+    plan_order: |
+      Plan sıralaması (leaf-first):
+      1. BlueprintTree.Walk ile tüm blueprint'leri topla
+      2. TopologicalSort ile dependency sırasını çıkar
+      3. state "stale" veya "no_snapshot" olanları filtrele
+      4. Kalanları aynı sırayla listede göster
 
     hash_calculation: |
       Dosya hash:
@@ -230,6 +244,12 @@ workflow_policy:
       Bu hash dependency'nin "public interface"ini temsil eder.
       api_hash değiştiyse → dependent paketler stale olur
 
+    spec_hash_calculation: |
+      Spec hash (implementation section):
+      1. Blueprint'in implementation section'ını al
+      2. JSON-like canonical format'a çevir (sorted keys)
+      3. SHA-256 hash al
+
     unified_diff: |
       Standart unified diff formatı:
       - İlk satır: --- <old_file>
@@ -241,9 +261,11 @@ workflow_policy:
 
     implement_algorithm: |
       bp implement algoritması (yeni - reverse tracking):
-      1. Blueprint'i yükle, dependencies bölümünü oku
-      2. Dependency yoksa → "No dependencies, ready to implement"
-      3. Her dependency için:
+      0. Blueprint'i validate et (error varsa exit 2)
+      1. impl.lock varsa hata ver (aktif implementasyon var)
+      2. Blueprint'i yükle, dependencies bölümünü oku
+      3. Dependency yoksa → "No dependencies, ready to implement"
+      4. Her dependency için:
          a. Dependency path'ini resolve et (relative → absolute)
          b. Dependency'nin {state_dir}/state.yaml'ını kontrol et
          c. snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
@@ -259,7 +281,9 @@ workflow_policy:
                 api_hash: "{dep_api_hash}"
                 latest_api_hash: "{dep_api_hash}"
                 api_changed: false
-      4. "Ready to implement" mesajı ver
+      5. --clean yoksa kendi snapshot'ından impl restore et
+      6. impl.lock oluştur (aktif implementasyon)
+      7. "Ready to implement" mesajı ver
 
       İzolasyon garantisi (yeni model):
       - Her paket kendi dependency'lerinin stable snapshot'ına referans veriyor
@@ -298,7 +322,8 @@ workflow_policy:
          - Her dosyayı relatif path'i koruyarak kopyala
          - Dizin yapısını oluştur (mkdir -p equivalent)
       4. Kopyalanan dosyaları read-only yap (write bitlerini kaldır, exec bitlerini koru)
-      5. Sonuç: Tam, standalone kod kopyası
+      5. Snapshot başarılı olursa working tree implementation dosyalarını temizle
+      6. Sonuç: Tam, standalone kod kopyası
 
       Gelecek: Delta desteği (backward compatible)
       - impl/ varsa → direkt kullan (mevcut + eski snapshotlar)
@@ -486,6 +511,7 @@ workflow_policy:
             - "test command 2"
 
         bp ss davranışı:
+        - Ön koşul: impl.lock var (bp impl çalıştırılmış olmalı)
         - Her komutu sırayla shell'de çalıştırır
         - Working directory: BLUEPRINT.yaml'ın bulunduğu klasör
         - Timeout: 5 dakika per komut

@@ -58,6 +58,8 @@ api:
         {
           "validate": validate_command,
           "status": status_command,
+          "plan": plan_command,
+          "cancel": cancel_command,
           "deps": deps_command,
           "init": init_command,
           "log": log_command,
@@ -65,6 +67,7 @@ api:
           "show": show_command,
           "ss": ss_command,
           "implement": implement_command,
+          "impl": implement_command,
           "upgrade": upgrade_command,
         }
 
@@ -85,13 +88,16 @@ api:
         args sadece komut-spesifik flag'ler için:
         - validate: {recursive: bool}
         - status: {recursive: bool}
+        - plan: {recursive: bool}
+        - cancel: {}
         - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10
         - diff: {id1: string?, id2: string?}
         - show: {id: string?}           # null = son snapshot
         - ss: {message: string?, skip_tests: bool}
-        - implement: {}                 # Sadece path, dependency kontrol
+        - implement: {snapshot_id: string?, clean: bool}
+        - impl: {snapshot_id: string?, clean: bool}  # alias
         - upgrade: {dep_path: string?, safe: bool, all: bool}
 
     - name: CommandResult
@@ -104,6 +110,8 @@ api:
         data field komuta göre:
         - validate: ValidationResult
         - status: StatusInfo
+        - plan: PlanResult
+        - cancel: null
         - deps: string[] (topological order) veya DepUpgrade[] (--upgrades)
         - log: HistoryEntry[]
         - diff: DiffResult
@@ -128,6 +136,22 @@ api:
         - stale_reason: string?         # "files_changed" | "blueprint_changed" | "deps_changed" | "deps_api_changed"
         - dep_updates: DepUpgrade[]     # Upgrade mevcut dependency'ler
         - dependents: DepRef[]          # Kim bize bağlı (reverse tracking)
+        - implementing: bool            # Aktif implementasyon var mı? (impl.lock)
+        - impl_hidden: bool             # Working tree gizli mi? (impl.hidden)
+        - working_clean: bool           # Working tree'de tracked değişiklik yok mu?
+        - blueprint_changed: bool       # BLUEPRINT.yaml değişmiş mi?
+        - api_changed: bool             # API section hash değişmiş mi?
+        - spec_changed: bool            # Implementation spec hash değişmiş mi?
+
+    - name: PlanStep
+      fields:
+        - path: string                  # Blueprint path (relative)
+        - state: string                 # "stale" | "no_snapshot"
+        - reason: string                # "files_changed" | "blueprint_changed" | "deps_changed" | "deps_api_changed"
+
+    - name: PlanResult
+      fields:
+        - steps: PlanStep[]             # Leaf-first sıralı adımlar
 
     - name: SnapshotInfo
       fields:
@@ -135,6 +159,7 @@ api:
         - path: string                  # blueprint/history/{id}/
         - content_hash: string          # Tam content hash
         - api_hash: string              # API section hash
+        - spec_hash: string             # Implementation section hash
         - impl_hash: string             # Implementation dosyalarının hash'i
 
     - name: ImplementResult

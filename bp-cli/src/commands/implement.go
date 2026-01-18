@@ -23,6 +23,8 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	if path == "" {
 		path = "."
 	}
+	clean, _ := ctx.Args["clean"].(bool)
+	snapshotInput, _ := ctx.Args["snapshot_id"].(string)
 	bpObj, err := bp.LoadBlueprint(path)
 	if err != nil {
 		if errors.Is(err, bp.ErrNotBlueprint) {
@@ -30,6 +32,19 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 			return CommandResult{ExitCode: 2, Output: out, Errors: []string{out}}
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	validation := bpObj.Validate()
+	if len(validation.Errors) > 0 {
+		out := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), strings.Join(validation.Errors, "; "))
+		return CommandResult{ExitCode: 2, Output: out, Errors: validation.Errors}
+	}
+	active, err := hasImplLock(bpObj.StateDir)
+	if err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if active {
+		out := "Implementation already active. Run 'bp ss' to finish."
+		return CommandResult{ExitCode: 1, Output: out, Errors: []string{out}}
 	}
 
 	tree := &bp.BlueprintTree{Root: bpObj.Dir}
@@ -44,18 +59,6 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 			continue
 		}
 		warnLines = append(warnLines, "⚠ "+w)
-	}
-
-	if len(deps) == 0 {
-		out := "No dependencies, ready to implement."
-		if len(warnLines) > 0 {
-			out = strings.Join(append(warnLines, out), "\n")
-		}
-		return CommandResult{
-			ExitCode: 0,
-			Output:   out,
-			Data:     ImplementResult{Ready: true, Deps: []bp.DepState{}, MissingDeps: []string{}},
-		}
 	}
 
 	currentState := &bp.State{Deps: map[string]bp.DepState{}, Dependents: map[string]bp.DepRef{}, Files: map[string]string{}}
@@ -124,6 +127,39 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		}
 	}
 
+	restoreID := ""
+	if !clean {
+		restoreID, err = resolveImplementationSnapshotID(bpObj.StateDir, snapshotInput)
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := restoreImplementationSnapshot(bpObj.StateDir, restoreID, bpObj.Dir); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+	}
+
+	if len(deps) == 0 {
+		mode := "restore"
+		if clean {
+			mode = "clean"
+		}
+		if err := bp.ClearImplHidden(bpObj.StateDir); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := writeImplLock(bpObj.StateDir, restoreID, mode); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		out := "No dependencies, ready to implement."
+		if len(warnLines) > 0 {
+			out = strings.Join(append(warnLines, out), "\n")
+		}
+		return CommandResult{
+			ExitCode: 0,
+			Output:   out,
+			Data:     ImplementResult{Ready: true, Deps: []bp.DepState{}, MissingDeps: []string{}},
+		}
+	}
+
 	for _, info := range infos {
 		if info.state.Dependents == nil {
 			info.state.Dependents = map[string]bp.DepRef{}
@@ -141,6 +177,17 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		}
 	}
 	if err := bpObj.SaveState(currentState); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+
+	mode := "restore"
+	if clean {
+		mode = "clean"
+	}
+	if err := bp.ClearImplHidden(bpObj.StateDir); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if err := writeImplLock(bpObj.StateDir, restoreID, mode); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 

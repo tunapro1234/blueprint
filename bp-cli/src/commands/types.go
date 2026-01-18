@@ -32,6 +32,22 @@ type StatusInfo struct {
 	StaleReason  string
 	DepUpdates   []DepUpgrade
 	Dependents   []bp.DepRef
+	Implementing bool
+	ImplHidden   bool
+	WorkingClean bool
+	BlueprintChanged bool
+	APIChanged       bool
+	SpecChanged      bool
+}
+
+type PlanStep struct {
+	Path   string
+	State  string
+	Reason string
+}
+
+type PlanResult struct {
+	Steps []PlanStep
 }
 
 type SnapshotInfo struct {
@@ -39,6 +55,7 @@ type SnapshotInfo struct {
 	Path        string
 	ContentHash string
 	APIHash     string
+	SpecHash    string
 	ImplHash    string
 }
 

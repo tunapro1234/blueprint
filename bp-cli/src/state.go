@@ -390,10 +390,17 @@ func changedFilesFromState(b *Blueprint, state *State) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	implHidden, err := IsImplHidden(b.StateDir)
+	if err != nil {
+		return nil, err
+	}
 	changed := []string{}
 	for rel, oldHash := range state.Files {
 		abs, ok := currentFiles[rel]
 		if !ok {
+			if implHidden {
+				continue
+			}
 			changed = append(changed, "deleted: "+rel)
 			continue
 		}

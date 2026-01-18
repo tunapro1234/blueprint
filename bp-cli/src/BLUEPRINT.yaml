@@ -27,6 +27,9 @@ overview: |
   - bp show: Belirli snapshot'ın blueprint'ini göster
   - bp ss: Snapshot al (testler geçerse kaydet + impl/ kopyala)
   - bp implement: Implementation başlat (dependency kontrol + reverse tracking)
+  - bp impl: implement alias (kısa)
+  - bp plan: Değişen paketleri leaf-first sırada listeler
+  - bp cancel: Implementation oturumunu iptal eder (impl.lock temizler)
   - bp upgrade: Dependency'leri güncelle
 
 # =============================================================================

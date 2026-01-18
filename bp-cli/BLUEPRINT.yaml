@@ -143,10 +143,30 @@ usage:
     - "bp validate"
     - "bp validate -r"
     - "bp status"
+    - "bp plan -r"
+    - "bp cancel"
     - "bp ss -m 'Initial snapshot'"
     - "bp implement"
+    - "bp impl"
     - "bp upgrade --all"
     - "bp deps --upgrades"
+
+# =============================================================================
+# WORKFLOW
+# =============================================================================
+
+workflow:
+  summary: |
+    Önerilen akış (enforce edilmez):
+    1) Önce BLUEPRINT.yaml / BLUEPRINT.spec.yaml güncellenir
+    2) bp plan -r ile leaf-first sıra çıkarılır
+    3) Her paket için: bp impl → implementasyon → bp ss
+    4) bp ss sonrası impl dosyaları working tree'den temizlenir
+    5) Kod görmek için tekrar bp impl gerekir
+  notes:
+    - BLUEPRINT dosyaları ss sonrası working tree'de kalır
+    - impl.lock aktifse "implementing" state vardır
+    - impl.hidden working tree'nin gizli olduğunu belirtir
 
 # =============================================================================
 # AI GUIDELINES

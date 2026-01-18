@@ -2,6 +2,7 @@ package bp
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -58,6 +59,34 @@ func TestStalenessFilesChanged(t *testing.T) {
 	}
 	if info.State != "stale" || info.Reason != "files_changed" {
 		t.Fatalf("unexpected staleness: %+v", info)
+	}
+}
+
+func TestStalenessHiddenImplIgnoresMissingFiles(t *testing.T) {
+	dir := t.TempDir()
+	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
+	writeFile(t, filepath.Join(dir, "a.txt"), "one")
+	aHash, _ := HashFile(filepath.Join(dir, "a.txt"))
+	bpHash, _ := HashFile(bpObj.Path)
+	state := &State{BlueprintHash: bpHash, Files: map[string]string{"a.txt": aHash}}
+	if err := bpObj.SaveState(state); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
+		t.Fatalf("remove file: %v", err)
+	}
+	if err := MarkImplHidden(bpObj.StateDir); err != nil {
+		t.Fatalf("MarkImplHidden: %v", err)
+	}
+	info, err := bpObj.StalenessInfo()
+	if err != nil {
+		t.Fatalf("StalenessInfo: %v", err)
+	}
+	if info.State != "fresh" {
+		t.Fatalf("expected fresh, got %+v", info)
+	}
+	if len(info.ChangedFiles) != 0 {
+		t.Fatalf("unexpected changed files: %v", info.ChangedFiles)
 	}
 }
 

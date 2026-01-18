@@ -78,6 +78,8 @@ api:
           - Blueprint'leri recursive toplar (flag yoksa sadece verilen path)
           - Dependency graph'e göre leaf-first sıralar
           - Sadece stale veya no_snapshot paketleri listeler
+          - deps_changed/deps_api_changed görülen paketlerde import yolları güncellenmelidir
+          - Sadece import güncellemesi yapıldıysa yeni snapshot almak gerekmez
         output: |
           1. ./yamlparser (no snapshot)
           2. ./commands (stale, blueprint_changed)
@@ -87,7 +89,7 @@ api:
           1: Hata (circular dependency veya okuma hatası)
 
       - name: cancel
-        desc: Aktif implementation oturumunu iptal eder
+        desc: Aktif implementation/patch oturumunu iptal eder
         usage: bp cancel [path]
         behavior: |
           - impl.lock yoksa hata verir
@@ -99,6 +101,40 @@ api:
         exit_codes:
           0: Başarılı
           1: Aktif implementasyon yok veya hata
+
+      - name: patch
+        desc: Import/include güncelleme oturumu başlatır
+        usage: bp patch [path] [snapshot_id]
+        behavior: |
+          - Blueprint validate edilir (error varsa exit 2)
+          - Aktif impl/patch oturumu varsa hata verir
+          - snapshot_id verilirse o ID restore edilir
+          - verilmezse current snapshot restore edilir
+          - impl.lock açılır (mode=patch)
+        output:
+          ready: "Patch session ready."
+        exit_codes:
+          0: Başarılı
+          1: Snapshot bulunamadı veya hata
+          2: Validation hatası
+
+      - name: apply
+        desc: Aktif oturumu kapatır (impl ise snapshot alır, patch ise mevcut snapshot günceller)
+        usage: bp apply [path] [-m "message"] [--skip-tests]
+        behavior: |
+          - impl.lock yoksa hata verir
+          - mode=impl ise bp ss ile aynı davranır (snapshot alır + temizler)
+          - mode=patch ise:
+            - Sadece import/include değişikliklerini snapshot impl içine geri yazar
+            - Yeni snapshot oluşturmaz (mevcut snapshot güncellenir)
+            - impl.hidden yazar, impl.lock siler
+        output:
+          success_impl: "Snapshot created: {id}"
+          success_patch: "Patch applied."
+        exit_codes:
+          0: Başarılı
+          1: Aktif oturum yok veya hata
+          2: Validation hatası (impl mode)
 
       - name: deps
         desc: Dependency graph göster
@@ -169,7 +205,7 @@ api:
           1: ID bulunamadı veya hata
 
       - name: ss
-        desc: Snapshot al - testleri çalıştır, geçerse kaydet + impl kopyala
+        desc: Snapshot al - testleri çalıştır, geçerse kaydet + impl kopyala (legacy; apply tercih edilir)
         usage: bp ss [path] [-m "message"] [--skip-tests]
         flags:
           - name: -m, --message
@@ -220,7 +256,7 @@ api:
           5. impl.lock oluştur (aktif implementasyon)
           6. "Ready to implement" mesajı ver
 
-          Implementation bitince: bp ss -m "message" ile snapshot al.
+          Implementation bitince: bp apply -m "message" (tercih edilir) veya bp ss (legacy).
 
           NOT: Çalışma alanı repo içindeki paket klasörüdür.
           Her paket dependency'lerini stable snapshot'a pin'ler.

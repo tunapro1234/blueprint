@@ -27,7 +27,9 @@ implementation:
     - validate module
     - status module       # + dependents gösterimi
     - plan module         # Leaf-first plan listesi
-    - cancel module       # Implementation iptal
+    - cancel module       # Implementation/patch iptal
+    - patch module        # Import/include patch oturumu
+    - apply module        # Patch/impl kapatma
     - deps module         # + --upgrades flag
     - init module
     - log module          # Yeni snapshot ID formatı
@@ -157,6 +159,9 @@ implementation:
         2: Her blueprint için staleness kontrolü
         3: state "stale" veya "no_snapshot" ise listeye ekle
         4: Leaf-first sıralı liste yazdır
+      notes:
+        - deps_changed/deps_api_changed görülen paketlerde import yolları güncellenir
+        - Sadece import güncellemesi yapıldıysa yeni snapshot alınmaz
       output:
         format: "{index}. {path} ({state}{reason})"
         empty: "All blueprints fresh"
@@ -165,7 +170,7 @@ implementation:
         1: Hata (circular dependency veya okuma hatası)
 
     cancel:
-      purpose: Aktif implementation oturumunu iptal et
+      purpose: Aktif implementation/patch oturumunu iptal et
       steps:
         1: impl.lock var mı kontrol et
         2: Yoksa: "No active implementation.", exit 1
@@ -174,6 +179,34 @@ implementation:
       exit_codes:
         0: Başarılı
         1: Aktif implementasyon yok veya hata
+
+    patch:
+      purpose: Import/include güncelleme oturumu başlat
+      steps:
+        0: Blueprint'i validate et (error varsa exit 2)
+        1: impl.lock varsa hata ver (aktif oturum var)
+        2: snapshot_id verilirse o ID restore edilir; verilmezse current snapshot restore edilir
+        3: impl.hidden varsa temizle
+        4: impl.lock oluştur (mode=patch)
+        5: "Patch session ready." mesajı ver
+      exit_codes:
+        0: Başarılı
+        1: Snapshot bulunamadı veya hata
+        2: Validation hatası
+
+    apply:
+      purpose: Aktif oturumu kapat (impl ise snapshot alır, patch ise snapshot günceller)
+      steps:
+        0: impl.lock yoksa hata ver
+        1: mode=impl ise ss ile aynı davran (validate/test/snapshot/clean)
+        2: mode=patch ise:
+           - Import/include değişikliklerini snapshot impl içine geri yaz
+           - Yeni snapshot oluşturma (mevcut snapshot mutasyona uğrar)
+           - impl.hidden yaz, impl.lock sil
+      exit_codes:
+        0: Başarılı
+        1: Aktif oturum yok veya hata
+        2: Validation hatası (impl mode)
 
     deps:
       algorithm: Kahn's algorithm (topological sort)
@@ -274,6 +307,7 @@ implementation:
         - "Invalid current snapshot ID": {state_dir}/current geçersiz format
 
     ss:
+      note: "Legacy; default kapanış için bp apply kullanılır."
       steps:
         0: Aktif implementasyon yoksa hata ver (impl.lock yoksa)
         1: |
@@ -325,6 +359,34 @@ implementation:
         cwd: Blueprint'in bulunduğu klasör
         method: Shell'de komut çalıştırma (working directory = bp klasörü)
         timeout: 5 dakika per komut (300 saniye)
+
+    apply:
+      purpose: Aktif oturumu kapat (impl ise ss ile aynı; patch ise snapshot günceller)
+      steps:
+        0: impl.lock yoksa hata ver
+        1: mode=impl ise ss adımlarını uygula
+        2: mode=patch ise:
+           - Import/include değişikliklerini snapshot impl içine geri yaz
+           - Yeni snapshot oluşturma (mevcut snapshot mutasyona uğrar)
+           - impl.hidden yaz, impl.lock sil
+      exit_codes:
+        0: Başarılı
+        1: Aktif oturum yok veya hata
+        2: Validation hatası (impl mode)
+
+    patch:
+      purpose: Import/include güncelleme oturumu başlat
+      steps:
+        0: Blueprint'i validate et (error varsa exit 2)
+        1: impl.lock varsa hata ver (aktif oturum var)
+        2: snapshot_id verilirse o ID restore edilir; verilmezse current snapshot restore edilir
+        3: impl.hidden varsa temizle
+        4: impl.lock oluştur (mode=patch)
+        5: "Patch session ready." mesajı ver
+      exit_codes:
+        0: Başarılı
+        1: Snapshot bulunamadı veya hata
+        2: Validation hatası
         parallel: false (sırayla çalıştırılır)
         fail_fast: true (ilk hata durur)
         example: |
@@ -412,7 +474,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 13 komut var (validate, status, plan, cancel, deps, init, log, diff, show, ss, implement, impl, upgrade)
+      then: 15 komut var (validate, status, plan, cancel, patch, apply, deps, init, log, diff, show, ss, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut

@@ -60,6 +60,8 @@ api:
           "status": status_command,
           "plan": plan_command,
           "cancel": cancel_command,
+          "patch": patch_command,
+          "apply": apply_command,
           "deps": deps_command,
           "init": init_command,
           "log": log_command,
@@ -90,6 +92,8 @@ api:
         - status: {recursive: bool}
         - plan: {recursive: bool}
         - cancel: {}
+        - patch: {snapshot_id: string?}
+        - apply: {message: string?, skip_tests: bool}
         - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10
@@ -112,6 +116,8 @@ api:
         - status: StatusInfo
         - plan: PlanResult
         - cancel: null
+        - patch: null
+        - apply: SnapshotInfo | null
         - deps: string[] (topological order) veya DepUpgrade[] (--upgrades)
         - log: HistoryEntry[]
         - diff: DiffResult

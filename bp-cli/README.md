@@ -56,7 +56,8 @@ cd src && go build -o ../bp ./cmd/bp
 ```
 ./bp init
 ./bp validate
-./bp ss -m "initial"
+./bp impl
+./bp apply -m "initial"
 ./bp status
 ./bp log
 ./bp diff
@@ -70,12 +71,17 @@ Recursive validation:
 ## Commands
 - `bp validate [path] [-r|--recursive]`
 - `bp status [path] [-r|--recursive]`
+- `bp plan [path] [-r|--recursive]`
 - `bp deps [path]`
 - `bp init [path]`
 - `bp log [path] [-n|--count]`
 - `bp diff [path] [id1] [id2]`
 - `bp show [path] [id]`
-- `bp ss [path] [-m|--message] [--skip-tests]`
+- `bp impl [path] [snapshot_id] [--clean]` (alias of `bp implement`)
+- `bp apply [path] [-m|--message] [--skip-tests]`
+- `bp patch [path] [snapshot_id]`
+- `bp cancel [path]`
+- `bp ss [path] [-m|--message] [--skip-tests]` (legacy; `bp apply` preferred)
 
 ## Snapshot Model
 Each package keeps its own snapshot state under the configured state dir:
@@ -89,10 +95,16 @@ Each package keeps its own snapshot state under the configured state dir:
       meta.yaml
 ```
 
-`bp ss` will:
+`bp apply` (impl mode) will:
 1) Validate the blueprint  
 2) Run `tests.verification` commands (unless `--skip-tests`)  
 3) Write the snapshot and update state
+
+`bp patch`/`bp apply` (patch mode) will:
+- Restore the current snapshot to working tree
+- Update only import/include paths
+- Write changes back into the existing snapshot (no new snapshot)
+- Close the patch session
 
 ## Blueprint File Discovery
 Supported patterns include:

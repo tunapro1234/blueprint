@@ -56,7 +56,7 @@ plan:
     desc: tests.verification komutları state dizinini test kapsamı dışında bırakır.
   - id: snapshot_imports
     status: done
-    desc: commands/yamlparser snapshot impl path'leri üzerinden import edilir.
+    desc: commands/yamlparser snapshot'ları direkt symlink üzerinden import edilir (impl/deps yok).
 
 # =============================================================================
 # WORKFLOW POLICY

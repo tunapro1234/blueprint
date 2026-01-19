@@ -32,5 +32,23 @@ func CancelCommand(ctx CommandContext) CommandResult {
 	if err := clearImplLock(bpObj.StateDir); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	switch bpObj.Mode() {
+	case "hide":
+		trackedFiles, err := bpObj.TrackedFiles()
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := cleanImplementationFiles(trackedFiles); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+	case "ro":
+		trackedFiles, err := bpObj.TrackedFiles()
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := setTrackedFilesReadOnly(trackedFiles); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+	}
 	return CommandResult{ExitCode: 0, Output: "Implementation cancelled."}
 }

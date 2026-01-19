@@ -33,7 +33,7 @@ type StatusInfo struct {
 	DepUpdates       []DepUpgrade
 	Dependents       []bp.DepRef
 	Implementing     bool
-	ImplHidden       bool
+	ReadOnly         bool
 	WorkingClean     bool
 	BlueprintChanged bool
 	APIChanged       bool

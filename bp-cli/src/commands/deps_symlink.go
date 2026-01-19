@@ -13,12 +13,6 @@ func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map
 	if destDir == "" {
 		return nil
 	}
-	if err := os.RemoveAll(destDir); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if len(deps) == 0 || len(depStates) == 0 {
-		return nil
-	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err
 	}
@@ -27,6 +21,7 @@ func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map
 		return err
 	}
 	used := map[string]string{}
+	expected := map[string]string{}
 	for _, dep := range deps {
 		label := formatDepLabel(bpObj.Dir, dep.Dir)
 		state, ok := depStates[label]
@@ -51,16 +46,98 @@ func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map
 			return fmt.Errorf("dependency name collision: %s (%s, %s) - use 'as' alias", name, prev, label)
 		}
 		used[name] = label
-		target := filepath.Join(dep.StateDir, "history", pinned, "impl")
+		expected[name] = label
+	}
+
+	if err := cleanupDepSymlinks(destDir, expected); err != nil {
+		return err
+	}
+
+	for _, dep := range deps {
+		label := formatDepLabel(bpObj.Dir, dep.Dir)
+		state, ok := depStates[label]
+		if !ok {
+			continue
+		}
+		pinned := state.Pinned
+		if pinned == "" {
+			pinned = state.Latest
+		}
+		if pinned == "" {
+			continue
+		}
+		name := strings.TrimSpace(aliases[label])
+		if name == "" {
+			name = filepath.Base(dep.Dir)
+		}
+		target := filepath.Join(dep.StateDir, "history", pinned)
 		if _, err := os.Stat(target); err != nil {
 			return err
 		}
 		linkPath := filepath.Join(destDir, name)
+		if err := ensureSymlinkTargetAvailable(linkPath, name); err != nil {
+			return err
+		}
 		if err := createRelSymlink(target, linkPath); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func cleanupDepSymlinks(destDir string, expected map[string]string) error {
+	entries, err := os.ReadDir(destDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if expected != nil {
+			if _, ok := expected[name]; ok {
+				continue
+			}
+		}
+		if entry.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		path := filepath.Join(destDir, name)
+		target, err := os.Readlink(path)
+		if err != nil {
+			continue
+		}
+		if !looksLikeDependencyTarget(target) {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func looksLikeDependencyTarget(target string) bool {
+	normalized := filepath.ToSlash(target)
+	return strings.Contains(normalized, "/.blueprint/history/") || strings.HasPrefix(normalized, ".blueprint/history/")
+}
+
+func ensureSymlinkTargetAvailable(path, name string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("Name collision - '%s' exists both as code and dependency", name)
 }
 
 func createRelSymlink(target, linkPath string) error {

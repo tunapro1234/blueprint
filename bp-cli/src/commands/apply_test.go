@@ -80,8 +80,8 @@ func TestRunDependencySnapshotTests(t *testing.T) {
 	}
 
 	id := "20240102-0304-abcd-test"
-	snapshotImpl := filepath.Join(depBp.StateDir, "history", id, "impl")
-	writeFile(t, filepath.Join(snapshotImpl, "dummy.go"), "package dep\n")
+	snapshotRoot := filepath.Join(depBp.StateDir, "history", id)
+	writeFile(t, filepath.Join(snapshotRoot, "dummy.go"), "package dep\n")
 
 	label, err := relativeLabel(parent.Dir, depBp.Dir)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestRunDependencySnapshotTests(t *testing.T) {
 	if err := runDependencySnapshotTests(parent); err != nil {
 		t.Fatalf("runDependencySnapshotTests: %v", err)
 	}
-	if gotDir != snapshotImpl {
+	if gotDir != snapshotRoot {
 		t.Fatalf("unexpected workDir: %s", gotDir)
 	}
 	if !reflect.DeepEqual(gotPkgs, []string{"."}) {
@@ -127,7 +127,7 @@ func TestCopyImplementationSnapshotReadOnly(t *testing.T) {
 	if err := copyImplementationSnapshot(map[string]string{"script.sh": src}, stateDir, "snap", true); err != nil {
 		t.Fatalf("copyImplementationSnapshot: %v", err)
 	}
-	dst := filepath.Join(stateDir, "history", "snap", "impl", "script.sh")
+	dst := filepath.Join(stateDir, "history", "snap", "script.sh")
 	info, err := os.Stat(dst)
 	if err != nil {
 		t.Fatalf("stat dst: %v", err)

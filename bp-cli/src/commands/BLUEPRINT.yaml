@@ -158,7 +158,7 @@ api:
     - name: SnapshotInfo
       fields:
         - id: string                    # Snapshot ID, örn "20260116-1430-a1b2-add-feat"
-        - path: string                  # blueprint/history/{id}/
+        - path: string                  # {state_dir}/history/{id}/
         - content_hash: string          # Tam content hash
         - api_hash: string              # API section hash
         - spec_hash: string             # Implementation section hash

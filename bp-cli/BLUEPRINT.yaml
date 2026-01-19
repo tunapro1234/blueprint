@@ -62,10 +62,10 @@ overview: |
 plan:
   - id: state_dir_config
     status: done
-    desc: _meta.state_dir ile state dizini ayarlanabilir; bu repo "blueprint" kullanır.
+    desc: _meta.state_dir ile state dizini ayarlanabilir; bu repo varsayılan .blueprint kullanır.
   - id: snapshot_imports
     status: done
-    desc: Paketler snapshot impl dizinlerinden import edilecek şekilde güncellendi.
+    desc: Paketler snapshot'lara direkt symlink ile import edecek şekilde güncellendi (impl/deps yok).
   - id: docs_update
     status: done
     desc: README ve blueprint/spec dokümanları state_dir için güncellendi.
@@ -74,7 +74,7 @@ plan:
     desc: Verification komutları state dizinini test kapsamı dışında bırakır.
   - id: gitignore_state_dir
     status: done
-    desc: state dizinini (blueprint/) gitignore'a ekle.
+    desc: state dizinini (.blueprint/) gitignore'a ekle.
 
 # =============================================================================
 # WORKFLOW POLICY

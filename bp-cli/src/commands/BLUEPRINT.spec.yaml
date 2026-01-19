@@ -168,7 +168,7 @@ implementation:
         1: Hata (circular dependency veya okuma hatası)
 
     cancel:
-      purpose: Aktif implementation/patch oturumunu iptal et
+      purpose: Aktif implementation oturumunu iptal et
       steps:
         1: impl.lock var mı kontrol et
         2: Yoksa: "No active implementation.", exit 1

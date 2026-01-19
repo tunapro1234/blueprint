@@ -69,7 +69,7 @@ api:
         exit_codes:
           0: Fresh (değişiklik yok)
           1: Stale (kod veya dependency değişmiş)
-          2: No snapshot (henüz ss alınmamış)
+          2: No snapshot (henüz snapshot alınmamış)
         staleness_sources: |
           Stale durumu şu kaynaklardan gelebilir:
           1. Kendi dosyaları değişmiş (files_changed)
@@ -106,7 +106,7 @@ api:
           1: Hata (circular dependency veya okuma hatası)
 
       - name: cancel
-        desc: Aktif implementation/patch oturumunu iptal eder
+        desc: Aktif implementation oturumunu iptal eder
         usage: bp cancel [path]
         behavior: |
           - impl.lock yoksa hata verir
@@ -375,6 +375,9 @@ api:
           - name: impl_hash
             type: string
             desc: Implementation dosyalarının birleşik hash'i
+          - name: rotten
+            type: bool
+            desc: Snapshot rotten mı? (upgrade testleri fail ettiyse true)
 
       - name: PlanStep
         desc: Plan sırasındaki tek adım
@@ -414,6 +417,9 @@ api:
           - name: api_changed
             type: bool
             desc: API değişmiş mi? (convenience flag)
+          - name: rotten
+            type: bool
+            desc: Latest snapshot rotten mı?
 
       - name: DepRef
         desc: Reverse dependency bilgisi (state.yaml dependents içinde)

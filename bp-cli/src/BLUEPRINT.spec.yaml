@@ -168,6 +168,7 @@ workflow_policy:
       Notlar:
       - API/spec hash farkları staleness reason'a eklenmez; status flag'leriyle raporlanır.
       - impl.hidden varsa silinmiş dosyalar changed_files listesine eklenmez.
+      - deps/ symlink değişimleri staleness hesabına girmez
 
       Öncelik: files_changed > blueprint_changed > deps_api_changed > deps_changed
 
@@ -553,6 +554,7 @@ workflow_policy:
         - Klasörler (has_blueprint: true): Track edilmez, kendi state'leri var
 
         Symlink: Takip edilir ama cycle kontrolü yapılır
+        Not: deps/ symlink klasörü hash/staleness takibine dahil edilmez
 
     - q: tests.verification nasıl çalışır?
       a: |
@@ -563,7 +565,7 @@ workflow_policy:
             - "test command 1"
             - "test command 2"
 
-        bp ss davranışı:
+        bp apply davranışı:
         - Ön koşul: impl.lock var (bp impl çalıştırılmış olmalı)
         - Her komutu sırayla shell'de çalıştırır
         - Working directory: BLUEPRINT.yaml'ın bulunduğu klasör
@@ -630,7 +632,7 @@ workflow_policy:
       handle: '"Circular dependency detected: a → b → c → a" formatında hata'
 
     - case: {state_dir}/ yok
-      handle: İlk bp ss'te oluştur
+      handle: İlk bp apply'de oluştur
 
     - case: BLUEPRINT.yaml yok
       handle: '"Not a blueprint package" olarak atla'
@@ -876,55 +878,55 @@ tests:
     # SNAPSHOT TESTS
     # =========================================================================
 
-    - id: ss_create_first
-      given: {state_dir}/history/ yok
-      when: bp ss -m "initial"
+    - id: apply_create_first
+      given: {state_dir}/history/ yok, impl.lock var
+      when: bp apply -m "initial"
       then: |
         - history/20260116-HHMM-xxxx-initial/ oluşur
         - BLUEPRINT.yaml kopyalanır
         - meta.yaml oluşturulur
         - impl/ klasörüne kod kopyalanır
 
-    - id: ss_id_format
-      given: Herhangi bir blueprint
-      when: bp ss -m "add feature"
+    - id: apply_id_format
+      given: Herhangi bir blueprint, impl.lock var
+      when: bp apply -m "add feature"
       then: |
         - ID formatı: YYYYMMDD-HHMM-{4-char-hash}-{slug}
         - Örnek: 20260116-1430-a1b2-add-feature
 
-    - id: ss_copies_impl
-      given: Kaynak dosyalar var (main.go, util.go)
-      when: bp ss -m "snapshot"
+    - id: apply_copies_impl
+      given: Kaynak dosyalar var (main.go, util.go), impl.lock var
+      when: bp apply -m "snapshot"
       then: |
         - {state_dir}/history/{id}/impl/ oluşur
         - main.go, util.go kopyalanır
         - Dizin yapısı korunur
 
-    - id: ss_different_content_different_id
-      given: Blueprint veya impl değişmiş
-      when: bp ss -m "change"
+    - id: apply_different_content_different_id
+      given: Blueprint veya impl değişmiş, impl.lock var
+      when: bp apply -m "change"
       then: Farklı ID ile yeni snapshot (4-char hash farklı)
 
-    - id: ss_tests_fail
-      given: tests.verification başarısız
-      when: bp ss
+    - id: apply_tests_fail
+      given: tests.verification başarısız, impl.lock var
+      when: bp apply
       then: Snapshot alınmaz, exit 1
 
-    - id: ss_skip_tests
-      given: tests.verification başarısız
-      when: bp ss --skip-tests
+    - id: apply_skip_tests
+      given: tests.verification başarısız, impl.lock var
+      when: bp apply --skip-tests
       then: Snapshot alınır
 
-    - id: ss_records_dep_state
-      given: Dependency'ler var ve snapshot'ları var
-      when: bp ss
+    - id: apply_records_dep_state
+      given: Dependency'ler var ve snapshot'ları var, impl.lock var
+      when: bp apply
       then: |
         - state.yaml'da deps section'ı dolu
         - Her dep için: pinned, latest, api_hash, latest_api_hash
 
-    - id: ss_dep_no_snapshot_warning
-      given: Dependency'nin snapshot'ı yok
-      when: bp ss
+    - id: apply_dep_no_snapshot_warning
+      given: Dependency'nin snapshot'ı yok, impl.lock var
+      when: bp apply
       then: Warning verilir, snapshot yine alınır
 
     # =========================================================================

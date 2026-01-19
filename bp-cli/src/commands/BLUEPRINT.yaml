@@ -61,6 +61,7 @@ api:
           "cancel": cancel_command,
           "apply": apply_command,
           "deps": deps_command,
+          "map": map_command,
           "init": init_command,
           "log": log_command,
           "diff": diff_command,

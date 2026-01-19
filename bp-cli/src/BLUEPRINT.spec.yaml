@@ -50,6 +50,7 @@ implementation:
       api_hash: "sha256:abc123..."        # API section hash
       spec_hash: "sha256:def456..."       # Implementation section hash
       impl_hash: "sha256:xyz789..."       # Implementation dosyalarının birleşik hash'i
+      rotten: false                       # true = dependent testleri fail etmiş
 
     state_yaml: |
       # {state_dir}/state.yaml
@@ -69,6 +70,7 @@ implementation:
           api_hash: "sha256:aaa111..."            # Pinned versiyonun API hash'i
           latest_api_hash: "sha256:bbb222..."     # Latest'in API hash'i
           api_changed: true                       # API değişmiş mi?
+          rotten: false                           # Latest snapshot rotten mi?
 
       # Dependents: kim bize bağlı (reverse tracking)
       dependents:
@@ -191,6 +193,15 @@ workflow_policy:
       - Kod içinde değişiklik gerekmez, import'lar deps/{name} üzerinden yapılır
       - Collision durumunda 'as:' ile explicit alias tanımlanır
 
+    rotten_warning: |
+      Global rotten uyarı mekanizması:
+      - Her bp komutu başında state.yaml deps kontrol edilir
+      - Rotten dependency varsa stderr'e uyarı yazılır:
+        "⚠ Rotten dependency: ./yamlparser (tests failed on upgrade)"
+      - Komut normal çalışmaya devam eder
+      - Rotten bir snapshot kullanılıyorsa işlevsellik etkilenmez
+        ama kullanıcı uyarılır
+
     hash_calculation: |
       Dosya hash:
       1. Dosya içeriğini binary olarak oku
@@ -295,24 +306,27 @@ workflow_policy:
       - Ana klasör = development, history = stable versiyonlar
 
     upgrade_algorithm: |
-      bp upgrade [dep-path] [--safe|--all] algoritması:
+      bp upgrade [dep-path] [--safe|--all|--force] algoritması:
       1. state.yaml deps bölümünü oku
       2. Her dependency için (veya sadece dep-path verilmişse o):
          a. Dependency'nin {state_dir}/current dosyasını oku → latest_id
-         b. Dependency'nin history/{latest_id}/meta.yaml'dan api_hash al
-         c. Mevcut pinned api_hash ile karşılaştır
-         d. API değişmişse ve --safe varsa → atla
-         e. state.yaml deps'i güncelle:
-            pinned: {latest_id}
-            latest: {latest_id}
-            api_hash: {new_api_hash}
-            latest_api_hash: {new_api_hash}
-            api_changed: false
-         f. Dependency'nin state.yaml dependents section'ını güncelle
-      3. Working tree aktifse (impl.hidden yoksa):
-         - deps/{dep_name} symlink'ini sil
-         - Yeni symlink oluştur → {dep_path}/{state_dir}/history/{latest_id}/impl/
-      4. API değişikliği varsa uyarı göster (bloklamaz)
+         b. Dependency'nin history/{latest_id}/meta.yaml'dan api_hash ve rotten oku
+         c. Rotten true ve --force yoksa → atla, uyarı ver
+         d. Mevcut pinned api_hash ile karşılaştır
+         e. API değişmişse ve --safe varsa → atla
+      3. Upgrade yapılacaklar için:
+         a. Eski pinned_id'yi sakla (rollback için)
+         b. deps/ symlink'ini güncelle (working tree aktifse)
+         c. tests.verification çalıştır
+         d. Test başarısız olursa:
+            - Symlink'i eski haline döndür (rollback)
+            - Dependency'nin meta.yaml'ına rotten: true yaz
+            - state.yaml deps'e rotten: true ekle
+            - Uyarı ver, devam et
+         e. Test başarılı olursa:
+            - state.yaml deps'i güncelle (pinned, api_hash, rotten: false)
+            - Dependency'nin dependents section'ını güncelle
+      4. Özet: upgraded, skipped (rotten), failed (test)
 
     impl_copy_algorithm: |
       bp apply impl/ kopyalama algoritması:

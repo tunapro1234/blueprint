@@ -72,14 +72,15 @@ Recursive validation:
 - `bp validate [path] [-r|--recursive]`
 - `bp status [path] [-r|--recursive]`
 - `bp plan [path] [-r|--recursive]`
-- `bp deps [path]`
+- `bp deps [path] [--upgrades]`
+- `bp map [path] [-r]` - project map showing all packages and dependencies
 - `bp init [path]`
 - `bp log [path] [-n|--count]`
 - `bp diff [path] [id1] [id2]`
 - `bp show [path] [id]`
 - `bp impl [path] [snapshot_id] [--clean]` (alias of `bp implement`)
 - `bp apply [path] [-m|--message] [--skip-tests]`
-- `bp upgrade [dep-path] [--safe] [--all]`
+- `bp upgrade [dep-path] [--safe] [--all] [--force]`
 - `bp cancel [path]`
 
 ## Snapshot Model

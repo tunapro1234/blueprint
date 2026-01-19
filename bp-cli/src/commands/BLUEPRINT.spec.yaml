@@ -29,12 +29,13 @@ implementation:
     - cancel module       # Implementation iptal
     - apply module        # Snapshot al + symlink oluştur
     - deps module         # + --upgrades flag
+    - map module          # Project map - snapshot/dependency durumu
     - init module
     - log module          # Snapshot ID formatı
     - diff module
     - show module
     - implement module    # Dependency kontrol + reverse tracking + symlink
-    - upgrade module      # Dependency upgrade + symlink güncelle
+    - upgrade module      # Dependency upgrade + test + rollback + rotten
 
   decisions:
     - q: Neden her komut ayrı modül?
@@ -338,7 +339,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 13 komut var (validate, status, plan, cancel, apply, deps, init, log, diff, show, implement, impl, upgrade)
+      then: 14 komut var (validate, status, plan, cancel, apply, deps, map, init, log, diff, show, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut
@@ -772,8 +773,66 @@ tests:
       when: bp upgrade ./nonexistent
       then: exit 1, "Dependency not found: ./nonexistent"
 
+    - id: upgrade_test_fail_rollback
+      given: Dependency upgrade sonrası testler fail
+      when: bp upgrade ./yamlparser
+      then: |
+        Failed ./yamlparser: tests failed, rolled back, marked rotten
+        - Symlink eski haline döner
+        - Dependency meta.yaml'a rotten: true yazılır
+        exit 1
+
+    - id: upgrade_skip_rotten
+      given: Dependency'nin latest snapshot'ı rotten
+      when: bp upgrade ./yamlparser
+      then: |
+        Skipped ./yamlparser: rotten (use --force)
+        exit 0
+
+    - id: upgrade_force_rotten
+      given: Dependency'nin latest snapshot'ı rotten
+      when: bp upgrade ./yamlparser --force
+      then: |
+        Upgraded ./yamlparser (forced): 20260115-xxxx → 20260116-yyyy [ROTTEN]
+        ⚠ Warning: using rotten snapshot
+        exit 0
+
     # =========================================================================
-    # DEPENDENCY UPGRADE WARNINGS (Status/Validate/SS)
+    # MAP
+    # =========================================================================
+    - id: map_basic
+      given: 2 paket var (root + yamlparser)
+      when: bp map
+      then: |
+        ./
+          snapshot: 20260116-1430-a1b2-feature
+          api: sha256:abc123...
+          deps:
+            ./yamlparser @ 20260115-1000-x1y2 (api: def456)
+
+        ./yamlparser/
+          snapshot: 20260115-1000-x1y2-stable
+          api: sha256:def456...
+          deps: (none)
+
+    - id: map_shows_rotten
+      given: Dependency rotten flag var
+      when: bp map
+      then: "[ROTTEN] işareti görünür"
+
+    # =========================================================================
+    # ROTTEN WARNING
+    # =========================================================================
+    - id: rotten_warning_on_any_command
+      given: state.yaml'da rotten dependency var
+      when: bp status (veya herhangi bir komut)
+      then: |
+        ⚠ Rotten dependency: ./yamlparser (tests failed on upgrade)
+        ✓ . (fresh)
+        (uyarı stderr'e, komut çıktısı stdout'a)
+
+    # =========================================================================
+    # DEPENDENCY UPGRADE WARNINGS (Status/Validate)
     # =========================================================================
     - id: dep_warning_on_validate
       given: Dependency upgrade mevcut

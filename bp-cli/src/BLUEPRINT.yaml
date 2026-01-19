@@ -1,10 +1,11 @@
 # bp - Blueprint Management Tool
 
 _meta:
-  version: "0.2.0"
-  updated: 2026-01-17
+  version: "0.3.0"
+  updated: 2026-01-19
   status: draft
-  state_dir: "blueprint"
+  # state_dir: ".blueprint"  # default
+  # mode: ro                  # default
 
 intent: Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool
 
@@ -15,22 +16,28 @@ overview: |
   - Her klasör bir paket
   - Alt klasörler implicit dependency
   - BLUEPRINT.yaml kullanıcı düzenler
-  - blueprint/ tool yönetir (state, history)
-  - deps/ symlink ile dependency'lere erişim
+  - .blueprint/ tool yönetir (state, history)
+  - Symlink'ler direkt pakette (deps/ yok)
+
+  Development mode'lar (_meta.mode):
+  - ro (default): Read-only enforcement
+  - hide: Kodları gizle/göster
+  - pussy: Hiçbir şeyi zorlamaz
 
   Komutlar:
   - bp validate: YAML syntax + schema check
   - bp status: Kod değişmiş mi? (son snapshot'a göre) + dependents
   - bp deps: Dependency graph (--upgrades ile upgrade kontrolü)
+  - bp map: Project map - tüm paketler, snapshot'lar, dependency'ler
   - bp init: Yeni blueprint oluştur
   - bp log: Snapshot geçmişi
   - bp diff: İki snapshot arasındaki fark
   - bp show: Belirli snapshot'ın blueprint'ini göster
-  - bp implement: Implementation başlat (dependency kontrol + reverse tracking)
+  - bp implement: Implementation başlat (dependency kontrol + symlink)
   - bp impl: implement alias (kısa)
-  - bp apply: Snapshot al + deps/ symlink oluştur + temizle
+  - bp apply: Snapshot al + symlink oluştur + mode'a göre temizle
   - bp plan: Değişen paketleri leaf-first sırada listeler
-  - bp cancel: Implementation oturumunu iptal eder (impl.lock temizler)
+  - bp cancel: Implementation oturumunu iptal eder
   - bp upgrade: Dependency'leri güncelle (symlink günceller)
 
 # =============================================================================
@@ -57,19 +64,16 @@ plan:
 
 dependency_policy:
   summary: |
-    Symlink tabanlı dependency yönetimi:
-    - Paket klasörü yalnızca edit alanıdır (working tree)
-    - Her snapshot impl/ altında deps/ klasörü bulunur
-    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
-    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    Symlink tabanlı dependency yönetimi (yeni yapı):
+    - Paket klasörü edit alanıdır (working tree)
+    - Snapshot'ta kod + symlink'ler direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
+    - Import/build için direkt symlink'ler kullanılır
     - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
-  alias_support: |
-    Collision durumunda explicit alias tanımlanabilir:
-    dependencies:
-      internal:
-        - path: ./utils
-        - path: ../shared/utils
-          as: shared_utils   # deps/shared_utils/ olarak symlink
+  collision_handling: |
+    İsim çakışması durumunda hata verilir:
+    "Name collision - '{name}' exists both as code and dependency"
+    Çözüm: Kod dosyasını/klasörünü yeniden adlandır
 
 # =============================================================================
 # API

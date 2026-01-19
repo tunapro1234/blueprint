@@ -1,11 +1,12 @@
 # bp - Blueprint Management Tool
 
 _meta:
-  version: "0.2.0"
+  version: "0.3.0"
   updated: 2026-01-19
   status: draft
-  state_dir: "blueprint"
   root: true  # Bu proje root'u - alt paketlerde argümansız komutlar buradan çalışır
+  # state_dir: ".blueprint"  # default
+  # mode: ro                  # default (pussy | ro | hide)
 
 # =============================================================================
 # PROJECT INFO
@@ -81,11 +82,11 @@ plan:
 
 dependency_policy:
   summary: |
-    Symlink tabanlı dependency yönetimi:
-    - Working tree (paket klasörü) sadece edit alanıdır
-    - Her snapshot impl/ klasörü altında deps/ klasörü bulunur
-    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
-    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    Symlink tabanlı dependency yönetimi (yeni yapı):
+    - Working tree (paket klasörü) edit alanıdır
+    - Snapshot'ta kod + symlink'ler direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
+    - Import/build için direkt symlink'ler kullanılır
     - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
 
 # =============================================================================
@@ -97,7 +98,7 @@ structure:
     src/:
       desc: Tüm kaynak kodlar ve iç blueprint'ler
       has_blueprint: true
-    blueprint/:
+    .blueprint/:
       desc: bp tool'un internal state'i (history, snapshots, state)
       managed_by: bp tool
     .git/:
@@ -163,21 +164,24 @@ workflow:
     1) Önce BLUEPRINT.yaml / BLUEPRINT.spec.yaml güncellenir
     2) bp plan ile leaf-first sıra çıkarılır (default recursive)
     3) Her paket için: bp impl → implementasyon → bp apply
-    4) bp apply sonrası impl dosyaları working tree'den temizlenir
-    5) Kod görmek için tekrar bp impl gerekir
+    4) Mode'a göre davranış:
+       - ro (default): dosyalar read-only olur
+       - hide: kod dosyaları silinir
+       - pussy: hiçbir şey değişmez
   notes:
     - BLUEPRINT dosyaları apply sonrası working tree'de kalır
     - impl.lock aktifse "implementing" state vardır
-    - impl.hidden working tree'nin gizli olduğunu belirtir
-    - Importlar deps/ klasöründeki symlinkler üzerinden yapılır
+    - Importlar direkt symlink'ler üzerinden yapılır (deps/ yok)
     - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
   symlink_structure: |
-    Snapshot sonrası deps/ klasörü oluşturulur:
-    impl/
+    Snapshot yapısı (impl/, deps/ yok):
+    .blueprint/history/{id}/
+    ├── BLUEPRINT.yaml
+    ├── meta.yaml
     ├── main.go
-    └── deps/
-        ├── yamlparser/ → ../../../yamlparser/blueprint/history/{pinned_id}/impl/
-        └── commands/ → ../../../commands/blueprint/history/{pinned_id}/impl/
+    ├── util.go
+    ├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
+    └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
 
 # =============================================================================
 # AI GUIDELINES

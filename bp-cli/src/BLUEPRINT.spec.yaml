@@ -23,23 +23,30 @@ implementation:
       {state_dir}/                         # _meta.state_dir (default .blueprint)
       ├── current                           # Son snapshot ID
       ├── impl.lock                         # Aktif implementasyon kilidi
-      ├── impl.hidden                       # Working tree gizli işareti
       ├── state.yaml                        # Files, deps, dependents
       └── history/
           ├── 20260116-1430-a1b2-add-feat/  # Snapshot ID (timestamp-hash-slug)
           │   ├── BLUEPRINT.yaml            # Blueprint snapshot
           │   ├── meta.yaml                 # id, timestamp, message, hashes
-          │   └── impl/                     # TAM KOD KOPYASI (MVP)
-          │       ├── main.go
-          │       ├── util.go
-          │       └── deps/                 # Dependency symlinks
-          │           ├── yamlparser/ → ../../../../yamlparser/{state_dir}/history/{pinned_id}/impl/
-          │           └── commands/ → ../../../../commands/{state_dir}/history/{pinned_id}/impl/
+          │   ├── main.go                   # Kod (direkt, impl/ yok)
+          │   ├── util.go
+          │   ├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
+          │   └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
           └── 20260115-1000-c3d4-initial/
               ├── BLUEPRINT.yaml
               ├── meta.yaml
-              └── impl/
-                  └── ...
+              └── ...
+
+    working_tree: |
+      # Working tree yapısı (ro/pussy mode - kodlar her zaman var)
+      package/
+      ├── BLUEPRINT.yaml                    # Blueprint dosyası
+      ├── main.go                           # Kod
+      ├── util.go
+      ├── yamlparser/ → ../yamlparser/.blueprint/history/{pinned_id}/
+      ├── commands/ → ../commands/.blueprint/history/{pinned_id}/
+      └── .blueprint/                       # State directory
+          └── ...
 
     meta_yaml: |
       # {state_dir}/history/{id}/meta.yaml
@@ -109,10 +116,31 @@ workflow_policy:
   summary: |
     Symlink tabanlı dependency yönetimi:
     - Paket klasörü edit alanıdır (working tree)
-    - Her snapshot impl/ altında deps/ klasörü bulunur
-    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
-    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    - Snapshot'ta kod + symlink'ler direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
+    - Import/build için direkt symlink'ler kullanılır
     - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
+
+  modes: |
+    Development mode'lar (_meta.mode ile ayarlanır, default: ro):
+
+    pussy:
+      - Hiçbir şeyi zorlamaz
+      - bp impl: impl.lock oluştur
+      - bp apply: impl.lock sil
+      - Dosyalar her zaman var ve writable
+
+    ro (default):
+      - Read-only enforcement
+      - bp impl: impl.lock oluştur, dosyaları writable yap (chmod +w)
+      - bp apply: impl.lock sil, dosyaları read-only yap (chmod -w)
+      - impl.lock yokken dosyalar read-only
+
+    hide:
+      - Kodları gizle/göster
+      - bp impl: snapshot'tan restore et, impl.lock oluştur
+      - bp apply: impl.lock sil, working tree'deki kodları temizle
+      - Sadece impl sırasında kodlar görünür
 
   algorithms:
     root_resolution: |
@@ -169,8 +197,8 @@ workflow_policy:
 
       Notlar:
       - API/spec hash farkları staleness reason'a eklenmez; status flag'leriyle raporlanır.
-      - impl.hidden varsa silinmiş dosyalar changed_files listesine eklenmez.
-      - deps/ symlink değişimleri staleness hesabına girmez
+      - Symlink değişimleri staleness hesabına girmez
+      - hide mode'da silinmiş dosyalar changed_files listesine eklenmez
 
       Öncelik: files_changed > blueprint_changed > deps_api_changed > deps_changed
 
@@ -219,11 +247,12 @@ workflow_policy:
       4. Kalanları aynı sırayla listede göster
 
     symlink_policy: |
-      Symlink tabanlı import yönetimi:
-      - Her snapshot impl/deps/ altında dependency symlink'leri tutar
+      Symlink tabanlı import yönetimi (yeni yapı):
+      - Symlink'ler direkt pakette (deps/ klasörü yok)
+      - {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/
       - bp upgrade çalıştırıldığında symlink hedefi güncellenir
-      - Kod içinde değişiklik gerekmez, import'lar deps/{name} üzerinden yapılır
-      - Collision durumunda 'as:' ile explicit alias tanımlanır
+      - Kod içinde değişiklik gerekmez, import'lar {dep_name} üzerinden yapılır
+      - Collision durumunda hata verilir (aynı isimde kod klasörü/dosyası varsa)
 
     rotten_warning: |
       Global rotten uyarı mekanizması:
@@ -324,17 +353,23 @@ workflow_policy:
          c. snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
          d. Dependency'nin state.yaml'ına reverse tracking ekle
          e. Kendi state.yaml deps section'ına pin ekle
-      5. --clean yoksa kendi snapshot'ından impl restore et
-      6. deps/ klasörü oluştur, her dependency için symlink:
-         deps/{dep_name}/ → {dep_path}/{state_dir}/history/{pinned_id}/impl/
-      7. impl.lock oluştur (aktif implementasyon)
-      8. "Ready to implement" mesajı ver
+      5. Symlink'leri oluştur (direkt pakette):
+         {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/
+      6. Mode'a göre davranış:
+         - pussy: impl.lock oluştur
+         - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
+         - hide:
+           - --clean yoksa kendi snapshot'ından kodları restore et
+           - snapshot_id verilirse o ID restore edilir
+           - verilmezse current snapshot restore edilir
+           - impl.lock oluştur
+      7. "Ready to implement" mesajı ver
 
       Implementation bitince: bp apply -m "message"
 
       İzolasyon garantisi:
       - Her paket kendi dependency'lerinin stable snapshot'ına referans veriyor
-      - Dependency kodu: deps/ symlink'leri üzerinden erişilir
+      - Dependency kodu: symlink'ler üzerinden erişilir
       - Ana klasör = development, history = stable versiyonlar
 
     upgrade_algorithm: |
@@ -348,7 +383,8 @@ workflow_policy:
          e. API değişmişse ve --safe varsa → atla
       3. Upgrade yapılacaklar için:
          a. Eski pinned_id'yi sakla (rollback için)
-         b. deps/ symlink'ini güncelle (working tree aktifse)
+         b. Symlink'i güncelle (direkt pakette):
+            {dep_name}/ → {dep_path}/.blueprint/history/{new_pinned_id}/
          c. tests.verification çalıştır
          d. Test başarısız olursa:
             - Symlink'i eski haline döndür (rollback)
@@ -360,30 +396,35 @@ workflow_policy:
             - Dependency'nin dependents section'ını güncelle
       4. Özet: upgraded, skipped (rotten), failed (test)
 
-    impl_copy_algorithm: |
-      bp apply impl/ kopyalama algoritması:
-      1. Hangi dosyalar kopyalanacak:
-         - implementation.structure'dan dosya listesi al
-         - Yoksa: dizindeki kaynak dosyalarını tara (.go, .py, etc.)
-      2. Hariç tutulanlar:
-         - {state_dir}/
-         - .git/
-         - *_test.go (test dosyaları - opsiyonel)
-         - node_modules/, __pycache__/, etc.
-         - deps/ (symlink klasörü kopyalanmaz, yeniden oluşturulur)
-      3. Kopyalama:
-         - {state_dir}/history/{id}/impl/ klasörü oluştur
-         - Her dosyayı relatif path'i koruyarak kopyala
-         - Dizin yapısını oluştur (mkdir -p equivalent)
-      4. Symlink oluşturma:
-         - impl/deps/ klasörü oluştur
-         - state.yaml'dan dependency pin'lerini oku
-         - Her dependency için symlink:
-           deps/{dep_name}/ → {dep_path}/{state_dir}/history/{pinned_id}/impl/
-         - Collision varsa 'as:' alias'ını kullan
-      5. Kopyalanan dosyaları read-only yap (write bitlerini kaldır, exec bitlerini koru)
-      6. Snapshot başarılı olursa working tree implementation dosyalarını temizle
-      7. Sonuç: Tam, standalone kod kopyası + dependency symlink'leri
+    apply_algorithm: |
+      bp apply -m "message" algoritması:
+      1. Mode kontrolü:
+         - ro/hide mode'da impl.lock yoksa → hata
+         - pussy mode'da impl.lock kontrolü yok
+      2. Blueprint validate edilir (error varsa exit 2)
+      3. tests.verification komutları çalıştırılır (--skip-tests ile atlanır)
+      4. Snapshot oluşturulur (history/{id}/):
+         a. Klasör oluştur
+         b. BLUEPRINT.yaml kopyala
+         c. meta.yaml oluştur (id, timestamp, message, hashes)
+         d. Kod dosyalarını kopyala (direkt, impl/ yok)
+         e. Symlink'leri kopyala/oluştur (direkt, deps/ yok)
+      5. Mode'a göre working tree işlemi:
+         - pussy: impl.lock sil
+         - ro: impl.lock sil, dosyaları read-only yap (chmod -w)
+         - hide: impl.lock sil, working tree'deki kod dosyalarını temizle
+      6. state.yaml güncelle (snapshot_id, hashes, deps)
+      7. current dosyasını güncelle
+
+    cancel_algorithm: |
+      bp cancel algoritması:
+      1. impl.lock yoksa → hata: "No active implementation"
+      2. impl.lock sil
+      3. Mode'a göre:
+         - pussy: hiçbir şey yapma
+         - ro: dosyaları read-only yap (chmod -w)
+         - hide: working tree'deki kod dosyalarını temizle
+      4. "Implementation cancelled" mesajı
 
   decisions:
     - q: Paketler arası iletişim nasıl?
@@ -556,7 +597,7 @@ workflow_policy:
         - Klasörler (has_blueprint: true): Track edilmez, kendi state'leri var
 
         Symlink: Takip edilir ama cycle kontrolü yapılır
-        Not: deps/ symlink klasörü hash/staleness takibine dahil edilmez
+        Not: Dependency symlink'leri hash/staleness takibine dahil edilmez
 
     - q: tests.verification nasıl çalışır?
       a: |
@@ -568,7 +609,7 @@ workflow_policy:
             - "test command 2"
 
         bp apply davranışı:
-        - Ön koşul: impl.lock var (bp impl çalıştırılmış olmalı)
+        - Ön koşul: impl.lock var (bp impl çalıştırılmış olmalı) - ro/hide mode için
         - Her komutu sırayla shell'de çalıştırır
         - Working directory: BLUEPRINT.yaml'ın bulunduğu klasör
         - Timeout: 5 dakika per komut
@@ -600,7 +641,7 @@ workflow_policy:
         Bozuk history davranışı:
         - meta.yaml eksik/bozuk → o snapshot atlanır, warning
         - BLUEPRINT.yaml eksik → o snapshot atlanır, warning
-        - impl/ eksik → warning (gelecekte delta'dan reconstruct)
+        - Kod dosyaları eksik → warning (gelecekte delta'dan reconstruct)
         - Klasör adı geçersiz format → atlanır
 
     - q: Snapshot eşzamanlılığı nasıl yönetilir?
@@ -622,6 +663,25 @@ workflow_policy:
         - fresh: Kod snapshot ile aynı
         - stale: Kod değişmiş
         - no_snapshot: Henüz snapshot alınmamış ({state_dir}/ yok)
+
+    - q: Development mode'lar nedir?
+      a: |
+        _meta.mode ile ayarlanır (default: ro):
+
+        pussy: Hiçbir şeyi zorlamaz
+        - Dosyalar her zaman var ve writable
+        - impl.lock sadece state tracking için
+
+        ro (read-only, default): Read-only enforcement
+        - impl.lock yokken dosyalar read-only (chmod -w)
+        - bp impl: chmod +w
+        - bp apply: chmod -w
+        - Yanlışlıkla düzenlemeyi engeller
+
+        hide: Kodları gizle/göster
+        - bp apply sonrası kodlar silinir
+        - bp impl ile restore edilir
+        - Temiz working tree (sadece blueprint'ler görünür)
 
   edge_cases:
     - case: Birden fazla ana blueprint
@@ -660,6 +720,11 @@ workflow_policy:
 
     - case: Section referans bulunamadı
       handle: '"Section #xyz not found in file" hatası'
+
+    - case: İsim çakışması (dependency adı = kod dosyası/klasörü)
+      handle: |
+        Hata ver: "Name collision - '{name}' exists both as code and dependency"
+        Çözüm: Kod dosyasını/klasörünü yeniden adlandır
 
 # =============================================================================
 # TESTS
@@ -711,6 +776,11 @@ tests:
       given: {state_dir}/ yok
       when: bp status
       then: exit 2, "○ . (no snapshot)"
+
+    - id: cli_status_read_only
+      given: ro mode, impl.lock yok
+      when: bp status
+      then: "🔒 (read-only)" gösterir
 
     # Deps
     - id: cli_deps_no_deps
@@ -881,13 +951,13 @@ tests:
     # =========================================================================
 
     - id: apply_create_first
-      given: {state_dir}/history/ yok, impl.lock var
+      given: "{state_dir}/history/ yok, impl.lock var (ro mode)"
       when: bp apply -m "initial"
       then: |
         - history/20260116-HHMM-xxxx-initial/ oluşur
         - BLUEPRINT.yaml kopyalanır
         - meta.yaml oluşturulur
-        - impl/ klasörüne kod kopyalanır
+        - Kod dosyaları direkt kopyalanır (impl/ yok)
 
     - id: apply_id_format
       given: Herhangi bir blueprint, impl.lock var
@@ -896,16 +966,16 @@ tests:
         - ID formatı: YYYYMMDD-HHMM-{4-char-hash}-{slug}
         - Örnek: 20260116-1430-a1b2-add-feature
 
-    - id: apply_copies_impl
+    - id: apply_copies_code
       given: Kaynak dosyalar var (main.go, util.go), impl.lock var
       when: bp apply -m "snapshot"
       then: |
-        - {state_dir}/history/{id}/impl/ oluşur
-        - main.go, util.go kopyalanır
+        - {state_dir}/history/{id}/ oluşur
+        - main.go, util.go direkt kopyalanır (impl/ yok)
         - Dizin yapısı korunur
 
     - id: apply_different_content_different_id
-      given: Blueprint veya impl değişmiş, impl.lock var
+      given: Blueprint veya kod değişmiş, impl.lock var
       when: bp apply -m "change"
       then: Farklı ID ile yeni snapshot (4-char hash farklı)
 
@@ -930,6 +1000,35 @@ tests:
       given: Dependency'nin snapshot'ı yok, impl.lock var
       when: bp apply
       then: Warning verilir, snapshot yine alınır
+
+    # =========================================================================
+    # MODE TESTS
+    # =========================================================================
+
+    - id: mode_ro_apply_makes_readonly
+      given: ro mode, impl.lock var, dosyalar writable
+      when: bp apply -m "test"
+      then: Dosyalar read-only olur (chmod -w)
+
+    - id: mode_ro_impl_makes_writable
+      given: ro mode, dosyalar read-only
+      when: bp impl
+      then: Dosyalar writable olur (chmod +w), impl.lock oluşur
+
+    - id: mode_hide_apply_cleans_tree
+      given: hide mode, impl.lock var
+      when: bp apply -m "test"
+      then: Kod dosyaları silinir, BLUEPRINT.yaml kalır
+
+    - id: mode_hide_impl_restores
+      given: hide mode, snapshot var, kod dosyaları yok
+      when: bp impl
+      then: Kod dosyaları restore edilir
+
+    - id: mode_pussy_no_enforcement
+      given: pussy mode
+      when: bp apply, bp impl
+      then: Dosya permissions değişmez, her zaman writable
 
     # =========================================================================
     # DEPENDENCY TRACKING TESTS
@@ -971,6 +1070,7 @@ tests:
         - exit 0, "Ready to implement"
         - Her dep'in state.yaml dependents'ına eklenir
         - Kendi state.yaml deps'ine pin eklenir
+        - Symlink'ler oluşur (direkt pakette)
 
     - id: implement_dep_no_snapshot
       given: Dependency var ama snapshot'ı yok
@@ -984,12 +1084,20 @@ tests:
         - B'nin state.yaml dependents section'ına A eklenir
         - A'nın state.yaml deps section'ına B eklenir
 
+    - id: implement_creates_symlinks
+      given: Dependencies var, snapshot'ları var
+      when: bp implement
+      then: |
+        - {dep_name}/ symlink oluşur (direkt pakette)
+        - Hedef: {dep_path}/.blueprint/history/{pinned_id}/
+
     - id: upgrade_single_dep
       given: Dependency'nin yeni snapshot'ı var
       when: bp upgrade ./dep
       then: |
         - state.yaml deps güncellenir (pinned → latest)
         - Dependency'nin dependents section'ı güncellenir
+        - Symlink güncellenir
 
     - id: upgrade_api_changed_warning
       given: Dependency API'si değişmiş
@@ -1099,6 +1207,11 @@ tests:
       given: Symlink olan klasör
       when: walk() çağrılır
       then: Sonsuz döngüye girmez
+
+    - id: edge_name_collision
+      given: Dependency adı ile kod klasörü aynı
+      when: bp impl
+      then: Hata verilir
 
   verification:
     - go test $(go list ./... | grep -v '/blueprint/')

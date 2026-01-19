@@ -7,6 +7,31 @@ api:
     name: bp
     usage: bp <command> [path] [flags]
 
+    defaults:
+      state_dir: ".blueprint"
+      mode: ro  # pussy | ro | hide
+
+    modes: |
+      Development mode'lar (_meta.mode ile ayarlanır, default: ro):
+
+      pussy:
+        - Hiçbir şeyi zorlamaz
+        - bp impl: impl.lock oluştur
+        - bp apply: impl.lock sil
+        - Dosyalar her zaman var ve writable
+
+      ro (default):
+        - Read-only enforcement
+        - bp impl: impl.lock oluştur, dosyaları writable yap (chmod +w)
+        - bp apply: impl.lock sil, dosyaları read-only yap (chmod -w)
+        - impl.lock yokken dosyalar read-only
+
+      hide:
+        - Kodları gizle/göster
+        - bp impl: snapshot'tan restore et, impl.lock oluştur
+        - bp apply: impl.lock sil, working tree'deki kodları temizle
+        - Sadece impl sırasında kodlar görünür
+
     root_resolution: |
       Root blueprint kavramı:
       - _meta.root: true olan blueprint proje root'udur
@@ -66,6 +91,7 @@ api:
           deps_upgrade_api: "⚠ {dep}: {pinned} → {latest} (API CHANGED!)"
           no_state: "○ {path} (no snapshot)"
           implementing: "⧗ {path} (implementing)"
+          read_only: "🔒 {path} (read-only)"
           dependents: |
             Dependents:
               ../consumer using 20260115-xxxx (OUTDATED - 2 behind)
@@ -83,7 +109,7 @@ api:
         status_flags: |
           Ayrı flag'ler (staleness reason'a eklenmez):
           - implementing: impl.lock var mı?
-          - impl_hidden: impl.hidden var mı?
+          - read_only: ro mode'da impl.lock yok mu?
           - working_clean: tracked dosyalarda değişiklik yok mu?
           - blueprint_changed: BLUEPRINT.yaml hash değişmiş mi?
           - api_changed: API section hash değişmiş mi?
@@ -99,8 +125,6 @@ api:
           - Default recursive; --no-recursive sadece verilen path'i tarar
           - Dependency graph'e göre leaf-first sıralar
           - Sadece stale veya no_snapshot paketleri listeler
-          - deps_changed/deps_api_changed görülen paketlerde import yolları güncellenmelidir
-          - Sadece import güncellemesi yapıldıysa yeni snapshot almak gerekmez
         output: |
           1. ./yamlparser (no snapshot)
           2. ./commands (stale, blueprint_changed)
@@ -115,7 +139,10 @@ api:
         behavior: |
           - impl.lock yoksa hata verir
           - impl.lock varsa silinir
-          - Working tree dosyaları değiştirilmez
+          - Mode'a göre:
+            - ro: dosyaları read-only yap
+            - hide: dosyaları temizle
+            - pussy: hiçbir şey yapma
         output:
           success: "Implementation cancelled."
           no_active: "No active implementation."
@@ -124,18 +151,21 @@ api:
           1: Aktif implementasyon yok veya hata
 
       - name: apply
-        desc: Snapshot al, deps/ symlink oluştur, working tree temizle
+        desc: Snapshot al, symlink oluştur, mode'a göre working tree ayarla
         usage: bp apply [path] [-m "message"] [--skip-tests]
         behavior: |
-          - impl.lock yoksa hata verir
+          - impl.lock yoksa hata verir (ro/hide mode'da)
           - Blueprint validate edilir (error varsa exit 2)
           - tests.verification komutları çalıştırılır (--skip-tests ile atlanır)
           - Snapshot oluşturulur (history/{id}/)
-          - impl/ klasörüne kod kopyalanır
-          - deps/ klasörü oluşturulur, her dependency için symlink:
-            deps/{dep_name}/ → {dep_path}/{state_dir}/history/{pinned_id}/impl/
-          - Working tree temizlenir
-          - impl.hidden yazılır, impl.lock silinir
+            - BLUEPRINT.yaml kopyalanır
+            - meta.yaml oluşturulur
+            - Kod dosyaları kopyalanır (direkt, impl/ yok)
+            - Symlink'ler kopyalanır (direkt, deps/ yok)
+          - Mode'a göre:
+            - pussy: impl.lock sil
+            - ro: impl.lock sil, dosyaları read-only yap (chmod -w)
+            - hide: impl.lock sil, working tree'deki kod dosyalarını temizle
         output:
           success: "Snapshot created: {id}"
         exit_codes:
@@ -242,13 +272,13 @@ api:
         usage: bp show [path] [id]
         behavior:
           - ID verilmezse son snapshot
-          - blueprint/history/XXXX/BLUEPRINT.yaml içeriğini stdout'a yazar
+          - .blueprint/history/XXXX/BLUEPRINT.yaml içeriğini stdout'a yazar
         exit_codes:
           0: Başarılı
           1: ID bulunamadı veya hata
 
       - name: implement
-        desc: Implementation başlat - dependency kontrol + reverse tracking + symlink restore
+        desc: Implementation başlat - dependency kontrol + symlink + mode davranışı
         usage: bp implement [path] [snapshot_id] [--clean]
         note: "Alias: bp impl"
         behavior: |
@@ -259,13 +289,16 @@ api:
              - Pin'lenmiş snapshot mevcut mu kontrol et
              - Snapshot yoksa hata: "Dependency {dep} has no snapshot"
              - Dependency'nin state.yaml'ına kendini kaydet (reverse tracking)
-          4. --clean yoksa kendi snapshot'ından impl/ restore et
-             - snapshot_id verilirse o ID restore edilir
-             - verilmezse current snapshot restore edilir
-          5. deps/ klasörü oluştur, her dependency için symlink:
-             deps/{dep_name}/ → {dep_path}/{state_dir}/history/{pinned_id}/impl/
-          6. impl.lock oluştur (aktif implementasyon)
-          7. "Ready to implement" mesajı ver
+          4. Symlink'leri oluştur (direkt pakette, deps/ yok):
+             {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/
+          5. Mode'a göre:
+             - pussy: impl.lock oluştur
+             - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
+             - hide: snapshot'tan kodları restore et, impl.lock oluştur
+               - snapshot_id verilirse o ID restore edilir
+               - verilmezse current snapshot restore edilir
+               - --clean verilirse boş başla (restore etme)
+          6. "Ready to implement" mesajı ver
 
           Implementation bitince: bp apply -m "message"
         output:
@@ -296,7 +329,8 @@ api:
           3. --safe verilmişse sadece api_changed=false olanları upgrade et
           4. Rotten snapshot'ları atla (--force ile zorla)
           5. Her upgrade için:
-             - deps/ symlink'ini güncelle
+             - Symlink'i güncelle (direkt pakette):
+               {dep_name}/ → {dep_path}/.blueprint/history/{new_pinned_id}/
              - tests.verification çalıştır
              - Test fail → rollback + rotten flag
              - Test pass → state.yaml güncelle
@@ -327,7 +361,10 @@ api:
             desc: Parse edilmiş YAML içeriği
           - name: state_dir
             type: string
-            desc: blueprint/ klasörünün yolu (_meta.state_dir, default .blueprint)
+            desc: State klasörünün yolu (_meta.state_dir, default .blueprint)
+          - name: mode
+            type: string
+            desc: Development mode (_meta.mode, default ro)
         methods:
           - name: validate
             returns: ValidationResult
@@ -353,7 +390,7 @@ api:
             desc: Snapshot geçmişi
           - name: save_state
             returns: void
-            desc: blueprint/state.yaml güncelle
+            desc: .blueprint/state.yaml güncelle
 
       - name: HistoryEntry
         desc: Tek bir snapshot kaydı

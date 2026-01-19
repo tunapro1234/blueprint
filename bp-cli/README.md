@@ -56,8 +56,8 @@ cd src && go build -o ../bp ./cmd/bp
 ```
 ./bp init
 ./bp validate
-./bp impl                    # deps/ symlink'leri oluşur
-./bp apply -m "initial"      # snapshot + deps/ symlink
+./bp impl                    # symlink'ler oluşur, mode'a göre dosyalar hazırlanır
+./bp apply -m "initial"      # snapshot + mode'a göre temizle
 ./bp status
 ./bp log
 ./bp diff
@@ -96,38 +96,46 @@ _meta:
 - `bp upgrade [dep-path] [--safe] [--all] [--force]`
 - `bp cancel [path]`
 
+## Development Modes
+Configure with `_meta.mode` (default: `ro`):
+
+| Mode | `bp impl` | `bp apply` |
+|------|-----------|------------|
+| **ro** (default) | chmod +w, impl.lock | chmod -w, impl.lock sil |
+| **hide** | restore + impl.lock | temizle + impl.lock sil |
+| **pussy** | impl.lock | impl.lock sil |
+
 ## Snapshot Model
-Each package keeps its own snapshot state under the configured state dir:
+Each package keeps its own snapshot state under the configured state dir (default `.blueprint/`):
 ```
-{state_dir}/
+.blueprint/
   current
   state.yaml
   history/
     {snapshot_id}/
       BLUEPRINT.yaml
       meta.yaml
-      impl/
-        code.go
-        deps/               # dependency symlinks
-          yamlparser/ → ...
-          commands/ → ...
+      code.go                   # kod direkt (impl/ yok)
+      util.go
+      yamlparser/ → ...         # symlink direkt (deps/ yok)
+      commands/ → ...
 ```
 
 `bp apply` will:
 1) Validate the blueprint
 2) Run `tests.verification` commands (unless `--skip-tests`)
-3) Copy impl files to `history/{id}/impl/`
-4) Create deps/ symlinks for each dependency
-5) Clean working tree
+3) Copy files to `history/{id}/` (directly, no impl/)
+4) Create symlinks for dependencies (directly, no deps/)
+5) Mode-based cleanup (ro: chmod -w, hide: delete files, pussy: nothing)
 
 `bp impl` will:
-1) Restore impl files from snapshot to working tree
-2) Create deps/ symlinks for each dependency
+1) Mode-based setup (ro: chmod +w, hide: restore files, pussy: nothing)
+2) Create symlinks for dependencies (directly in package)
 3) Create impl.lock
 
 `bp upgrade` will:
 1) Update dependency pins in state.yaml
-2) Update deps/ symlinks to new snapshot targets (no code changes needed)
+2) Update symlinks to new snapshot targets (no code changes needed)
 
 ## Blueprint File Discovery
 Supported patterns include:

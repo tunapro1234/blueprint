@@ -18,10 +18,11 @@
 # - YAML subset - sadece ihtiyacımız olan özellikler
 
 _meta:
-  version: "0.2.0"
+  version: "0.3.0"
   updated: 2026-01-19
   status: ready
-  state_dir: "blueprint"
+  # state_dir: ".blueprint"  # default
+  # mode: ro                  # default
 
 intent: |
   BLUEPRINT.yaml dosyaları için özel parser.
@@ -46,10 +47,10 @@ plan:
 
 dependency_policy:
   summary: |
-    Symlink tabanlı dependency yönetimi:
-    - Paket klasörü sadece edit alanıdır
-    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
-    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    Symlink tabanlı dependency yönetimi (yeni yapı):
+    - Paket klasörü edit alanıdır
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (deps/ yok)
+    - Import/build için direkt symlink'ler kullanılır
 
 # =============================================================================
 # API

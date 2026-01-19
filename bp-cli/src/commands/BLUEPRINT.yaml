@@ -1,10 +1,11 @@
 # bp/commands - CLI Komutları
 
 _meta:
-  version: "0.2.0"
-  updated: 2026-01-17
+  version: "0.3.0"
+  updated: 2026-01-19
   status: ready
-  state_dir: "blueprint"
+  # state_dir: ".blueprint"  # default
+  # mode: ro                  # default
 
 intent: bp CLI'ın her komutunu ayrı modül olarak implement eder
 
@@ -30,10 +31,10 @@ plan:
 
 dependency_policy:
   summary: |
-    Symlink tabanlı dependency yönetimi:
-    - Paket klasörü sadece edit alanıdır
-    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
-    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    Symlink tabanlı dependency yönetimi (yeni yapı):
+    - Paket klasörü edit alanıdır
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (deps/ yok)
+    - Import/build için direkt symlink'ler kullanılır
 
 dependencies:
   from_parent:
@@ -138,7 +139,7 @@ api:
         - dep_updates: DepUpgrade[]     # Upgrade mevcut dependency'ler
         - dependents: DepRef[]          # Kim bize bağlı (reverse tracking)
         - implementing: bool            # Aktif implementasyon var mı? (impl.lock)
-        - impl_hidden: bool             # Working tree gizli mi? (impl.hidden)
+        - read_only: bool               # ro mode'da impl.lock yok mu?
         - working_clean: bool           # Working tree'de tracked değişiklik yok mu?
         - blueprint_changed: bool       # BLUEPRINT.yaml değişmiş mi?
         - api_changed: bool             # API section hash değişmiş mi?

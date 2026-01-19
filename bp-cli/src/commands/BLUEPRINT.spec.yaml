@@ -156,7 +156,7 @@ implementation:
       purpose: Değişen paketleri leaf-first sırada listele
       steps:
         1: Default recursive olarak BlueprintTree.Walk + TopologicalSort ile sıralama
-           --no-recursive verilirse sadece verilen paket listelenir
+        --no-recursive verilirse sadece verilen paket listelenir
         2: Her blueprint için staleness kontrolü
         3: state "stale" veya "no_snapshot" ise listeye ekle
         4: Leaf-first sıralı liste yazdır

@@ -15,16 +15,18 @@ api:
         2. _meta.root: true olan ilk blueprint root olarak belirlenir
         3. Root bulunamazsa en üstteki blueprint root sayılır
         4. Komut root'tan recursive çalıştırılır
-      - Explicit path verilirse (örn: "bp validate .") sadece o path için çalışır
+      - Explicit path verilirse o path'ten recursive çalışır
+      - --no-recursive ile sadece tek paket hedeflenir
 
       Örnekler:
-        bp validate        → root bul, root'tan recursive validate
-        bp validate .      → sadece bulunulan paket (recursive)
-        bp validate . --no-recursive  → sadece bulunulan paket (non-recursive)
-        bp validate ./src  → sadece ./src paketi (recursive)
-        bp status          → root bul, root'tan recursive status
-        bp status .        → sadece bulunulan paket (recursive)
-        bp status . --no-recursive → sadece bulunulan paket (non-recursive)
+        bp validate              → root bul, root'tan recursive
+        bp validate .            → bulunulan paketten recursive
+        bp validate ./src        → ./src'den recursive
+        bp validate --no-recursive     → root bul, sadece root paketi
+        bp validate . --no-recursive   → sadece bulunulan paket
+        bp status                → root bul, root'tan recursive
+        bp status .              → bulunulan paketten recursive
+        bp status . --no-recursive     → sadece bulunulan paket
 
     commands:
       - name: validate

@@ -129,10 +129,11 @@ workflow_policy:
          b. Yoksa → mevcut klasör root
 
       Komut davranışı:
-      - bp <cmd>        → root bul, root'tan recursive çalıştır
-      - bp <cmd> .      → sadece bulunulan paket (explicit path)
-      - bp <cmd> ./sub  → sadece ./sub paketi (explicit path)
-      - bp <cmd> . --no-recursive → sadece bulunulan paket (non-recursive)
+      - bp <cmd>              → root bul, root'tan recursive çalıştır
+      - bp <cmd> .            → bulunulan paketten recursive
+      - bp <cmd> ./sub        → ./sub paketinden recursive
+      - bp <cmd> --no-recursive    → root bul, sadece root paketi
+      - bp <cmd> . --no-recursive  → sadece bulunulan paket (non-recursive)
 
       Örnek:
         /project/             (_meta.root: true)

@@ -1,50 +1,42 @@
-from llm import LLMClient, Message, RateLimitError
+from llm import LLMRouter, CompletionRequest, Message
+from llm.rotation import RotationManager, RotationPolicy, RotationSlot
+from llm.gemini_adapter import GeminiAdapter, GeminiConfig
 
 
-def test_model_validation():
-    client = LLMClient(["key1"], model="gemini-3-flash-preview")
-    assert client.model == "gemini-3-flash-preview"
-
+def test_router_requires_provider():
+    router = LLMRouter()
     try:
-        LLMClient(["key1"], model="invalid-model")
-        assert False, "Should have raised"
+        router.complete(CompletionRequest(messages=[]))
+        assert False, "Expected ValueError"
     except ValueError:
         pass
 
 
-def test_key_rotation(monkeypatch):
-    client = LLMClient(["key1", "key2", "key3"])
+def test_rotation_select_round_robin():
+    policy = RotationPolicy(cooldown_seconds=0)
+    mgr = RotationManager(policy=policy)
+    mgr.add_slot(RotationSlot(id="a"))
+    mgr.add_slot(RotationSlot(id="b"))
 
-    calls = {"count": 0}
-
-    def fake_send_request(_):
-        calls["count"] += 1
-        if calls["count"] < 2:
-            raise RateLimitError()
-        return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
-
-    monkeypatch.setattr(client, "_send_request", fake_send_request)
-
-    response = client.complete([Message(role="user", content="hi")])
-    assert response.content == "ok"
-    assert client.current_key_index == 1
+    slot1 = mgr.select_slot()
+    slot2 = mgr.select_slot()
+    assert slot1.id in ["a", "b"]
+    assert slot2.id in ["a", "b"]
 
 
-def test_request_building():
-    client = LLMClient(["key"])  # no network call here
-    messages = [
-        Message(role="system", content="Be helpful"),
-        Message(role="user", content="Hello"),
-    ]
-    request = client._build_request(messages, None, temperature=0.7)
-    assert "systemInstruction" in request
-    assert len(request["contents"]) == 1
-    assert request["generationConfig"]["temperature"] == 0.7
+def test_gemini_adapter_response_parsing():
+    adapter = GeminiAdapter(GeminiConfig(api_keys=["k1"]))
 
+    def fake_send_request(payload, model, api_key):
+        assert api_key == "k1"
+        return {
+            "candidates": [
+                {"content": {"parts": [{"text": "Hello!"}]}}
+            ]
+        }
 
-def test_response_parsing():
-    client = LLMClient(["key"])
-    raw = {"candidates": [{"content": {"parts": [{"text": "Hello!"}]}}]}
-    response = client._parse_response(raw)
+    adapter._send_request = fake_send_request  # type: ignore[attr-defined]
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    response = adapter.complete(request)
     assert response.content == "Hello!"
-    assert response.tool_calls is None

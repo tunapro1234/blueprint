@@ -1,0 +1,7 @@
+id: 20260119-1538-b12b-debug-cli-python-rep
+timestamp: 2026-01-19T15:38:39
+message: debug_cli: python repl with direct+http
+content_hash: sha256:b12b4ae77124701f84b3828d07765cade36141eccdd445f69f96725789e82daa
+api_hash: sha256:8b7fef7043988bc08c160630d3d84863dfcd51222c28553530427dfbdd1ccc03
+spec_hash: sha256:bb9088d60b6962113f08e9b05afae84100255bb9f9a15aa271b23065d407d081
+impl_hash: sha256:c29f402d05e912c8cfe3510e5592e20a3ebd1f14585c0966b5e4b22084d8a04f

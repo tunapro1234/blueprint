@@ -1,0 +1,7 @@
+id: 20260118-2029-ff92-debug-cli-add-http-c
+timestamp: 2026-01-18T20:29:30
+message: debug_cli: add http client and repl
+content_hash: sha256:ff92fb92ca68cbf897eb3d6d3d8208c1889ac7a93f46fb18ecca6e08abc987c1
+api_hash: sha256:39673e20aae9a72008b96a2bbb5492ed38f3b1225ef08df3e1624ba6f2b8428f
+spec_hash: sha256:575fc4690d51981f40cfc077ead2e94301a2239355b07d7880e6acb44ec42c9c
+impl_hash: sha256:8aacd53da868eff6fee3d9557b4affdd363a1adbaa185dce656fd6e6f96becb8

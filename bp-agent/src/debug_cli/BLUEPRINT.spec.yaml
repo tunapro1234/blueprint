@@ -1,0 +1,491 @@
+# Debug CLI Implementation Spec
+
+_meta:
+  version: "0.2.0"
+  type: spec
+
+implementation:
+  structure:
+    - __init__.py
+    - cli.py          # Ana REPL + argparse entrypoint
+    - backend.py      # Backend interface + HTTPBackend + DirectBackend
+    - display.py      # Output formatting (tables, colors)
+    - models.py       # Dataclasses (CLIConfig, TaskInfo, etc)
+
+  models:
+    pseudocode: |
+      from dataclasses import dataclass
+      from enum import Enum
+
+      class RunMode(Enum):
+          HTTP = "http"
+          DIRECT = "direct"
+
+      @dataclass
+      class CLIConfig:
+          mode: RunMode = RunMode.HTTP
+          base_url: str = "http://localhost:8080"
+          provider: str = "gemini"
+          model: str | None = None
+          system_prompt: str | None = None
+          temperature: float = 0.3
+          debug: bool = False
+
+      @dataclass
+      class ChatMessage:
+          role: str  # "user" | "assistant"
+          content: str
+
+      @dataclass
+      class TaskInfo:
+          id: str
+          status: str
+          instruction: str
+          output: str | None = None
+          created_at: str = ""
+
+      @dataclass
+      class ToolInfo:
+          name: str
+          description: str
+
+      @dataclass
+      class ExecuteResult:
+          success: bool
+          output: str
+          task_id: str | None = None
+          tool_calls: list[dict] | None = None
+
+  backend:
+    pseudocode: |
+      from abc import ABC, abstractmethod
+
+      class Backend(ABC):
+          @abstractmethod
+          def execute(self, instruction: str, history: list[ChatMessage], config: CLIConfig) -> ExecuteResult:
+              pass
+
+          @abstractmethod
+          def list_tasks(self, limit: int = 10) -> list[TaskInfo]:
+              pass
+
+          @abstractmethod
+          def get_task(self, task_id: str) -> TaskInfo | None:
+              pass
+
+          @abstractmethod
+          def list_tools(self) -> list[ToolInfo]:
+              pass
+
+          @abstractmethod
+          def list_models(self) -> list[str]:
+              pass
+
+
+      class HTTPBackend(Backend):
+          """HTTP API client - server'a bağlanır"""
+
+          def __init__(self, base_url: str, token: str | None = None):
+              self.base_url = base_url.rstrip("/")
+              self.token = token
+
+          def _headers(self) -> dict:
+              h = {"Content-Type": "application/json"}
+              if self.token:
+                  h["Authorization"] = f"Bearer {self.token}"
+              return h
+
+          def execute(self, instruction: str, history: list[ChatMessage], config: CLIConfig) -> ExecuteResult:
+              # Build transcript from history
+              transcript = self._build_transcript(history, instruction)
+
+              payload = {
+                  "instruction": transcript,
+                  "provider": config.provider,
+                  "model": config.model,
+                  "temperature": config.temperature,
+                  "system_prompt": config.system_prompt,
+                  "debug": config.debug
+              }
+              resp = requests.post(f"{self.base_url}/execute", json=payload, headers=self._headers())
+              data = resp.json()
+              return ExecuteResult(
+                  success=data.get("success", False),
+                  output=data.get("output", ""),
+                  task_id=data.get("task_id"),
+                  tool_calls=data.get("trace", {}).get("tool_calls")
+              )
+
+          def list_tasks(self, limit: int = 10) -> list[TaskInfo]:
+              resp = requests.get(f"{self.base_url}/tasks", params={"limit": limit}, headers=self._headers())
+              return [TaskInfo(**t) for t in resp.json().get("tasks", [])]
+
+          def get_task(self, task_id: str) -> TaskInfo | None:
+              resp = requests.get(f"{self.base_url}/tasks/{task_id}", headers=self._headers())
+              if resp.ok:
+                  return TaskInfo(**resp.json())
+              return None
+
+          def list_tools(self) -> list[ToolInfo]:
+              resp = requests.get(f"{self.base_url}/tools", headers=self._headers())
+              return [ToolInfo(**t) for t in resp.json().get("tools", [])]
+
+          def list_models(self) -> list[str]:
+              resp = requests.get(f"{self.base_url}/models", headers=self._headers())
+              return resp.json().get("models", [])
+
+          def _build_transcript(self, history: list[ChatMessage], new_msg: str) -> str:
+              lines = []
+              for msg in history:
+                  lines.append(f"{msg.role}: {msg.content}")
+              lines.append(f"user: {new_msg}")
+              return "\n".join(lines) if len(history) > 0 else new_msg
+
+
+      class DirectBackend(Backend):
+          """Agent'ı direkt import eder - server'sız çalışır"""
+
+          def __init__(self):
+              self._agent = None
+              self._current_config_hash = None
+
+          def _ensure_agent(self, config: CLIConfig):
+              config_hash = f"{config.provider}:{config.model}:{config.temperature}:{config.system_prompt}"
+              if self._agent is None or self._current_config_hash != config_hash:
+                  # Import from snapshot
+                  from agent import Agent, AgentConfig
+                  agent_config = AgentConfig(
+                      provider=config.provider,
+                      model=config.model,
+                      temperature=config.temperature
+                  )
+                  self._agent = Agent("debug-cli", config=agent_config, system_prompt=config.system_prompt)
+                  self._register_default_tools()
+                  self._current_config_hash = config_hash
+
+          def _register_default_tools(self):
+              # Test tool'ları
+              self._agent.add_tool(
+                  "calculator",
+                  lambda expr: str(eval(expr)),  # Simple eval for testing
+                  {"type": "object", "properties": {"expr": {"type": "string"}}}
+              )
+              self._agent.add_tool(
+                  "echo",
+                  lambda text: text,
+                  {"type": "object", "properties": {"text": {"type": "string"}}}
+              )
+
+          def execute(self, instruction: str, history: list[ChatMessage], config: CLIConfig) -> ExecuteResult:
+              self._ensure_agent(config)
+              # Build transcript
+              full_instruction = self._build_transcript(history, instruction)
+              result = self._agent.execute(full_instruction)
+              return ExecuteResult(
+                  success=result.success,
+                  output=result.output,
+                  task_id=result.task_id
+              )
+
+          def list_tasks(self, limit: int = 10) -> list[TaskInfo]:
+              if self._agent and self._agent.tasks:
+                  tasks = self._agent.tasks.list(limit=limit)
+                  return [TaskInfo(
+                      id=t.id,
+                      status=t.status,
+                      instruction=t.instruction,
+                      output=t.output,
+                      created_at=t.created_at
+                  ) for t in tasks]
+              return []
+
+          def get_task(self, task_id: str) -> TaskInfo | None:
+              if self._agent and self._agent.tasks:
+                  t = self._agent.tasks.get(task_id)
+                  if t:
+                      return TaskInfo(id=t.id, status=t.status, instruction=t.instruction, output=t.output)
+              return None
+
+          def list_tools(self) -> list[ToolInfo]:
+              if self._agent:
+                  return [ToolInfo(name=n, description=s.get("description", ""))
+                          for n, s in self._agent.tools.get_schemas().items()]
+              return []
+
+          def list_models(self) -> list[str]:
+              # Hardcoded for now - could query provider
+              return [
+                  "gemini-3-flash-preview",
+                  "gemini-3-pro-preview",
+                  "gpt-5.2-codex",
+                  "gpt-5.1-codex-mini"
+              ]
+
+          def _build_transcript(self, history: list[ChatMessage], new_msg: str) -> str:
+              if not history:
+                  return new_msg
+              lines = [f"{m.role}: {m.content}" for m in history]
+              lines.append(f"user: {new_msg}")
+              return "\n".join(lines)
+
+  cli:
+    pseudocode: |
+      class REPL:
+          def __init__(self, config: CLIConfig):
+              self.config = config
+              self.backend = self._create_backend()
+              self.history: list[ChatMessage] = []
+
+          def _create_backend(self) -> Backend:
+              if self.config.mode == RunMode.HTTP:
+                  return HTTPBackend(self.config.base_url)
+              return DirectBackend()
+
+          def run(self):
+              print_welcome(self.config)
+
+              while True:
+                  try:
+                      line = input("you> ").strip()
+                  except (EOFError, KeyboardInterrupt):
+                      print("\nBye!")
+                      break
+
+                  if not line:
+                      continue
+
+                  if line.startswith("."):
+                      if self._handle_command(line):
+                          break
+                      continue
+
+                  # Execute
+                  result = self.backend.execute(line, self.history, self.config)
+                  print_response(result, self.config.debug)
+
+                  # Update history
+                  self.history.append(ChatMessage("user", line))
+                  self.history.append(ChatMessage("assistant", result.output))
+
+          def _handle_command(self, line: str) -> bool:
+              parts = line.split(maxsplit=1)
+              cmd = parts[0]
+              args = parts[1] if len(parts) > 1 else ""
+
+              if cmd in (".exit", ".quit", ".q"):
+                  return True
+
+              elif cmd == ".help":
+                  print_help()
+
+              elif cmd == ".info":
+                  print_info(self.config)
+
+              elif cmd == ".model":
+                  self._select_model()
+
+              elif cmd == ".provider":
+                  self._select_provider()
+
+              elif cmd == ".tasks":
+                  tasks = self.backend.list_tasks()
+                  print_task_table(tasks)
+
+              elif cmd == ".task":
+                  task = self.backend.get_task(args)
+                  if task:
+                      print_task_detail(task)
+                  else:
+                      print(f"Task not found: {args}")
+
+              elif cmd == ".tools":
+                  tools = self.backend.list_tools()
+                  print_tool_list(tools)
+
+              elif cmd == ".system":
+                  self.config.system_prompt = args or None
+                  print(f"System prompt: {self.config.system_prompt or '(default)'}")
+
+              elif cmd == ".clear":
+                  self.history.clear()
+                  print("History cleared.")
+
+              elif cmd == ".debug":
+                  self.config.debug = not self.config.debug
+                  print(f"Debug: {'on' if self.config.debug else 'off'}")
+
+              elif cmd == ".mode":
+                  if args in ("http", "direct"):
+                      self.config.mode = RunMode.HTTP if args == "http" else RunMode.DIRECT
+                      self.backend = self._create_backend()
+                      print(f"Mode: {self.config.mode.value}")
+                  else:
+                      print("Usage: .mode http|direct")
+
+              else:
+                  print(f"Unknown command: {cmd}. Type .help")
+
+              return False
+
+          def _select_model(self):
+              models = self.backend.list_models()
+              print("Models:")
+              for i, m in enumerate(models, 1):
+                  cur = " (current)" if m == self.config.model else ""
+                  print(f"  [{i}] {m}{cur}")
+              try:
+                  choice = input("Select: ").strip()
+                  if choice.isdigit():
+                      self.config.model = models[int(choice) - 1]
+                  else:
+                      self.config.model = choice
+                  print(f"Model: {self.config.model}")
+              except (ValueError, IndexError):
+                  print("Cancelled")
+
+          def _select_provider(self):
+              providers = ["gemini", "codex", "opus"]
+              print("Providers:")
+              for i, p in enumerate(providers, 1):
+                  cur = " (current)" if p == self.config.provider else ""
+                  print(f"  [{i}] {p}{cur}")
+              try:
+                  choice = input("Select: ").strip()
+                  self.config.provider = providers[int(choice) - 1]
+                  self.config.model = None  # Reset
+                  print(f"Provider: {self.config.provider}")
+              except (ValueError, IndexError):
+                  print("Cancelled")
+
+  display:
+    pseudocode: |
+      def print_welcome(config: CLIConfig):
+          mode = "HTTP" if config.mode == RunMode.HTTP else "Direct"
+          print(f"base-agent CLI [{mode}]")
+          print(f"Provider: {config.provider} | Model: {config.model or 'default'}")
+          print("Type .help for commands\n")
+
+      def print_help():
+          print("""
+      Commands:
+        .model       Select model (interactive)
+        .provider    Select provider (gemini/codex/opus)
+        .tasks       List recent tasks
+        .task <id>   Show task detail
+        .tools       List registered tools
+        .system <t>  Set system prompt
+        .clear       Clear chat history
+        .debug       Toggle debug mode
+        .mode <m>    Switch mode (http/direct)
+        .info        Show current settings
+        .help        Show this help
+        .exit        Quit
+          """)
+
+      def print_info(config: CLIConfig):
+          print(f"Mode:     {config.mode.value}")
+          print(f"URL:      {config.base_url}")
+          print(f"Provider: {config.provider}")
+          print(f"Model:    {config.model or '(default)'}")
+          print(f"System:   {config.system_prompt or '(default)'}")
+          print(f"Temp:     {config.temperature}")
+          print(f"Debug:    {config.debug}")
+
+      def print_response(result: ExecuteResult, debug: bool):
+          if debug and result.tool_calls:
+              for tc in result.tool_calls:
+                  print(f"  [tool] {tc.get('name')}({tc.get('args')})")
+          print(f"assistant> {result.output}")
+
+      def print_task_table(tasks: list[TaskInfo]):
+          if not tasks:
+              print("No tasks.")
+              return
+          print(f"{'ID':<16} {'Status':<10} {'Output':<50}")
+          print("-" * 76)
+          for t in tasks:
+              out = (t.output or "-")[:47] + "..." if len(t.output or "") > 50 else (t.output or "-")
+              print(f"{t.id:<16} {t.status:<10} {out:<50}")
+
+      def print_task_detail(task: TaskInfo):
+          print(f"ID:          {task.id}")
+          print(f"Status:      {task.status}")
+          print(f"Instruction: {task.instruction}")
+          print(f"Output:      {task.output or '-'}")
+          print(f"Created:     {task.created_at}")
+
+      def print_tool_list(tools: list[ToolInfo]):
+          if not tools:
+              print("No tools registered.")
+              return
+          print("Registered tools:")
+          for t in tools:
+              print(f"  - {t.name}: {t.description or '(no description)'}")
+
+  entrypoint:
+    pseudocode: |
+      def main():
+          parser = argparse.ArgumentParser(prog="debug-cli", description="Base Agent Debug CLI")
+          parser.add_argument("--url", default="http://localhost:8080", help="API server URL")
+          parser.add_argument("--direct", action="store_true", help="Direct mode (no server)")
+          parser.add_argument("--provider", default="gemini")
+          parser.add_argument("--model", default=None)
+          parser.add_argument("--system", default=None, help="System prompt")
+          parser.add_argument("--temp", type=float, default=0.3)
+          parser.add_argument("--debug", action="store_true")
+
+          subparsers = parser.add_subparsers(dest="command")
+
+          subparsers.add_parser("repl", help="Interactive chat")
+
+          run_p = subparsers.add_parser("run", help="Single instruction")
+          run_p.add_argument("instruction", nargs="*")
+
+          args = parser.parse_args()
+
+          config = CLIConfig(
+              mode=RunMode.DIRECT if args.direct else RunMode.HTTP,
+              base_url=args.url,
+              provider=args.provider,
+              model=args.model,
+              system_prompt=args.system,
+              temperature=args.temp,
+              debug=args.debug
+          )
+
+          # Default to repl if no command
+          cmd = args.command or "repl"
+
+          if cmd == "repl":
+              REPL(config).run()
+
+          elif cmd == "run":
+              instruction = " ".join(args.instruction) if args.instruction else input("Instruction: ")
+              backend = DirectBackend() if config.mode == RunMode.DIRECT else HTTPBackend(config.base_url)
+              result = backend.execute(instruction, [], config)
+              print(result.output)
+
+      if __name__ == "__main__":
+          main()
+
+tests:
+  unit:
+    - name: config_defaults
+      test: |
+        config = CLIConfig()
+        assert config.mode == RunMode.HTTP
+        assert config.provider == "gemini"
+
+    - name: http_backend_transcript
+      test: |
+        backend = HTTPBackend("http://test:8080")
+        history = [ChatMessage("user", "hi"), ChatMessage("assistant", "hello")]
+        transcript = backend._build_transcript(history, "how are you")
+        assert "user: hi" in transcript
+        assert "assistant: hello" in transcript
+
+    - name: command_parse
+      test: |
+        # .exit returns True
+        # .help returns False
+        pass

@@ -4,7 +4,7 @@ from urllib import request, error
 
 import pytest
 
-from llm import ALLOWED_MODELS
+from llm.gemini_adapter import GEMINI_ALLOWED_MODELS
 
 
 def _fetch_models(api_key: str) -> list[str]:
@@ -39,5 +39,5 @@ def test_allowed_models_exist_if_online():
     except error.URLError:
         pytest.skip("Network unavailable")
 
-    missing = [m for m in ALLOWED_MODELS if m not in available]
+    missing = [m for m in GEMINI_ALLOWED_MODELS if m not in available]
     assert not missing, f"Allowed models not found in models.list: {missing}"

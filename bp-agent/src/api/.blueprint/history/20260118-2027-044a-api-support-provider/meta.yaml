@@ -1,0 +1,7 @@
+id: 20260118-2027-044a-api-support-provider
+timestamp: 2026-01-18T20:27:24
+message: api: support provider overrides & debug trace
+content_hash: sha256:044a510862013ca2da6568ed05038bdc1a7f8db7afe64bdf7280852a2ffa0a1b
+api_hash: sha256:e6902c94e5c4e85a37cb8f766c7732a969caf308a41570c23a3f53d5028de5bf
+spec_hash: sha256:eb3f6c3b5d43c4ccb68f34338903f06c6cab92b47465ada039df57948e91a0c2
+impl_hash: sha256:bec2f28973259d45be219efd594729b467174950262e2f2f839997c9f5083979

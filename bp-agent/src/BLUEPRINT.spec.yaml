@@ -17,10 +17,7 @@ implementation:
           self.system_prompt = system_prompt or "You are a helpful assistant."
 
           # Dependencies
-          self.llm = LLMClient(
-            api_keys=load_api_keys(),
-            model=self.config.model
-          )
+          self.llm = build_llm_router(self.config)
           self.tools = ToolRegistry()
           self.tasks = TaskStore() if self.config.enable_task_store else None
 
@@ -42,12 +39,15 @@ implementation:
 
           # 4. Execution loop
           for i in range(self.config.max_iterations):
-            # Call LLM
-            response = self.llm.complete(
-              messages,
+            # Call LLM (provider router)
+            request = CompletionRequest(
+              messages=messages,
               tools=tool_schemas,
-              temperature=self.config.temperature
+              temperature=self.config.temperature,
+              model=self.config.model,
+              provider=self.config.provider
             )
+            response = self.llm.complete(request)
 
             # No tool calls = done
             if not response.tool_calls:
@@ -74,10 +74,13 @@ implementation:
     pseudocode: |
       @dataclass
       class AgentConfig:
+        provider: str = "gemini"
         model: str = "gemini-3-flash-preview"
+        reasoning_effort: str | None = None
         max_iterations: int = 10
         temperature: float = 0.3
         enable_task_store: bool = True
+        codex_auth_file: str | None = None
 
   result:
     pseudocode: |
@@ -88,15 +91,17 @@ implementation:
         task_id: str = None
 
   helpers:
-    load_api_keys:
+    load_gemini_keys:
       pseudocode: |
-        def load_api_keys() -> list[str]:
-          """Load API keys from environment"""
+        def load_gemini_keys() -> list[str]:
+          """Load Gemini API keys from environment"""
           keys = []
 
-          # Primary key
-          if key := os.getenv("GEMINI_API_KEY"):
-            keys.append(key)
+          # Comma-separated
+          if raw := os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS"):
+            for item in raw.split(","):
+              if item.strip():
+                keys.append(item.strip())
 
           # Additional keys (GEMINI_API_KEY_2, _3, etc.)
           for i in range(2, 10):
@@ -107,6 +112,20 @@ implementation:
             raise ValueError("No API keys found")
 
           return keys
+
+    build_llm_router:
+      pseudocode: |
+        def build_llm_router(config: AgentConfig) -> LLMRouter:
+          keys = load_gemini_keys()
+          router = LLMRouter(default_provider=config.provider)
+          router.register_provider(
+            "gemini",
+            GeminiAdapter(GeminiConfig(api_keys=keys, model=config.model, temperature=config.temperature))
+          )
+          # Optional providers (register if credentials exist)
+          # Codex: api_keys or auth file (default ~/.codex/auth.json)
+          # Opus: api_keys + OPUS_BASE_URL
+          return router
 
 tests:
   unit:

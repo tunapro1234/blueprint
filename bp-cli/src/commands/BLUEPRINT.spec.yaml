@@ -10,11 +10,10 @@ _meta:
 
 workflow_policy:
   summary: |
-    Bu tool enforce etmez; ekip standardı olarak:
+    Symlink tabanlı dependency yönetimi:
     - Paket klasörü edit alanıdır (working tree)
-    - Import/build için pinned snapshot kopyaları tercih edilir
-      (örn. {state_dir}/history/{snapshot_id}/impl)
-    - Snapshot'lar publish edilen stable sürümü temsil eder
+    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
+    - Import/build için deps/ klasöründeki symlinkler kullanılır
     Not: {state_dir} = _meta.state_dir (default .blueprint)
 
 # =============================================================================
@@ -27,17 +26,15 @@ implementation:
     - validate module
     - status module       # + dependents gösterimi
     - plan module         # Leaf-first plan listesi
-    - cancel module       # Implementation/patch iptal
-    - patch module        # Import/include patch oturumu
-    - apply module        # Patch/impl kapatma
+    - cancel module       # Implementation iptal
+    - apply module        # Snapshot al + symlink oluştur
     - deps module         # + --upgrades flag
     - init module
-    - log module          # Yeni snapshot ID formatı
+    - log module          # Snapshot ID formatı
     - diff module
     - show module
-    - ss module           # + impl/ kopyalama, yeni ID formatı
-    - implement module    # Dependency kontrol + reverse tracking
-    - upgrade module      # YENİ: Dependency upgrade
+    - implement module    # Dependency kontrol + reverse tracking + symlink
+    - upgrade module      # Dependency upgrade + symlink güncelle
 
   decisions:
     - q: Neden her komut ayrı modül?
@@ -180,33 +177,21 @@ implementation:
         0: Başarılı
         1: Aktif implementasyon yok veya hata
 
-    patch:
-      purpose: Import/include güncelleme oturumu başlat
-      steps:
-        0: Blueprint'i validate et (error varsa exit 2)
-        1: impl.lock varsa hata ver (aktif oturum var)
-        2: snapshot_id verilirse o ID restore edilir; verilmezse current snapshot restore edilir
-        3: impl.hidden varsa temizle
-        4: impl.lock oluştur (mode=patch)
-        5: "Patch session ready." mesajı ver
-      exit_codes:
-        0: Başarılı
-        1: Snapshot bulunamadı veya hata
-        2: Validation hatası
-
     apply:
-      purpose: Aktif oturumu kapat (impl ise snapshot alır, patch ise snapshot günceller)
+      purpose: Snapshot al, deps/ symlink oluştur, working tree temizle
       steps:
         0: impl.lock yoksa hata ver
-        1: mode=impl ise ss ile aynı davran (validate/test/snapshot/clean)
-        2: mode=patch ise:
-           - Import/include değişikliklerini snapshot impl içine geri yaz
-           - Yeni snapshot oluşturma (mevcut snapshot mutasyona uğrar)
-           - impl.hidden yaz, impl.lock sil
+        1: Blueprint'i validate et (error varsa exit 2)
+        2: tests.verification çalıştır (--skip-tests ile atlanır)
+        3: Snapshot oluştur (history/{id}/)
+        4: impl/ klasörüne kod kopyala
+        5: deps/ klasörü oluştur, her dependency için symlink
+        6: Working tree temizle
+        7: impl.hidden yaz, impl.lock sil
       exit_codes:
         0: Başarılı
-        1: Aktif oturum yok veya hata
-        2: Validation hatası (impl mode)
+        1: Testler başarısız veya hata
+        2: Validation hatası
 
     deps:
       algorithm: Kahn's algorithm (topological sort)
@@ -306,153 +291,32 @@ implementation:
         - "No snapshot history": {state_dir}/history/ yok veya boş
         - "Invalid current snapshot ID": {state_dir}/current geçersiz format
 
-    ss:
-      note: "Legacy; default kapanış için bp apply kullanılır."
-      steps:
-        0: Aktif implementasyon yoksa hata ver (impl.lock yoksa)
-        1: |
-          Blueprint'i validate et
-          - Error varsa (exit 1) → ss exit 2, snapshot alınmaz
-          - Warning varsa (exit 2) → devam et, snapshot alınır
-          - Yani sadece error'lar bloke eder, warning'ler geçer
-        2: Dependency'lerin snapshot durumunu kontrol et (warning)
-        3: tests.verification komutlarını çalıştır (--skip-tests ile atlanır)
-        4: Testler başarısızsa exit 1
-        5: |
-          Hash'leri hesapla:
-          - impl_hash: implementation dosyalarının birleşik hash'i
-          - api_hash: api section'ın hash'i
-          - spec_hash: implementation section'ın hash'i
-          - content_hash: blueprint_hash + impl_hash + deps_hash → SHA-256
-        6: |
-          Snapshot ID oluştur: YYYYMMDD-HHMM-{4-char-hash}-{slug}
-          - timestamp: time.Now().Format("20060102-1504")
-          - 4-char-hash: content_hash[:4]
-          - slug: slugify(message), max 20 char
-        7: |
-          Snapshot klasörü oluştur:
-          - {state_dir}/history/{id}/ oluştur
-          - BLUEPRINT.yaml kopyala
-          - meta.yaml oluştur (id, timestamp, message, content_hash, api_hash, spec_hash, impl_hash)
-          - impl/ klasörüne kaynak dosyaları kopyala (TAM KOPYA)
-        8: {state_dir}/state.yaml güncelle (files + deps + dependents)
-        9: {state_dir}/current güncelle
-        10: Başarılıysa working tree implementation dosyalarını temizle
-        11: Başarılıysa impl.hidden oluştur (working tree gizli)
-        12: Başarılıysa impl.lock sil (implementasyon kapanır)
-      id_format: "YYYYMMDD-HHMM-{4-char-hash}-{slug}"
-      exit_codes:
-        0: Snapshot başarıyla alındı
-        1: Testler başarısız
-        2: Validation hatası
-      impl_copy: |
-        impl/ klasörüne kopyalanan dosyalar:
-        - implementation.structure'daki dosyalar
-        - Yoksa: .go, .py gibi kaynak dosyaları
-        Hariç tutulanlar:
-        - {state_dir}/, .git/
-        - *_test.go (opsiyonel)
-        - node_modules/, __pycache__/
-      verification_execution:
-        source: BLUEPRINT.yaml içindeki tests.verification listesi
-        format: Her item bir shell komutu (string)
-        cwd: Blueprint'in bulunduğu klasör
-        method: Shell'de komut çalıştırma (working directory = bp klasörü)
-        timeout: 5 dakika per komut (300 saniye)
-
-    apply:
-      purpose: Aktif oturumu kapat (impl ise ss ile aynı; patch ise snapshot günceller)
-      steps:
-        0: impl.lock yoksa hata ver
-        1: mode=impl ise ss adımlarını uygula
-        2: mode=patch ise:
-           - Import/include değişikliklerini snapshot impl içine geri yaz
-           - Yeni snapshot oluşturma (mevcut snapshot mutasyona uğrar)
-           - impl.hidden yaz, impl.lock sil
-      exit_codes:
-        0: Başarılı
-        1: Aktif oturum yok veya hata
-        2: Validation hatası (impl mode)
-
-    patch:
-      purpose: Import/include güncelleme oturumu başlat
-      steps:
-        0: Blueprint'i validate et (error varsa exit 2)
-        1: impl.lock varsa hata ver (aktif oturum var)
-        2: snapshot_id verilirse o ID restore edilir; verilmezse current snapshot restore edilir
-        3: impl.hidden varsa temizle
-        4: impl.lock oluştur (mode=patch)
-        5: "Patch session ready." mesajı ver
-      exit_codes:
-        0: Başarılı
-        1: Snapshot bulunamadı veya hata
-        2: Validation hatası
-        parallel: false (sırayla çalıştırılır)
-        fail_fast: true (ilk hata durur)
-        example: |
-          tests:
-            verification:
-              - make test
-              - ./run_tests.sh
-      skip_tests_flag: |
-        --skip-tests: verification komutlarını atlar
-        Validation hala çalışır (atlanamaz)
-
     implement:
-      purpose: Implementation başlat - dependency kontrol + reverse tracking
+      purpose: Implementation başlat - dependency kontrol + reverse tracking + symlink
       steps:
         0: Blueprint'i validate et (error varsa exit 2)
         1: Aktif implementasyon varsa hata ver (impl.lock varsa)
         2: Blueprint'i yükle, dependencies bölümünü oku
         3: Dependency yoksa → "No dependencies, ready to implement"
-        4: |
-          Her dependency için:
-          - Path'i resolve et (relative → absolute)
-          - Dependency'nin {state_dir}/state.yaml'ını kontrol et
-          - snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
-          - Dependency'nin state.yaml dependents'ına kendini ekle (reverse tracking)
-          - Kendi state.yaml deps'ine pin bilgisi ekle
-        5: |
-          --clean yoksa impl restore et:
-          - snapshot_id verilirse o ID restore edilir
-          - verilmezse current snapshot restore edilir
-        6: impl.hidden varsa temizle (working tree tekrar görünür)
-        7: impl.lock oluştur (aktif implementasyon)
-        8: "Ready to implement" mesajı ver
-      reverse_tracking: |
-        Dependency'nin state.yaml'ına eklenen:
-        dependents:
-          "{my_relative_path}":
-            using: "{dep_snapshot_id}"
-
-        Kendi state.yaml'a eklenen:
-        deps:
-          "{dep_path}":
-            pinned: "{dep_snapshot_id}"
-            latest: "{dep_snapshot_id}"
-            api_hash: "{dep_api_hash}"
-            latest_api_hash: "{dep_api_hash}"
-            api_changed: false
+        4: Her dependency için reverse tracking + pin ekle
+        5: --clean yoksa snapshot'tan impl restore et
+        6: deps/ klasörü oluştur, her dependency için symlink
+        7: impl.hidden varsa temizle
+        8: impl.lock oluştur
+        9: "Ready to implement" mesajı ver
       exit_codes:
         0: Ready to implement
         1: Dependency snapshot eksik
         2: Blueprint bulunamadı
 
     upgrade:
-      purpose: Dependency'leri güncelle
+      purpose: Dependency'leri güncelle (symlink günceller)
       steps:
         1: state.yaml deps bölümünü oku
-        2: |
-          Her dependency için (veya sadece dep-path verilmişse o):
-          - Dependency'nin {state_dir}/current'ı oku → latest_id
-          - history/{latest_id}/meta.yaml'dan api_hash al
-          - Mevcut pinned api_hash ile karşılaştır
-          - API değişmişse ve --safe varsa → atla
-        3: |
-          Upgrade yap:
-          - state.yaml deps güncelle (pinned, latest, api_hash, api_changed)
-          - Dependency'nin state.yaml dependents'ını güncelle
-        4: API değişikliği varsa uyarı göster (bloklamaz)
+        2: Her dependency için latest_id ve api_hash al
+        3: state.yaml deps güncelle
+        4: Working tree aktifse deps/ symlink'ini güncelle
+        5: API değişikliği varsa uyarı göster
       flags:
         safe: Sadece API değişmeyenleri upgrade et
         all: Tüm dependency'leri upgrade et
@@ -474,7 +338,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 15 komut var (validate, status, plan, cancel, patch, apply, deps, init, log, diff, show, ss, implement, impl, upgrade)
+      then: 13 komut var (validate, status, plan, cancel, apply, deps, init, log, diff, show, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut
@@ -745,69 +609,44 @@ tests:
       then: '"Snapshot not found", exit 1'
 
     # =========================================================================
-    # SNAPSHOT (ss)
+    # APPLY (Snapshot)
     # =========================================================================
-    - id: ss_success
-      given: Valid blueprint, testler geçiyor (veya yok)
-      when: bp ss -m "v1.0 release"
+    - id: apply_success
+      given: Valid blueprint, testler geçiyor, impl.lock var
+      when: bp apply -m "v1.0 release"
       then: |
         - {state_dir}/history/20260116-HHMM-xxxx-v10-release/ oluşur
-        - meta.yaml: id, timestamp, message, content_hash, api_hash, spec_hash, impl_hash
-        - impl/ klasörüne kaynak dosyalar kopyalanır
+        - impl/ klasörüne kod + deps/ symlink'leri oluşur
         - {state_dir}/current güncellenir
         - exit 0
 
-    - id: ss_validation_error
+    - id: apply_validation_error
       given: Invalid blueprint (_meta.version yok)
-      when: bp ss
+      when: bp apply
       then: '"Validation failed: missing _meta.version", exit 2'
 
-    - id: ss_validation_warning_passes
-      given: Blueprint'te intent yok (warning) ama _meta.version var
-      when: bp ss
-      then: Snapshot alınır (warning bloke etmez), exit 0
-
-    - id: ss_tests_fail
+    - id: apply_tests_fail
       given: Valid blueprint, tests.verification başarısız
-      when: bp ss
+      when: bp apply
       then: '"Tests failed", exit 1, snapshot alınmaz'
 
-    - id: ss_skip_tests
+    - id: apply_skip_tests
       given: Valid blueprint, tests.verification başarısız
-      when: bp ss --skip-tests
+      when: bp apply --skip-tests
       then: Snapshot alınır (testler atlandı), exit 0
 
-    - id: ss_no_message
-      given: Valid blueprint
-      when: bp ss (mesaj verilmedi)
-      then: 'meta.yaml''da message = tarih (örn: "2026-01-15")'
-
-    - id: ss_idempotent
-      given: Aynı blueprint, impl ve deps, aynı dakikada
-      when: bp ss iki kez çalışır
+    - id: apply_creates_symlinks
+      given: 2 dependency var, impl.lock var
+      when: bp apply -m "with deps"
       then: |
-        Aynı content = aynı 4-char hash = aynı ID:
-        - "Snapshot already exists: 20260116-1430-a1b2-message"
-        - exit 0 (hata değil, idempotent)
+        impl/deps/ klasörü oluşur:
+        - deps/yamlparser/ → symlink
+        - deps/commands/ → symlink
 
-    - id: ss_first_snapshot
-      given: {state_dir}/ yok
-      when: bp ss -m "initial"
-      then: {state_dir}/ ve history/20260116-HHMM-xxxx-initial/ oluşur
-
-    - id: ss_state_updated
-      given: bp ss başarılı
-      then: {state_dir}/state.yaml güncellenir (dosya hash'leri + deps)
-
-    - id: ss_records_deps
-      given: Dependency'ler var ve snapshot'ları var
-      when: bp ss
-      then: state.yaml'da deps section'ı kayıtlı (pinned/latest + api_changed)
-
-    - id: ss_dep_no_snapshot
-      given: Dependency'nin snapshot'ı yok
-      when: bp ss
-      then: Warning verilir, deps entry eklenmez (deps_hash'te bu dep atlanır), snapshot alınır
+    - id: apply_no_impl_lock
+      given: impl.lock yok
+      when: bp apply
+      then: '"No active implementation", exit 1'
 
     # =========================================================================
     # DEPENDENCY TRACKING (STATUS)
@@ -852,7 +691,7 @@ tests:
       given: Dependency'nin snapshot'ı yok ({state_dir}/state.yaml yok)
       when: bp implement
       then: |
-        ✗ Dependency ./yamlparser has no snapshot. Run 'bp ss' in ./yamlparser first.
+        ✗ Dependency ./yamlparser has no snapshot. Run 'bp apply' in ./yamlparser first.
         exit 1
 
     - id: implement_reverse_tracking
@@ -944,9 +783,9 @@ tests:
         ✓ ./BLUEPRINT.yaml
         (uyarı stderr'e, validation stdout'a)
 
-    - id: dep_warning_on_ss
+    - id: dep_warning_on_apply
       given: Dependency upgrade mevcut, API değişmiş
-      when: bp ss -m "feature"
+      when: bp apply -m "feature"
       then: |
         ⚠ ./yamlparser: 20260115-xxxx → 20260116-yyyy (API CHANGED!)
         Snapshot created: 20260116-1430-xxxx-feature

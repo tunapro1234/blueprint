@@ -30,11 +30,10 @@ plan:
 
 dependency_policy:
   summary: |
-    Önerilen kullanım (enforce edilmez, ekip standardı):
+    Symlink tabanlı dependency yönetimi:
     - Paket klasörü sadece edit alanıdır
-    - Import/build pinned snapshot kopyalarından yapılır
-      (örn. blueprint/history/{snapshot_id}/impl)
-    - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
+    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
+    - Import/build için deps/ klasöründeki symlinkler kullanılır
 
 dependencies:
   from_parent:
@@ -60,14 +59,12 @@ api:
           "status": status_command,
           "plan": plan_command,
           "cancel": cancel_command,
-          "patch": patch_command,
           "apply": apply_command,
           "deps": deps_command,
           "init": init_command,
           "log": log_command,
           "diff": diff_command,
           "show": show_command,
-          "ss": ss_command,
           "implement": implement_command,
           "impl": implement_command,
           "upgrade": upgrade_command,
@@ -92,14 +89,12 @@ api:
         - status: {recursive: bool}
         - plan: {recursive: bool}
         - cancel: {}
-        - patch: {snapshot_id: string?}
         - apply: {message: string?, skip_tests: bool}
         - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10
         - diff: {id1: string?, id2: string?}
         - show: {id: string?}           # null = son snapshot
-        - ss: {message: string?, skip_tests: bool}
         - implement: {snapshot_id: string?, clean: bool}
         - impl: {snapshot_id: string?, clean: bool}  # alias
         - upgrade: {dep_path: string?, safe: bool, all: bool}
@@ -116,13 +111,11 @@ api:
         - status: StatusInfo
         - plan: PlanResult
         - cancel: null
-        - patch: null
-        - apply: SnapshotInfo | null
+        - apply: SnapshotInfo
         - deps: string[] (topological order) veya DepUpgrade[] (--upgrades)
         - log: HistoryEntry[]
         - diff: DiffResult
         - show: string (blueprint content)
-        - ss: SnapshotInfo
         - init: null
         - implement: ImplementResult
         - upgrade: UpgradeResult

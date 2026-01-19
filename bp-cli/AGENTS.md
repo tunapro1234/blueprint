@@ -18,35 +18,25 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 │                           ▼                                  │
 │  3. bp impl [clean | <snapshot_id>]                         │
 │     └── Snapshot'tan working tree'yi restore eder           │
+│     └── deps/ klasörüne symlink'ler oluşturur               │
 │     └── impl.lock açılır (implementing state)               │
 │                           │                                  │
 │                           ▼                                  │
 │  4. IMPLEMENTATION (Kod Yazma)                              │
 │     └── Working tree'de kodu düzenle                        │
-│     └── API/spec'e uy                                       │
+│     └── Import'lar deps/ üzerinden yapılır                  │
 │     └── Test yaz / güncelle                                 │
 │                           │                                  │
 │                           ▼                                  │
 │  5. bp apply -m "message"                                   │
-│     └── (impl mode) Validate + test çalıştır                │
-│     └── history/{snapshot_id}/impl/ altına kopyalar         │
+│     └── Validate + test çalıştır                            │
+│     └── history/{id}/impl/ altına kopyalar + deps/ symlink  │
 │     └── impl dosyalarını working tree'den temizler          │
 │     └── impl.hidden yazar, impl.lock kapatılır              │
 │                           │                                  │
 │                           ▼                                  │
 │  6. ITERATION (Sonraki değişiklik)                          │
-│     └── bp impl → kod düzenle → bp ss                       │
-│                                                             │
-│  (IMPORT PATCH AKIŞI)                                       │
-│  3b. bp patch [<snapshot_id>]                               │
-│     └── Snapshot'tan working tree'yi restore eder           │
-│     └── impl.lock açılır (mode=patch)                       │
-│  4b. PATCH (Import/include güncelle)                        │
-│     └── Sadece import/include yollarını değiştir            │
-│  5b. bp apply                                                │
-│     └── Değişiklikleri snapshot impl içine geri yazar       │
-│     └── impl dosyalarını working tree'den temizler          │
-│     └── impl.hidden yazar, impl.lock kapatılır              │
+│     └── bp impl → kod düzenle → bp apply                    │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -54,10 +44,20 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 ## Dosya Yapısı
 - `BLUEPRINT.yaml`: intent, API, dependencies
 - `BLUEPRINT.spec.yaml`: structure (impl dosyaları), tests
-- `blueprint/history/{id}/impl/`: Snapshot'lanmış kod katmanları
+- `blueprint/history/{id}/impl/`: Snapshot'lanmış kod + deps/ symlink'leri
 - `blueprint/current`: Aktif snapshot ID
 - `blueprint/impl.lock`: Aktif implementasyon kilidi
 - `blueprint/impl.hidden`: Working tree gizli işareti
+
+## Symlink Yapısı
+```
+impl/
+├── main.go
+├── util.go
+└── deps/
+    ├── yamlparser/ → ../../../yamlparser/blueprint/history/{pinned_id}/impl/
+    └── commands/ → ../../../commands/blueprint/history/{pinned_id}/impl/
+```
 
 ## Temel Komutlar
 
@@ -66,46 +66,46 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 # 2. (Opsiyonel) değişenleri sırala
 ./bp plan -r .
 
-# 3. Restore + implement başlat
+# 3. Restore + implement başlat (deps/ symlink'leri oluşur)
 ./bp impl
 
-# 4. Kodu yaz, test et
+# 4. Kodu yaz, test et (import'lar deps/ üzerinden)
 cd src && go test ./...
 
-# 5. Uygula + kapat (default)
+# 5. Uygula + kapat
 ./bp apply -m "implement feature X"
 
-# 5b. (Opsiyonel) Import patch akışı
-./bp patch
-# import/include değişiklikleri
-./bp apply
+# 6. Dependency güncelle (symlink güncellenir)
+./bp upgrade --all
 
-# 6. Sonraki iterasyon için restore
+# 7. Sonraki iterasyon için restore
 ./bp impl
 ```
 
 ## Snapshot Davranışı
-- `bp ss` çalıştırıldığında (legacy, tercih edilmez):
+- `bp apply` çalıştırıldığında:
   1. Blueprint validate edilir
   2. `tests.verification` komutları çalıştırılır
   3. Impl dosyaları `history/{id}/impl/` altına kopyalanır
-  4. Working tree'deki impl dosyaları **silinir**
-  5. `impl.hidden` yazılır, `impl.lock` silinir
-- `bp apply` çalıştırıldığında (impl mode):
-  - `bp ss` ile aynı işi yapar (snapshot alır + temizler)
+  4. `deps/` klasörüne symlink'ler oluşturulur
+  5. Working tree'deki impl dosyaları **silinir**
+  6. `impl.hidden` yazılır, `impl.lock` silinir
 - `bp implement` çalıştırıldığında:
   - Current snapshot'tan dosyalar restore edilir
+  - `deps/` klasörüne symlink'ler oluşturulur
   - `impl.hidden` temizlenir, `impl.lock` açılır
 
-## Patch Davranışı
-- `bp patch` çalıştırıldığında:
-  - Current snapshot'tan dosyalar restore edilir (veya verilen snapshot)
-  - `impl.hidden` temizlenir, `impl.lock` açılır (mode=patch)
-- `bp apply` çalıştırıldığında:
-  - Import/include değişiklikleri snapshot impl içine geri yazılır
-  - Dependency pin'leri (state.yaml) güncellenir
-  - Yeni snapshot oluşmaz; mevcut snapshot mutasyona uğrar
-  - Working tree temizlenir, `impl.hidden` yazılır, `impl.lock` silinir
+## Import Kullanımı
+```python
+# Python
+from deps.yamlparser import parser
+
+# Go - go.mod'da replace direktifi
+replace proj/yamlparser => ./deps/yamlparser
+
+# TypeScript - tsconfig paths
+import { parser } from "@deps/yamlparser"
+```
 
 ## State Directory
 - `_meta.state_dir` ile ayarlanır (default: `.blueprint/`)
@@ -117,46 +117,41 @@ cd src && go test ./...
 2. Blueprint değişikliği olmadan yeni özellik ekleme
 3. API imzalarını koru (breaking change için yeni versiyon)
 4. Her snapshot için anlamlı mesaj yaz
-5. `bp impl` ve `bp apply` ardışık/tek yönlü akış:  
+5. `bp impl` ve `bp apply` ardışık/tek yönlü akış:
    - `bp impl` → çalış → `bp apply` ile kapat
    - `bp apply` olmadan ikinci `bp impl` çalışmaz
-6. `bp ss` sonrası working tree temizlenir; kod görmek için `bp impl` gerekir
-7. Import/build için snapshot kopyaları tercih edilir (history/{id}/impl); working tree'den import yapılmaz
-8. Dependency snapshot güncellendiğinde dependents içindeki import yolları **güncellenmelidir**
-9. Sadece import yolu güncellemesi yapıldıysa **yeni snapshot alınmaz**; `bp patch`/`bp apply` ile mevcut snapshot güncellenir
+6. `bp apply` sonrası working tree temizlenir; kod görmek için `bp impl` gerekir
+7. Import'lar deps/ klasöründeki symlink'ler üzerinden yapılır
+8. `bp upgrade` symlink'leri günceller, kod değişikliği gerekmez
 
 ## Agent Rehberi (Önerilen İş Akışı)
 1. `bp plan -r .` ile leaf-first sıra çıkar
 2. Her paket için:
    - `bp impl` (veya `bp impl clean`)
-   - Değişiklikleri yap
+   - Değişiklikleri yap (import'lar deps/ üzerinden)
    - Testleri çalıştır
-   - `bp ss -m "..."` ile snapshot al
-3. Sadece import yollarını güncellemek gerekiyorsa:
-   - `bp patch`
-   - Import/include güncelle
-   - `bp apply`
+   - `bp apply -m "..."` ile snapshot al
+3. Dependency güncellemek için:
+   - `bp upgrade --all` (symlink'ler güncellenir)
 4. `bp status -r .` ile genel kontrol
 
 Notlar:
-- BLUEPRINT dosyaları `bp ss` sonrası working tree'de kalır.
+- BLUEPRINT dosyaları `bp apply` sonrası working tree'de kalır.
 - `impl.hidden` varken `status` fresh kalabilir; kodu görmek için `bp impl` kullanılır.
-- Importlar **daima** snapshot path'lerine referans verir (working tree değil).
-- Plan sırasında dependency update varsa, ilgili paketlerdeki import yollarını güncelle; tek değişiklik buysa `bp patch`/`bp apply` kullan.
+- Import'lar deps/ klasöründeki symlink'ler üzerinden yapılır.
+- `bp upgrade` çalıştırıldığında symlink hedefleri güncellenir, kod değişikliği gerekmez.
 
 ## Komut Referansı
 
 | Komut | Açıklama |
 |-------|----------|
-| `bp implement` | Current snapshot'tan dosyaları restore et |
-| `bp apply -m "msg"` | (impl mode) Snapshot al (validate + test + save) |
-| `bp ss -m "msg"` | Legacy snapshot (apply yerine) |
+| `bp implement` | Snapshot restore + deps/ symlink oluştur |
+| `bp apply -m "msg"` | Snapshot al + deps/ symlink + temizle |
 | `bp validate [-r]` | Blueprint doğrula |
 | `bp status [-r]` | Değişiklik kontrolü |
 | `bp plan [-r]` | Leaf-first uygulanacak paketleri listeler |
-| `bp patch` | Import/include güncelleme oturumu başlatır |
-| `bp apply` | Patch oturumunu kapatır, snapshot impl'i günceller |
-| `bp cancel` | Aktif implementasyon/patch oturumunu iptal eder (impl.lock temizler) |
+| `bp upgrade [--all]` | Dependency güncelle (symlink günceller) |
+| `bp cancel` | Aktif implementasyonu iptal et |
 | `bp log [-n N]` | Snapshot history |
 | `bp diff [id1] [id2]` | Snapshot karşılaştır |
 | `bp show [id]` | Belirli snapshot'ı göster |

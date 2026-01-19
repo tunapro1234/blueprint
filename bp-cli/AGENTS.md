@@ -41,8 +41,20 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Root Blueprint
+- `_meta.root: true` ile proje root'u işaretlenir
+- Alt paketlerde argümansız komut → root bulunur, recursive çalıştırılır
+- Explicit path verilirse (`.`, `./sub`) sadece o paket için çalışır
+- Root bulunamazsa en üstteki blueprint root sayılır
+
+```bash
+# yamlparser/ içindeyken
+bp validate      # → root bul, tüm proje için recursive
+bp validate .    # → sadece yamlparser paketi
+```
+
 ## Dosya Yapısı
-- `BLUEPRINT.yaml`: intent, API, dependencies
+- `BLUEPRINT.yaml`: intent, API, dependencies (root'ta `_meta.root: true`)
 - `BLUEPRINT.spec.yaml`: structure (impl dosyaları), tests
 - `blueprint/history/{id}/impl/`: Snapshot'lanmış kod + deps/ symlink'leri
 - `blueprint/current`: Aktif snapshot ID

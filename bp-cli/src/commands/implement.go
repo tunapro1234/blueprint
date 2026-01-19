@@ -40,6 +40,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 2, Output: out, Errors: validation.Errors}
 	}
 	warnRottenDependencies(bpObj)
+	mode := bpObj.Mode()
 	active, err := hasImplLock(bpObj.StateDir)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
@@ -134,7 +135,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	}
 
 	restoreID := ""
-	if !clean {
+	if mode == "hide" && !clean {
 		restoreID, err = resolveImplementationSnapshotID(bpObj.StateDir, snapshotInput)
 		if err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
@@ -145,17 +146,23 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	}
 
 	if len(deps) == 0 {
-		mode := "restore"
+		if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if mode == "ro" {
+			trackedFiles, err := bpObj.TrackedFiles()
+			if err != nil {
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
+			if err := setTrackedFilesWritable(trackedFiles); err != nil {
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
+		}
+		lockMode := "restore"
 		if clean {
-			mode = "clean"
+			lockMode = "clean"
 		}
-		if err := bp.ClearImplHidden(bpObj.StateDir); err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
-		if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, filepath.Join(bpObj.Dir, "deps")); err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
-		if err := writeImplLock(bpObj.StateDir, restoreID, mode); err != nil {
+		if err := writeImplLock(bpObj.StateDir, restoreID, lockMode); err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		out := "No dependencies, ready to implement."
@@ -190,17 +197,23 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
-	mode := "restore"
+	if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if mode == "ro" {
+		trackedFiles, err := bpObj.TrackedFiles()
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := setTrackedFilesWritable(trackedFiles); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+	}
+	lockMode := "restore"
 	if clean {
-		mode = "clean"
+		lockMode = "clean"
 	}
-	if err := bp.ClearImplHidden(bpObj.StateDir); err != nil {
-		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-	}
-	if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, filepath.Join(bpObj.Dir, "deps")); err != nil {
-		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-	}
-	if err := writeImplLock(bpObj.StateDir, restoreID, mode); err != nil {
+	if err := writeImplLock(bpObj.StateDir, restoreID, lockMode); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 

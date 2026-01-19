@@ -397,15 +397,21 @@ func changedFilesFromState(b *Blueprint, state *State) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	implHidden, err := IsImplHidden(b.StateDir)
-	if err != nil {
-		return nil, err
+	ignoreDeleted := false
+	if b.Mode() == "hide" {
+		locked, err := HasImplLock(b.StateDir)
+		if err != nil {
+			return nil, err
+		}
+		if !locked {
+			ignoreDeleted = true
+		}
 	}
 	changed := []string{}
 	for rel, oldHash := range state.Files {
 		abs, ok := currentFiles[rel]
 		if !ok {
-			if implHidden {
+			if ignoreDeleted {
 				continue
 			}
 			changed = append(changed, "deleted: "+rel)
@@ -590,6 +596,11 @@ func walkFiles(root, stateDirRel string, visited map[string]struct{}, fn func(pa
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
+		if target, err := os.Readlink(root); err == nil {
+			if isDependencySnapshotPath(target) {
+				return nil
+			}
+		}
 		stat, err := os.Stat(root)
 		if err != nil {
 			return err
@@ -599,11 +610,19 @@ func walkFiles(root, stateDirRel string, visited map[string]struct{}, fn func(pa
 			if err != nil {
 				return err
 			}
+			if isDependencySnapshotPath(real) {
+				return nil
+			}
 			if _, ok := visited[real]; ok {
 				return nil
 			}
 			visited[real] = struct{}{}
 			return walkDirEntries(root, stateDirRel, visited, fn)
+		}
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			if isDependencySnapshotPath(real) {
+				return nil
+			}
 		}
 		if shouldSkipFileName(stat.Name()) {
 			return nil

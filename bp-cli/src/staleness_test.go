@@ -64,7 +64,7 @@ func TestStalenessFilesChanged(t *testing.T) {
 
 func TestStalenessHiddenImplIgnoresMissingFiles(t *testing.T) {
 	dir := t.TempDir()
-	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
+	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n  mode: hide\n")
 	writeFile(t, filepath.Join(dir, "a.txt"), "one")
 	aHash, _ := HashFile(filepath.Join(dir, "a.txt"))
 	bpHash, _ := HashFile(bpObj.Path)
@@ -74,9 +74,6 @@ func TestStalenessHiddenImplIgnoresMissingFiles(t *testing.T) {
 	}
 	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
 		t.Fatalf("remove file: %v", err)
-	}
-	if err := MarkImplHidden(bpObj.StateDir); err != nil {
-		t.Fatalf("MarkImplHidden: %v", err)
 	}
 	info, err := bpObj.StalenessInfo()
 	if err != nil {

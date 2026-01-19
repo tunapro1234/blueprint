@@ -63,7 +63,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	var singleUpdates []DepUpgrade
 	var singleDependents []bp.DepRef
 	var singleImplementing bool
-	var singleImplHidden bool
+	var singleReadOnly bool
 	var singleWorkingClean bool
 	var singleBlueprintChanged bool
 	var singleAPIChanged bool
@@ -90,7 +90,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 		lines = append(lines, statusLine)
 		if !recursive {
 			implementing, _ := hasImplLock(bpObj.StateDir)
-			implHidden, _ := bp.IsImplHidden(bpObj.StateDir)
+			readOnly := bpObj.Mode() == "ro" && !implementing
 			workingClean, blueprintChanged, apiChanged, specChanged := computeStatusFlags(bpObj, info)
 			for _, up := range upgrades {
 				lines = append(lines, formatDepUpgradeLine(up))
@@ -105,7 +105,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			singleUpdates = upgrades
 			singleDependents = dependentsData
 			singleImplementing = implementing
-			singleImplHidden = implHidden
+			singleReadOnly = readOnly
 			singleWorkingClean = workingClean
 			singleBlueprintChanged = blueprintChanged
 			singleAPIChanged = apiChanged
@@ -139,7 +139,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			DepUpdates:       singleUpdates,
 			Dependents:       singleDependents,
 			Implementing:     singleImplementing,
-			ImplHidden:       singleImplHidden,
+			ReadOnly:         singleReadOnly,
 			WorkingClean:     singleWorkingClean,
 			BlueprintChanged: singleBlueprintChanged,
 			APIChanged:       singleAPIChanged,

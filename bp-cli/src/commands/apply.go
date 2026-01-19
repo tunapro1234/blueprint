@@ -31,11 +31,12 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	warnRottenDependencies(bpObj)
+	mode := bpObj.Mode()
 	active, err := hasImplLock(bpObj.StateDir)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if !active {
+	if !active && mode != "pussy" {
 		out := "No active implementation. Run 'bp impl' first."
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{out}}
 	}
@@ -133,7 +134,7 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot already exists: %s", snapshotID))
-		if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID, "impl", "deps")); err != nil {
+		if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID)); err != nil {
 			msg := fmt.Sprintf("Failed to create dependency symlinks: %s", err.Error())
 			out = strings.Join([]string{out, "✗ " + msg}, "\n")
 			return CommandResult{
@@ -143,28 +144,8 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
 			}
 		}
-		if err := cleanImplementationFiles(trackedFiles, bpObj.Dir); err != nil {
-			msg := fmt.Sprintf("Failed to clean implementation files: %s", err.Error())
-			out = strings.Join([]string{out, "✗ " + msg}, "\n")
-			return CommandResult{
-				ExitCode: 1,
-				Output:   out,
-				Errors:   []string{msg},
-				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
-			}
-		}
-		if err := bp.MarkImplHidden(bpObj.StateDir); err != nil {
-			msg := fmt.Sprintf("Failed to mark implementation hidden: %s", err.Error())
-			out = strings.Join([]string{out, "✗ " + msg}, "\n")
-			return CommandResult{
-				ExitCode: 1,
-				Output:   out,
-				Errors:   []string{msg},
-				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
-			}
-		}
-		if err := clearImplLock(bpObj.StateDir); err != nil {
-			msg := fmt.Sprintf("Failed to clear implementation lock: %s", err.Error())
+		if err := finalizeApply(bpObj, trackedFiles); err != nil {
+			msg := err.Error()
 			out = strings.Join([]string{out, "✗ " + msg}, "\n")
 			return CommandResult{
 				ExitCode: 1,
@@ -189,7 +170,7 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 	if err := copyImplementationSnapshot(trackedFiles, bpObj.StateDir, snapshotID, testCfg.SnapshotReadOnly); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID, "impl", "deps")); err != nil {
+	if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID)); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if err := bpObj.SaveState(state); err != nil {
@@ -199,28 +180,8 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot created: %s", snapshotID))
-	if err := cleanImplementationFiles(trackedFiles, bpObj.Dir); err != nil {
-		msg := fmt.Sprintf("Failed to clean implementation files: %s", err.Error())
-		out = strings.Join([]string{out, "✗ " + msg}, "\n")
-		return CommandResult{
-			ExitCode: 1,
-			Output:   out,
-			Errors:   []string{msg},
-			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, ImplHash: implHash},
-		}
-	}
-	if err := bp.MarkImplHidden(bpObj.StateDir); err != nil {
-		msg := fmt.Sprintf("Failed to mark implementation hidden: %s", err.Error())
-		out = strings.Join([]string{out, "✗ " + msg}, "\n")
-		return CommandResult{
-			ExitCode: 1,
-			Output:   out,
-			Errors:   []string{msg},
-			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
-		}
-	}
-	if err := clearImplLock(bpObj.StateDir); err != nil {
-		msg := fmt.Sprintf("Failed to clear implementation lock: %s", err.Error())
+	if err := finalizeApply(bpObj, trackedFiles); err != nil {
+		msg := err.Error()
 		out = strings.Join([]string{out, "✗ " + msg}, "\n")
 		return CommandResult{
 			ExitCode: 1,
@@ -236,16 +197,28 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 	}
 }
 
-func cleanImplementationFiles(files map[string]string, root string) error {
+func cleanImplementationFiles(files map[string]string) error {
 	for _, abs := range files {
 		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
-	if root != "" {
-		if err := os.RemoveAll(filepath.Join(root, "deps")); err != nil && !os.IsNotExist(err) {
-			return err
+	return nil
+}
+
+func finalizeApply(bpObj *bp.Blueprint, trackedFiles map[string]string) error {
+	switch bpObj.Mode() {
+	case "hide":
+		if err := cleanImplementationFiles(trackedFiles); err != nil {
+			return fmt.Errorf("Failed to clean implementation files: %s", err.Error())
 		}
+	case "ro":
+		if err := setTrackedFilesReadOnly(trackedFiles); err != nil {
+			return fmt.Errorf("Failed to set files read-only: %s", err.Error())
+		}
+	}
+	if err := clearImplLock(bpObj.StateDir); err != nil {
+		return fmt.Errorf("Failed to clear implementation lock: %s", err.Error())
 	}
 	return nil
 }
@@ -422,8 +395,8 @@ func runDependencySnapshotTests(bpObj *bp.Blueprint) error {
 			}
 			id = currentID
 		}
-		snapshotImpl := filepath.Join(dep.StateDir, "history", id, "impl")
-		if _, err := os.Stat(snapshotImpl); err != nil {
+		snapshotRoot := filepath.Join(dep.StateDir, "history", id)
+		if _, err := os.Stat(snapshotRoot); err != nil {
 			return err
 		}
 		depCfg, err := readTestConfig(dep)
@@ -433,7 +406,7 @@ func runDependencySnapshotTests(bpObj *bp.Blueprint) error {
 		if len(depCfg.Packages) == 0 {
 			return fmt.Errorf("tests.packages missing for dependency %s", label)
 		}
-		if err := runPackageTests(snapshotImpl, depCfg.Packages); err != nil {
+		if err := runPackageTests(snapshotRoot, depCfg.Packages); err != nil {
 			return err
 		}
 	}
@@ -521,7 +494,7 @@ func copyBlueprintSnapshot(src, dst string) error {
 }
 
 func copyImplementationSnapshot(files map[string]string, stateDir, id string, readOnly bool) error {
-	base := filepath.Join(stateDir, "history", id, "impl")
+	base := filepath.Join(stateDir, "history", id)
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return err
 	}
@@ -529,6 +502,9 @@ func copyImplementationSnapshot(files map[string]string, stateDir, id string, re
 		return nil
 	}
 	for rel, abs := range files {
+		if rel == "BLUEPRINT.yaml" || rel == "meta.yaml" {
+			return fmt.Errorf("reserved snapshot filename: %s", rel)
+		}
 		dst := filepath.Join(base, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err

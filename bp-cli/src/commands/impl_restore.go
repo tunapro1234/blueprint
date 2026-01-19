@@ -36,16 +36,16 @@ func resolveImplementationSnapshotID(stateDir, input string) (string, error) {
 }
 
 func restoreImplementationSnapshot(stateDir, snapshotID, targetDir string) error {
-	srcRoot := filepath.Join(stateDir, "history", snapshotID, "impl")
+	srcRoot := filepath.Join(stateDir, "history", snapshotID)
 	info, err := os.Stat(srcRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("Snapshot #%s has no impl copy", snapshotID)
+			return fmt.Errorf("Snapshot #%s has no snapshot copy", snapshotID)
 		}
 		return err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("Snapshot #%s has no impl copy", snapshotID)
+		return fmt.Errorf("Snapshot #%s has no snapshot copy", snapshotID)
 	}
 	return filepath.WalkDir(srcRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -61,7 +61,7 @@ func restoreImplementationSnapshot(stateDir, snapshotID, targetDir string) error
 		if err != nil {
 			return err
 		}
-		if rel == "deps" || strings.HasPrefix(filepath.ToSlash(rel), "deps/") {
+		if rel == "BLUEPRINT.yaml" || rel == "meta.yaml" {
 			return nil
 		}
 		dst := filepath.Join(targetDir, rel)

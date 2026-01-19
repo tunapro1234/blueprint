@@ -104,6 +104,11 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			continue
 		}
 
+		importUpdates, importNote, err := updateSnapshotImports(bpObj, depDir, depBp.StateDirRel, current, latestID)
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+
 		depState.Pinned = latestID
 		depState.Latest = latestID
 		depState.APIHash = latestAPI
@@ -117,6 +122,11 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			lines = append(lines, fmt.Sprintf("⚠ Review diff: bp diff %s %s %s", key, current, latestID))
 		} else {
 			lines = append(lines, fmt.Sprintf("Upgraded %s to %s", key, latestID))
+		}
+		if importUpdates > 0 {
+			lines = append(lines, fmt.Sprintf("Updated imports for %s (%d files)", key, importUpdates))
+		} else if importNote != "" {
+			lines = append(lines, fmt.Sprintf("⚠ %s: %s", key, importNote))
 		}
 
 		depStateObj, err := bp.LoadState(filepath.Join(depBp.StateDir, "state.yaml"))

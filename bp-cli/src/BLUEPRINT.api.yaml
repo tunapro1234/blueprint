@@ -141,6 +141,42 @@ api:
           0: Başarılı
           1: Circular dependency veya hata
 
+      - name: map
+        desc: Project map - tüm paketlerin snapshot ve dependency durumu
+        usage: bp map [path] [-r|--recursive]
+        flags:
+          - name: -r, --recursive
+            desc: Alt paketleri de göster (default: true)
+        behavior: |
+          Recursive olarak tüm paketleri tarar ve her biri için gösterir:
+          - Paket adı ve path
+          - Current snapshot ID
+          - API hash (kısa)
+          - Dependency listesi ve pinned snapshot'ları
+          - Rotten flag varsa işaretle
+        output:
+          format: |
+            ./
+              snapshot: 20260116-1430-a1b2-feature
+              api: sha256:abc123...
+              deps:
+                ./yamlparser @ 20260115-1000-x1y2 (api: def456)
+                ./commands @ 20260116-0900-y3z4 (api: ghi789) [ROTTEN]
+
+            ./yamlparser/
+              snapshot: 20260115-1000-x1y2-stable
+              api: sha256:def456...
+              deps: (none)
+
+            ./commands/
+              snapshot: 20260116-0900-y3z4-init [ROTTEN]
+              api: sha256:ghi789...
+              deps:
+                ./yamlparser @ 20260115-1000-x1y2 (api: def456)
+        exit_codes:
+          0: Başarılı
+          1: Hata
+
       - name: init
         desc: Yeni BLUEPRINT.yaml oluştur
         usage: bp init [path]
@@ -224,34 +260,34 @@ api:
           2: Validation hatası veya blueprint bulunamadı
 
       - name: upgrade
-        desc: Dependency'leri güncelle (symlink günceller)
-        usage: bp upgrade [dep-path] [--safe] [--all]
+        desc: Dependency'leri güncelle (symlink günceller, test çalıştırır)
+        usage: bp upgrade [dep-path] [--safe] [--all] [--force]
         flags:
           - name: --safe
             desc: Sadece API değişmeyenleri upgrade et
           - name: --all
             desc: Tüm dependency'leri upgrade et
+          - name: --force
+            desc: Rotten snapshot'ları da upgrade et
         behavior: |
           1. dep-path verilmişse sadece o dependency'yi upgrade et
           2. --all verilmişse tüm dependency'leri upgrade et
           3. --safe verilmişse sadece api_changed=false olanları upgrade et
-          4. Her upgrade için:
-             - Dependency'nin en son snapshot'ını al
-             - API hash'leri karşılaştır
-             - API değişmişse uyarı göster (bloklamaz)
-             - state.yaml deps section'ını güncelle
-             - Dependency'nin dependents section'ını güncelle
-          5. Working tree aktifse (impl.hidden yoksa):
-             - deps/{dep_name} symlink'ini sil
-             - Yeni symlink oluştur → yeni pinned snapshot impl'e
+          4. Rotten snapshot'ları atla (--force ile zorla)
+          5. Her upgrade için:
+             - deps/ symlink'ini güncelle
+             - tests.verification çalıştır
+             - Test fail → rollback + rotten flag
+             - Test pass → state.yaml güncelle
+          6. API değişikliği varsa uyarı göster
         output:
           success: "Upgraded {dep}: {pinned} → {latest}"
-          success_api: "Upgraded {dep}: {pinned} → {latest} (API CHANGED!)"
-          api_hint: "  Review: bp diff {dep} {pinned} {latest}"
-          no_upgrade: "No upgrades available"
+          failed: "Failed {dep}: tests failed, rolled back, marked rotten"
+          skipped_rotten: "Skipped {dep}: rotten (use --force)"
+          skipped_api: "Skipped {dep}: API changed (use --safe=false)"
         exit_codes:
-          0: Upgrade başarılı
-          1: Hata
+          0: En az bir upgrade başarılı
+          1: Tüm upgrade'ler başarısız veya hata
 
   library:
     note: |

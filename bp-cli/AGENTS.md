@@ -94,6 +94,22 @@ cd src && go test ./...
   - Current snapshot'tan dosyalar restore edilir
   - `deps/` klasörüne symlink'ler oluşturulur
   - `impl.hidden` temizlenir, `impl.lock` açılır
+- `bp upgrade` çalıştırıldığında:
+  1. Symlink'ler yeni pinned snapshot'a güncellenir
+  2. `tests.verification` çalıştırılır
+  3. Test başarısız olursa: rollback + rotten flag
+  4. Test başarılı olursa: state.yaml güncellenir
+
+## Rotten Flag Sistemi
+Bir dependency upgrade'ı sırasında testler fail ederse:
+- Symlink eski haline döndürülür (rollback)
+- Dependency'nin `meta.yaml` dosyasına `rotten: true` yazılır
+- Consumer'ın `state.yaml` deps bölümüne `rotten: true` eklenir
+
+Rotten dependency uyarısı:
+- **Tüm bp komutları** başlangıçta rotten dependency kontrolü yapar
+- Rotten varsa uyarı gösterir: `⚠ Rotten dependency: {dep} (upgrade failed)`
+- `bp upgrade` rotten dependency'leri atlar (--force ile zorlanabilir)
 
 ## Import Kullanımı
 ```python
@@ -150,9 +166,11 @@ Notlar:
 | `bp validate [-r]` | Blueprint doğrula |
 | `bp status [-r]` | Değişiklik kontrolü |
 | `bp plan [-r]` | Leaf-first uygulanacak paketleri listeler |
-| `bp upgrade [--all]` | Dependency güncelle (symlink günceller) |
+| `bp map [-r]` | Proje haritası: tüm paketler, snapshot'lar, dependency'ler |
+| `bp upgrade [--all] [--force]` | Dependency güncelle (symlink günceller, test çalıştırır) |
 | `bp cancel` | Aktif implementasyonu iptal et |
 | `bp log [-n N]` | Snapshot history |
 | `bp diff [id1] [id2]` | Snapshot karşılaştır |
 | `bp show [id]` | Belirli snapshot'ı göster |
 | `bp deps` | Dependency graph |
+| `bp init` | Yeni BLUEPRINT.yaml oluştur |

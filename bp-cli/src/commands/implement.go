@@ -14,6 +14,7 @@ type depInfo struct {
 	label      string
 	snapshotID string
 	apiHash    string
+	rotten     bool
 	relPath    string
 	state      *bp.State
 }
@@ -38,12 +39,13 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		out := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), strings.Join(validation.Errors, "; "))
 		return CommandResult{ExitCode: 2, Output: out, Errors: validation.Errors}
 	}
+	warnRottenDependencies(bpObj)
 	active, err := hasImplLock(bpObj.StateDir)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if active {
-		out := "Implementation already active. Run 'bp ss' to finish."
+		out := "Implementation already active. Run 'bp apply' to finish."
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{out}}
 	}
 
@@ -98,6 +100,10 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		if err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
+		rotten := false
+		if meta, err := bp.LoadSnapshotMeta(dep.StateDir, snapshotID); err == nil {
+			rotten = meta.Rotten
+		}
 		rel, err := filepath.Rel(dep.Dir, bpObj.Dir)
 		if err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
@@ -108,15 +114,15 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		} else if !strings.HasPrefix(rel, ".") {
 			rel = "./" + rel
 		}
-		depStates = append(depStates, bp.DepState{Pinned: snapshotID, Latest: snapshotID, APIHash: apiHash, LatestAPIHash: apiHash, APIChanged: false})
+		depStates = append(depStates, bp.DepState{Pinned: snapshotID, Latest: snapshotID, APIHash: apiHash, LatestAPIHash: apiHash, APIChanged: false, Rotten: rotten})
 		depLines = append(depLines, fmt.Sprintf("  %s @ %s ✓", label, snapshotID))
-		infos = append(infos, depInfo{bp: dep, label: label, snapshotID: snapshotID, apiHash: apiHash, relPath: rel, state: state})
+		infos = append(infos, depInfo{bp: dep, label: label, snapshotID: snapshotID, apiHash: apiHash, rotten: rotten, relPath: rel, state: state})
 	}
 
 	if len(missing) > 0 {
 		errLines := make([]string, 0, len(missing))
 		for _, dep := range missing {
-			errLines = append(errLines, fmt.Sprintf("✗ Dependency %s has no snapshot. Run 'bp ss' in %s first.", dep, dep))
+			errLines = append(errLines, fmt.Sprintf("✗ Dependency %s has no snapshot. Run 'bp apply' in %s first.", dep, dep))
 		}
 		out := strings.Join(append(warnLines, errLines...), "\n")
 		return CommandResult{
@@ -144,6 +150,9 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 			mode = "clean"
 		}
 		if err := bp.ClearImplHidden(bpObj.StateDir); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, filepath.Join(bpObj.Dir, "deps")); err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		if err := writeImplLock(bpObj.StateDir, restoreID, mode); err != nil {
@@ -174,6 +183,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 			APIHash:       info.apiHash,
 			LatestAPIHash: info.apiHash,
 			APIChanged:    false,
+			Rotten:        info.rotten,
 		}
 	}
 	if err := bpObj.SaveState(currentState); err != nil {
@@ -185,6 +195,9 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		mode = "clean"
 	}
 	if err := bp.ClearImplHidden(bpObj.StateDir); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, filepath.Join(bpObj.Dir, "deps")); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if err := writeImplLock(bpObj.StateDir, restoreID, mode); err != nil {

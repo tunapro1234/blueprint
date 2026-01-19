@@ -26,6 +26,7 @@ func LogCommand(ctx CommandContext) CommandResult {
 		out := fmt.Sprintf("✗ %s: %s", formatPath(path), err.Error())
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{err.Error()}}
 	}
+	warnRottenDependencies(bpObj)
 	history, err := bpObj.GetHistory()
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}

@@ -15,10 +15,10 @@ func TestIsSnapshotID(t *testing.T) {
 	}
 	invalid := []string{
 		"",
-		"20240102-0304-acde",       // missing slug
-		"20240102-030-aaaa-test",   // invalid time
-		"20240102-0304-zzzz-test",  // invalid hex
-		"20240102-0304-aaaa-",      // empty slug
+		"20240102-0304-acde",      // missing slug
+		"20240102-030-aaaa-test",  // invalid time
+		"20240102-0304-zzzz-test", // invalid hex
+		"20240102-0304-aaaa-",     // empty slug
 		"20240102-0304-aaaa-TOO_LONG_SLUG_EXCEEDS_LIMIT",
 	}
 	for _, id := range invalid {

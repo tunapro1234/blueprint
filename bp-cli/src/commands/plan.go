@@ -13,8 +13,8 @@ func PlanCommand(ctx CommandContext) CommandResult {
 	if path == "" {
 		path = "."
 	}
-	recursive, _ := ctx.Args["recursive"].(bool)
-	if recursive {
+	noRecursive, _ := ctx.Args["no_recursive"].(bool)
+	if !noRecursive {
 		return planRecursive(path)
 	}
 	bpObj, err := bp.LoadBlueprint(path)
@@ -25,6 +25,7 @@ func PlanCommand(ctx CommandContext) CommandResult {
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	warnRottenDependencies(bpObj)
 	lines, steps, err := planForBlueprints([]*bp.Blueprint{bpObj})
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
@@ -56,6 +57,7 @@ func planForBlueprints(bps []*bp.Blueprint) ([]string, []PlanStep, error) {
 	steps := []PlanStep{}
 	idx := 1
 	for _, bpObj := range bps {
+		warnRottenDependencies(bpObj)
 		info, err := bpObj.StalenessInfo()
 		if err != nil {
 			return nil, nil, err

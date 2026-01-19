@@ -12,7 +12,8 @@ import (
 )
 
 func StatusCommand(ctx CommandContext) CommandResult {
-	recursive, _ := ctx.Args["recursive"].(bool)
+	noRecursive, _ := ctx.Args["no_recursive"].(bool)
+	recursive := !noRecursive
 	path := ctx.Path
 	if path == "" {
 		path = "."
@@ -76,6 +77,7 @@ func StatusCommand(ctx CommandContext) CommandResult {
 			counts["stale"]++
 			continue
 		}
+		warnRottenDependencies(bpObj)
 		statusLine, info, upgrades, dependentsLines, dependentsData, err := statusForBlueprint(bpObj)
 		if err != nil {
 			msg := err.Error()
@@ -130,15 +132,15 @@ func StatusCommand(ctx CommandContext) CommandResult {
 	data := any(nil)
 	if !recursive {
 		data = StatusInfo{
-			State:        singleState,
-			ChangedFiles: singleChanged,
-			ChangedDeps:  singleDeps,
-			StaleReason:  singleReason,
-			DepUpdates:   singleUpdates,
-			Dependents:   singleDependents,
-			Implementing: singleImplementing,
-			ImplHidden:   singleImplHidden,
-			WorkingClean: singleWorkingClean,
+			State:            singleState,
+			ChangedFiles:     singleChanged,
+			ChangedDeps:      singleDeps,
+			StaleReason:      singleReason,
+			DepUpdates:       singleUpdates,
+			Dependents:       singleDependents,
+			Implementing:     singleImplementing,
+			ImplHidden:       singleImplHidden,
+			WorkingClean:     singleWorkingClean,
 			BlueprintChanged: singleBlueprintChanged,
 			APIChanged:       singleAPIChanged,
 			SpecChanged:      singleSpecChanged,

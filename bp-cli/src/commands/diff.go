@@ -26,6 +26,7 @@ func DiffCommand(ctx CommandContext) CommandResult {
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	warnRottenDependencies(bpObj)
 	leftID, rightID, err := resolveDiffIDs(bpObj, id1, id2)
 	if err != nil {
 		if errors.Is(err, bp.ErrNoSnapshot) {

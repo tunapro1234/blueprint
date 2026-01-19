@@ -99,7 +99,7 @@ api:
         - show: {id: string?}           # null = son snapshot
         - implement: {snapshot_id: string?, clean: bool}
         - impl: {snapshot_id: string?, clean: bool}  # alias
-        - upgrade: {dep_path: string?, safe: bool, all: bool}
+        - upgrade: {dep_path: string?, safe: bool, all: bool, force: bool}
 
     - name: CommandResult
       fields:

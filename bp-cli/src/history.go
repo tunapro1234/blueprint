@@ -16,6 +16,7 @@ type HistoryEntry struct {
 	APIHash     string
 	SpecHash    string
 	ImplHash    string
+	Rotten      bool
 }
 
 func (b *Blueprint) GetHistory() ([]HistoryEntry, error) {
@@ -83,6 +84,9 @@ func LoadSnapshotMeta(stateDir, id string) (HistoryEntry, error) {
 		APIHash:     getString(parsed, "api_hash"),
 		SpecHash:    getString(parsed, "spec_hash"),
 		ImplHash:    getString(parsed, "impl_hash"),
+	}
+	if v, ok := parsed["rotten"].(bool); ok {
+		meta.Rotten = v
 	}
 	if meta.ID == "" {
 		meta.ID = id

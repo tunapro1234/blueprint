@@ -26,15 +26,15 @@ type DiffResult struct {
 }
 
 type StatusInfo struct {
-	State        string
-	ChangedFiles []string
-	ChangedDeps  []string
-	StaleReason  string
-	DepUpdates   []DepUpgrade
-	Dependents   []bp.DepRef
-	Implementing bool
-	ImplHidden   bool
-	WorkingClean bool
+	State            string
+	ChangedFiles     []string
+	ChangedDeps      []string
+	StaleReason      string
+	DepUpdates       []DepUpgrade
+	Dependents       []bp.DepRef
+	Implementing     bool
+	ImplHidden       bool
+	WorkingClean     bool
 	BlueprintChanged bool
 	APIChanged       bool
 	SpecChanged      bool
@@ -73,7 +73,10 @@ type DepUpgrade struct {
 }
 
 type UpgradeResult struct {
-	Upgraded   []string
-	APIChanged []string
-	Skipped    []string
+	Upgraded      []string
+	APIChanged    []string
+	Skipped       []string
+	SkippedRotten []string
+	SkippedAPI    []string
+	Failed        []string
 }

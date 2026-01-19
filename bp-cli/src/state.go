@@ -19,6 +19,7 @@ type DepState struct {
 	APIHash       string
 	LatestAPIHash string
 	APIChanged    bool
+	Rotten        bool
 }
 
 type DepRef struct {
@@ -244,6 +245,9 @@ func marshalState(state *State) string {
 			b.WriteString("    api_changed: ")
 			b.WriteString(strconv.FormatBool(dep.APIChanged))
 			b.WriteString("\n")
+			b.WriteString("    rotten: ")
+			b.WriteString(strconv.FormatBool(dep.Rotten))
+			b.WriteString("\n")
 		}
 	}
 	if len(state.Dependents) > 0 {
@@ -336,6 +340,9 @@ func LoadState(statePath string) (*State, error) {
 					dep.APIChanged = bval
 				} else if dep.APIHash != "" && dep.LatestAPIHash != "" && dep.APIHash != dep.LatestAPIHash {
 					dep.APIChanged = true
+				}
+				if bval, ok := sub["rotten"].(bool); ok {
+					dep.Rotten = bval
 				}
 				if dep.Pinned != "" || dep.Latest != "" || dep.APIHash != "" || dep.LatestAPIHash != "" {
 					state.Deps[k] = dep
@@ -486,6 +493,9 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 				if err != nil {
 					return err
 				}
+				if isUnderDepsDir(rel) {
+					return nil
+				}
 				if isUnderBlueprintState(rel, stateDirRel) {
 					return nil
 				}
@@ -504,6 +514,9 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 		rel, err := relPath(b.Dir, abs)
 		if err != nil {
 			return nil, err
+		}
+		if isUnderDepsDir(rel) {
+			continue
 		}
 		if isUnderBlueprintState(rel, stateDirRel) {
 			continue
@@ -530,6 +543,9 @@ func collectFallbackFiles(root, stateDirRel string, visited map[string]struct{})
 		if err != nil {
 			return err
 		}
+		if isUnderDepsDir(rel) {
+			return nil
+		}
 		if isUnderBlueprintState(rel, stateDirRel) {
 			return nil
 		}
@@ -547,7 +563,7 @@ func shouldSkipDir(name, stateDirRel string) bool {
 		return true
 	}
 	switch name {
-	case ".git", "node_modules", "__pycache__":
+	case ".git", "node_modules", "__pycache__", "deps":
 		return true
 	default:
 		return false

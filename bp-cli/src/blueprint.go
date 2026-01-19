@@ -27,6 +27,11 @@ type StructureEntry struct {
 	DirHint      bool
 }
 
+type DepSpec struct {
+	Path  string
+	Alias string
+}
+
 func LoadBlueprint(path string) (*Blueprint, error) {
 	if path == "" {
 		path = "."
@@ -230,46 +235,59 @@ func (b *Blueprint) ImplementationStructure() ([]StructureEntry, error) {
 }
 
 func (b *Blueprint) Dependencies() ([]string, error) {
+	specs, err := b.DependencySpecs()
+	if err != nil {
+		return nil, err
+	}
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	deps := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Path != "" {
+			deps = append(deps, spec.Path)
+		}
+	}
+	return deps, nil
+}
+
+func (b *Blueprint) DependencySpecs() ([]DepSpec, error) {
 	val, ok := b.Data["dependencies"]
 	if !ok || val == nil {
 		return nil, nil
 	}
 	switch t := val.(type) {
 	case []interface{}:
-		return collectDepList(t), nil
+		return collectDepSpecs(t), nil
 	case map[string]interface{}:
-		return collectDepMap(t), nil
+		return collectDepSpecMap(t), nil
 	case map[interface{}]interface{}:
 		if converted, ok := convertYAML(t).(map[string]interface{}); ok {
-			return collectDepMap(converted), nil
+			return collectDepSpecMap(converted), nil
 		}
 	}
 	return nil, nil
 }
 
-func collectDepList(list []interface{}) []string {
-	deps := make([]string, 0, len(list))
+func collectDepSpecs(list []interface{}) []DepSpec {
+	deps := make([]DepSpec, 0, len(list))
 	for _, item := range list {
 		switch v := item.(type) {
 		case string:
-			deps = append(deps, v)
+			deps = append(deps, DepSpec{Path: v})
 		case map[string]interface{}:
-			if path, ok := v["path"].(string); ok {
-				deps = append(deps, path)
-			}
+			deps = append(deps, depSpecFromMap(v))
 		case map[interface{}]interface{}:
 			if converted, ok := convertYAML(v).(map[string]interface{}); ok {
-				if path, ok := converted["path"].(string); ok {
-					deps = append(deps, path)
-				}
+				deps = append(deps, depSpecFromMap(converted))
 			}
 		}
 	}
 	return deps
 }
 
-func collectDepMap(depMap map[string]interface{}) []string {
-	deps := []string{}
+func collectDepSpecMap(depMap map[string]interface{}) []DepSpec {
+	deps := []DepSpec{}
 	for key, value := range depMap {
 		if key == "from_parent" {
 			continue
@@ -278,9 +296,51 @@ func collectDepMap(depMap map[string]interface{}) []string {
 		if !ok {
 			continue
 		}
-		deps = append(deps, collectDepList(list)...)
+		deps = append(deps, collectDepSpecs(list)...)
 	}
 	return deps
+}
+
+func depSpecFromMap(m map[string]interface{}) DepSpec {
+	spec := DepSpec{}
+	if path, ok := m["path"].(string); ok {
+		spec.Path = path
+	}
+	if alias, ok := m["as"].(string); ok {
+		spec.Alias = alias
+	}
+	return spec
+}
+
+func (b *Blueprint) DependencyAliases() (map[string]string, error) {
+	specs, err := b.DependencySpecs()
+	if err != nil {
+		return nil, err
+	}
+	if len(specs) == 0 {
+		return map[string]string{}, nil
+	}
+	aliases := map[string]string{}
+	for _, spec := range specs {
+		if strings.TrimSpace(spec.Alias) == "" {
+			continue
+		}
+		if strings.ContainsAny(spec.Alias, `/\\`) {
+			return nil, fmt.Errorf("dependency alias must be a single name: %s", spec.Alias)
+		}
+		path := strings.TrimSpace(spec.Path)
+		if path == "" {
+			continue
+		}
+		if filepath.IsAbs(path) {
+			return nil, fmt.Errorf("absolute dependency paths are not allowed: %s", path)
+		}
+		clean := filepath.Clean(path)
+		abs := filepath.Join(b.Dir, clean)
+		label := depLabel(b.Dir, abs)
+		aliases[label] = spec.Alias
+	}
+	return aliases, nil
 }
 
 func (b *Blueprint) TrackedFiles() (map[string]string, error) {

@@ -20,6 +20,7 @@ func CancelCommand(ctx CommandContext) CommandResult {
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	warnRottenDependencies(bpObj)
 	active, err := hasImplLock(bpObj.StateDir)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}

@@ -24,6 +24,7 @@ func DepsCommand(ctx CommandContext) CommandResult {
 		out := fmt.Sprintf("✗ %s: %s", formatPath(path), err.Error())
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{err.Error()}}
 	}
+	warnRottenDependencies(bpObj)
 	root := bpObj.Dir
 	if upgrades {
 		return depsUpgrades(bpObj)

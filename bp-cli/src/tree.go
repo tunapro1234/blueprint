@@ -35,6 +35,8 @@ func (t *BlueprintTree) Walk() ([]*Blueprint, error) {
 				}
 			} else if d.Name() == ".blueprint" {
 				return filepath.SkipDir
+			} else if isDepsDirName(d.Name()) {
+				return filepath.SkipDir
 			}
 			files, err := FindBlueprintFiles(path)
 			if err != nil {
@@ -74,6 +76,9 @@ func (t *BlueprintTree) ResolveDeps(bp *Blueprint) ([]*Blueprint, []string, erro
 			continue
 		}
 		name := entry.Name()
+		if isDepsDirName(name) {
+			continue
+		}
 		if isStateDirName(name, bp.StateDirRel) {
 			continue
 		}

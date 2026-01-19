@@ -17,7 +17,7 @@ func resolveImplementationSnapshotID(stateDir, input string) (string, error) {
 		current, err := readCurrentSnapshotID(stateDir)
 		if err != nil {
 			if errors.Is(err, bp.ErrNoSnapshot) {
-				return "", fmt.Errorf("No snapshot history. Run 'bp ss' first or use 'bp impl clean'.")
+				return "", fmt.Errorf("No snapshot history. Run 'bp apply' first or use 'bp impl clean'.")
 			}
 			return "", err
 		}
@@ -54,9 +54,15 @@ func restoreImplementationSnapshot(stateDir, snapshotID, targetDir string) error
 		if d.IsDir() {
 			return nil
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
 		rel, err := filepath.Rel(srcRoot, path)
 		if err != nil {
 			return err
+		}
+		if rel == "deps" || strings.HasPrefix(filepath.ToSlash(rel), "deps/") {
+			return nil
 		}
 		dst := filepath.Join(targetDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {

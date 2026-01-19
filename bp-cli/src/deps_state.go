@@ -45,6 +45,10 @@ func (b *Blueprint) DependencyState() (map[string]DepState, []string, error) {
 		if err != nil {
 			return nil, warnings, err
 		}
+		latestRotten := false
+		if meta, err := LoadSnapshotMeta(dep.StateDir, latestID); err == nil {
+			latestRotten = meta.Rotten
+		}
 		apiChanged := pinnedAPI != "" && latestAPI != "" && pinnedAPI != latestAPI
 		state[label] = DepState{
 			Pinned:        pinnedID,
@@ -52,6 +56,7 @@ func (b *Blueprint) DependencyState() (map[string]DepState, []string, error) {
 			APIHash:       pinnedAPI,
 			LatestAPIHash: latestAPI,
 			APIChanged:    apiChanged,
+			Rotten:        latestRotten,
 		}
 	}
 	return state, warnings, nil

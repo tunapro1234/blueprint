@@ -141,6 +141,18 @@ func isStateDirName(name, stateDirRel string) bool {
 	return false
 }
 
+func isDepsDirName(name string) bool {
+	return name == "deps"
+}
+
+func isUnderDepsDir(rel string) bool {
+	if rel == "" {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	return rel == "deps" || strings.HasPrefix(rel, "deps/")
+}
+
 // StateDirRelFromFile reads _meta.state_dir from a blueprint file.
 // It returns ".blueprint" on any error or invalid value.
 func StateDirRelFromFile(path string) string {

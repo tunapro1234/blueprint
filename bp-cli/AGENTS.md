@@ -2,6 +2,48 @@
 
 Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 
+## Aktif Plan: Yapısal Sadeleştirme
+
+**Durum:** Planlama aşamasında
+
+### Değişiklikler
+1. **deps/ klasörü kaldırıldı** - Symlink'ler direkt pakette
+2. **impl/ klasörü kaldırıldı** - Kod direkt snapshot'ta
+3. **3 development mode** - pussy, ro, hide (default: ro)
+4. **Default state_dir** - `.blueprint/` (gizli)
+
+### Yeni Snapshot Yapısı
+```
+package/
+├── BLUEPRINT.yaml
+├── main.go
+├── yamlparser/ → ../yamlparser/.blueprint/history/{pinned_id}/
+├── .blueprint/
+│   ├── state.yaml
+│   ├── current
+│   └── history/
+│       └── {snapshot_id}/
+│           ├── BLUEPRINT.yaml
+│           ├── meta.yaml
+│           ├── main.go
+│           └── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
+```
+
+### Development Modes
+| Mode | `bp impl` | `bp apply` | Dosyalar |
+|------|-----------|------------|----------|
+| **pussy** | impl.lock oluştur | impl.lock sil | Her zaman var, her zaman writable |
+| **ro** (default) | impl.lock + chmod +w | impl.lock sil + chmod -w | Her zaman var, lock olmadan read-only |
+| **hide** | impl.lock + restore | impl.lock sil + temizle | Sadece impl sırasında var |
+
+```yaml
+_meta:
+  state_dir: ".blueprint"  # default
+  mode: ro                  # default (pussy | ro | hide)
+```
+
+---
+
 ## Blueprint Akışı
 
 ```
@@ -17,22 +59,23 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 │                           │                                  │
 │                           ▼                                  │
 │  3. bp impl [clean | <snapshot_id>]                         │
-│     └── Snapshot'tan working tree'yi restore eder           │
-│     └── deps/ klasörüne symlink'ler oluşturur               │
+│     └── ro/hide mode: dosyaları writable yapar/restore eder │
+│     └── Symlink'ler oluşturulur (direkt pakette)            │
 │     └── impl.lock açılır (implementing state)               │
 │                           │                                  │
 │                           ▼                                  │
 │  4. IMPLEMENTATION (Kod Yazma)                              │
 │     └── Working tree'de kodu düzenle                        │
-│     └── Import'lar deps/ üzerinden yapılır                  │
+│     └── Import'lar direkt symlink üzerinden                 │
 │     └── Test yaz / güncelle                                 │
 │                           │                                  │
 │                           ▼                                  │
 │  5. bp apply -m "message"                                   │
 │     └── Validate + test çalıştır                            │
-│     └── history/{id}/impl/ altına kopyalar + deps/ symlink  │
-│     └── impl dosyalarını working tree'den temizler          │
-│     └── impl.hidden yazar, impl.lock kapatılır              │
+│     └── history/{id}/ altına kopyalar + symlink             │
+│     └── ro mode: read-only yapar                            │
+│     └── hide mode: dosyaları temizler                       │
+│     └── impl.lock kapatılır                                 │
 │                           │                                  │
 │                           ▼                                  │
 │  6. ITERATION (Sonraki değişiklik)                          │
@@ -58,19 +101,29 @@ bp validate . --no-recursive  # → sadece bu paket (non-recursive)
 ## Dosya Yapısı
 - `BLUEPRINT.yaml`: intent, API, dependencies (root'ta `_meta.root: true`)
 - `BLUEPRINT.spec.yaml`: structure (impl dosyaları), tests
-- `blueprint/history/{id}/impl/`: Snapshot'lanmış kod + deps/ symlink'leri
-- `blueprint/current`: Aktif snapshot ID
-- `blueprint/impl.lock`: Aktif implementasyon kilidi
-- `blueprint/impl.hidden`: Working tree gizli işareti
+- `.blueprint/history/{id}/`: Snapshot'lanmış kod + symlink'ler
+- `.blueprint/current`: Aktif snapshot ID
+- `.blueprint/impl.lock`: Aktif implementasyon kilidi
+- `.blueprint/state.yaml`: Dependency pin'leri, staleness bilgisi
 
-## Symlink Yapısı
+## Symlink Yapısı (Yeni)
 ```
-impl/
+package/
 ├── main.go
 ├── util.go
-└── deps/
-    ├── yamlparser/ → ../../../yamlparser/blueprint/history/{pinned_id}/impl/
-    └── commands/ → ../../../commands/blueprint/history/{pinned_id}/impl/
+├── yamlparser/ → ../yamlparser/.blueprint/history/{pinned_id}/
+└── commands/ → ../commands/.blueprint/history/{pinned_id}/
+```
+
+Snapshot içinde:
+```
+.blueprint/history/{id}/
+├── BLUEPRINT.yaml
+├── meta.yaml
+├── main.go
+├── util.go
+├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
+└── commands/ → ../../commands/.blueprint/history/{pinned_id}/
 ```
 
 ## Temel Komutlar
@@ -80,10 +133,10 @@ impl/
 # 2. (Opsiyonel) değişenleri sırala (default recursive)
 ./bp plan .
 
-# 3. Restore + implement başlat (deps/ symlink'leri oluşur)
+# 3. Restore + implement başlat (symlink'ler oluşur)
 ./bp impl
 
-# 4. Kodu yaz, test et (import'lar deps/ üzerinden)
+# 4. Kodu yaz, test et (import'lar direkt symlink üzerinden)
 cd src && go test ./...
 
 # 5. Uygula + kapat
@@ -92,27 +145,33 @@ cd src && go test ./...
 # 6. Dependency güncelle (symlink güncellenir)
 ./bp upgrade --all
 
-# 7. Sonraki iterasyon için restore
+# 7. Sonraki iterasyon için
 ./bp impl
 ```
 
 ## Snapshot Davranışı
-- `bp apply` çalıştırıldığında:
-  1. Blueprint validate edilir
-  2. `tests.verification` komutları çalıştırılır
-  3. Impl dosyaları `history/{id}/impl/` altına kopyalanır
-  4. `deps/` klasörüne symlink'ler oluşturulur
-  5. Working tree'deki impl dosyaları **silinir**
-  6. `impl.hidden` yazılır, `impl.lock` silinir
-- `bp implement` çalıştırıldığında:
-  - Current snapshot'tan dosyalar restore edilir
-  - `deps/` klasörüne symlink'ler oluşturulur
-  - `impl.hidden` temizlenir, `impl.lock` açılır
-- `bp upgrade` çalıştırıldığında:
-  1. Symlink'ler yeni pinned snapshot'a güncellenir
-  2. `tests.verification` çalıştırılır
-  3. Test başarısız olursa: rollback + rotten flag
-  4. Test başarılı olursa: state.yaml güncellenir
+
+### `bp apply` çalıştırıldığında:
+1. Blueprint validate edilir
+2. `tests.verification` komutları çalıştırılır
+3. Dosyalar `history/{id}/` altına kopyalanır (BLUEPRINT.yaml, kod, symlink'ler)
+4. Mode'a göre:
+   - **pussy**: impl.lock silinir
+   - **ro**: impl.lock silinir, dosyalar read-only yapılır (chmod -w)
+   - **hide**: impl.lock silinir, working tree'deki kod dosyaları silinir
+
+### `bp implement` çalıştırıldığında:
+- Mode'a göre:
+  - **pussy**: impl.lock oluşturulur
+  - **ro**: impl.lock oluşturulur, dosyalar writable yapılır (chmod +w)
+  - **hide**: Current snapshot'tan dosyalar restore edilir, impl.lock oluşturulur
+- Symlink'ler oluşturulur (direkt pakette)
+
+### `bp upgrade` çalıştırıldığında:
+1. Symlink'ler yeni pinned snapshot'a güncellenir
+2. `tests.verification` çalıştırılır
+3. Test başarısız olursa: rollback + rotten flag
+4. Test başarılı olursa: state.yaml güncellenir
 
 ## Rotten Flag Sistemi
 Bir dependency upgrade'ı sırasında testler fail ederse:
@@ -125,22 +184,32 @@ Rotten dependency uyarısı:
 - Rotten varsa uyarı gösterir: `⚠ Rotten dependency: {dep} (upgrade failed)`
 - `bp upgrade` rotten dependency'leri atlar (--force ile zorlanabilir)
 
-## Import Kullanımı
+## Import Kullanımı (Yeni)
 ```python
-# Python
-from deps.yamlparser import parser
+# Python - direkt import
+import yamlparser
 
 # Go - go.mod'da replace direktifi
-replace proj/yamlparser => ./deps/yamlparser
+replace proj/yamlparser => ./yamlparser
 
 # TypeScript - tsconfig paths
-import { parser } from "@deps/yamlparser"
+import { parser } from "yamlparser"
+```
+
+**Eski (deps/ ile):**
+```python
+from deps.yamlparser import parser  # KALDIRILDI
 ```
 
 ## State Directory
 - `_meta.state_dir` ile ayarlanır (default: `.blueprint/`)
-- Bu repo `blueprint/` kullanır
 - İçerik: `current`, `state.yaml`, `history/`
+
+## Development Mode
+- `_meta.mode` ile ayarlanır (default: `ro`)
+- **pussy**: Hiçbir şeyi zorlamaz
+- **ro**: impl.lock yokken read-only zorlar (chmod)
+- **hide**: apply sonrası kodları kaldırır
 
 ## Kurallar
 1. Önce blueprint yaz, sonra implement et
@@ -150,15 +219,14 @@ import { parser } from "@deps/yamlparser"
 5. `bp impl` ve `bp apply` ardışık/tek yönlü akış:
    - `bp impl` → çalış → `bp apply` ile kapat
    - `bp apply` olmadan ikinci `bp impl` çalışmaz
-6. `bp apply` sonrası working tree temizlenir; kod görmek için `bp impl` gerekir
-7. Import'lar deps/ klasöründeki symlink'ler üzerinden yapılır
-8. `bp upgrade` symlink'leri günceller, kod değişikliği gerekmez
+6. Import'lar direkt symlink'ler üzerinden yapılır
+7. `bp upgrade` symlink'leri günceller, kod değişikliği gerekmez
 
 ## Agent Rehberi (Önerilen İş Akışı)
 1. `bp plan .` ile leaf-first sıra çıkar (default recursive)
 2. Her paket için:
    - `bp impl` (veya `bp impl clean`)
-   - Değişiklikleri yap (import'lar deps/ üzerinden)
+   - Değişiklikleri yap (import'lar direkt symlink üzerinden)
    - Testleri çalıştır
    - `bp apply -m "..."` ile snapshot al
 3. Dependency güncellemek için:
@@ -167,16 +235,16 @@ import { parser } from "@deps/yamlparser"
 
 Notlar:
 - BLUEPRINT dosyaları `bp apply` sonrası working tree'de kalır.
-- `impl.hidden` varken `status` fresh kalabilir; kodu görmek için `bp impl` kullanılır.
-- Import'lar deps/ klasöründeki symlink'ler üzerinden yapılır.
+- ro mode'da impl.lock yokken dosyalar read-only'dir.
+- Import'lar direkt symlink'ler üzerinden yapılır (deps/ yok).
 - `bp upgrade` çalıştırıldığında symlink hedefleri güncellenir, kod değişikliği gerekmez.
 
 ## Komut Referansı
 
 | Komut | Açıklama |
 |-------|----------|
-| `bp implement` | Snapshot restore + deps/ symlink oluştur |
-| `bp apply -m "msg"` | Snapshot al + deps/ symlink + temizle |
+| `bp implement` | impl.lock aç + symlink oluştur (mode'a göre restore/chmod) |
+| `bp apply -m "msg"` | Snapshot al + symlink + kapat (mode'a göre temizle/chmod) |
 | `bp validate [--no-recursive]` | Blueprint doğrula |
 | `bp status [--no-recursive]` | Değişiklik kontrolü |
 | `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |

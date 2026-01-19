@@ -21,6 +21,7 @@ func ShowCommand(ctx CommandContext) CommandResult {
 		}
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	warnRottenDependencies(bpObj)
 	if id == "" {
 		current, err := readCurrentSnapshotID(bpObj.StateDir)
 		if err != nil {

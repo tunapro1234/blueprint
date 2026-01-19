@@ -16,7 +16,8 @@ const (
 )
 
 func ValidateCommand(ctx CommandContext) CommandResult {
-	recursive, _ := ctx.Args["recursive"].(bool)
+	noRecursive, _ := ctx.Args["no_recursive"].(bool)
+	recursive := !noRecursive
 	path := ctx.Path
 	if path == "" {
 		path = "."
@@ -68,6 +69,7 @@ func ValidateCommand(ctx CommandContext) CommandResult {
 			exitCode = maxExit(exitCode, 1)
 			continue
 		}
+		warnRottenDependencies(bpObj)
 
 		if depState, _, err := bpObj.DependencyState(); err == nil {
 			for _, up := range depUpgradesFromState(depState) {

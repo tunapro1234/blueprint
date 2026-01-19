@@ -18,9 +18,9 @@
 # - YAML subset - sadece ihtiyacımız olan özellikler
 
 _meta:
-  version: "0.1.0"
-  updated: 2026-01-17
-  status: draft
+  version: "0.2.0"
+  updated: 2026-01-19
+  status: ready
   state_dir: "blueprint"
 
 intent: |
@@ -46,11 +46,10 @@ plan:
 
 dependency_policy:
   summary: |
-    Önerilen kullanım (enforce edilmez, ekip standardı):
+    Symlink tabanlı dependency yönetimi:
     - Paket klasörü sadece edit alanıdır
-    - Import/build pinned snapshot kopyalarından yapılır
-      (örn. blueprint/history/{snapshot_id}/impl)
-    - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
+    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
+    - Import/build için deps/ klasöründeki symlinkler kullanılır
 
 # =============================================================================
 # API

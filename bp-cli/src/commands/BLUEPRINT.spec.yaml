@@ -64,7 +64,8 @@ implementation:
         1: Error var (YAML syntax veya _meta.version eksik)
         2: Sadece warning var (intent eksik, satır limiti aşımı gibi)
       recursive_behavior: |
-        -r flag ile alt klasörleri de tarar.
+        Default recursive çalışır.
+        --no-recursive ile sadece verilen paket kontrol edilir.
         Her blueprint için ayrı satır.
         Exit code önceliği: error (1) > warning (2) > success (0)
         Yani: en az bir error varsa 1, error yok ama warning varsa 2, hiçbiri yoksa 0
@@ -146,14 +147,16 @@ implementation:
         1: stale
         2: no_snapshot
       recursive_behavior: |
-        -r flag ile alt paketleri de kontrol eder.
+        Default recursive çalışır.
+        --no-recursive ile sadece verilen paket kontrol edilir.
         Özet satırı en sonda gösterilir.
         Exit code: en kötü durum (2 > 1 > 0)
 
     plan:
       purpose: Değişen paketleri leaf-first sırada listele
       steps:
-        1: recursive ise BlueprintTree.Walk + TopologicalSort ile sıralama
+        1: Default recursive olarak BlueprintTree.Walk + TopologicalSort ile sıralama
+           --no-recursive verilirse sadece verilen paket listelenir
         2: Her blueprint için staleness kontrolü
         3: state "stale" veya "no_snapshot" ise listeye ekle
         4: Leaf-first sıralı liste yazdır
@@ -381,7 +384,7 @@ tests:
 
     - id: validate_recursive
       given: 2 alt klasör (1 valid, 1 invalid)
-      when: bp validate -r
+      when: bp validate
       then: |
         Her blueprint listelenir:
         ✓ ./BLUEPRINT.yaml
@@ -429,7 +432,7 @@ tests:
 
     - id: status_recursive
       given: 2 alt paket (1 fresh, 1 stale)
-      when: bp status -r
+      when: bp status
       then: |
         ✓ ./commands (fresh)
         ⚠ ./other (stale, 1 file changed)
@@ -447,7 +450,7 @@ tests:
     # =========================================================================
     - id: plan_lists_stale_leaf_first
       given: Root paketin 2 dependency'si var (leaf + mid), root stale
-      when: bp plan -r
+      when: bp plan
       then: |
         1. ./leaf (no snapshot)
         2. ./mid (stale, deps_changed)

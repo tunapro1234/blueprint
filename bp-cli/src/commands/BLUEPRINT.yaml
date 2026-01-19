@@ -86,9 +86,10 @@ api:
       note: |
         path her zaman ctx.path üzerinden gelir (CLI'dan parse edilir).
         args sadece komut-spesifik flag'ler için:
-        - validate: {recursive: bool}
-        - status: {recursive: bool}
-        - plan: {recursive: bool}
+        - validate: {no_recursive: bool}
+        - status: {no_recursive: bool}
+        - plan: {no_recursive: bool}
+        - map: {no_recursive: bool}
         - cancel: {}
         - apply: {message: string?, skip_tests: bool}
         - deps: {upgrades: bool}        # --upgrades flag

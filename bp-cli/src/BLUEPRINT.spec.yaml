@@ -129,9 +129,10 @@ workflow_policy:
          b. Yoksa → mevcut klasör root
 
       Komut davranışı:
-      - bp <cmd>        → root bul, root'tan -r ile çalıştır
+      - bp <cmd>        → root bul, root'tan recursive çalıştır
       - bp <cmd> .      → sadece bulunulan paket (explicit path)
       - bp <cmd> ./sub  → sadece ./sub paketi (explicit path)
+      - bp <cmd> . --no-recursive → sadece bulunulan paket (non-recursive)
 
       Örnek:
         /project/             (_meta.root: true)
@@ -142,7 +143,7 @@ workflow_policy:
         1. parser/ → root değil
         2. src/ → root değil, topmost_blueprint = src/
         3. project/ → _meta.root: true → ROOT BULUNDU
-        4. "bp validate -r /project/" çalışır
+        4. "bp validate /project/" çalışır
 
     staleness_check: |
       1. {state_dir}/state.yaml oku (yoksa → no_snapshot)
@@ -691,7 +692,7 @@ tests:
 
     - id: cli_validate_recursive
       given: 3 alt klasör, 1'i invalid
-      when: bp validate -r
+      when: bp validate
       then: Hepsi listelenir, exit 1
 
     # Status
@@ -1100,4 +1101,4 @@ tests:
 
   verification:
     - go test $(go list ./... | grep -v '/blueprint/')
-    - ../bp validate -r || [ $? -eq 2 ]
+    - ../bp validate || [ $? -eq 2 ]

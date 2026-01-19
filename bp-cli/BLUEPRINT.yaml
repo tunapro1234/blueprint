@@ -143,9 +143,9 @@ build:
 usage:
   examples:
     - "bp validate"
-    - "bp validate -r"
+    - "bp validate"
     - "bp status"
-    - "bp plan -r"
+    - "bp plan"
     - "bp cancel"
     - "bp implement"
     - "bp impl"
@@ -161,7 +161,7 @@ workflow:
   summary: |
     Önerilen akış:
     1) Önce BLUEPRINT.yaml / BLUEPRINT.spec.yaml güncellenir
-    2) bp plan -r ile leaf-first sıra çıkarılır
+    2) bp plan ile leaf-first sıra çıkarılır (default recursive)
     3) Her paket için: bp impl → implementasyon → bp apply
     4) bp apply sonrası impl dosyaları working tree'den temizlenir
     5) Kod görmek için tekrar bp impl gerekir

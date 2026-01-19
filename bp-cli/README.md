@@ -56,8 +56,8 @@ cd src && go build -o ../bp ./cmd/bp
 ```
 ./bp init
 ./bp validate
-./bp impl
-./bp apply -m "initial"
+./bp impl                    # deps/ symlink'leri oluşur
+./bp apply -m "initial"      # snapshot + deps/ symlink
 ./bp status
 ./bp log
 ./bp diff
@@ -79,9 +79,8 @@ Recursive validation:
 - `bp show [path] [id]`
 - `bp impl [path] [snapshot_id] [--clean]` (alias of `bp implement`)
 - `bp apply [path] [-m|--message] [--skip-tests]`
-- `bp patch [path] [snapshot_id]`
+- `bp upgrade [dep-path] [--safe] [--all]`
 - `bp cancel [path]`
-- `bp ss [path] [-m|--message] [--skip-tests]` (legacy; `bp apply` preferred)
 
 ## Snapshot Model
 Each package keeps its own snapshot state under the configured state dir:
@@ -90,21 +89,31 @@ Each package keeps its own snapshot state under the configured state dir:
   current
   state.yaml
   history/
-    0001/
+    {snapshot_id}/
       BLUEPRINT.yaml
       meta.yaml
+      impl/
+        code.go
+        deps/               # dependency symlinks
+          yamlparser/ → ...
+          commands/ → ...
 ```
 
-`bp apply` (impl mode) will:
-1) Validate the blueprint  
-2) Run `tests.verification` commands (unless `--skip-tests`)  
-3) Write the snapshot and update state
+`bp apply` will:
+1) Validate the blueprint
+2) Run `tests.verification` commands (unless `--skip-tests`)
+3) Copy impl files to `history/{id}/impl/`
+4) Create deps/ symlinks for each dependency
+5) Clean working tree
 
-`bp patch`/`bp apply` (patch mode) will:
-- Restore the current snapshot to working tree
-- Update only import/include paths
-- Write changes back into the existing snapshot (no new snapshot)
-- Close the patch session
+`bp impl` will:
+1) Restore impl files from snapshot to working tree
+2) Create deps/ symlinks for each dependency
+3) Create impl.lock
+
+`bp upgrade` will:
+1) Update dependency pins in state.yaml
+2) Update deps/ symlinks to new snapshot targets (no code changes needed)
 
 ## Blueprint File Discovery
 Supported patterns include:

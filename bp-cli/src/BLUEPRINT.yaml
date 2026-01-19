@@ -16,6 +16,7 @@ overview: |
   - Alt klasörler implicit dependency
   - BLUEPRINT.yaml kullanıcı düzenler
   - blueprint/ tool yönetir (state, history)
+  - deps/ symlink ile dependency'lere erişim
 
   Komutlar:
   - bp validate: YAML syntax + schema check
@@ -25,14 +26,12 @@ overview: |
   - bp log: Snapshot geçmişi
   - bp diff: İki snapshot arasındaki fark
   - bp show: Belirli snapshot'ın blueprint'ini göster
-  - bp ss: Snapshot al (testler geçerse kaydet + impl/ kopyala)
   - bp implement: Implementation başlat (dependency kontrol + reverse tracking)
   - bp impl: implement alias (kısa)
-  - bp patch: Import/include güncelleme oturumu başlat
-  - bp apply: Oturumu kapat (impl ise snapshot alır, patch ise snapshot günceller)
+  - bp apply: Snapshot al + deps/ symlink oluştur + temizle
   - bp plan: Değişen paketleri leaf-first sırada listeler
   - bp cancel: Implementation oturumunu iptal eder (impl.lock temizler)
-  - bp upgrade: Dependency'leri güncelle
+  - bp upgrade: Dependency'leri güncelle (symlink günceller)
 
 # =============================================================================
 # PLAN
@@ -58,14 +57,19 @@ plan:
 
 dependency_policy:
   summary: |
-    Önerilen kullanım (enforce edilmez, ekip standardı):
+    Symlink tabanlı dependency yönetimi:
     - Paket klasörü yalnızca edit alanıdır (working tree)
-    - Diğer paketler import/build için pinned snapshot kopyalarını kullanır
-      (örn. blueprint/history/{snapshot_id}/impl)
-    - bp import çözümünü değiştirmez; bu bir kullanım standardıdır
-    - Dependency snapshot güncellendiğinde dependents import yolları güncellenmelidir
-    - Sadece import güncellemesi yapıldıysa yeni snapshot alınmaz; patch/apply ile mevcut snapshot güncellenir
-    - bp ss legacy'dir; default kapanış için bp apply kullanılır
+    - Her snapshot impl/ altında deps/ klasörü bulunur
+    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
+    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
+  alias_support: |
+    Collision durumunda explicit alias tanımlanabilir:
+    dependencies:
+      internal:
+        - path: ./utils
+        - path: ../shared/utils
+          as: shared_utils   # deps/shared_utils/ olarak symlink
 
 # =============================================================================
 # API

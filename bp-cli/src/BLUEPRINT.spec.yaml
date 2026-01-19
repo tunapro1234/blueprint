@@ -32,7 +32,9 @@ implementation:
           │   └── impl/                     # TAM KOD KOPYASI (MVP)
           │       ├── main.go
           │       ├── util.go
-          │       └── parser.go
+          │       └── deps/                 # Dependency symlinks
+          │           ├── yamlparser/ → ../../../../yamlparser/{state_dir}/history/{pinned_id}/impl/
+          │           └── commands/ → ../../../../commands/{state_dir}/history/{pinned_id}/impl/
           └── 20260115-1000-c3d4-initial/
               ├── BLUEPRINT.yaml
               ├── meta.yaml
@@ -103,11 +105,12 @@ implementation:
 
 workflow_policy:
   summary: |
-    Bu tool enforce etmez; ekip standardı olarak:
+    Symlink tabanlı dependency yönetimi:
     - Paket klasörü edit alanıdır (working tree)
-    - Import/build için pinned snapshot kopyaları tercih edilir
-      (örn. {state_dir}/history/{snapshot_id}/impl)
-    - Snapshot'lar publish edilen stable sürümü temsil eder
+    - Her snapshot impl/ altında deps/ klasörü bulunur
+    - deps/{dep_name}/ → dependency'nin pinned snapshot impl'ine symlink
+    - Import/build için deps/ klasöründeki symlinkler kullanılır
+    - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
 
   algorithms:
     staleness_check: |
@@ -181,10 +184,12 @@ workflow_policy:
       3. state "stale" veya "no_snapshot" olanları filtrele
       4. Kalanları aynı sırayla listede göster
 
-    import_update_policy: |
-      Dependency snapshot güncellendiğinde dependents import yolları güncellenir.
-      Sadece import yolu güncellemesi yapıldıysa yeni snapshot alınmaz; patch/apply
-      ile mevcut snapshot güncellenir.
+    symlink_policy: |
+      Symlink tabanlı import yönetimi:
+      - Her snapshot impl/deps/ altında dependency symlink'leri tutar
+      - bp upgrade çalıştırıldığında symlink hedefi güncellenir
+      - Kod içinde değişiklik gerekmez, import'lar deps/{name} üzerinden yapılır
+      - Collision durumunda 'as:' ile explicit alias tanımlanır
 
     hash_calculation: |
       Dosya hash:
@@ -265,7 +270,7 @@ workflow_policy:
       - Context satırları: space prefix
 
     implement_algorithm: |
-      bp implement algoritması (yeni - reverse tracking):
+      bp implement algoritması:
       0. Blueprint'i validate et (error varsa exit 2)
       1. impl.lock varsa hata ver (aktif implementasyon var)
       2. Blueprint'i yükle, dependencies bölümünü oku
@@ -274,37 +279,20 @@ workflow_policy:
          a. Dependency path'ini resolve et (relative → absolute)
          b. Dependency'nin {state_dir}/state.yaml'ını kontrol et
          c. snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
-         d. Dependency'nin state.yaml'ına reverse tracking ekle:
-            dependents:
-              "{my_relative_path}":
-                using: "{dep_snapshot_id}"
-         e. Kendi state.yaml deps section'ına pin ekle:
-            deps:
-              "{dep_path}":
-                pinned: "{dep_snapshot_id}"
-                latest: "{dep_snapshot_id}"
-                api_hash: "{dep_api_hash}"
-                latest_api_hash: "{dep_api_hash}"
-                api_changed: false
+         d. Dependency'nin state.yaml'ına reverse tracking ekle
+         e. Kendi state.yaml deps section'ına pin ekle
       5. --clean yoksa kendi snapshot'ından impl restore et
-      6. impl.lock oluştur (aktif implementasyon)
-      7. "Ready to implement" mesajı ver
+      6. deps/ klasörü oluştur, her dependency için symlink:
+         deps/{dep_name}/ → {dep_path}/{state_dir}/history/{pinned_id}/impl/
+      7. impl.lock oluştur (aktif implementasyon)
+      8. "Ready to implement" mesajı ver
 
-      Implementation bitince: bp apply -m "message" (tercih edilir) veya bp ss (legacy).
+      Implementation bitince: bp apply -m "message"
 
-      İzolasyon garantisi (yeni model):
+      İzolasyon garantisi:
       - Her paket kendi dependency'lerinin stable snapshot'ına referans veriyor
-      - Dependency kodu: dep/{state_dir}/history/{id}/impl/ içinde
+      - Dependency kodu: deps/ symlink'leri üzerinden erişilir
       - Ana klasör = development, history = stable versiyonlar
-
-    patch_apply_algorithm: |
-      Patch akışı (patch/apply):
-      1. bp patch: snapshot restore + impl.lock(mode=patch)
-      2. Sadece import/include yolları güncellenir
-      3. bp apply:
-         - Değişiklikleri ilgili snapshot impl içine geri yazar
-         - Yeni snapshot oluşturmaz (mevcut snapshot mutasyona uğrar)
-         - impl.hidden yazar, impl.lock siler
 
     upgrade_algorithm: |
       bp upgrade [dep-path] [--safe|--all] algoritması:
@@ -321,10 +309,13 @@ workflow_policy:
             latest_api_hash: {new_api_hash}
             api_changed: false
          f. Dependency'nin state.yaml dependents section'ını güncelle
-      3. API değişikliği varsa uyarı göster (bloklamaz)
+      3. Working tree aktifse (impl.hidden yoksa):
+         - deps/{dep_name} symlink'ini sil
+         - Yeni symlink oluştur → {dep_path}/{state_dir}/history/{latest_id}/impl/
+      4. API değişikliği varsa uyarı göster (bloklamaz)
 
     impl_copy_algorithm: |
-      bp apply (impl mode) / bp ss (legacy) impl/ kopyalama algoritması:
+      bp apply impl/ kopyalama algoritması:
       1. Hangi dosyalar kopyalanacak:
          - implementation.structure'dan dosya listesi al
          - Yoksa: dizindeki kaynak dosyalarını tara (.go, .py, etc.)
@@ -333,17 +324,20 @@ workflow_policy:
          - .git/
          - *_test.go (test dosyaları - opsiyonel)
          - node_modules/, __pycache__/, etc.
+         - deps/ (symlink klasörü kopyalanmaz, yeniden oluşturulur)
       3. Kopyalama:
          - {state_dir}/history/{id}/impl/ klasörü oluştur
          - Her dosyayı relatif path'i koruyarak kopyala
          - Dizin yapısını oluştur (mkdir -p equivalent)
-      4. Kopyalanan dosyaları read-only yap (write bitlerini kaldır, exec bitlerini koru)
-      5. Snapshot başarılı olursa working tree implementation dosyalarını temizle
-      6. Sonuç: Tam, standalone kod kopyası
-
-      Gelecek: Delta desteği (backward compatible)
-      - impl/ varsa → direkt kullan (mevcut + eski snapshotlar)
-      - changes.patch varsa → reconstruct (gelecekte eklenecek)
+      4. Symlink oluşturma:
+         - impl/deps/ klasörü oluştur
+         - state.yaml'dan dependency pin'lerini oku
+         - Her dependency için symlink:
+           deps/{dep_name}/ → {dep_path}/{state_dir}/history/{pinned_id}/impl/
+         - Collision varsa 'as:' alias'ını kullan
+      5. Kopyalanan dosyaları read-only yap (write bitlerini kaldır, exec bitlerini koru)
+      6. Snapshot başarılı olursa working tree implementation dosyalarını temizle
+      7. Sonuç: Tam, standalone kod kopyası + dependency symlink'leri
 
   decisions:
     - q: Paketler arası iletişim nasıl?

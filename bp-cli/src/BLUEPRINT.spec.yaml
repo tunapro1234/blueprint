@@ -115,6 +115,35 @@ workflow_policy:
     - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
 
   algorithms:
+    root_resolution: |
+      Root blueprint bulma algoritması:
+      1. Mevcut klasörden başla
+      2. BLUEPRINT.yaml ara
+      3. Varsa ve _meta.root: true ise → root bulundu
+      4. Yoksa veya root değilse → parent klasöre çık
+      5. Parent'ta BLUEPRINT.yaml varsa:
+         a. _meta.root: true ise → root bulundu
+         b. Değilse → topmost_blueprint olarak işaretle, parent'a devam
+      6. Daha parent yoksa (/ veya repo root):
+         a. topmost_blueprint varsa → onu root olarak kullan
+         b. Yoksa → mevcut klasör root
+
+      Komut davranışı:
+      - bp <cmd>        → root bul, root'tan -r ile çalıştır
+      - bp <cmd> .      → sadece bulunulan paket (explicit path)
+      - bp <cmd> ./sub  → sadece ./sub paketi (explicit path)
+
+      Örnek:
+        /project/             (_meta.root: true)
+        /project/src/         (normal paket)
+        /project/src/parser/  (normal paket)
+
+        /project/src/parser/ içinde "bp validate" çalıştırılırsa:
+        1. parser/ → root değil
+        2. src/ → root değil, topmost_blueprint = src/
+        3. project/ → _meta.root: true → ROOT BULUNDU
+        4. "bp validate -r /project/" çalışır
+
     staleness_check: |
       1. {state_dir}/state.yaml oku (yoksa → no_snapshot)
       2. Dosya kontrolü:

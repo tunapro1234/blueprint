@@ -2,9 +2,10 @@
 
 _meta:
   version: "0.2.0"
-  updated: 2026-01-17
+  updated: 2026-01-19
   status: draft
   state_dir: "blueprint"
+  root: true  # Bu proje root'u - alt paketlerde argümansız komutlar buradan çalışır
 
 # =============================================================================
 # PROJECT INFO

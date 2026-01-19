@@ -68,6 +68,18 @@ Recursive validation:
 ./bp validate -r
 ```
 
+## Root Blueprint
+Mark a blueprint as project root with `_meta.root: true`. When running commands without an explicit path from a subdirectory:
+- bp finds the root blueprint by walking up the directory tree
+- Commands run recursively from the root
+- Use `.` for current package only: `bp validate .`
+
+```yaml
+# Root BLUEPRINT.yaml
+_meta:
+  root: true
+```
+
 ## Commands
 - `bp validate [path] [-r|--recursive]`
 - `bp status [path] [-r|--recursive]`

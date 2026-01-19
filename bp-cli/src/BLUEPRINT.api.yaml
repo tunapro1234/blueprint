@@ -7,6 +7,23 @@ api:
     name: bp
     usage: bp <command> [path] [flags]
 
+    root_resolution: |
+      Root blueprint kavramı:
+      - _meta.root: true olan blueprint proje root'udur
+      - Alt paketlerde argümansız komut çalıştırıldığında:
+        1. Yukarı doğru parent klasörlerde blueprint aranır
+        2. _meta.root: true olan ilk blueprint root olarak belirlenir
+        3. Root bulunamazsa en üstteki blueprint root sayılır
+        4. Komut root'tan recursive çalıştırılır
+      - Explicit path verilirse (örn: "bp validate .") sadece o path için çalışır
+
+      Örnekler:
+        bp validate        → root bul, root'tan recursive validate
+        bp validate .      → sadece bulunulan paket
+        bp validate ./src  → sadece ./src paketi
+        bp status          → root bul, root'tan recursive status
+        bp status .        → sadece bulunulan paket
+
     commands:
       - name: validate
         desc: YAML syntax ve schema kontrolü

@@ -1,6 +1,6 @@
 _meta:
-  version: "0.1.0"
-  updated: 2026-01-17
+  version: "0.2.0"
+  updated: 2026-01-18
   status: mvp
 
 intent: |
@@ -10,22 +10,59 @@ intent: |
 
 overview: |
   Paketler:
-    llm/    - Gemini 3 client (key rotation)
-    tools/  - Tool registry ve execution
-    task/   - Task tracking (in-memory veya JSON)
+    llm/         - LLM client katmani
+      codex/     - OpenAI Codex API (ChatGPT login bazli)
+      (gemini)   - Gemini 3 client (key rotation) [default]
+    tools/       - Tool registry ve execution
+    task/        - Task tracking (in-memory veya JSON)
+    api/         - External interface (library, HTTP, Docker)
+    debug_cli/   - HTTP debug CLI (agent davranisi testi)
+
+  LLM Providers:
+    - Gemini 3: API key ile, key rotation destekli
+    - Codex: ChatGPT hesabi ile, reasoning effort destekli
+    - Opus: HTTP provider (configurable)
 
   Agent sinifi src/ icinde, ayri paket degil.
 
   Akis:
     instruction → LLM → tool call? → execute → response
 
+environment:
+  required:
+    - GEMINI_API_KEY (default provider icin gerekli)
+  optional:
+    - GEMINI_API_KEY_2..N (rotation)
+    - CODEX_AUTH_FILE (default: ~/.codex/auth.json)
+    - CODEX_API_KEY (API key auth tercih edilirse)
+    - OPUS_API_KEY (opus provider icin)
+
 api:
   types:
+    LLMProvider:
+      type: enum
+      values: [gemini, codex, opus]
+      default: gemini
+
     AgentConfig:
       fields:
+        - name: provider
+          type: LLMProvider
+          default: "gemini"
+          description: LLM provider secimi
+
         - name: model
           type: string
           default: "gemini-3-flash-preview"
+          description: |
+            Gemini: gemini-3-flash-preview, gemini-3-pro-preview
+            Codex: gpt-5.2-codex, gpt-5.1-codex-max, gpt-5.1-codex-mini
+            Opus: configurable (server-side adapter)
+
+        - name: reasoning_effort
+          type: string
+          nullable: true
+          description: Sadece Codex icin (none/minimal/low/medium/high/xhigh)
 
         - name: max_iterations
           type: integer
@@ -40,6 +77,11 @@ api:
           type: boolean
           default: true
           description: Task kaydi tutulacak mi
+
+        - name: codex_auth_file
+          type: string
+          nullable: true
+          description: Codex auth dosyasi (default ~/.codex/auth.json)
 
     AgentResult:
       fields:

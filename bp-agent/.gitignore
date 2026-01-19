@@ -13,12 +13,17 @@ secrets/
 credentials.json
 service_account.json
 
+# Codex Auth (OAuth tokens)
+**/auth/*.json
+src/llm/codex/auth/
+
 # ===========================================
 # Blueprint State
 # ===========================================
-.blueprint/
-blueprint/
-*.blueprint/
+# Snapshot'lar paylaşılıyor (kod orada)
+# .blueprint/
+# blueprint/
+# *.blueprint/
 
 # ===========================================
 # Python

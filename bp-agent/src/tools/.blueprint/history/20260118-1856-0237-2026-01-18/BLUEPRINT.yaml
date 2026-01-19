@@ -1,0 +1,66 @@
+_meta:
+  version: "0.1.0"
+  updated: 2026-01-17
+  status: mvp
+
+intent: |
+  Tool registry ve execution.
+  Tool tanimla, kaydet, cagir.
+
+api:
+  types:
+    ToolSchema:
+      fields:
+        - name: name
+          type: string
+        - name: description
+          type: string
+        - name: parameters
+          type: JSONSchema
+          nullable: true
+
+    ToolResult:
+      fields:
+        - name: success
+          type: boolean
+        - name: output
+          type: any
+        - name: error
+          type: string
+          nullable: true
+
+  exports:
+    ToolRegistry:
+      type: class
+
+      methods:
+        - name: register
+          parameters:
+            - name: name
+              type: string
+            - name: handler
+              type: function
+            - name: schema
+              type: ToolSchema
+
+        - name: execute
+          parameters:
+            - name: name
+              type: string
+            - name: args
+              type: map<string, any>
+          returns: ToolResult
+
+        - name: get_schemas
+          description: LLM'e gonderilecek tool listesi
+          returns: list<ToolSchema>
+
+        - name: has
+          parameters:
+            - name: name
+              type: string
+          returns: boolean
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"

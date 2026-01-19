@@ -1,0 +1,7 @@
+id: 20260118-2111-c57d-debug-cli-go-binary
+timestamp: 2026-01-18T21:11:27
+message: debug_cli: go binary cli
+content_hash: sha256:c57dbdfe5e8f78791fbd61ea62bf9ba9b67a23ac7a12cee3efb57f13f5183638
+api_hash: sha256:39673e20aae9a72008b96a2bbb5492ed38f3b1225ef08df3e1624ba6f2b8428f
+spec_hash: sha256:6c8eb1068100c5db47b790d2b55d29c41f1591400bae08835af9efa3c42c1ba8
+impl_hash: sha256:b1750a6f03811decc07cfffec59954bc525336f10e2d2c8172aa38dc49ed7911

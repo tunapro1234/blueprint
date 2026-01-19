@@ -1,0 +1,7 @@
+id: 20260118-2306-fb83-api-document-snapsho
+timestamp: 2026-01-18T23:06:56
+message: api: document snapshot entrypoint
+content_hash: sha256:fb83fa14266b6edcfc93bd34bbaeccff3c37ef560104faf5626827e6ecbf3877
+api_hash: sha256:e6902c94e5c4e85a37cb8f766c7732a969caf308a41570c23a3f53d5028de5bf
+spec_hash: sha256:eb3f6c3b5d43c4ccb68f34338903f06c6cab92b47465ada039df57948e91a0c2
+impl_hash: sha256:bec2f28973259d45be219efd594729b467174950262e2f2f839997c9f5083979

@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -232,6 +235,201 @@ func hasSnapshotHistory(stateDir string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func updateSnapshotImports(bpObj *bp.Blueprint, depDir, depStateDirRel, fromID, toID string) (int, string, error) {
+	if fromID == "" || toID == "" || fromID == toID {
+		return 0, "", nil
+	}
+	hidden, err := bp.IsImplHidden(bpObj.StateDir)
+	if err != nil {
+		return 0, "", err
+	}
+	if hidden {
+		return 0, "working tree hidden; run 'bp impl' to update imports", nil
+	}
+	modRoot, modPath, ok, err := findGoModuleRoot(bpObj.Dir)
+	if err != nil {
+		return 0, "", err
+	}
+	if !ok || strings.TrimSpace(modPath) == "" {
+		return 0, "go.mod not found; skipping import update", nil
+	}
+	rel, err := filepath.Rel(modRoot, depDir)
+	if err != nil {
+		return 0, "dependency path not under module root; skipping import update", nil
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || strings.HasPrefix(rel, "..") {
+		return 0, "dependency path not under module root; skipping import update", nil
+	}
+	if depStateDirRel == "" {
+		depStateDirRel = ".blueprint"
+	}
+	oldImport := path.Join(modPath, rel, depStateDirRel, "history", fromID, "impl")
+	newImport := path.Join(modPath, rel, depStateDirRel, "history", toID, "impl")
+	if oldImport == newImport {
+		return 0, "", nil
+	}
+
+	files, err := bpObj.TrackedFiles()
+	if err != nil {
+		return 0, "", err
+	}
+	nestedDirs, err := nestedBlueprintDirs(bpObj.Dir)
+	if err != nil {
+		return 0, "", err
+	}
+	updated := 0
+	for relPath, abs := range files {
+		if !strings.HasSuffix(relPath, ".go") {
+			continue
+		}
+		if containsStateDirSegment(relPath, depStateDirRel) {
+			continue
+		}
+		if isUnderAnyDir(abs, nestedDirs) {
+			continue
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return updated, "", err
+		}
+		if !bytes.Contains(data, []byte(oldImport)) {
+			continue
+		}
+		newData := bytes.ReplaceAll(data, []byte(oldImport), []byte(newImport))
+		info, err := os.Stat(abs)
+		if err != nil {
+			return updated, "", err
+		}
+		if err := os.WriteFile(abs, newData, info.Mode().Perm()); err != nil {
+			return updated, "", err
+		}
+		updated++
+	}
+	return updated, "", nil
+}
+
+func findGoModuleRoot(start string) (string, string, bool, error) {
+	dir := start
+	for {
+		goModPath := filepath.Join(dir, "go.mod")
+		data, err := os.ReadFile(goModPath)
+		if err == nil {
+			modulePath, err := parseGoModulePath(data)
+			if err != nil {
+				return "", "", false, err
+			}
+			if modulePath == "" {
+				return dir, "", false, nil
+			}
+			return dir, modulePath, true, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", "", false, err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", "", false, nil
+}
+
+func nestedBlueprintDirs(root string) ([]string, error) {
+	files, err := findBlueprintsRecursive(root)
+	if err != nil {
+		return nil, err
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	dirs := map[string]struct{}{}
+	for _, file := range files {
+		dir := filepath.Dir(file)
+		dirAbs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
+		}
+		if pathsEqual(dirAbs, rootAbs) {
+			continue
+		}
+		dirs[dirAbs] = struct{}{}
+	}
+	out := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		out = append(out, dir)
+	}
+	return out, nil
+}
+
+func isUnderAnyDir(path string, dirs []string) bool {
+	for _, dir := range dirs {
+		if isUnderDir(path, dir) {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnderDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." {
+		return false
+	}
+	prefix := ".." + string(os.PathSeparator)
+	if strings.HasPrefix(rel, prefix) {
+		return false
+	}
+	return true
+}
+
+func containsStateDirSegment(relPath, stateDirRel string) bool {
+	if relPath == "" {
+		return false
+	}
+	if stateDirRel == "" {
+		stateDirRel = ".blueprint"
+	}
+	relPath = filepath.ToSlash(relPath)
+	parts := strings.Split(relPath, "/")
+	for _, part := range parts {
+		if part == stateDirRel || part == ".blueprint" {
+			return true
+		}
+	}
+	return false
+}
+
+func pathsEqual(a, b string) bool {
+	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func parseGoModulePath(data []byte) (string, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "module" {
+			return fields[1], nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
 }
 
 func formatTimestamp(ts string) string {

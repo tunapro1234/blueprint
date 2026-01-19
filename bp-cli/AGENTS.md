@@ -12,7 +12,7 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 │     └── BLUEPRINT.spec.yaml yaz: structure (dosya listesi)  │
 │                           │                                  │
 │                           ▼                                  │
-│  2. bp plan -r (opsiyonel)                                  │
+│  2. bp plan (default recursive)                             │
 │     └── Leaf-first sırada değişen paketleri listeler        │
 │                           │                                  │
 │                           ▼                                  │
@@ -44,13 +44,15 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 ## Root Blueprint
 - `_meta.root: true` ile proje root'u işaretlenir
 - Alt paketlerde argümansız komut → root bulunur, recursive çalıştırılır
-- Explicit path verilirse (`.`, `./sub`) sadece o paket için çalışır
+- Explicit path verilirse (`.`, `./sub`) bulunduğun yerden recursive çalışır
+- `--no-recursive` verilirse sadece tek paket çalışır
 - Root bulunamazsa en üstteki blueprint root sayılır
 
 ```bash
 # yamlparser/ içindeyken
-bp validate      # → root bul, tüm proje için recursive
-bp validate .    # → sadece yamlparser paketi
+bp validate                 # → root bul, tüm proje için recursive
+bp validate .               # → sadece bu paket (recursive)
+bp validate . --no-recursive  # → sadece bu paket (non-recursive)
 ```
 
 ## Dosya Yapısı
@@ -75,8 +77,8 @@ impl/
 
 ```bash
 # 1. Blueprint yaz (manuel)
-# 2. (Opsiyonel) değişenleri sırala
-./bp plan -r .
+# 2. (Opsiyonel) değişenleri sırala (default recursive)
+./bp plan .
 
 # 3. Restore + implement başlat (deps/ symlink'leri oluşur)
 ./bp impl
@@ -153,7 +155,7 @@ import { parser } from "@deps/yamlparser"
 8. `bp upgrade` symlink'leri günceller, kod değişikliği gerekmez
 
 ## Agent Rehberi (Önerilen İş Akışı)
-1. `bp plan -r .` ile leaf-first sıra çıkar
+1. `bp plan .` ile leaf-first sıra çıkar (default recursive)
 2. Her paket için:
    - `bp impl` (veya `bp impl clean`)
    - Değişiklikleri yap (import'lar deps/ üzerinden)
@@ -161,7 +163,7 @@ import { parser } from "@deps/yamlparser"
    - `bp apply -m "..."` ile snapshot al
 3. Dependency güncellemek için:
    - `bp upgrade --all` (symlink'ler güncellenir)
-4. `bp status -r .` ile genel kontrol
+4. `bp status .` ile genel kontrol (default recursive)
 
 Notlar:
 - BLUEPRINT dosyaları `bp apply` sonrası working tree'de kalır.
@@ -175,10 +177,10 @@ Notlar:
 |-------|----------|
 | `bp implement` | Snapshot restore + deps/ symlink oluştur |
 | `bp apply -m "msg"` | Snapshot al + deps/ symlink + temizle |
-| `bp validate [-r]` | Blueprint doğrula |
-| `bp status [-r]` | Değişiklik kontrolü |
-| `bp plan [-r]` | Leaf-first uygulanacak paketleri listeler |
-| `bp map [-r]` | Proje haritası: tüm paketler, snapshot'lar, dependency'ler |
+| `bp validate [--no-recursive]` | Blueprint doğrula |
+| `bp status [--no-recursive]` | Değişiklik kontrolü |
+| `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |
+| `bp map [--no-recursive]` | Proje haritası: tüm paketler, snapshot'lar, dependency'ler |
 | `bp upgrade [--all] [--force]` | Dependency güncelle (symlink günceller, test çalıştırır) |
 | `bp cancel` | Aktif implementasyonu iptal et |
 | `bp log [-n N]` | Snapshot history |

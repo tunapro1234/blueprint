@@ -19,22 +19,24 @@ api:
 
       Örnekler:
         bp validate        → root bul, root'tan recursive validate
-        bp validate .      → sadece bulunulan paket
-        bp validate ./src  → sadece ./src paketi
+        bp validate .      → sadece bulunulan paket (recursive)
+        bp validate . --no-recursive  → sadece bulunulan paket (non-recursive)
+        bp validate ./src  → sadece ./src paketi (recursive)
         bp status          → root bul, root'tan recursive status
-        bp status .        → sadece bulunulan paket
+        bp status .        → sadece bulunulan paket (recursive)
+        bp status . --no-recursive → sadece bulunulan paket (non-recursive)
 
     commands:
       - name: validate
         desc: YAML syntax ve schema kontrolü
-        usage: bp validate [path] [-r|--recursive]
+        usage: bp validate [path] [--no-recursive]
         args:
           - name: path
             default: "."
             desc: Blueprint dosyası veya klasör
         flags:
-          - name: -r, --recursive
-            desc: Alt klasörleri de tara
+          - name: -nr, --no-recursive
+            desc: Sadece verilen paketi kontrol et
         line_limits:
           api: 300              # Soft limit - aşılırsa warning
           implementation: 900   # Soft limit - aşılırsa warning
@@ -50,10 +52,10 @@ api:
 
       - name: status
         desc: Kod, dependency ve dependent değişiklik kontrolü
-        usage: bp status [path] [-r]
+        usage: bp status [path] [--no-recursive]
         flags:
-          - name: -r, --recursive
-            desc: Alt klasörleri de kontrol et
+          - name: -nr, --no-recursive
+            desc: Sadece verilen paketi kontrol et
         output:
           fresh: "✓ {path} (fresh)"
           stale: "⚠ {path} (stale, {n} files changed)"
@@ -87,12 +89,12 @@ api:
 
       - name: plan
         desc: Değişen paketleri dependency sırasına göre listeler (leaf-first)
-        usage: bp plan [path] [-r]
+        usage: bp plan [path] [--no-recursive]
         flags:
-          - name: -r, --recursive
-            desc: Alt klasörleri de tara
+          - name: -nr, --no-recursive
+            desc: Sadece verilen paketi planla
         behavior: |
-          - Blueprint'leri recursive toplar (flag yoksa sadece verilen path)
+          - Default recursive; --no-recursive sadece verilen path'i tarar
           - Dependency graph'e göre leaf-first sıralar
           - Sadece stale veya no_snapshot paketleri listeler
           - deps_changed/deps_api_changed görülen paketlerde import yolları güncellenmelidir
@@ -160,12 +162,12 @@ api:
 
       - name: map
         desc: Project map - tüm paketlerin snapshot ve dependency durumu
-        usage: bp map [path] [-r|--recursive]
+        usage: bp map [path] [--no-recursive]
         flags:
-          - name: -r, --recursive
-            desc: Alt paketleri de göster (default: true)
+          - name: -nr, --no-recursive
+            desc: Sadece verilen paketi göster
         behavior: |
-          Recursive olarak tüm paketleri tarar ve her biri için gösterir:
+          Default recursive olarak tüm paketleri tarar ve her biri için gösterir:
           - Paket adı ve path
           - Current snapshot ID
           - API hash (kısa)

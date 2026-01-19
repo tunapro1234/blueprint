@@ -63,16 +63,17 @@ cd src && go build -o ../bp ./cmd/bp
 ./bp diff
 ```
 
-Recursive validation:
+Default (recursive) validation:
 ```
-./bp validate -r
+./bp validate
 ```
 
 ## Root Blueprint
 Mark a blueprint as project root with `_meta.root: true`. When running commands without an explicit path from a subdirectory:
 - bp finds the root blueprint by walking up the directory tree
 - Commands run recursively from the root
-- Use `.` for current package only: `bp validate .`
+- Use `.` for current package only (still recursive): `bp validate .`
+- Use `--no-recursive` to target only the current package
 
 ```yaml
 # Root BLUEPRINT.yaml
@@ -81,11 +82,11 @@ _meta:
 ```
 
 ## Commands
-- `bp validate [path] [-r|--recursive]`
-- `bp status [path] [-r|--recursive]`
-- `bp plan [path] [-r|--recursive]`
+- `bp validate [path] [--no-recursive]`
+- `bp status [path] [--no-recursive]`
+- `bp plan [path] [--no-recursive]`
 - `bp deps [path] [--upgrades]`
-- `bp map [path] [-r]` - project map showing all packages and dependencies
+- `bp map [path] [--no-recursive]` - project map showing all packages and dependencies
 - `bp init [path]`
 - `bp log [path] [-n|--count]`
 - `bp diff [path] [id1] [id2]`
@@ -168,9 +169,9 @@ Run tests:
 cd src && go test ./...
 ```
 
-Validate all blueprints:
+Validate all blueprints (default recursive):
 ```
-./bp validate -r
+./bp validate
 ```
 
 Build:

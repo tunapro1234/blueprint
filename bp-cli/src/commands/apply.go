@@ -134,7 +134,7 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot already exists: %s", snapshotID))
-		if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID)); err != nil {
+		if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID), false); err != nil {
 			msg := fmt.Sprintf("Failed to create dependency symlinks: %s", err.Error())
 			out = strings.Join([]string{out, "✗ " + msg}, "\n")
 			return CommandResult{
@@ -170,7 +170,7 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 	if err := copyImplementationSnapshot(trackedFiles, bpObj.StateDir, snapshotID, testCfg.SnapshotReadOnly); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID)); err != nil {
+	if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID), false); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if err := bpObj.SaveState(state); err != nil {

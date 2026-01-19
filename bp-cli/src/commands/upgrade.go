@@ -166,14 +166,14 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 		newStates[key] = newDep
 
 		if workingActive {
-			if err := ensureDepsSymlinks(bpObj, depsList, newStates, bpObj.Dir); err != nil {
+			if err := ensureDepsSymlinks(bpObj, depsList, newStates, bpObj.Dir, true); err != nil {
 				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 			}
 		}
 
 		if err := runBlueprintTests(bpObj, testCfg); err != nil {
 			if workingActive {
-				_ = ensureDepsSymlinks(bpObj, depsList, oldStates, bpObj.Dir)
+				_ = ensureDepsSymlinks(bpObj, depsList, oldStates, bpObj.Dir, true)
 			}
 			_ = setSnapshotRotten(depBp.StateDir, latestID, true)
 			depState.Latest = latestID

@@ -172,7 +172,10 @@ api:
       fields:
         - upgraded: string[]            # Upgrade edilen dependency'ler
         - api_changed: string[]         # API değişen dependency'ler (uyarı)
-        - skipped: string[]             # --safe ile atlanan dependency'ler
+        - skipped: string[]             # Atlanan dependency'ler (örn: --safe, rotten)
+        - skipped_rotten: string[]      # Rotten olduğu için atlananlar
+        - skipped_api: string[]         # API değiştiği için atlananlar
+        - failed: string[]              # Test fail nedeniyle rollback olanlar
 
     - name: DepUpgrade
       desc: Upgrade mevcut bir dependency

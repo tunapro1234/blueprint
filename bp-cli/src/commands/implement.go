@@ -146,7 +146,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	}
 
 	if len(deps) == 0 {
-		if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir); err != nil {
+		if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir, true); err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		if mode == "ro" {
@@ -197,7 +197,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
-	if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir); err != nil {
+	if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir, true); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if mode == "ro" {

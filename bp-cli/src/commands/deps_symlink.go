@@ -9,7 +9,7 @@ import (
 	bp "blueprint"
 )
 
-func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map[string]bp.DepState, destDir string) error {
+func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map[string]bp.DepState, destDir string, allowExistingBlueprintDirs bool) error {
 	if destDir == "" {
 		return nil
 	}
@@ -75,7 +75,7 @@ func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map
 			return err
 		}
 		linkPath := filepath.Join(destDir, name)
-		if err := ensureSymlinkTargetAvailable(linkPath, name); err != nil {
+		if err := ensureSymlinkTargetAvailable(linkPath, name, allowExistingBlueprintDirs); err != nil {
 			return err
 		}
 		if err := createRelSymlink(target, linkPath); err != nil {
@@ -123,7 +123,7 @@ func looksLikeDependencyTarget(target string) bool {
 	return strings.Contains(normalized, "/.blueprint/history/") || strings.HasPrefix(normalized, ".blueprint/history/")
 }
 
-func ensureSymlinkTargetAvailable(path, name string) error {
+func ensureSymlinkTargetAvailable(path, name string, allowExistingBlueprintDirs bool) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -136,6 +136,11 @@ func ensureSymlinkTargetAvailable(path, name string) error {
 			return err
 		}
 		return nil
+	}
+	if allowExistingBlueprintDirs && info.IsDir() {
+		if _, err := bp.FindBlueprintFile(path); err == nil {
+			return nil
+		}
 	}
 	return fmt.Errorf("Name collision - '%s' exists both as code and dependency", name)
 }

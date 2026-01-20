@@ -146,9 +146,6 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	}
 
 	if len(deps) == 0 {
-		if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir, true); err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
 		if mode == "ro" {
 			trackedFiles, err := bpObj.TrackedFiles()
 			if err != nil {
@@ -197,9 +194,6 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
-	if err := ensureDepsSymlinks(bpObj, deps, currentState.Deps, bpObj.Dir, true); err != nil {
-		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-	}
 	if mode == "ro" {
 		trackedFiles, err := bpObj.TrackedFiles()
 		if err != nil {

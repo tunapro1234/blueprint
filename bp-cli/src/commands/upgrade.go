@@ -43,15 +43,6 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	workingActive := true
-	if bpObj.Mode() == "hide" {
-		locked, err := bp.HasImplLock(bpObj.StateDir)
-		if err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
-		workingActive = locked
-	}
-
 	depsTree := &bp.BlueprintTree{Root: bpObj.Dir}
 	depsList, _, err := depsTree.ResolveDeps(bpObj)
 	if err != nil {
@@ -156,25 +147,7 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			continue
 		}
 
-		oldStates := cloneDepStates(state.Deps)
-		newStates := cloneDepStates(state.Deps)
-		newDep := newStates[key]
-		newDep.Pinned = latestID
-		newDep.APIHash = latestAPI
-		newDep.APIChanged = false
-		newDep.Rotten = latestRotten
-		newStates[key] = newDep
-
-		if workingActive {
-			if err := ensureDepsSymlinks(bpObj, depsList, newStates, bpObj.Dir, true); err != nil {
-				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-			}
-		}
-
 		if err := runBlueprintTests(bpObj, testCfg); err != nil {
-			if workingActive {
-				_ = ensureDepsSymlinks(bpObj, depsList, oldStates, bpObj.Dir, true)
-			}
 			_ = setSnapshotRotten(depBp.StateDir, latestID, true)
 			depState.Latest = latestID
 			depState.LatestAPIHash = latestAPI

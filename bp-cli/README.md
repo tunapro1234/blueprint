@@ -56,7 +56,7 @@ cd src && go build -o ../bp ./cmd/bp
 ```
 ./bp init
 ./bp validate
-./bp impl                    # symlink'ler oluşur, mode'a göre dosyalar hazırlanır
+./bp impl                    # mode'a göre dosyalar hazırlanır
 ./bp apply -m "initial"      # snapshot + mode'a göre temizle
 ./bp status
 ./bp log
@@ -120,6 +120,7 @@ Each package keeps its own snapshot state under the configured state dir (defaul
       yamlparser/ → ...         # symlink direkt (deps/ yok)
       commands/ → ...
 ```
+Working tree'de dependency klasörleri gerçek dizinlerdir; symlink'ler sadece history içindeki snapshot'larda bulunur.
 
 `bp apply` will:
 1) Validate the blueprint
@@ -130,12 +131,11 @@ Each package keeps its own snapshot state under the configured state dir (defaul
 
 `bp impl` will:
 1) Mode-based setup (ro: chmod +w, hide: restore files, pussy: nothing)
-2) Create symlinks for dependencies (directly in package)
-3) Create impl.lock
+2) Create impl.lock
 
 `bp upgrade` will:
 1) Update dependency pins in state.yaml
-2) Update symlinks to new snapshot targets (no code changes needed)
+2) Snapshot symlink'leri bir sonraki `bp apply` ile güncellenir
 
 ## Blueprint File Discovery
 Supported patterns include:

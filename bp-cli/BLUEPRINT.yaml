@@ -65,7 +65,7 @@ plan:
     desc: _meta.state_dir ile state dizini ayarlanabilir; bu repo varsayılan .blueprint kullanır.
   - id: snapshot_imports
     status: done
-    desc: Paketler snapshot'lara direkt symlink ile import edecek şekilde güncellendi (impl/deps yok).
+    desc: Snapshot history içinde dependency symlink'leri olacak şekilde güncellendi (impl/deps yok).
   - id: docs_update
     status: done
     desc: README ve blueprint/spec dokümanları state_dir için güncellendi.
@@ -84,10 +84,10 @@ dependency_policy:
   summary: |
     Symlink tabanlı dependency yönetimi (yeni yapı):
     - Working tree (paket klasörü) edit alanıdır
-    - Snapshot'ta kod + symlink'ler direkt bulunur (impl/, deps/ yok)
-    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
-    - Import/build için direkt symlink'ler kullanılır
-    - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz (gerçek klasör)
+    - Snapshot'ta kod + dependency symlink'leri direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
+    - bp upgrade pinleri günceller; symlink'ler snapshot'ta oluşur
 
 # =============================================================================
 # PROJECT STRUCTURE
@@ -171,8 +171,8 @@ workflow:
   notes:
     - BLUEPRINT dosyaları apply sonrası working tree'de kalır
     - impl.lock aktifse "implementing" state vardır
-    - Importlar direkt symlink'ler üzerinden yapılır (deps/ yok)
-    - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
+    - Importlar working tree'de gerçek dependency klasörlerinden yapılır (deps/ yok)
+    - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
   symlink_structure: |
     Snapshot yapısı (impl/, deps/ yok):
     .blueprint/history/{id}/
@@ -207,6 +207,20 @@ ai_rules:
 # =============================================================================
 # DEPENDENCIES
 # =============================================================================
+
+# =============================================================================
+# IMPLEMENTATION
+# =============================================================================
+
+implementation:
+  structure:
+    - README.md
+    - LICENSE
+    - .gitignore
+    - AGENTS.md
+    - todo.md
+    - src/:
+        has_blueprint: true
 
 dependencies:
   internal:

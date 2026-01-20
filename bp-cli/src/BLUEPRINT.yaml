@@ -17,7 +17,7 @@ overview: |
   - Alt klasörler implicit dependency
   - BLUEPRINT.yaml kullanıcı düzenler
   - .blueprint/ tool yönetir (state, history)
-  - Symlink'ler direkt pakette (deps/ yok)
+  - Symlink'ler snapshot history içinde (deps/ yok)
 
   Development mode'lar (_meta.mode):
   - ro (default): Read-only enforcement
@@ -33,12 +33,12 @@ overview: |
   - bp log: Snapshot geçmişi
   - bp diff: İki snapshot arasındaki fark
   - bp show: Belirli snapshot'ın blueprint'ini göster
-  - bp implement: Implementation başlat (dependency kontrol + symlink)
+  - bp implement: Implementation başlat (dependency kontrol)
   - bp impl: implement alias (kısa)
-  - bp apply: Snapshot al + symlink oluştur + mode'a göre temizle
+  - bp apply: Snapshot al + symlink oluştur (snapshot) + mode'a göre temizle
   - bp plan: Değişen paketleri leaf-first sırada listeler
   - bp cancel: Implementation oturumunu iptal eder
-  - bp upgrade: Dependency'leri güncelle (symlink günceller)
+  - bp upgrade: Dependency'leri güncelle (pin günceller)
 
 # =============================================================================
 # PLAN
@@ -56,7 +56,7 @@ plan:
     desc: tests.verification komutları state dizinini test kapsamı dışında bırakır.
   - id: snapshot_imports
     status: done
-    desc: commands/yamlparser snapshot'ları direkt symlink üzerinden import edilir (impl/deps yok).
+    desc: commands/yamlparser snapshot'larında dependency symlink'leri bulunur (impl/deps yok).
 
 # =============================================================================
 # WORKFLOW POLICY
@@ -66,10 +66,10 @@ dependency_policy:
   summary: |
     Symlink tabanlı dependency yönetimi (yeni yapı):
     - Paket klasörü edit alanıdır (working tree)
-    - Snapshot'ta kod + symlink'ler direkt bulunur (impl/, deps/ yok)
-    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
-    - Import/build için direkt symlink'ler kullanılır
-    - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz
+    - Snapshot'ta kod + dependency symlink'leri direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
+    - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
   collision_handling: |
     İsim çakışması durumunda hata verilir:
     "Name collision - '{name}' exists both as code and dependency"

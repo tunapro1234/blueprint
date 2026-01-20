@@ -43,8 +43,8 @@ implementation:
       ├── BLUEPRINT.yaml                    # Blueprint dosyası
       ├── main.go                           # Kod
       ├── util.go
-      ├── yamlparser/ → ../yamlparser/.blueprint/history/{pinned_id}/
-      ├── commands/ → ../commands/.blueprint/history/{pinned_id}/
+      ├── yamlparser/                       # gerçek dependency klasörü
+      ├── commands/                         # gerçek dependency klasörü
       └── .blueprint/                       # State directory
           └── ...
 
@@ -116,10 +116,10 @@ workflow_policy:
   summary: |
     Symlink tabanlı dependency yönetimi:
     - Paket klasörü edit alanıdır (working tree)
-    - Snapshot'ta kod + symlink'ler direkt bulunur (impl/, deps/ yok)
-    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
-    - Import/build için direkt symlink'ler kullanılır
-    - bp upgrade symlink'leri günceller, kod değişikliği gerekmez
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz
+    - Snapshot'ta kod + dependency symlink'leri direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
+    - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
 
   modes: |
     Development mode'lar (_meta.mode ile ayarlanır, default: ro):
@@ -247,11 +247,11 @@ workflow_policy:
       4. Kalanları aynı sırayla listede göster
 
     symlink_policy: |
-      Symlink tabanlı import yönetimi (yeni yapı):
-      - Symlink'ler direkt pakette (deps/ klasörü yok)
-      - {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/
-      - bp upgrade çalıştırıldığında symlink hedefi güncellenir
-      - Kod içinde değişiklik gerekmez, import'lar {dep_name} üzerinden yapılır
+      Snapshot symlink policy (yeni yapı):
+      - Symlink'ler sadece snapshot history içinde oluşturulur
+      - {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/ (snapshot içinde)
+      - Working tree'de dependency klasörü varsa symlink oluşturulmaz
+      - bp upgrade pinleri günceller, symlink'ler bir sonraki apply'da oluşur
       - Collision durumunda hata verilir (aynı isimde kod klasörü/dosyası varsa)
 
     rotten_warning: |
@@ -353,8 +353,7 @@ workflow_policy:
          c. snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
          d. Dependency'nin state.yaml'ına reverse tracking ekle
          e. Kendi state.yaml deps section'ına pin ekle
-      5. Symlink'leri oluştur (direkt pakette):
-         {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/
+      5. Working tree'de symlink oluşturulmaz (dependency klasörleri gerçek)
       6. Mode'a göre davranış:
          - pussy: impl.lock oluştur
          - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
@@ -369,7 +368,7 @@ workflow_policy:
 
       İzolasyon garantisi:
       - Her paket kendi dependency'lerinin stable snapshot'ına referans veriyor
-      - Dependency kodu: symlink'ler üzerinden erişilir
+      - Dependency kodu: working tree'de gerçek klasörlerden erişilir
       - Ana klasör = development, history = stable versiyonlar
 
     upgrade_algorithm: |
@@ -383,11 +382,10 @@ workflow_policy:
          e. API değişmişse ve --safe varsa → atla
       3. Upgrade yapılacaklar için:
          a. Eski pinned_id'yi sakla (rollback için)
-         b. Symlink'i güncelle (direkt pakette):
-            {dep_name}/ → {dep_path}/.blueprint/history/{new_pinned_id}/
+         b. state.yaml pin bilgisini geçici güncelle
          c. tests.verification çalıştır
          d. Test başarısız olursa:
-            - Symlink'i eski haline döndür (rollback)
+            - pinned eski halinde kalır (rollback)
             - Dependency'nin meta.yaml'ına rotten: true yaz
             - state.yaml deps'e rotten: true ekle
             - Uyarı ver, devam et
@@ -597,7 +595,7 @@ workflow_policy:
         - Klasörler (has_blueprint: true): Track edilmez, kendi state'leri var
 
         Symlink: Takip edilir ama cycle kontrolü yapılır
-        Not: Dependency symlink'leri hash/staleness takibine dahil edilmez
+        Not: Snapshot dependency symlink'leri hash/staleness takibine dahil edilmez
 
     - q: tests.verification nasıl çalışır?
       a: |
@@ -1070,7 +1068,6 @@ tests:
         - exit 0, "Ready to implement"
         - Her dep'in state.yaml dependents'ına eklenir
         - Kendi state.yaml deps'ine pin eklenir
-        - Symlink'ler oluşur (direkt pakette)
 
     - id: implement_dep_no_snapshot
       given: Dependency var ama snapshot'ı yok
@@ -1084,12 +1081,11 @@ tests:
         - B'nin state.yaml dependents section'ına A eklenir
         - A'nın state.yaml deps section'ına B eklenir
 
-    - id: implement_creates_symlinks
-      given: Dependencies var, snapshot'ları var
+    - id: implement_skips_symlinks
+      given: Dependencies var, dependency klasörleri working tree'de mevcut
       when: bp implement
       then: |
-        - {dep_name}/ symlink oluşur (direkt pakette)
-        - Hedef: {dep_path}/.blueprint/history/{pinned_id}/
+        - Working tree'de symlink oluşturulmaz
 
     - id: upgrade_single_dep
       given: Dependency'nin yeni snapshot'ı var
@@ -1097,7 +1093,7 @@ tests:
       then: |
         - state.yaml deps güncellenir (pinned → latest)
         - Dependency'nin dependents section'ı güncellenir
-        - Symlink güncellenir
+        - Snapshot symlink'leri bir sonraki apply'da oluşur
 
     - id: upgrade_api_changed_warning
       given: Dependency API'si değişmiş
@@ -1210,8 +1206,8 @@ tests:
 
     - id: edge_name_collision
       given: Dependency adı ile kod klasörü aynı
-      when: bp impl
-      then: Hata verilir
+      when: bp apply
+      then: Hata verilir (snapshot symlink adı çakışır)
 
   verification:
     - go test $(go list ./... | grep -v '/blueprint/')

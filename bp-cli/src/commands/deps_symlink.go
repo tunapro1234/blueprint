@@ -70,11 +70,20 @@ func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map
 		if name == "" {
 			name = filepath.Base(dep.Dir)
 		}
+		linkPath := filepath.Join(destDir, name)
+		if allowExistingBlueprintDirs {
+			if info, err := os.Lstat(linkPath); err == nil {
+				if info.Mode()&os.ModeSymlink == 0 && info.IsDir() {
+					if _, err := bp.FindBlueprintFile(linkPath); err == nil {
+						continue
+					}
+				}
+			}
+		}
 		target := filepath.Join(dep.StateDir, "history", pinned)
 		if _, err := os.Stat(target); err != nil {
 			return err
 		}
-		linkPath := filepath.Join(destDir, name)
 		if err := ensureSymlinkTargetAvailable(linkPath, name, allowExistingBlueprintDirs); err != nil {
 			return err
 		}

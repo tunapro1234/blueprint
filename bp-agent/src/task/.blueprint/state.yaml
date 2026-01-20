@@ -1,9 +1,0 @@
-snapshot_id: 20260118-1856-32ea-2026-01-18
-blueprint_hash: sha256:23fdbc63370dad48bf4c24bd8c6d19d20c2950bae3e334275e433561a105ea3e
-impl_hash: sha256:b0bce6a469ed28885f9ac9b264112b7f7cbe5931f8f8170f19d84ab530347dab
-files:
-  "__init__.py": sha256:c4d9b8049e0cd4ec9035e0b56ac8ec9d0e9112d71338b5d9570c97fd1f718a2a
-  "store.py": sha256:2c58af4fd80c3a45a3bfe0c0e83f7129d2707989f8bb005a85938eeb92d1f4e0
-dependents:
-  "..":
-    using: 20260118-1856-32ea-2026-01-18

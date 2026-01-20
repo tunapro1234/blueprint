@@ -1,12 +1,11 @@
 from pathlib import Path
-import sys
 
 import pytest
 
 import agent
 
 
-def test_snapshot_impl_paths_in_sys_path():
+def test_snapshot_history_flat_layout():
     root = Path(__file__).resolve().parents[1] / "src"
     state_dir = agent._detect_state_dir(root)
     state_path = state_dir / "state.yaml"
@@ -19,14 +18,16 @@ def test_snapshot_impl_paths_in_sys_path():
         pytest.skip("no pinned deps in state.yaml")
 
     missing = []
+    impl_dirs = []
     for dep_path, snapshot in pinned.items():
         dep_dir = (root / dep_path).resolve()
         dep_state_dir = agent._detect_state_dir(dep_dir)
-        impl_dir = dep_state_dir / "history" / snapshot / "impl"
-        if not impl_dir.exists():
-            missing.append(str(impl_dir))
+        snapshot_dir = dep_state_dir / "history" / snapshot
+        if not snapshot_dir.exists():
+            missing.append(str(snapshot_dir))
             continue
-        if str(impl_dir) not in sys.path:
-            missing.append(str(impl_dir))
+        if (snapshot_dir / "impl").exists():
+            impl_dirs.append(str(snapshot_dir / "impl"))
 
-    assert not missing, f"Missing snapshot impl paths in sys.path: {missing}"
+    assert not missing, f"Missing snapshot directories: {missing}"
+    assert not impl_dirs, f"Legacy impl directories found in snapshots: {impl_dirs}"

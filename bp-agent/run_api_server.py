@@ -20,11 +20,11 @@ def _read_snapshot_id(path: Path) -> str:
 def _inject_snapshot_paths(repo_root: Path) -> Path:
     state_dir = repo_root / "src" / ".blueprint"
     snapshot_id = _read_snapshot_id(state_dir / "current")
-    impl_dir = state_dir / "history" / snapshot_id / "impl"
-    if not impl_dir.exists():
-        raise SystemExit(f"Snapshot impl not found: {impl_dir}")
-    sys.path.insert(0, str(impl_dir))
-    return impl_dir
+    snapshot_dir = state_dir / "history" / snapshot_id
+    if not snapshot_dir.exists():
+        raise SystemExit(f"Snapshot not found: {snapshot_dir}")
+    sys.path.insert(0, str(snapshot_dir))
+    return snapshot_dir
 
 
 def _build_echo_agent():

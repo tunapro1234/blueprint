@@ -1,0 +1,11 @@
+_meta:
+  version: "0.1.0"
+  type: spec
+
+implementation:
+  structure:
+    - run_api_server.py
+    - LICENSE
+    - tests/
+    - src/:
+        has_blueprint: true

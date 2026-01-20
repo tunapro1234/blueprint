@@ -5,9 +5,7 @@ _meta:
 
 intent: |
   Base Agent debug CLI.
-  İki modda çalışır:
-    1. HTTP mode: API server'a bağlanır (remote test)
-    2. Direct mode: Agent'ı direkt import eder (local test)
+  HTTP API server'a bağlanır (remote test).
 
 overview: |
   Basit REPL chat arayüzü. aichat benzeri slash komutları.
@@ -19,25 +17,17 @@ overview: |
     - Tool calling'i gözlemle
 
   Modlar:
-    HTTP:   Server'a HTTP request atar
-    Direct: Agent sınıfını import edip direkt çağırır
+    HTTP: Server'a HTTP request atar
 
 cli:
   usage: |
-    # HTTP mode (default)
     debug-cli repl --url http://localhost:8080
-
-    # Direct mode (no server)
-    debug-cli repl --direct
-
     # Tek komut
     debug-cli run "Merhaba"
-    debug-cli run --direct "2+2 kaç?"
 
 environment:
   optional:
     - BASE_AGENT_URL (default http://localhost:8080)
-    - GEMINI_API_KEY (direct mode için)
 
 commands:
   slash:
@@ -73,10 +63,6 @@ commands:
       description: Debug mode toggle (tool calls, raw response)
       example: .debug
 
-    - name: .mode
-      description: HTTP/Direct mod değiştir
-      example: .mode direct
-
     - name: .info
       description: Mevcut ayarları göster
       example: .info
@@ -91,17 +77,8 @@ commands:
 
 api:
   types:
-    RunMode:
-      type: enum
-      values: [http, direct]
-      default: http
-
     CLIConfig:
       fields:
-        - name: mode
-          type: RunMode
-          default: http
-
         - name: base_url
           type: string
           default: "http://localhost:8080"
@@ -159,7 +136,7 @@ api:
   exports:
     Backend:
       type: interface
-      description: HTTP ve Direct mode için ortak arayüz
+      description: HTTP mode için arayüz
       methods:
         - name: execute
           parameters:
@@ -193,11 +170,6 @@ api:
       implements: Backend
       description: HTTP API client
 
-    DirectBackend:
-      type: class
-      implements: Backend
-      description: Agent'ı direkt import eder
-
     REPL:
       type: class
       description: Ana REPL loop
@@ -211,7 +183,5 @@ tests: "./BLUEPRINT.spec.yaml"
 
 dependencies:
   internal:
-    - path: ../
-      desc: Agent sınıfı (direct mode)
     - path: ../api
       desc: API types (http mode)

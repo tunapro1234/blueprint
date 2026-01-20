@@ -5,12 +5,24 @@ _meta:
   type: spec
 
 implementation:
+  structure:
+    - agent.py
+    - __init__.py
+    - llm/:
+        has_blueprint: true
+    - tools/:
+        has_blueprint: true
+    - task/:
+        has_blueprint: true
+    - api/:
+        has_blueprint: true
+    - debug_cli/:
+        has_blueprint: true
   agent:
     pseudocode: |
       class Agent:
         def __init__(self, name: str, config: AgentConfig = None, system_prompt: str = None):
-          # Use pinned dependency snapshots (impl/) instead of working tree
-          inject_snapshot_deps_from_state()
+          # Dependencies resolved from working tree; snapshot entrypoints add snapshot root if needed
 
           self.name = name
           self.config = config or AgentConfig()

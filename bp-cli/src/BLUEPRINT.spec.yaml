@@ -426,7 +426,7 @@ workflow_policy:
          c. meta.yaml oluştur (id, timestamp, message, hashes)
          d. Kod dosyalarını kopyala (direkt, impl/ yok)
          e. Symlink'leri kopyala/oluştur (direkt, deps/ yok)
-         f. history/{id}/ altındaki tüm dosyaları read-only yap (chmod -w, symlink hariç)
+         f. history/{id}/ altındaki tüm dosyaları read+execute yap (chmod 0555, symlink hariç)
       4. state.yaml güncelle (snapshot_id, hashes, deps)
       5. current dosyasını güncelle
       6. Working tree'ye dokunma
@@ -1013,10 +1013,10 @@ tests:
       when: bp ss
       then: Warning verilir, snapshot yine alınır
 
-    - id: ss_makes_snapshot_readonly
+    - id: ss_makes_snapshot_readexec
       given: Snapshot alındı
       when: history/{id}/ içindeki dosya izinleri kontrol edilir
-      then: Tüm dosyalarda write bit kapalı (read-only)
+      then: Tüm dosyalarda write bit kapalı + execute bit açık (read+execute)
 
     # =========================================================================
     # MODE TESTS

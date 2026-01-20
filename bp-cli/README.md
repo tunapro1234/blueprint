@@ -141,7 +141,7 @@ Timestamp is stored in `meta.yaml`.
 2) Run `tests.verification` commands (unless `--skip-tests`)
 3) Copy files to `history/{id}/` (directly, no impl/)
 4) Create symlinks for dependencies (directly, no deps/)
-5) Mark all files under `history/{id}/` as read-only (chmod -w, symlinks skipped)
+5) Mark all files under `history/{id}/` as read+execute (chmod 0555, symlinks skipped)
 6) Update state.yaml + current
 7) Leave working tree untouched
 

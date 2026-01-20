@@ -191,7 +191,7 @@ workflow:
     - impl.lock sadece derleme sırasında "busy" flag'dir
     - Importlar working tree'de gerçek dependency klasörlerinden yapılır (deps/ yok)
     - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
-    - Snapshot içindeki tüm dosyalar read-only (write bit kaldırılır)
+    - Snapshot içindeki tüm dosyalar read+execute (chmod 0555, symlink hariç)
   symlink_structure: |
     Snapshot yapısı (impl/, deps/ yok):
     .blueprint/history/{id}/

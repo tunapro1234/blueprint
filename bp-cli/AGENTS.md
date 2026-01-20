@@ -71,7 +71,7 @@ _meta:
 │  5. bp ss -m "message"                                      │
 │     └── Validate + test çalıştır                            │
 │     └── history/{id}/ altına kopyalar + symlink             │
-│     └── snapshot read-only yapılır                          │
+│     └── snapshot read+execute yapılır                       │
 │                           │                                  │
 │                           ▼                                  │
 │  6. ITERATION (Sonraki değişiklik)                          │
@@ -162,7 +162,7 @@ cd src && go test ./...
 1. Blueprint validate edilir
 2. `tests.verification` komutları çalıştırılır
 3. Dosyalar `history/{id}/` altına kopyalanır (BLUEPRINT.yaml, kod, symlink'ler)
-4. Snapshot altındaki tüm dosyalar read-only yapılır (chmod -w, symlink hariç)
+4. Snapshot altındaki tüm dosyalar read+execute yapılır (chmod 0555, symlink hariç)
 5. Working tree'ye dokunulmaz
 
 ### `bp impl` çalıştırıldığında:
@@ -243,14 +243,14 @@ Notlar:
 - ro mode'da idle durumda dosyalar read-only'dir.
 - Import'lar gerçek dependency klasörlerinden yapılır (deps/ yok).
 - `bp upgrade` çalıştırıldığında pinler güncellenir, symlink'ler snapshot'ta oluşur.
-- Snapshot altındaki tüm dosyalar read-only yapılır (symlink hariç).
+- Snapshot altındaki tüm dosyalar read+execute yapılır (symlink hariç).
 
 ## Komut Referansı
 
 | Komut | Açıklama |
 |-------|----------|
 | `bp implement` | Agentic derleme + opsiyonel snapshot |
-| `bp ss -m "msg"` | Manuel snapshot (validate + test + read-only) |
+| `bp ss -m "msg"` | Manuel snapshot (validate + test + read+execute) |
 | `bp new-lang <lang>` | Yeni dil kökü oluştur (API blueprint symlink, diğerleri kopya) |
 | `bp validate [--no-recursive]` | Blueprint doğrula |
 | `bp status [--no-recursive]` | Değişiklik kontrolü |

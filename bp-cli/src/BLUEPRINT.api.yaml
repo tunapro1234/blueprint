@@ -165,7 +165,7 @@ api:
             - meta.yaml oluşturulur
             - Kod dosyaları kopyalanır (direkt, impl/ yok)
             - Symlink'ler kopyalanır (direkt, deps/ yok)
-            - history/{id}/ altındaki tüm dosyalar read-only yapılır (chmod -w, symlink hariç)
+            - history/{id}/ altındaki tüm dosyalar read+execute yapılır (chmod 0555, symlink hariç)
           - state.yaml ve current güncellenir
           - Working tree'ye dokunulmaz
         output:
@@ -336,7 +336,7 @@ api:
           5. Agentic derleme: BLUEPRINT.spec'e göre kodu üret/güncelle
           6. --no-snapshot verilmemişse:
              - ss ile aynı snapshot adımlarını uygula (history/{id}/)
-             - Snapshot altındaki tüm dosyalar read-only yapılır (chmod -w, symlink hariç)
+             - Snapshot altındaki tüm dosyalar read+execute yapılır (chmod 0555, symlink hariç)
           7. Mode'a göre idle davranış:
              - meek: hiçbir şey yapma
              - ro: dosyaları read-only yap (chmod -w)

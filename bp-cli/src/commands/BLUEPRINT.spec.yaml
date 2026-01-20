@@ -192,7 +192,7 @@ implementation:
         3: Snapshot oluştur (history/{id}/)
         4: history/{id}/ altına kod kopyala (direkt)
         5: history/{id}/ içinde dependency symlink'lerini oluştur (direkt)
-        6: history/{id}/ altındaki tüm dosyaları read-only yap (chmod -w, symlink hariç)
+        6: history/{id}/ altındaki tüm dosyaları read+execute yap (chmod 0555, symlink hariç)
         7: state.yaml güncelle
         8: current dosyasını güncelle
       exit_codes:
@@ -643,7 +643,7 @@ tests:
       then: |
         - {state_dir}/history/v10-release-a1b2/ oluşur
         - history/{id}/ altında kod + symlink'ler direkt oluşur
-        - history/{id}/ read-only yapılır
+        - history/{id}/ read+execute yapılır
         - {state_dir}/current güncellenir
         - exit 0
 
@@ -670,10 +670,10 @@ tests:
         - yamlparser/ → symlink
         - commands/ → symlink
 
-    - id: ss_makes_readonly
+    - id: ss_makes_readexec
       given: Snapshot alındı
       when: history/{id}/ dosya izinleri kontrol edilir
-      then: Write bit kapalı (read-only)
+      then: Write bit kapalı + execute bit açık (read+execute)
 
     # =========================================================================
     # NEW-LANG

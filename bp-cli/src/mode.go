@@ -2,29 +2,31 @@ package bp
 
 import "strings"
 
-// Mode returns the development mode for the blueprint (pussy | ro | hide).
-// Defaults to "pussy" on missing or invalid values.
+// Mode returns the development mode for the blueprint (meek | ro | hide).
+// Defaults to "meek" on missing or invalid values.
 func (b *Blueprint) Mode() string {
 	if b == nil || b.Data == nil {
-		return "pussy"
+		return "meek"
 	}
 	metaRaw, ok := b.Data["_meta"]
 	if !ok || metaRaw == nil {
-		return "pussy"
+		return "meek"
 	}
 	meta, ok := convertYAML(metaRaw).(map[string]interface{})
 	if !ok {
-		return "pussy"
+		return "meek"
 	}
 	raw, ok := meta["mode"].(string)
 	if !ok {
-		return "pussy"
+		return "meek"
 	}
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	switch mode {
-	case "pussy", "ro", "hide":
+	case "meek", "ro", "hide":
 		return mode
+	case "pussy":
+		return "meek"
 	default:
-		return "pussy"
+		return "meek"
 	}
 }

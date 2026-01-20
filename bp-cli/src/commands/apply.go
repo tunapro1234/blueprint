@@ -133,7 +133,8 @@ func SsCommand(ctx CommandContext) CommandResult {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot already exists: %s", snapshotID))
-		if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID), false); err != nil {
+		snapshotRoot := filepath.Join(bpObj.StateDir, "history", snapshotID)
+		if err := ensureDepsSymlinks(bpObj, deps, depsState, snapshotRoot, false); err != nil {
 			msg := fmt.Sprintf("Failed to create dependency symlinks: %s", err.Error())
 			out = strings.Join([]string{out, "✗ " + msg}, "\n")
 			return CommandResult{
@@ -141,6 +142,18 @@ func SsCommand(ctx CommandContext) CommandResult {
 				Output:   out,
 				Errors:   []string{msg},
 				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
+			}
+		}
+		if testCfg.SnapshotReadOnly {
+			if err := setSnapshotReadOnly(snapshotRoot); err != nil {
+				msg := fmt.Sprintf("Failed to set snapshot read-only: %s", err.Error())
+				out = strings.Join([]string{out, "✗ " + msg}, "\n")
+				return CommandResult{
+					ExitCode: 1,
+					Output:   out,
+					Errors:   []string{msg},
+					Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
+				}
 			}
 		}
 		return CommandResult{
@@ -159,8 +172,14 @@ func SsCommand(ctx CommandContext) CommandResult {
 	if err := copyImplementationSnapshot(trackedFiles, bpObj.StateDir, snapshotID, testCfg.SnapshotReadOnly); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := ensureDepsSymlinks(bpObj, deps, depsState, filepath.Join(bpObj.StateDir, "history", snapshotID), false); err != nil {
+	snapshotRoot := filepath.Join(bpObj.StateDir, "history", snapshotID)
+	if err := ensureDepsSymlinks(bpObj, deps, depsState, snapshotRoot, false); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	if testCfg.SnapshotReadOnly {
+		if err := setSnapshotReadOnly(snapshotRoot); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
 	}
 	if err := bpObj.SaveState(state); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
@@ -515,12 +534,40 @@ func copyImplementationSnapshot(files map[string]string, stateDir, id string, re
 			return err
 		}
 		if readOnly {
-			if err := makeReadOnly(dst, srcInfo.Mode().Perm()); err != nil {
+			if err := makeReadExecute(dst, srcInfo.Mode().Perm()); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func setSnapshotReadOnly(snapshotRoot string) error {
+	return filepath.WalkDir(snapshotRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return makeReadExecute(path, info.Mode().Perm())
+	})
+}
+
+// Snapshots are read+execute (0555) to keep scripts runnable.
+func makeReadExecute(path string, srcPerm os.FileMode) error {
+	perm := (srcPerm &^ 0o222) | 0o444 | 0o111
+	if perm == 0 {
+		perm = 0o555
+	}
+	return os.Chmod(path, perm)
 }
 
 func makeReadOnly(path string, srcPerm os.FileMode) error {

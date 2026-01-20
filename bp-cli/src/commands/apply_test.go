@@ -140,3 +140,52 @@ func TestCopyImplementationSnapshotReadOnly(t *testing.T) {
 		t.Fatalf("expected exec bits preserved, got mode %o", mode)
 	}
 }
+
+func TestSetSnapshotReadExecute(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod semantics differ on windows")
+	}
+	dir := t.TempDir()
+	snap := filepath.Join(dir, "snap")
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	blueprint := filepath.Join(snap, "BLUEPRINT.yaml")
+	meta := filepath.Join(snap, "meta.yaml")
+	execFile := filepath.Join(snap, "run.sh")
+	writeFile(t, blueprint, "_meta:\n  version: \"1\"\n")
+	writeFile(t, meta, "id: test\n")
+	writeFile(t, execFile, "#!/bin/sh\n")
+	if err := os.Chmod(execFile, 0o755); err != nil {
+		t.Fatalf("chmod exec: %v", err)
+	}
+	linkTarget := filepath.Join(dir, "target.txt")
+	writeFile(t, linkTarget, "hi")
+	linkPath := filepath.Join(snap, "dep")
+	if err := os.Symlink(linkTarget, linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	if err := setSnapshotReadOnly(snap); err != nil {
+		t.Fatalf("setSnapshotReadOnly: %v", err)
+	}
+
+	for _, path := range []string{blueprint, meta, execFile} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		mode := info.Mode().Perm()
+		if mode&0o222 != 0 {
+			t.Fatalf("expected read-only for %s, got mode %o", path, mode)
+		}
+		if mode&0o111 == 0 {
+			t.Fatalf("expected exec bits set for %s, got mode %o", path, mode)
+		}
+	}
+	if info, err := os.Lstat(linkPath); err != nil {
+		t.Fatalf("lstat link: %v", err)
+	} else if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink to remain")
+	}
+}

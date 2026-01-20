@@ -6,6 +6,7 @@ var COMMANDS = map[string]CommandHandler{
 	"plan":      PlanCommand,
 	"cancel":    CancelCommand,
 	"ss":        SsCommand,
+	"new-lang":  NewLangCommand,
 	"deps":      DepsCommand,
 	"map":       MapCommand,
 	"init":      InitCommand,

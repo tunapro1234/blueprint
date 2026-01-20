@@ -67,6 +67,14 @@ type ImplementResult struct {
 	MissingDeps []string
 }
 
+type NewLangResult struct {
+	Source       string
+	Target       string
+	Packages     int
+	Blueprints   int
+	SharedCopied int
+}
+
 type DepUpgrade struct {
 	Path       string
 	Current    string

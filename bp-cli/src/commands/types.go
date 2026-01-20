@@ -60,7 +60,9 @@ type SnapshotInfo struct {
 }
 
 type ImplementResult struct {
-	Ready       bool
+	Compiled    bool
+	SnapshotID  string
+	NoSnapshot  bool
 	Deps        []bp.DepState
 	MissingDeps []string
 }

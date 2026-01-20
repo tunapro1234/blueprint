@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"sort"
 	"testing"
-	"time"
 )
 
 func TestHashFunctions(t *testing.T) {
@@ -46,10 +45,12 @@ func TestHashFile(t *testing.T) {
 }
 
 func TestBuildSnapshotIDAndSlugify(t *testing.T) {
-	ts := time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC)
-	id := BuildSnapshotID(ts, "sha256:abcd1234", "Hello, World!")
-	if id != "20240102-0304-abcd-hello-world" {
+	id := BuildSnapshotID("sha256:abcd1234", "Hello, World!")
+	if id != "hello-world-abcd" {
 		t.Fatalf("unexpected snapshot id: %s", id)
+	}
+	if empty := BuildSnapshotID("sha256:abcd1234", ""); empty != "ss-abcd1234" {
+		t.Fatalf("unexpected empty snapshot id: %s", empty)
 	}
 	if slug := slugify("   "); slug != "snapshot" {
 		t.Fatalf("unexpected slug: %s", slug)

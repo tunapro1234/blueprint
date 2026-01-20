@@ -24,8 +24,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	if path == "" {
 		path = "."
 	}
-	clean, _ := ctx.Args["clean"].(bool)
-	snapshotInput, _ := ctx.Args["snapshot_id"].(string)
+	noSnapshot, _ := ctx.Args["no_snapshot"].(bool)
 	bpObj, err := bp.LoadBlueprint(path)
 	if err != nil {
 		if errors.Is(err, bp.ErrNotBlueprint) {
@@ -46,13 +45,27 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if active {
-		out := "Implementation already active. Run 'bp apply' to finish."
+		out := "Implementation already active."
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{out}}
+	}
+
+	if err := writeImplLock(bpObj.StateDir, "", "compile"); err != nil {
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+	locked := true
+	trackedFiles := map[string]string{}
+	cleanup := func() error {
+		if !locked {
+			return nil
+		}
+		locked = false
+		return finalizeApply(bpObj, trackedFiles)
 	}
 
 	tree := &bp.BlueprintTree{Root: bpObj.Dir}
 	deps, warnings, err := tree.ResolveDeps(bpObj)
 	if err != nil {
+		_ = cleanup()
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
@@ -68,6 +81,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	if state, err := bp.LoadState(filepath.Join(bpObj.StateDir, "state.yaml")); err == nil {
 		currentState = state
 	} else if err != nil && !errors.Is(err, bp.ErrNoSnapshot) {
+		_ = cleanup()
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if currentState.Deps == nil {
@@ -77,7 +91,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		currentState.Dependents = map[string]bp.DepRef{}
 	}
 
-	depLines := []string{"Dependencies:"}
+	depLines := []string{}
 	missing := []string{}
 	depStates := []bp.DepState{}
 	infos := []depInfo{}
@@ -90,6 +104,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 				missing = append(missing, label)
 				continue
 			}
+			_ = cleanup()
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		if strings.TrimSpace(state.SnapshotID) == "" {
@@ -99,6 +114,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		snapshotID := state.SnapshotID
 		apiHash, err := apiHashForSnapshot(dep, snapshotID)
 		if err != nil {
+			_ = cleanup()
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		rotten := false
@@ -107,6 +123,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		}
 		rel, err := filepath.Rel(dep.Dir, bpObj.Dir)
 		if err != nil {
+			_ = cleanup()
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		rel = filepath.ToSlash(rel)
@@ -123,53 +140,15 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 	if len(missing) > 0 {
 		errLines := make([]string, 0, len(missing))
 		for _, dep := range missing {
-			errLines = append(errLines, fmt.Sprintf("✗ Dependency %s has no snapshot. Run 'bp apply' in %s first.", dep, dep))
+			errLines = append(errLines, fmt.Sprintf("✗ Dependency %s has no snapshot. Run 'bp ss' in %s first.", dep, dep))
 		}
+		_ = cleanup()
 		out := strings.Join(append(warnLines, errLines...), "\n")
 		return CommandResult{
 			ExitCode: 1,
 			Output:   out,
 			Errors:   errLines,
-			Data:     ImplementResult{Ready: false, Deps: depStates, MissingDeps: missing},
-		}
-	}
-
-	restoreID := ""
-	if mode == "hide" && !clean {
-		restoreID, err = resolveImplementationSnapshotID(bpObj.StateDir, snapshotInput)
-		if err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
-		if err := restoreImplementationSnapshot(bpObj.StateDir, restoreID, bpObj.Dir); err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
-	}
-
-	if len(deps) == 0 {
-		if mode == "ro" {
-			trackedFiles, err := bpObj.TrackedFiles()
-			if err != nil {
-				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-			}
-			if err := setTrackedFilesWritable(trackedFiles); err != nil {
-				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-			}
-		}
-		lockMode := "restore"
-		if clean {
-			lockMode = "clean"
-		}
-		if err := writeImplLock(bpObj.StateDir, restoreID, lockMode); err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
-		out := "No dependencies, ready to implement."
-		if len(warnLines) > 0 {
-			out = strings.Join(append(warnLines, out), "\n")
-		}
-		return CommandResult{
-			ExitCode: 0,
-			Output:   out,
-			Data:     ImplementResult{Ready: true, Deps: []bp.DepState{}, MissingDeps: []string{}},
+			Data:     ImplementResult{Compiled: false, NoSnapshot: noSnapshot, Deps: depStates, MissingDeps: missing},
 		}
 	}
 
@@ -179,6 +158,7 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		}
 		info.state.Dependents[info.relPath] = bp.DepRef{Using: info.snapshotID}
 		if err := info.bp.SaveState(info.state); err != nil {
+			_ = cleanup()
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 		currentState.Deps[info.label] = bp.DepState{
@@ -191,31 +171,73 @@ func ImplementCommand(ctx CommandContext) CommandResult {
 		}
 	}
 	if err := bpObj.SaveState(currentState); err != nil {
+		_ = cleanup()
+		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+	}
+
+	if mode == "hide" {
+		if currentID, err := readCurrentSnapshotID(bpObj.StateDir); err == nil {
+			if err := restoreImplementationSnapshot(bpObj.StateDir, currentID, bpObj.Dir); err != nil {
+				_ = cleanup()
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
+		} else if !errors.Is(err, bp.ErrNoSnapshot) && !errors.Is(err, ErrInvalidCurrentID) {
+			_ = cleanup()
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+	}
+
+	trackedFiles, err = bpObj.TrackedFiles()
+	if err != nil {
+		_ = cleanup()
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
 	if mode == "ro" {
-		trackedFiles, err := bpObj.TrackedFiles()
-		if err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-		}
 		if err := setTrackedFilesWritable(trackedFiles); err != nil {
+			_ = cleanup()
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
 	}
-	lockMode := "restore"
-	if clean {
-		lockMode = "clean"
+
+	snapshotID := ""
+	if !noSnapshot {
+		snapCtx := CommandContext{Path: bpObj.Dir, Args: map[string]any{"message": "", "skip_tests": false}}
+		snapResult := SsCommand(snapCtx)
+		if snapResult.ExitCode != 0 {
+			_ = cleanup()
+			return CommandResult{
+				ExitCode: snapResult.ExitCode,
+				Output:   snapResult.Output,
+				Errors:   snapResult.Errors,
+				Data:     ImplementResult{Compiled: false, NoSnapshot: noSnapshot, Deps: depStates, MissingDeps: []string{}},
+			}
+		}
+		if info, ok := snapResult.Data.(SnapshotInfo); ok {
+			snapshotID = info.ID
+		}
 	}
-	if err := writeImplLock(bpObj.StateDir, restoreID, lockMode); err != nil {
+
+	if err := cleanup(); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 
-	lines := append(warnLines, depLines...)
-	lines = append(lines, "Ready to implement.")
+	lines := append([]string{}, warnLines...)
+	if len(deps) > 0 {
+		lines = append(lines, "Compiled:")
+		lines = append(lines, depLines...)
+	}
+	if noSnapshot {
+		lines = append(lines, "Compiled (no snapshot)")
+	} else if len(deps) == 0 {
+		lines = append(lines, "Compiled")
+		lines = append(lines, fmt.Sprintf("Snapshot: %s", snapshotID))
+	} else {
+		lines = append(lines, fmt.Sprintf("Snapshot: %s", snapshotID))
+	}
 	return CommandResult{
 		ExitCode: 0,
 		Output:   strings.Join(lines, "\n"),
-		Data:     ImplementResult{Ready: true, Deps: depStates, MissingDeps: []string{}},
+		Data:     ImplementResult{Compiled: true, SnapshotID: snapshotID, NoSnapshot: noSnapshot, Deps: depStates, MissingDeps: []string{}},
 	}
 }

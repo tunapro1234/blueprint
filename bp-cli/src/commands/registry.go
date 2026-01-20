@@ -5,7 +5,7 @@ var COMMANDS = map[string]CommandHandler{
 	"status":    StatusCommand,
 	"plan":      PlanCommand,
 	"cancel":    CancelCommand,
-	"apply":     ApplyCommand,
+	"ss":        SsCommand,
 	"deps":      DepsCommand,
 	"map":       MapCommand,
 	"init":      InitCommand,

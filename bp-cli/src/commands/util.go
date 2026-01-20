@@ -186,14 +186,21 @@ func resolveSnapshotID(stateDir, input string) (string, error) {
 		}
 		if _, err := os.Stat(snapshotDir(stateDir, id)); err != nil {
 			if os.IsNotExist(err) {
+				matches, matchErr := matchSnapshotPrefix(stateDir, id)
+				if matchErr != nil {
+					return "", matchErr
+				}
+				if len(matches) == 1 {
+					return matches[0], nil
+				}
+				if len(matches) > 1 {
+					return "", fmt.Errorf("Snapshot #%s is ambiguous", raw)
+				}
 				return "", fmt.Errorf("Snapshot #%s not found", raw)
 			}
 			return "", err
 		}
 		return id, nil
-	}
-	if len(id) < len("20060102") {
-		return "", fmt.Errorf("Snapshot #%s not found", raw)
 	}
 	matches, err := matchSnapshotPrefix(stateDir, id)
 	if err != nil {

@@ -147,21 +147,30 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			continue
 		}
 
+		prevPinned := depState.Pinned
+		prevAPIHash := depState.APIHash
+		depState.Pinned = latestID
+		depState.APIHash = latestAPI
+		depState.APIChanged = false
+		state.Deps[key] = depState
+		if err := bpObj.SaveState(state); err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+
 		if err := runBlueprintTests(bpObj, testCfg); err != nil {
 			_ = setSnapshotRotten(depBp.StateDir, latestID, true)
-			depState.Latest = latestID
-			depState.LatestAPIHash = latestAPI
+			depState.Pinned = prevPinned
+			depState.APIHash = prevAPIHash
 			depState.APIChanged = apiChanged
 			depState.Rotten = true
 			state.Deps[key] = depState
+			_ = bpObj.SaveState(state)
 			failed = append(failed, key)
 			lines = append(lines, fmt.Sprintf("Failed %s: tests failed, rolled back, marked rotten", key))
 			continue
 		}
 
-		depState.Pinned = latestID
 		depState.Latest = latestID
-		depState.APIHash = latestAPI
 		depState.LatestAPIHash = latestAPI
 		depState.APIChanged = false
 		depState.Rotten = latestRotten

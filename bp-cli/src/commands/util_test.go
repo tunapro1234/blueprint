@@ -118,10 +118,10 @@ func TestResolveSnapshotID(t *testing.T) {
 	if got, err := resolveSnapshotID(stateDir, id1); err != nil || got != id1 {
 		t.Fatalf("expected id1, got %s, err %v", got, err)
 	}
-	if _, err := resolveSnapshotID(stateDir, "20240102-0304"); err == nil {
+	if _, err := resolveSnapshotID(stateDir, "20240102-0304-"); err == nil {
 		t.Fatalf("expected ambiguous error")
 	}
-	if got, err := resolveSnapshotID(stateDir, "20240102-0305"); err != nil || got != id3 {
+	if got, err := resolveSnapshotID(stateDir, "20240102-0305-acde-"); err != nil || got != id3 {
 		t.Fatalf("expected id3, got %s, err %v", got, err)
 	}
 	if _, err := resolveSnapshotID(stateDir, "2024"); err == nil {

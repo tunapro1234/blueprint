@@ -9,7 +9,7 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 ### Değişiklikler
 1. **deps/ klasörü kaldırıldı** - Symlink'ler sadece snapshot history içinde
 2. **impl/ klasörü kaldırıldı** - Kod direkt snapshot'ta
-3. **3 development mode** - pussy, ro, hide (default: pussy)
+3. **3 development mode** - meek, ro, hide (default: meek)
 4. **Default state_dir** - `.blueprint/` (gizli)
 
 ### Yeni Snapshot Yapısı
@@ -32,14 +32,14 @@ package/
 ### Development Modes
 | Mode | `bp impl` | `bp ss` | Dosyalar |
 |------|-----------|---------|----------|
-| **pussy** (default) | busy flag only | snapshot only | Her zaman var, her zaman writable |
+| **meek** (default) | busy flag only | snapshot only | Her zaman var, her zaman writable |
 | **ro** | derleme boyunca writable, sonra read-only | izin değiştirmez | Her zaman var, idle'da read-only |
 | **hide** | derleme için görünür, sonra gizle | snapshot alır (kod yoksa boş) | Sadece derleme sırasında var |
 
 ```yaml
 _meta:
   state_dir: ".blueprint"  # default
-  mode: pussy               # default (pussy | ro | hide)
+  mode: meek               # default (meek | ro | hide)
 ```
 
 ---
@@ -122,6 +122,14 @@ Snapshot içinde:
 └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
 ```
 
+## Multi-language Kökler
+- Dil kökleri `src-<lang>` altında tutulur (örn. `src-go`, `src-rs`)
+- `bp new-lang rs --from go` yeni kök oluşturur
+  - Paket klasörleri oluşturulur
+  - API blueprint dosyaları symlink edilir, diğer blueprint dosyaları kopyalanır
+  - Implementasyon dosyaları kopyalanmaz
+- `bp map --langs` API hash eşitliğini gösterir
+
 ## Temel Komutlar
 
 ```bash
@@ -141,6 +149,9 @@ cd src && go test ./...
 # 6. Dependency güncelle (pin güncellenir; symlink snapshot'ta oluşur)
 ./bp upgrade --all
 
+# 6.5 Yeni dil kökü oluştur (opsiyonel)
+./bp new-lang rs --from go
+
 # 7. Sonraki iterasyon için
 ./bp impl veya ./bp ss
 ```
@@ -151,13 +162,13 @@ cd src && go test ./...
 1. Blueprint validate edilir
 2. `tests.verification` komutları çalıştırılır
 3. Dosyalar `history/{id}/` altına kopyalanır (BLUEPRINT.yaml, kod, symlink'ler)
-4. Snapshot dosyaları read-only yapılır (chmod -w)
+4. Snapshot altındaki tüm dosyalar read-only yapılır (chmod -w, symlink hariç)
 5. Working tree'ye dokunulmaz
 
 ### `bp impl` çalıştırıldığında:
 - Agentic derleme yapılır, opsiyonel snapshot alınır (`--no-snapshot` ile kapatılır)
 - Mode'a göre idle davranış:
-  - **pussy**: hiçbir şey yapma
+  - **meek**: hiçbir şey yapma
   - **ro**: dosyaları read-only yap
   - **hide**: kod dosyalarını gizle
 - impl.lock sadece derleme süresince "busy" flag'dir
@@ -201,8 +212,8 @@ from deps.yamlparser import parser  # KALDIRILDI
 - İçerik: `current`, `state.yaml`, `history/`
 
 ## Development Mode
-- `_meta.mode` ile ayarlanır (default: `pussy`)
-- **pussy**: Hiçbir şeyi zorlamaz
+- `_meta.mode` ile ayarlanır (default: `meek`)
+- **meek**: Hiçbir şeyi zorlamaz
 - **ro**: idle durumda read-only zorlar (chmod)
 - **hide**: derleme sonrası kodları gizler
 
@@ -232,7 +243,7 @@ Notlar:
 - ro mode'da idle durumda dosyalar read-only'dir.
 - Import'lar gerçek dependency klasörlerinden yapılır (deps/ yok).
 - `bp upgrade` çalıştırıldığında pinler güncellenir, symlink'ler snapshot'ta oluşur.
-- Snapshot dosyaları read-only yapılır.
+- Snapshot altındaki tüm dosyalar read-only yapılır (symlink hariç).
 
 ## Komut Referansı
 
@@ -240,12 +251,13 @@ Notlar:
 |-------|----------|
 | `bp implement` | Agentic derleme + opsiyonel snapshot |
 | `bp ss -m "msg"` | Manuel snapshot (validate + test + read-only) |
+| `bp new-lang <lang>` | Yeni dil kökü oluştur (API blueprint symlink, diğerleri kopya) |
 | `bp validate [--no-recursive]` | Blueprint doğrula |
 | `bp status [--no-recursive]` | Değişiklik kontrolü |
 | `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |
-| `bp map [--no-recursive]` | Proje haritası: tüm paketler, snapshot'lar, dependency'ler |
+| `bp map [--no-recursive] [--langs]` | Proje haritası + dil karşılaştırması |
 | `bp upgrade [--all] [--force]` | Dependency güncelle (pin günceller, test çalıştırır) |
-| `bp cancel` | Aktif implementasyonu iptal et |
+| `bp cancel` | Aktif derlemeyi iptal et |
 | `bp log [-n N]` | Snapshot history |
 | `bp diff [id1] [id2]` | Snapshot karşılaştır |
 | `bp show [id]` | Belirli snapshot'ı göster |

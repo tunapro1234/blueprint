@@ -121,10 +121,17 @@ workflow_policy:
     - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
     - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
 
-  modes: |
-    Development mode'lar (_meta.mode ile ayarlanır, default: pussy):
+  language_policy: |
+    Multi-language kökler (src-<lang>):
+    - new-lang komutu package ağacını oluşturur
+    - API blueprint dosyaları symlink edilir; diğer blueprint dosyaları kopyalanır
+    - Implementasyon dosyaları diller arasında kopyalanmaz
+    - API hash eşitliği map --langs ile kontrol edilir
 
-    pussy (default):
+  modes: |
+    Development mode'lar (_meta.mode ile ayarlanır, default: meek):
+
+    meek (default):
       - Hiçbir şeyi zorlamaz
       - bp impl: derleme sırasında impl.lock "busy" flag
       - bp ss: snapshot alır, working tree'ye dokunmaz
@@ -172,6 +179,24 @@ workflow_policy:
         2. src/ → root değil, topmost_blueprint = src/
         3. project/ → _meta.root: true → ROOT BULUNDU
         4. "bp validate /project/" çalışır
+
+    new_lang_algorithm: |
+      bp new-lang algoritması:
+      1. Root blueprint'i bul (veya --root kullan)
+      2. Kaynak dil kökünü seç:
+         - --from verilmişse src-<from>
+         - Değilse ilk bulunan src-* klasörü
+      3. Hedef kökü belirle:
+         - --target verilmişse kullan
+         - Değilse src-<lang>
+      4. Hedef varsa hata ver
+      5. Kaynak kökte package ağacını tara:
+         - Her paket için klasör oluştur
+         - API blueprint dosyalarını symlink et (pattern bazlı)
+         - Diğer blueprint dosyalarını kopyala
+         - Implementation dosyalarını kopyalama
+      6. Kaynak kökte blueprint olmayan klasörleri kopyala (shared assets)
+      7. Languages listesi varsa güncelle (opsiyonel)
 
     staleness_check: |
       1. {state_dir}/state.yaml oku (yoksa → no_snapshot)
@@ -357,7 +382,7 @@ workflow_policy:
       5. Agentic derleme: BLUEPRINT.spec'e göre kodu üret/güncelle
       6. --no-snapshot verilmemişse ss algoritması çalıştırılır
       7. Mode'a göre idle davranış:
-         - pussy: hiçbir şey yapma
+         - meek: hiçbir şey yapma
          - ro: dosyaları read-only yap (chmod -w)
          - hide: working tree'deki kod dosyalarını temizle
       8. impl.lock sil
@@ -401,17 +426,17 @@ workflow_policy:
          c. meta.yaml oluştur (id, timestamp, message, hashes)
          d. Kod dosyalarını kopyala (direkt, impl/ yok)
          e. Symlink'leri kopyala/oluştur (direkt, deps/ yok)
-         f. history/{id}/ altını read-only yap (chmod -w)
+         f. history/{id}/ altındaki tüm dosyaları read-only yap (chmod -w, symlink hariç)
       4. state.yaml güncelle (snapshot_id, hashes, deps)
       5. current dosyasını güncelle
       6. Working tree'ye dokunma
 
     cancel_algorithm: |
       bp cancel algoritması:
-      1. impl.lock yoksa → hata: "No active implementation"
+      1. impl.lock yoksa → hata: "No active compilation"
       2. impl.lock sil
       3. Mode'a göre idle davranış uygula (ro/hide)
-      4. "Implementation cancelled" mesajı
+      4. "Compilation cancelled" mesajı
 
   decisions:
     - q: Paketler arası iletişim nasıl?
@@ -649,9 +674,9 @@ workflow_policy:
 
     - q: Development mode'lar nedir?
       a: |
-        _meta.mode ile ayarlanır (default: pussy):
+        _meta.mode ile ayarlanır (default: meek):
 
-        pussy (default): Hiçbir şeyi zorlamaz
+        meek (default): Hiçbir şeyi zorlamaz
         - Working tree her zaman aktif
         - impl.lock sadece derleme sırasında busy flag
 
@@ -1007,8 +1032,8 @@ tests:
       when: bp impl --no-snapshot
       then: Kod dosyaları silinir, BLUEPRINT.yaml kalır
 
-    - id: mode_pussy_no_enforcement
-      given: pussy mode
+    - id: mode_meek_no_enforcement
+      given: meek mode
       when: bp ss, bp impl --no-snapshot
       then: Dosya permissions değişmez, her zaman writable
 

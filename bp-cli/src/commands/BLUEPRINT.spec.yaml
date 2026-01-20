@@ -29,6 +29,7 @@ implementation:
     - plan module         # Leaf-first plan listesi
     - cancel module       # Implementation iptal
     - ss module           # Manuel snapshot al
+    - new_lang module     # Yeni dil kökü oluştur
     - deps module         # + --upgrades flag
     - map module          # Project map - snapshot/dependency durumu
     - init module
@@ -78,7 +79,7 @@ implementation:
         no_snapshot: {state_dir}/state.yaml yok
       flags:
         implementing: impl.lock varsa true (derleme sırasında)
-        read_only: ro mode'da impl.lock yoksa true
+        read_only: ro mode'da idle ise true
         working_clean: tracked dosyalarda değişiklik yok
         blueprint_changed: BLUEPRINT.yaml hash değişmiş
         api_changed: API section hash değişmiş
@@ -175,10 +176,10 @@ implementation:
       purpose: Aktif derlemeyi iptal et (busy flag temizler)
       steps:
         1: impl.lock var mı kontrol et
-        2: Yoksa: "No active implementation.", exit 1
+        2: Yoksa: "No active compilation.", exit 1
         3: Varsa: impl.lock sil
-        4: Mode'a göre cleanup yap (pussy: none, ro: chmod -w, hide: delete)
-        5: "Implementation cancelled.", exit 0
+        4: Mode'a göre cleanup yap (meek: none, ro: chmod -w, hide: delete)
+        5: "Compilation cancelled.", exit 0
       exit_codes:
         0: Başarılı
         1: Aktif implementasyon yok veya hata
@@ -191,13 +192,32 @@ implementation:
         3: Snapshot oluştur (history/{id}/)
         4: history/{id}/ altına kod kopyala (direkt)
         5: history/{id}/ içinde dependency symlink'lerini oluştur (direkt)
-        6: history/{id}/ altını read-only yap (chmod -w)
+        6: history/{id}/ altındaki tüm dosyaları read-only yap (chmod -w, symlink hariç)
         7: state.yaml güncelle
         8: current dosyasını güncelle
       exit_codes:
         0: Başarılı
         1: Testler başarısız veya hata
         2: Validation hatası
+
+    new-lang:
+      purpose: Yeni dil kökü oluştur (src-<lang>)
+      steps:
+        1: Root blueprint'i bul (veya --root kullan)
+        2: Kaynak dil kökünü seç (src-<from> veya ilk src-*)
+        3: Hedef kökü belirle (default src-<lang>, --target override)
+        4: Hedef varsa hata ver
+        5: |
+           Kaynak kökten package ağacını kopyala:
+           - Paket klasörlerini oluştur
+           - API blueprint dosyalarını symlink et (pattern bazlı)
+           - Diğer blueprint dosyalarını kopyala
+           - Implementation dosyalarını kopyalama
+        6: Kaynak kökte blueprint olmayan klasörleri kopyala (shared assets)
+        7: Languages listesi varsa güncelle (opsiyonel)
+      exit_codes:
+        0: Başarılı
+        1: Kaynak bulunamadı / hedef zaten var / hata
 
     deps:
       algorithm: Kahn's algorithm (topological sort)
@@ -344,7 +364,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 14 komut var (validate, status, plan, cancel, ss, deps, map, init, log, diff, show, implement, impl, upgrade)
+      then: 15 komut var (validate, status, plan, cancel, ss, new-lang, deps, map, init, log, diff, show, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut
@@ -465,12 +485,12 @@ tests:
     - id: cancel_no_active
       given: impl.lock yok
       when: bp cancel
-      then: '"No active implementation.", exit 1'
+      then: '"No active compilation.", exit 1'
 
     - id: cancel_success
       given: impl.lock var
       when: bp cancel
-      then: '"Implementation cancelled.", exit 0'
+      then: '"Compilation cancelled.", exit 0'
 
     # =========================================================================
     # DEPS
@@ -656,6 +676,39 @@ tests:
       then: Write bit kapalı (read-only)
 
     # =========================================================================
+    # NEW-LANG
+    # =========================================================================
+    - id: new_lang_creates_root
+      given: src-go var, src-rs yok
+      when: bp new-lang rs --from go
+      then: src-rs/ oluşur, exit 0
+
+    - id: new_lang_symlinks_api_blueprints
+      given: src-go/p1/BLUEPRINT.api.yaml var
+      when: bp new-lang rs --from go
+      then: src-rs/p1/BLUEPRINT.api.yaml symlink olur (aynı blueprint'e işaret eder)
+
+    - id: new_lang_copies_spec_blueprints
+      given: src-go/p1/BLUEPRINT.spec.yaml var
+      when: bp new-lang rs --from go
+      then: src-rs/p1/BLUEPRINT.spec.yaml kopyalanır (symlink değil)
+
+    - id: new_lang_copies_shared_dirs
+      given: src-go/assets/ (blueprint olmayan klasör)
+      when: bp new-lang rs --from go
+      then: src-rs/assets/ kopyalanır
+
+    - id: new_lang_skips_impl_files
+      given: src-go/p1/main.go var
+      when: bp new-lang rs --from go
+      then: src-rs/p1/main.go kopyalanmaz
+
+    - id: new_lang_target_exists
+      given: src-rs zaten var
+      when: bp new-lang rs --from go
+      then: exit 1, "Target exists"
+
+    # =========================================================================
     # DEPENDENCY TRACKING (STATUS)
     # =========================================================================
 
@@ -820,6 +873,16 @@ tests:
           snapshot: stable-x1y2
           api: sha256:def456...
           deps: (none)
+
+    - id: map_langs
+      given: src-go ve src-rs var, API blueprint'ler symlink
+      when: bp map --langs
+      then: |
+        Languages:
+          go: src-go
+          rs: src-rs
+        Package: ./parser
+          status: OK
 
     - id: map_shows_rotten
       given: Dependency rotten flag var

@@ -49,7 +49,7 @@ This tool is **snapshot-based** (not Git-based): it stores state alongside each 
 Requires Go 1.22+
 
 ```
-cd src && go build -o ../bp ./cmd/bp
+cd src-go && go build -o ../bp ./cmd/bp
 ```
 
 ## Quick Start
@@ -93,15 +93,16 @@ _meta:
 - `bp show [path] [id]`
 - `bp impl [path] [--no-snapshot|-ns]` (alias of `bp implement`)
 - `bp ss [path] [-m|--message] [--skip-tests]`
+- `bp new-lang <lang> [--from <lang>] [--root <path>] [--target <dir>]`
 - `bp upgrade [dep-path] [--safe] [--all] [--force]`
 - `bp cancel [path]`
 
 ## Development Modes
-Configure with `_meta.mode` (default: `pussy`):
+Configure with `_meta.mode` (default: `meek`):
 
 | Mode | `bp impl` | `bp ss` |
 |------|-----------|---------|
-| **pussy** (default) | busy flag only | snapshot only |
+| **meek** (default) | busy flag only | snapshot only |
 | **ro** | derleme boyunca writable, sonra read-only | izin değiştirmez |
 | **hide** | derleme için görünür, sonra gizle | snapshot alır (kod yoksa boş) |
 
@@ -127,12 +128,20 @@ Snapshot IDs:
 - Without message: `ss-{hash8}` (e.g. `ss-a3f2b7c1`)
 Timestamp is stored in `meta.yaml`.
 
+## Multi-language Roots
+- Language roots live under `src-<lang>` (e.g. `src-go`, `src-rs`)
+- `bp new-lang rs --from go` creates a new root:
+  - Package directories are created
+  - API blueprint files are symlinked; other blueprint files are copied
+  - Implementation files are **not** copied
+- `bp map --langs` shows API hash alignment across languages
+
 `bp ss` will:
 1) Validate the blueprint
 2) Run `tests.verification` commands (unless `--skip-tests`)
 3) Copy files to `history/{id}/` (directly, no impl/)
 4) Create symlinks for dependencies (directly, no deps/)
-5) Mark snapshot files as read-only (chmod -w)
+5) Mark all files under `history/{id}/` as read-only (chmod -w, symlinks skipped)
 6) Update state.yaml + current
 7) Leave working tree untouched
 
@@ -172,7 +181,7 @@ The custom parser:
 BLUEPRINT.yaml     # Root project blueprint
 README.md          # This file
 .gitignore         # Git ignore rules
-src/               # All source code
+src-go/            # Language root (example)
   BLUEPRINT.yaml   # Library blueprint (API, types, algorithms)
   cmd/bp/          # CLI entrypoint
   commands/        # CLI command handlers
@@ -183,7 +192,7 @@ src/               # All source code
 ## Development
 Run tests:
 ```
-cd src && go test ./...
+cd src-go && go test ./...
 ```
 
 Validate all blueprints (default recursive):

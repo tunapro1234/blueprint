@@ -6,7 +6,7 @@ _meta:
   status: draft
   root: true  # Bu proje root'u - alt paketlerde argümansız komutlar buradan çalışır
   # state_dir: ".blueprint"  # default
-  # mode: pussy               # default (pussy | ro | hide)
+  # mode: meek               # default (meek | ro | hide)
 
 # =============================================================================
 # PROJECT INFO
@@ -54,6 +54,7 @@ overview: |
   - Hash-based snapshot sistemi (slug-hash / ss-hash formatı)
   - Dependency tracking ve reverse tracking
   - Dependency pinning ve upgrade yönetimi
+  - Çoklu dil kökleri için new-lang desteği (src-<lang>)
 
 # =============================================================================
 # PLAN
@@ -89,14 +90,29 @@ dependency_policy:
     - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
     - bp upgrade pinleri günceller; symlink'ler snapshot'ta oluşur
 
+language_policy:
+  summary: |
+    Multi-language kökler (src-<lang>):
+    - Örnek: src-go, src-rs
+    - new-lang komutu paket ağacını oluşturur; API blueprint'ler symlink, diğer blueprint'ler kopya
+    - Implementasyonlar diller arasında kopyalanmaz (bağımsız)
+    - API hash eşitliği map --langs ile kontrol edilir
+  blueprint_patterns:
+    - BLUEPRINT.yaml
+    - .BLUEPRINT.yaml
+    - BLUEPRINT.*.yaml
+    - .BLUEPRINT.*.yaml
+    - "*.BP.yaml"
+    - "*.bp.yaml"
+
 # =============================================================================
 # PROJECT STRUCTURE
 # =============================================================================
 
 structure:
   directories:
-    src/:
-      desc: Tüm kaynak kodlar ve iç blueprint'ler
+    src-*/:
+      desc: Dil kökleri (örn. src-go, src-rs)
       has_blueprint: true
     .blueprint/:
       desc: bp tool'un internal state'i (history, snapshots, state)
@@ -136,7 +152,7 @@ structure:
 # =============================================================================
 
 build:
-  command: "cd src && go build -o ../bp ./cmd/bp"
+  command: "cd src-go && go build -o ../bp ./cmd/bp"
   output: "./bp"
   requirements:
     - Go 1.22+
@@ -151,6 +167,7 @@ usage:
     - "bp impl"
     - "bp impl --no-snapshot"
     - "bp ss -m 'Initial snapshot'"
+    - "bp new-lang rs --from go"
     - "bp upgrade --all"
     - "bp deps --upgrades"
 
@@ -164,8 +181,9 @@ workflow:
     1) Önce BLUEPRINT.yaml / BLUEPRINT.spec.yaml güncellenir
     2) bp plan ile leaf-first sıra çıkarılır (default recursive)
     3) Her paket için: bp impl (agentic derleme + snapshot) veya bp ss (manual snapshot)
+    3.5) Yeni dil kökü gerekiyorsa: bp new-lang <lang> --from <lang>
     4) Mode'a göre davranış:
-       - pussy (default): hiçbir şey değişmez
+       - meek (default): hiçbir şey değişmez
        - ro: dosyalar read-only olur
        - hide: kod dosyaları silinir
   notes:

@@ -61,6 +61,7 @@ api:
           "plan": plan_command,
           "cancel": cancel_command,
           "ss": ss_command,
+          "new-lang": new_lang_command,
           "deps": deps_command,
           "map": map_command,
           "init": init_command,
@@ -90,9 +91,10 @@ api:
         - validate: {no_recursive: bool}
         - status: {no_recursive: bool}
         - plan: {no_recursive: bool}
-        - map: {no_recursive: bool}
+        - map: {no_recursive: bool, langs: bool}
         - cancel: {}
         - ss: {message: string?, skip_tests: bool}
+        - new-lang: {lang: string, from: string?, root: string?, target: string?}
         - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10
@@ -115,6 +117,7 @@ api:
         - plan: PlanResult
         - cancel: null
         - ss: SnapshotInfo
+        - new-lang: NewLangResult
         - deps: string[] (topological order) veya DepUpgrade[] (--upgrades)
         - log: HistoryEntry[]
         - diff: DiffResult
@@ -171,6 +174,14 @@ api:
         - no_snapshot: bool             # --no-snapshot kullanıldı mı?
         - deps: DepState[]              # Pin'lenmiş dependency'ler
         - missing_deps: string[]        # Snapshot'ı olmayan dependency'ler
+
+    - name: NewLangResult
+      fields:
+        - source: string                # Kaynak dil kökü (src-*)
+        - target: string                # Hedef dil kökü
+        - packages: int                 # Oluşturulan paket sayısı
+        - blueprints: int               # Symlink edilen API blueprint sayısı
+        - shared_copied: int            # Kopyalanan shared dosya/klasör sayısı
 
     - name: UpgradeResult
       fields:

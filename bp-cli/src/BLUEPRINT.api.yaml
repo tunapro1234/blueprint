@@ -9,12 +9,12 @@ api:
 
     defaults:
       state_dir: ".blueprint"
-      mode: pussy  # pussy | ro | hide
+      mode: meek  # meek | ro | hide
 
     modes: |
-      Development mode'lar (_meta.mode ile ayarlanır, default: pussy):
+      Development mode'lar (_meta.mode ile ayarlanır, default: meek):
 
-      pussy (default):
+      meek (default):
         - Hiçbir şeyi zorlamaz
         - Working tree her zaman aktif
         - bp impl: derleme sırasında impl.lock "busy" flag
@@ -141,10 +141,10 @@ api:
           - Mode'a göre:
             - ro: dosyaları read-only yap
             - hide: dosyaları temizle
-            - pussy: hiçbir şey yapma
+            - meek: hiçbir şey yapma
         output:
-          success: "Implementation cancelled."
-          no_active: "No active implementation."
+          success: "Compilation cancelled."
+          no_active: "No active compilation."
         exit_codes:
           0: Başarılı
           1: Aktif implementasyon yok veya hata
@@ -165,7 +165,7 @@ api:
             - meta.yaml oluşturulur
             - Kod dosyaları kopyalanır (direkt, impl/ yok)
             - Symlink'ler kopyalanır (direkt, deps/ yok)
-            - history/{id}/ altı read-only yapılır (chmod -w)
+            - history/{id}/ altındaki tüm dosyalar read-only yapılır (chmod -w, symlink hariç)
           - state.yaml ve current güncellenir
           - Working tree'ye dokunulmaz
         output:
@@ -174,6 +174,32 @@ api:
           0: Başarılı
           1: Testler başarısız veya hata
           2: Validation hatası
+
+      - name: new-lang
+        desc: Yeni dil kökü oluştur (src-<lang>)
+        usage: bp new-lang <lang> [--from <lang>] [--root <path>] [--target <dir>]
+        flags:
+          - name: --from
+            desc: Kaynak dil (varsayılan: bulunan ilk src-*)
+          - name: --root
+            desc: Root path override (default: root blueprint)
+          - name: --target
+            desc: Hedef klasör (default: src-<lang>)
+        behavior: |
+          - Root blueprint bulunur (veya --root kullanılır)
+          - Kaynak dil kökü seçilir (src-<from> veya ilk src-*)
+          - Hedef kök oluşturulur (varsa hata)
+          - Kaynak kökteki package ağacı kopyalanır:
+            - Her paket için klasör oluşturulur
+            - API blueprint dosyaları symlink edilir, diğer blueprint dosyaları kopyalanır (pattern bazlı)
+            - Implementation dosyaları kopyalanmaz
+          - Kaynak kökte blueprint olmayan klasörler dosya/dizin olarak kopyalanır (shared assets)
+          - Languages listesi varsa güncellenir (yoksa dokunulmaz)
+        output:
+          success: "Language root created: {target}"
+        exit_codes:
+          0: Başarılı
+          1: Kaynak bulunamadı / hedef zaten var / hata
 
       - name: deps
         desc: Dependency graph göster
@@ -196,10 +222,12 @@ api:
 
       - name: map
         desc: Project map - tüm paketlerin snapshot ve dependency durumu
-        usage: bp map [path] [--no-recursive]
+        usage: bp map [path] [--no-recursive] [--langs]
         flags:
           - name: -nr, --no-recursive
             desc: Sadece verilen paketi göster
+          - name: --langs
+            desc: Dil kökleri arasında API hash karşılaştırması göster
         behavior: |
           Default recursive olarak tüm paketleri tarar ve her biri için gösterir:
           - Paket adı ve path
@@ -226,6 +254,16 @@ api:
               api: sha256:ghi789...
               deps:
                 ./yamlparser @ stable-x1y2 (api: def456)
+          langs: |
+            Languages:
+              go: src-go
+              rs: src-rs
+
+            Package: ./parser
+              api_hash:
+                go: sha256:abc123...
+                rs: sha256:abc123...
+              status: OK
         exit_codes:
           0: Başarılı
           1: Hata
@@ -298,9 +336,9 @@ api:
           5. Agentic derleme: BLUEPRINT.spec'e göre kodu üret/güncelle
           6. --no-snapshot verilmemişse:
              - ss ile aynı snapshot adımlarını uygula (history/{id}/)
-             - Snapshot read-only yapılır (chmod -w)
+             - Snapshot altındaki tüm dosyalar read-only yapılır (chmod -w, symlink hariç)
           7. Mode'a göre idle davranış:
-             - pussy: hiçbir şey yapma
+             - meek: hiçbir şey yapma
              - ro: dosyaları read-only yap (chmod -w)
              - hide: kod dosyalarını temizle
           8. impl.lock sil
@@ -367,7 +405,7 @@ api:
             desc: State klasörünün yolu (_meta.state_dir, default .blueprint)
           - name: mode
             type: string
-            desc: Development mode (_meta.mode, default pussy)
+            desc: Development mode (_meta.mode, default meek)
         methods:
           - name: validate
             returns: ValidationResult

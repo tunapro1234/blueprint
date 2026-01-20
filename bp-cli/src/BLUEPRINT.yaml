@@ -5,7 +5,7 @@ _meta:
   updated: 2026-01-19
   status: draft
   # state_dir: ".blueprint"  # default
-  # mode: pussy               # default
+  # mode: meek               # default
 
 intent: Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool
 
@@ -18,9 +18,10 @@ overview: |
   - BLUEPRINT.yaml kullanıcı düzenler
   - .blueprint/ tool yönetir (state, history)
   - Symlink'ler snapshot history içinde (deps/ yok)
+  - Multi-language kökler: src-<lang> (örn. src-go, src-rs)
 
   Development mode'lar (_meta.mode):
-  - pussy (default): Hiçbir şeyi zorlamaz
+  - meek (default): Hiçbir şeyi zorlamaz
   - ro: Read-only enforcement
   - hide: Kodları gizle/göster
 
@@ -36,8 +37,9 @@ overview: |
   - bp impl: Blueprint'i koda derle (agentic) + snapshot
   - bp implement: impl alias (uzun)
   - bp ss: Manuel snapshot
+  - bp new-lang: Yeni dil kökü oluştur (src-<lang>)
   - bp plan: Değişen paketleri leaf-first sırada listeler
-  - bp cancel: Implementation oturumunu iptal eder
+  - bp cancel: Derlemeyi iptal eder (busy flag)
   - bp upgrade: Dependency'leri güncelle (pin günceller)
 
 # =============================================================================
@@ -57,6 +59,9 @@ plan:
   - id: snapshot_imports
     status: done
     desc: commands/yamlparser snapshot'larında dependency symlink'leri bulunur (impl/deps yok).
+  - id: new_lang_command
+    status: planned
+    desc: new-lang komutu ile src-<lang> kökü oluşturma; API blueprint symlink, diğerleri kopya.
 
 # =============================================================================
 # WORKFLOW POLICY
@@ -70,6 +75,14 @@ dependency_policy:
     - Snapshot'ta kod + dependency symlink'leri direkt bulunur (impl/, deps/ yok)
     - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
     - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
+
+language_policy:
+  summary: |
+    Multi-language kökler:
+    - Dil kökleri src-<lang> formatında tutulur
+    - new-lang komutu paket ağacını oluşturur; API blueprint'ler symlink, diğer blueprint'ler kopya
+    - Implementasyonlar diller arasında bağımsızdır
+    - API hash eşitliği map --langs ile kontrol edilir
   collision_handling: |
     İsim çakışması durumunda hata verilir:
     "Name collision - '{name}' exists both as code and dependency"

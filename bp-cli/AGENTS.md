@@ -9,7 +9,7 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 ### Değişiklikler
 1. **deps/ klasörü kaldırıldı** - Symlink'ler sadece snapshot history içinde
 2. **impl/ klasörü kaldırıldı** - Kod direkt snapshot'ta
-3. **3 development mode** - pussy, ro, hide (default: ro)
+3. **3 development mode** - pussy, ro, hide (default: pussy)
 4. **Default state_dir** - `.blueprint/` (gizli)
 
 ### Yeni Snapshot Yapısı
@@ -30,16 +30,16 @@ package/
 ```
 
 ### Development Modes
-| Mode | `bp impl` | `bp apply` | Dosyalar |
-|------|-----------|------------|----------|
-| **pussy** | impl.lock oluştur | impl.lock sil | Her zaman var, her zaman writable |
-| **ro** (default) | impl.lock + chmod +w | impl.lock sil + chmod -w | Her zaman var, lock olmadan read-only |
-| **hide** | impl.lock + restore | impl.lock sil + temizle | Sadece impl sırasında var |
+| Mode | `bp impl` | `bp ss` | Dosyalar |
+|------|-----------|---------|----------|
+| **pussy** (default) | busy flag only | snapshot only | Her zaman var, her zaman writable |
+| **ro** | derleme boyunca writable, sonra read-only | izin değiştirmez | Her zaman var, idle'da read-only |
+| **hide** | derleme için görünür, sonra gizle | snapshot alır (kod yoksa boş) | Sadece derleme sırasında var |
 
 ```yaml
 _meta:
   state_dir: ".blueprint"  # default
-  mode: ro                  # default (pussy | ro | hide)
+  mode: pussy               # default (pussy | ro | hide)
 ```
 
 ---
@@ -58,27 +58,24 @@ _meta:
 │     └── Leaf-first sırada değişen paketleri listeler        │
 │                           │                                  │
 │                           ▼                                  │
-│  3. bp impl [clean | <snapshot_id>]                         │
-│     └── ro/hide mode: dosyaları writable yapar/restore eder │
-│     └── impl.lock açılır (implementing state)               │
+│  3. bp impl [--no-snapshot|-ns]                             │
+│     └── Agentic derleme + opsiyonel snapshot                │
+│     └── impl.lock sadece derleme sırasında "busy" flag      │
 │                           │                                  │
 │                           ▼                                  │
-│  4. IMPLEMENTATION (Kod Yazma)                              │
-│     └── Working tree'de kodu düzenle                        │
-│     └── Import'lar gerçek dependency klasörlerinden         │
-│     └── Test yaz / güncelle                                 │
+│  4. MANUAL IMPLEMENTATION (Opsiyonel)                       │
+│     └── Working tree her zaman aktif                        │
+│     └── Kod düzenle, test et                                │
 │                           │                                  │
 │                           ▼                                  │
-│  5. bp apply -m "message"                                   │
+│  5. bp ss -m "message"                                      │
 │     └── Validate + test çalıştır                            │
 │     └── history/{id}/ altına kopyalar + symlink             │
-│     └── ro mode: read-only yapar                            │
-│     └── hide mode: dosyaları temizler                       │
-│     └── impl.lock kapatılır                                 │
+│     └── snapshot read-only yapılır                          │
 │                           │                                  │
 │                           ▼                                  │
 │  6. ITERATION (Sonraki değişiklik)                          │
-│     └── bp impl → kod düzenle → bp apply                    │
+│     └── bp impl veya bp ss                                  │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -102,7 +99,7 @@ bp validate . --no-recursive  # → sadece bu paket (non-recursive)
 - `BLUEPRINT.spec.yaml`: structure (impl dosyaları), tests
 - `.blueprint/history/{id}/`: Snapshot'lanmış kod + symlink'ler
 - `.blueprint/current`: Aktif snapshot ID
-- `.blueprint/impl.lock`: Aktif implementasyon kilidi
+- `.blueprint/impl.lock`: Derleme sırasında busy flag
 - `.blueprint/state.yaml`: Dependency pin'leri, staleness bilgisi
 
 ## Symlink Yapısı (Yeni)
@@ -132,39 +129,38 @@ Snapshot içinde:
 # 2. (Opsiyonel) değişenleri sırala (default recursive)
 ./bp plan .
 
-# 3. Restore + implement başlat (mode'a göre dosyalar hazırlanır)
+# 3. Agentic derleme + snapshot (opsiyonel)
 ./bp impl
 
 # 4. Kodu yaz, test et (import'lar gerçek dependency klasörlerinden)
 cd src && go test ./...
 
-# 5. Uygula + kapat
-./bp apply -m "implement feature X"
+# 5. Manuel snapshot
+./bp ss -m "implement feature X"
 
 # 6. Dependency güncelle (pin güncellenir; symlink snapshot'ta oluşur)
 ./bp upgrade --all
 
 # 7. Sonraki iterasyon için
-./bp impl
+./bp impl veya ./bp ss
 ```
 
 ## Snapshot Davranışı
 
-### `bp apply` çalıştırıldığında:
+### `bp ss` çalıştırıldığında:
 1. Blueprint validate edilir
 2. `tests.verification` komutları çalıştırılır
 3. Dosyalar `history/{id}/` altına kopyalanır (BLUEPRINT.yaml, kod, symlink'ler)
-4. Mode'a göre:
-   - **pussy**: impl.lock silinir
-   - **ro**: impl.lock silinir, dosyalar read-only yapılır (chmod -w)
-   - **hide**: impl.lock silinir, working tree'deki kod dosyaları silinir
+4. Snapshot dosyaları read-only yapılır (chmod -w)
+5. Working tree'ye dokunulmaz
 
-### `bp implement` çalıştırıldığında:
-- Mode'a göre:
-  - **pussy**: impl.lock oluşturulur
-  - **ro**: impl.lock oluşturulur, dosyalar writable yapılır (chmod +w)
-  - **hide**: Current snapshot'tan dosyalar restore edilir, impl.lock oluşturulur
-- Working tree'de symlink oluşturulmaz (dependency klasörleri gerçek)
+### `bp impl` çalıştırıldığında:
+- Agentic derleme yapılır, opsiyonel snapshot alınır (`--no-snapshot` ile kapatılır)
+- Mode'a göre idle davranış:
+  - **pussy**: hiçbir şey yapma
+  - **ro**: dosyaları read-only yap
+  - **hide**: kod dosyalarını gizle
+- impl.lock sadece derleme süresince "busy" flag'dir
 
 ### `bp upgrade` çalıştırıldığında:
 1. state.yaml pinned/latest bilgileri güncellenir
@@ -205,45 +201,45 @@ from deps.yamlparser import parser  # KALDIRILDI
 - İçerik: `current`, `state.yaml`, `history/`
 
 ## Development Mode
-- `_meta.mode` ile ayarlanır (default: `ro`)
+- `_meta.mode` ile ayarlanır (default: `pussy`)
 - **pussy**: Hiçbir şeyi zorlamaz
-- **ro**: impl.lock yokken read-only zorlar (chmod)
-- **hide**: apply sonrası kodları kaldırır
+- **ro**: idle durumda read-only zorlar (chmod)
+- **hide**: derleme sonrası kodları gizler
 
 ## Kurallar
 1. Önce blueprint yaz, sonra implement et
 2. Blueprint değişikliği olmadan yeni özellik ekleme
 3. API imzalarını koru (breaking change için yeni versiyon)
 4. Her snapshot için anlamlı mesaj yaz
-5. `bp impl` ve `bp apply` ardışık/tek yönlü akış:
-   - `bp impl` → çalış → `bp apply` ile kapat
-   - `bp apply` olmadan ikinci `bp impl` çalışmaz
-6. Import'lar gerçek dependency klasörlerinden yapılır
-7. `bp upgrade` sadece pinleri günceller (symlink snapshot'ta oluşur)
+5. `bp impl` derleme + opsiyonel snapshot yapar (`--no-snapshot` hariç)
+6. Manuel değişiklikler için `bp ss` kullan
+7. Import'lar gerçek dependency klasörlerinden yapılır
+8. `bp upgrade` sadece pinleri günceller (symlink snapshot'ta oluşur)
 
 ## Agent Rehberi (Önerilen İş Akışı)
 1. `bp plan .` ile leaf-first sıra çıkar (default recursive)
 2. Her paket için:
-   - `bp impl` (veya `bp impl clean`)
+   - `bp impl` (agentic) veya manuel düzenle
    - Değişiklikleri yap (import'lar gerçek dependency klasörlerinden)
    - Testleri çalıştır
-   - `bp apply -m "..."` ile snapshot al
+   - `bp ss -m "..."` ile snapshot al
 3. Dependency güncellemek için:
    - `bp upgrade --all` (pinler güncellenir)
 4. `bp status .` ile genel kontrol (default recursive)
 
 Notlar:
-- BLUEPRINT dosyaları `bp apply` sonrası working tree'de kalır.
-- ro mode'da impl.lock yokken dosyalar read-only'dir.
+- BLUEPRINT dosyaları snapshot sonrası working tree'de kalır.
+- ro mode'da idle durumda dosyalar read-only'dir.
 - Import'lar gerçek dependency klasörlerinden yapılır (deps/ yok).
 - `bp upgrade` çalıştırıldığında pinler güncellenir, symlink'ler snapshot'ta oluşur.
+- Snapshot dosyaları read-only yapılır.
 
 ## Komut Referansı
 
 | Komut | Açıklama |
 |-------|----------|
-| `bp implement` | impl.lock aç (mode'a göre restore/chmod) |
-| `bp apply -m "msg"` | Snapshot al + symlink (snapshot) + kapat (mode'a göre temizle/chmod) |
+| `bp implement` | Agentic derleme + opsiyonel snapshot |
+| `bp ss -m "msg"` | Manuel snapshot (validate + test + read-only) |
 | `bp validate [--no-recursive]` | Blueprint doğrula |
 | `bp status [--no-recursive]` | Değişiklik kontrolü |
 | `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |

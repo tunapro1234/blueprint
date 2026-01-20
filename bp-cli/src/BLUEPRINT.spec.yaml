@@ -22,23 +22,23 @@ implementation:
     blueprint_dir: |
       {state_dir}/                         # _meta.state_dir (default .blueprint)
       ├── current                           # Son snapshot ID
-      ├── impl.lock                         # Aktif implementasyon kilidi
+      ├── impl.lock                         # Derleme sırasında busy flag
       ├── state.yaml                        # Files, deps, dependents
       └── history/
-          ├── 20260116-1430-a1b2-add-feat/  # Snapshot ID (timestamp-hash-slug)
+          ├── add-feat-a1b2/                # Snapshot ID (slug-hash4)
           │   ├── BLUEPRINT.yaml            # Blueprint snapshot
           │   ├── meta.yaml                 # id, timestamp, message, hashes
           │   ├── main.go                   # Kod (direkt, impl/ yok)
           │   ├── util.go
           │   ├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
           │   └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
-          └── 20260115-1000-c3d4-initial/
+          └── ss-a3f2b7c1/
               ├── BLUEPRINT.yaml
               ├── meta.yaml
               └── ...
 
     working_tree: |
-      # Working tree yapısı (ro/pussy mode - kodlar her zaman var)
+      # Working tree yapısı (her zaman aktif)
       package/
       ├── BLUEPRINT.yaml                    # Blueprint dosyası
       ├── main.go                           # Kod
@@ -50,7 +50,7 @@ implementation:
 
     meta_yaml: |
       # {state_dir}/history/{id}/meta.yaml
-      id: "20260116-1430-a1b2-add-feat"   # Snapshot ID (timestamp-hash-slug)
+      id: "add-feat-a1b2"                # Snapshot ID (slug-hash4 veya ss-hash8)
       timestamp: "2026-01-16T14:30:00"    # ISO 8601 format
       message: "Add feature"              # User -m ile veya otomatik tarih
       content_hash: "sha256:full..."      # Tam content hash (referans için)
@@ -62,7 +62,7 @@ implementation:
     state_yaml: |
       # {state_dir}/state.yaml
       # Dosya hash'leri, dependency state ve reverse tracking
-      snapshot_id: "20260116-1430-a1b2-add-feat"  # Mevcut snapshot ID
+      snapshot_id: "add-feat-a1b2"               # Mevcut snapshot ID
       blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml'ın hash'i
       impl_hash: "sha256:xyz789..."               # Tüm impl dosyalarının birleşik hash'i
       files:
@@ -72,8 +72,8 @@ implementation:
       # Dependencies: hangi snapshot'lara pin'liyiz
       deps:
         "./yamlparser":
-          pinned: "20260115-1200-c3d4-stable"     # Pin'lenmiş snapshot
-          latest: "20260116-0900-e5f6-new-api"    # Dependency'nin en son snapshot'ı
+          pinned: "stable-c3d4"                   # Pin'lenmiş snapshot
+          latest: "new-api-e5f6"                  # Dependency'nin en son snapshot'ı
           api_hash: "sha256:aaa111..."            # Pinned versiyonun API hash'i
           latest_api_hash: "sha256:bbb222..."     # Latest'in API hash'i
           api_changed: true                       # API değişmiş mi?
@@ -82,9 +82,9 @@ implementation:
       # Dependents: kim bize bağlı (reverse tracking)
       dependents:
         "../consumer":
-          using: "20260116-1430-a1b2-add-feat"   # Hangi snapshot'ımızı kullanıyor
+          using: "add-feat-a1b2"                 # Hangi snapshot'ımızı kullanıyor
         "../other":
-          using: "20260115-1000-x1y2-initial"    # Eski versiyon kullanıyor
+          using: "initial-x1y2"                  # Eski versiyon kullanıyor
 
     blueprint_template: |
       # {folder_name}
@@ -122,25 +122,24 @@ workflow_policy:
     - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
 
   modes: |
-    Development mode'lar (_meta.mode ile ayarlanır, default: ro):
+    Development mode'lar (_meta.mode ile ayarlanır, default: pussy):
 
-    pussy:
+    pussy (default):
       - Hiçbir şeyi zorlamaz
-      - bp impl: impl.lock oluştur
-      - bp apply: impl.lock sil
+      - bp impl: derleme sırasında impl.lock "busy" flag
+      - bp ss: snapshot alır, working tree'ye dokunmaz
       - Dosyalar her zaman var ve writable
 
-    ro (default):
+    ro:
       - Read-only enforcement
-      - bp impl: impl.lock oluştur, dosyaları writable yap (chmod +w)
-      - bp apply: impl.lock sil, dosyaları read-only yap (chmod -w)
-      - impl.lock yokken dosyalar read-only
+      - bp impl: derleme boyunca dosyaları writable yapar, sonra read-only'e döner
+      - bp ss: snapshot alır, izinleri değiştirmez
+      - idle durumda dosyalar read-only
 
     hide:
       - Kodları gizle/göster
-      - bp impl: snapshot'tan restore et, impl.lock oluştur
-      - bp apply: impl.lock sil, working tree'deki kodları temizle
-      - Sadece impl sırasında kodlar görünür
+      - bp impl: derleme için kodları görünür yapar, sonra tekrar gizler
+      - bp ss: mevcut working tree'yi snapshot'lar (hide'da kod yoksa boş olabilir)
 
   algorithms:
     root_resolution: |
@@ -251,7 +250,7 @@ workflow_policy:
       - Symlink'ler sadece snapshot history içinde oluşturulur
       - {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/ (snapshot içinde)
       - Working tree'de dependency klasörü varsa symlink oluşturulmaz
-      - bp upgrade pinleri günceller, symlink'ler bir sonraki apply'da oluşur
+      - bp upgrade pinleri günceller, symlink'ler bir sonraki ss/impl snapshot'ında oluşur
       - Collision durumunda hata verilir (aynı isimde kod klasörü/dosyası varsa)
 
     rotten_warning: |
@@ -281,34 +280,36 @@ workflow_policy:
       Örnek: "sha256:abc123..."
 
     snapshot_id_calculation: |
-      Snapshot ID formatı: YYYYMMDD-HHMM-{4-char-hash}-{slug}
+      Snapshot ID formatı:
+      - Mesaj varsa: {slug}-{hash4}
+      - Mesaj yoksa: ss-{hash8}
 
-      1. Timestamp: time.Now().Format("20060102-1504")
-         Örnek: "20260116-1430"
-
-      2. Content hash hesapla:
+      1. Content hash hesapla:
          - Birleştir: "{blueprint_hash}:{impl_hash}:{deps_hash}"
          - SHA-256 hash al
          - Tam hash'i meta.yaml'a kaydet (content_hash)
 
-      3. 4-char hash: content_hash'in ilk 4 karakteri
-         Örnek: "a1b2"
-
-      4. Slug: slugify(message)
+      2. Slug: slugify(message) (mesaj varsa)
          - Lowercase yap
          - Özel karakterleri kaldır (sadece a-z, 0-9, space)
          - Boşlukları "-" ile değiştir
          - Max 20 karakter
          Örnek: "Add validation logic" → "add-validation-logic"
 
-      5. Birleştir: "{timestamp}-{4-char-hash}-{slug}"
-         Örnek: "20260116-1430-a1b2-add-validation-logic"
+      3. Hash kısa form:
+         - Mesaj varsa: content_hash'in ilk 4 karakteri (hash4)
+         - Mesaj yoksa: content_hash'in ilk 8 karakteri (hash8)
+
+      4. Birleştir:
+         - Mesaj varsa: "{slug}-{hash4}"
+           Örnek: "add-validation-logic-a1b2"
+         - Mesaj yoksa: "ss-{hash8}"
+           Örnek: "ss-a3f2b7c1"
 
       Avantajlar:
-      - İnsan tarafından okunabilir (tarih + ne değişti)
-      - Kronolojik sıralama doğal
+      - İnsan tarafından okunabilir (slug + hash)
       - Hash sayesinde collision yok
-      - Aynı dakikada farklı içerik = farklı hash = farklı ID
+      - Timestamp meta.yaml'da tutulur
 
     deps_hash_calculation: |
       Dependency hash:
@@ -342,29 +343,25 @@ workflow_policy:
       - Context satırları: space prefix
 
     implement_algorithm: |
-      bp implement algoritması:
+      bp impl (implement) algoritması:
       0. Blueprint'i validate et (error varsa exit 2)
-      1. impl.lock varsa hata ver (aktif implementasyon var)
-      2. Blueprint'i yükle, dependencies bölümünü oku
-      3. Dependency yoksa → "No dependencies, ready to implement"
+      1. impl.lock varsa hata ver (busy)
+      2. impl.lock oluştur (derleme süresince busy flag)
+      3. Blueprint'i yükle, dependencies bölümünü oku
       4. Her dependency için:
          a. Dependency path'ini resolve et (relative → absolute)
          b. Dependency'nin {state_dir}/state.yaml'ını kontrol et
          c. snapshot_id yoksa → hata: "Dependency {dep} has no snapshot"
          d. Dependency'nin state.yaml'ına reverse tracking ekle
          e. Kendi state.yaml deps section'ına pin ekle
-      5. Working tree'de symlink oluşturulmaz (dependency klasörleri gerçek)
-      6. Mode'a göre davranış:
-         - pussy: impl.lock oluştur
-         - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
-         - hide:
-           - --clean yoksa kendi snapshot'ından kodları restore et
-           - snapshot_id verilirse o ID restore edilir
-           - verilmezse current snapshot restore edilir
-           - impl.lock oluştur
-      7. "Ready to implement" mesajı ver
-
-      Implementation bitince: bp apply -m "message"
+      5. Agentic derleme: BLUEPRINT.spec'e göre kodu üret/güncelle
+      6. --no-snapshot verilmemişse ss algoritması çalıştırılır
+      7. Mode'a göre idle davranış:
+         - pussy: hiçbir şey yapma
+         - ro: dosyaları read-only yap (chmod -w)
+         - hide: working tree'deki kod dosyalarını temizle
+      8. impl.lock sil
+      9. "Compiled" mesajı ver (snapshot var/yok)
 
       İzolasyon garantisi:
       - Her paket kendi dependency'lerinin stable snapshot'ına referans veriyor
@@ -394,34 +391,26 @@ workflow_policy:
             - Dependency'nin dependents section'ını güncelle
       4. Özet: upgraded, skipped (rotten), failed (test)
 
-    apply_algorithm: |
-      bp apply -m "message" algoritması:
-      1. Mode kontrolü:
-         - ro/hide mode'da impl.lock yoksa → hata
-         - pussy mode'da impl.lock kontrolü yok
-      2. Blueprint validate edilir (error varsa exit 2)
-      3. tests.verification komutları çalıştırılır (--skip-tests ile atlanır)
-      4. Snapshot oluşturulur (history/{id}/):
+    ss_algorithm: |
+      bp ss -m "message" algoritması:
+      1. Blueprint validate edilir (error varsa exit 2)
+      2. tests.verification komutları çalıştırılır (--skip-tests ile atlanır)
+      3. Snapshot oluşturulur (history/{id}/):
          a. Klasör oluştur
          b. BLUEPRINT.yaml kopyala
          c. meta.yaml oluştur (id, timestamp, message, hashes)
          d. Kod dosyalarını kopyala (direkt, impl/ yok)
          e. Symlink'leri kopyala/oluştur (direkt, deps/ yok)
-      5. Mode'a göre working tree işlemi:
-         - pussy: impl.lock sil
-         - ro: impl.lock sil, dosyaları read-only yap (chmod -w)
-         - hide: impl.lock sil, working tree'deki kod dosyalarını temizle
-      6. state.yaml güncelle (snapshot_id, hashes, deps)
-      7. current dosyasını güncelle
+         f. history/{id}/ altını read-only yap (chmod -w)
+      4. state.yaml güncelle (snapshot_id, hashes, deps)
+      5. current dosyasını güncelle
+      6. Working tree'ye dokunma
 
     cancel_algorithm: |
       bp cancel algoritması:
       1. impl.lock yoksa → hata: "No active implementation"
       2. impl.lock sil
-      3. Mode'a göre:
-         - pussy: hiçbir şey yapma
-         - ro: dosyaları read-only yap (chmod -w)
-         - hide: working tree'deki kod dosyalarını temizle
+      3. Mode'a göre idle davranış uygula (ro/hide)
       4. "Implementation cancelled" mesajı
 
   decisions:
@@ -606,8 +595,7 @@ workflow_policy:
             - "test command 1"
             - "test command 2"
 
-        bp apply davranışı:
-        - Ön koşul: impl.lock var (bp impl çalıştırılmış olmalı) - ro/hide mode için
+        bp ss davranışı:
         - Her komutu sırayla shell'de çalıştırır
         - Working directory: BLUEPRINT.yaml'ın bulunduğu klasör
         - Timeout: 5 dakika per komut
@@ -616,25 +604,22 @@ workflow_policy:
 
     - q: Snapshot ID kuralları nedir?
       a: |
-        Format: YYYYMMDD-HHMM-{4-char-hash}-{slug}
-        Örnek: "20260116-1430-a1b2-add-validation"
-
-        Bileşenler:
-        - YYYYMMDD-HHMM: Timestamp (sıralama için)
-        - 4-char-hash: Content hash'in ilk 4 karakteri (uniqueness)
-        - slug: Message'dan türetilen slug (max 20 char, okunabilirlik)
+        Format:
+        - Mesaj varsa: {slug}-{hash4}
+        - Mesaj yoksa: ss-{hash8}
+        Örnek: "add-validation-a1b2", "ss-a3f2b7c1"
 
         Hash hesaplama:
         - blueprint_hash + impl_hash + deps_hash birleştirilir
         - SHA-256 hash alınır
         - Tam hash meta.yaml'a kaydedilir (content_hash)
-        - İlk 4 karakter ID'ye eklenir
+        - İlk 4 karakter slug ID'ye, 8 karakter ss ID'ye eklenir
 
         Avantajlar:
         - İnsan tarafından okunabilir
-        - Kronolojik sıralama doğal
         - Hash sayesinde collision yok
         - Ne değiştiği görünür
+        - Timestamp meta.yaml'da tutulur
 
         Bozuk history davranışı:
         - meta.yaml eksik/bozuk → o snapshot atlanır, warning
@@ -646,9 +631,9 @@ workflow_policy:
       a: |
         Lock mekanizması yok (basitlik için).
 
-        Yeni ID formatı (YYYYMMDD-HHMM-{hash}-{slug}) ile çakışma nadir:
-        - Aynı dakikada aynı içerik = aynı hash = aynı ID (idempotent)
-        - Aynı dakikada farklı içerik = farklı hash = farklı ID
+        Yeni ID formatı ile çakışma nadir:
+        - Aynı içerik = aynı hash = aynı ID (idempotent)
+        - Farklı içerik = farklı hash = farklı ID
 
         Klasör zaten varsa:
         - Content hash karşılaştırılır
@@ -664,21 +649,18 @@ workflow_policy:
 
     - q: Development mode'lar nedir?
       a: |
-        _meta.mode ile ayarlanır (default: ro):
+        _meta.mode ile ayarlanır (default: pussy):
 
-        pussy: Hiçbir şeyi zorlamaz
-        - Dosyalar her zaman var ve writable
-        - impl.lock sadece state tracking için
+        pussy (default): Hiçbir şeyi zorlamaz
+        - Working tree her zaman aktif
+        - impl.lock sadece derleme sırasında busy flag
 
-        ro (read-only, default): Read-only enforcement
-        - impl.lock yokken dosyalar read-only (chmod -w)
-        - bp impl: chmod +w
-        - bp apply: chmod -w
-        - Yanlışlıkla düzenlemeyi engeller
+        ro (read-only): Read-only enforcement
+        - idle durumda dosyalar read-only (chmod -w)
+        - bp impl: derleme boyunca writable, sonra read-only
 
         hide: Kodları gizle/göster
-        - bp apply sonrası kodlar silinir
-        - bp impl ile restore edilir
+        - bp impl derleme sonrası kodları tekrar gizler
         - Temiz working tree (sadece blueprint'ler görünür)
 
   edge_cases:
@@ -692,7 +674,7 @@ workflow_policy:
       handle: '"Circular dependency detected: a → b → c → a" formatında hata'
 
     - case: {state_dir}/ yok
-      handle: İlk bp apply'de oluştur
+      handle: İlk bp ss veya bp impl sırasında oluştur
 
     - case: BLUEPRINT.yaml yok
       handle: '"Not a blueprint package" olarak atla'
@@ -948,84 +930,86 @@ tests:
     # SNAPSHOT TESTS
     # =========================================================================
 
-    - id: apply_create_first
-      given: "{state_dir}/history/ yok, impl.lock var (ro mode)"
-      when: bp apply -m "initial"
+    - id: ss_create_first
+      given: "{state_dir}/history/ yok"
+      when: bp ss -m "initial"
       then: |
-        - history/20260116-HHMM-xxxx-initial/ oluşur
+        - history/initial-a1b2/ oluşur
         - BLUEPRINT.yaml kopyalanır
         - meta.yaml oluşturulur
         - Kod dosyaları direkt kopyalanır (impl/ yok)
 
-    - id: apply_id_format
-      given: Herhangi bir blueprint, impl.lock var
-      when: bp apply -m "add feature"
+    - id: ss_id_format
+      given: Herhangi bir blueprint
+      when: bp ss -m "add feature"
       then: |
-        - ID formatı: YYYYMMDD-HHMM-{4-char-hash}-{slug}
-        - Örnek: 20260116-1430-a1b2-add-feature
+        - ID formatı: {slug}-{hash4}
+        - Örnek: add-feature-a1b2
 
-    - id: apply_copies_code
-      given: Kaynak dosyalar var (main.go, util.go), impl.lock var
-      when: bp apply -m "snapshot"
+    - id: ss_id_format_no_message
+      given: Herhangi bir blueprint
+      when: bp ss
+      then: |
+        - ID formatı: ss-{hash8}
+        - Örnek: ss-a3f2b7c1
+
+    - id: ss_copies_code
+      given: Kaynak dosyalar var (main.go, util.go)
+      when: bp ss -m "snapshot"
       then: |
         - {state_dir}/history/{id}/ oluşur
         - main.go, util.go direkt kopyalanır (impl/ yok)
         - Dizin yapısı korunur
 
-    - id: apply_different_content_different_id
-      given: Blueprint veya kod değişmiş, impl.lock var
-      when: bp apply -m "change"
-      then: Farklı ID ile yeni snapshot (4-char hash farklı)
+    - id: ss_different_content_different_id
+      given: Blueprint veya kod değişmiş
+      when: bp ss -m "change"
+      then: Farklı ID ile yeni snapshot (hash farklı)
 
-    - id: apply_tests_fail
-      given: tests.verification başarısız, impl.lock var
-      when: bp apply
+    - id: ss_tests_fail
+      given: tests.verification başarısız
+      when: bp ss
       then: Snapshot alınmaz, exit 1
 
-    - id: apply_skip_tests
-      given: tests.verification başarısız, impl.lock var
-      when: bp apply --skip-tests
+    - id: ss_skip_tests
+      given: tests.verification başarısız
+      when: bp ss --skip-tests
       then: Snapshot alınır
 
-    - id: apply_records_dep_state
-      given: Dependency'ler var ve snapshot'ları var, impl.lock var
-      when: bp apply
+    - id: ss_records_dep_state
+      given: Dependency'ler var ve snapshot'ları var
+      when: bp ss
       then: |
         - state.yaml'da deps section'ı dolu
         - Her dep için: pinned, latest, api_hash, latest_api_hash
 
-    - id: apply_dep_no_snapshot_warning
-      given: Dependency'nin snapshot'ı yok, impl.lock var
-      when: bp apply
+    - id: ss_dep_no_snapshot_warning
+      given: Dependency'nin snapshot'ı yok
+      when: bp ss
       then: Warning verilir, snapshot yine alınır
+
+    - id: ss_makes_snapshot_readonly
+      given: Snapshot alındı
+      when: history/{id}/ içindeki dosya izinleri kontrol edilir
+      then: Tüm dosyalarda write bit kapalı (read-only)
 
     # =========================================================================
     # MODE TESTS
     # =========================================================================
 
-    - id: mode_ro_apply_makes_readonly
-      given: ro mode, impl.lock var, dosyalar writable
-      when: bp apply -m "test"
-      then: Dosyalar read-only olur (chmod -w)
+    - id: mode_ro_impl_restores_readonly
+      given: ro mode, dosyalar writable
+      when: bp impl --no-snapshot
+      then: Derleme sonrası dosyalar read-only olur (chmod -w)
 
-    - id: mode_ro_impl_makes_writable
-      given: ro mode, dosyalar read-only
-      when: bp impl
-      then: Dosyalar writable olur (chmod +w), impl.lock oluşur
-
-    - id: mode_hide_apply_cleans_tree
-      given: hide mode, impl.lock var
-      when: bp apply -m "test"
+    - id: mode_hide_impl_hides_after
+      given: hide mode, kod dosyaları var
+      when: bp impl --no-snapshot
       then: Kod dosyaları silinir, BLUEPRINT.yaml kalır
-
-    - id: mode_hide_impl_restores
-      given: hide mode, snapshot var, kod dosyaları yok
-      when: bp impl
-      then: Kod dosyaları restore edilir
 
     - id: mode_pussy_no_enforcement
       given: pussy mode
-      when: bp apply, bp impl
+      when: bp ss, bp impl --no-snapshot
       then: Dosya permissions değişmez, her zaman writable
 
     # =========================================================================
@@ -1058,14 +1042,14 @@ tests:
 
     - id: implement_no_deps
       given: Dependencies bölümü yok
-      when: bp implement
-      then: exit 0, "No dependencies, ready to implement"
+      when: bp implement --no-snapshot
+      then: exit 0, "Compiled (no snapshot)"
 
     - id: implement_deps_ok
       given: Dependencies var, hepsinin snapshot'ı var
       when: bp implement
       then: |
-        - exit 0, "Ready to implement"
+        - exit 0, "Compiled"
         - Her dep'in state.yaml dependents'ına eklenir
         - Kendi state.yaml deps'ine pin eklenir
 
@@ -1093,7 +1077,7 @@ tests:
       then: |
         - state.yaml deps güncellenir (pinned → latest)
         - Dependency'nin dependents section'ı güncellenir
-        - Snapshot symlink'leri bir sonraki apply'da oluşur
+        - Snapshot symlink'leri bir sonraki ss/impl snapshot'ında oluşur
 
     - id: upgrade_api_changed_warning
       given: Dependency API'si değişmiş
@@ -1206,7 +1190,7 @@ tests:
 
     - id: edge_name_collision
       given: Dependency adı ile kod klasörü aynı
-      when: bp apply
+      when: bp ss
       then: Hata verilir (snapshot symlink adı çakışır)
 
   verification:

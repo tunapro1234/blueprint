@@ -9,28 +9,27 @@ api:
 
     defaults:
       state_dir: ".blueprint"
-      mode: ro  # pussy | ro | hide
+      mode: pussy  # pussy | ro | hide
 
     modes: |
-      Development mode'lar (_meta.mode ile ayarlanır, default: ro):
+      Development mode'lar (_meta.mode ile ayarlanır, default: pussy):
 
-      pussy:
+      pussy (default):
         - Hiçbir şeyi zorlamaz
-        - bp impl: impl.lock oluştur
-        - bp apply: impl.lock sil
-        - Dosyalar her zaman var ve writable
+        - Working tree her zaman aktif
+        - bp impl: derleme sırasında impl.lock "busy" flag
+        - bp ss: snapshot alır, çalışma dizinine dokunmaz
 
-      ro (default):
+      ro:
         - Read-only enforcement
-        - bp impl: impl.lock oluştur, dosyaları writable yap (chmod +w)
-        - bp apply: impl.lock sil, dosyaları read-only yap (chmod -w)
-        - impl.lock yokken dosyalar read-only
+        - bp impl: derleme boyunca dosyaları writable yapar, sonra read-only'e geri döner
+        - bp ss: snapshot alır, izinleri değiştirmez
+        - idle durumda dosyalar read-only
 
       hide:
         - Kodları gizle/göster
-        - bp impl: snapshot'tan restore et, impl.lock oluştur
-        - bp apply: impl.lock sil, working tree'deki kodları temizle
-        - Sadece impl sırasında kodlar görünür
+        - bp impl: derleme için kodları görünür yapar, sonra tekrar gizler
+        - bp ss: mevcut working tree'yi snapshot'lar (hide'da kod yoksa boş olabilir)
 
     root_resolution: |
       Root blueprint kavramı:
@@ -94,8 +93,8 @@ api:
           read_only: "🔒 {path} (read-only)"
           dependents: |
             Dependents:
-              ../consumer using 20260115-xxxx (OUTDATED - 2 behind)
-              ../other using 20260116-yyyy (current)
+              ../consumer using old-xxxx (OUTDATED - 2 behind)
+              ../other using new-yyyy (current)
         exit_codes:
           0: Fresh (değişiklik yok)
           1: Stale (kod veya dependency değişmiş)
@@ -108,8 +107,8 @@ api:
           4. Dependency'nin api_hash'i değişmiş (deps_api_changed, daha kritik)
         status_flags: |
           Ayrı flag'ler (staleness reason'a eklenmez):
-          - implementing: impl.lock var mı?
-          - read_only: ro mode'da impl.lock yok mu?
+          - implementing: impl.lock var mı? (derleme sırasında)
+          - read_only: ro mode'da idle ise read-only mi?
           - working_clean: tracked dosyalarda değişiklik yok mu?
           - blueprint_changed: BLUEPRINT.yaml hash değişmiş mi?
           - api_changed: API section hash değişmiş mi?
@@ -134,7 +133,7 @@ api:
           1: Hata (circular dependency veya okuma hatası)
 
       - name: cancel
-        desc: Aktif implementation oturumunu iptal eder
+        desc: Aktif derlemeyi iptal eder (busy flag temizler)
         usage: bp cancel [path]
         behavior: |
           - impl.lock yoksa hata verir
@@ -150,11 +149,15 @@ api:
           0: Başarılı
           1: Aktif implementasyon yok veya hata
 
-      - name: apply
-        desc: Snapshot al, dependency symlink'lerini snapshot'a yaz, mode'a göre working tree ayarla
-        usage: bp apply [path] [-m "message"] [--skip-tests]
+      - name: ss
+        desc: Manuel snapshot al (her zaman çalışır)
+        usage: bp ss [path] [-m "message"] [--skip-tests]
+        flags:
+          - name: -m, --message
+            desc: Snapshot mesajı
+          - name: --skip-tests
+            desc: tests.verification adımını atla
         behavior: |
-          - impl.lock yoksa hata verir (ro/hide mode'da)
           - Blueprint validate edilir (error varsa exit 2)
           - tests.verification komutları çalıştırılır (--skip-tests ile atlanır)
           - Snapshot oluşturulur (history/{id}/)
@@ -162,10 +165,9 @@ api:
             - meta.yaml oluşturulur
             - Kod dosyaları kopyalanır (direkt, impl/ yok)
             - Symlink'ler kopyalanır (direkt, deps/ yok)
-          - Mode'a göre:
-            - pussy: impl.lock sil
-            - ro: impl.lock sil, dosyaları read-only yap (chmod -w)
-            - hide: impl.lock sil, working tree'deki kod dosyalarını temizle
+            - history/{id}/ altı read-only yapılır (chmod -w)
+          - state.yaml ve current güncellenir
+          - Working tree'ye dokunulmaz
         output:
           success: "Snapshot created: {id}"
         exit_codes:
@@ -186,7 +188,7 @@ api:
             2. mid/package
             3. root/package (current)
           upgrades: |
-            ./yamlparser: 20260115-xxxx → 20260116-yyyy (API CHANGED!)
+            ./yamlparser: old-xxxx → new-yyyy (API CHANGED!)
             ./commands: (up to date)
         exit_codes:
           0: Başarılı
@@ -208,22 +210,22 @@ api:
         output:
           format: |
             ./
-              snapshot: 20260116-1430-a1b2-feature
+              snapshot: feature-a1b2
               api: sha256:abc123...
               deps:
-                ./yamlparser @ 20260115-1000-x1y2 (api: def456)
-                ./commands @ 20260116-0900-y3z4 (api: ghi789) [ROTTEN]
+                ./yamlparser @ stable-x1y2 (api: def456)
+                ./commands @ init-y3z4 (api: ghi789) [ROTTEN]
 
             ./yamlparser/
-              snapshot: 20260115-1000-x1y2-stable
+              snapshot: stable-x1y2
               api: sha256:def456...
               deps: (none)
 
             ./commands/
-              snapshot: 20260116-0900-y3z4-init [ROTTEN]
+              snapshot: init-y3z4 [ROTTEN]
               api: sha256:ghi789...
               deps:
-                ./yamlparser @ 20260115-1000-x1y2 (api: def456)
+                ./yamlparser @ stable-x1y2 (api: def456)
         exit_codes:
           0: Başarılı
           1: Hata
@@ -246,9 +248,9 @@ api:
             default: 10
             desc: Gösterilecek snapshot sayısı
         output: |
-          20260116-1430-a1b2-add-validation   "Add validation logic"
-          20260115-1500-c3d4-fix-edge-cases   "Fix edge cases"
-          20260114-0900-e5f6-initial          "Initial snapshot"
+          add-validation-a1b2   "Add validation logic"
+          fix-edge-cases-c3d4   "Fix edge cases"
+          ss-a1b2b7c1           "Snapshot"
         exit_codes:
           0: Başarılı (boş geçmiş dahil)
           1: Hata
@@ -278,38 +280,41 @@ api:
           1: ID bulunamadı veya hata
 
       - name: implement
-        desc: Implementation başlat - dependency kontrol + mode davranışı
-        usage: bp implement [path] [snapshot_id] [--clean]
-        note: "Alias: bp impl"
+        desc: Blueprint'i koda derle (agentic) + opsiyonel snapshot
+        usage: bp impl [path] [--no-snapshot|-ns]
+        note: "Alias: bp implement"
+        flags:
+          - name: -ns, --no-snapshot
+            desc: Snapshot alma (derleme sonrası otomatik ss kapalı)
         behavior: |
           0. Blueprint'i validate et (error varsa exit 2)
-          1. Eğer impl.lock varsa hata ver (aktif implementasyon var)
-          2. Blueprint'i oku, dependencies bölümünü kontrol et
-          3. Her dependency için:
+          1. Eğer impl.lock varsa hata ver (busy)
+          2. impl.lock oluştur (derleme sırasında busy flag)
+          3. Blueprint'i oku, dependencies bölümünü kontrol et
+          4. Her dependency için:
              - Pin'lenmiş snapshot mevcut mu kontrol et
              - Snapshot yoksa hata: "Dependency {dep} has no snapshot"
              - Dependency'nin state.yaml'ına kendini kaydet (reverse tracking)
-          4. Working tree'de symlink oluşturulmaz (dependency klasörleri gerçek)
-          5. Mode'a göre:
-             - pussy: impl.lock oluştur
-             - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
-             - hide: snapshot'tan kodları restore et, impl.lock oluştur
-               - snapshot_id verilirse o ID restore edilir
-               - verilmezse current snapshot restore edilir
-               - --clean verilirse boş başla (restore etme)
-          6. "Ready to implement" mesajı ver
-
-          Implementation bitince: bp apply -m "message"
+          5. Agentic derleme: BLUEPRINT.spec'e göre kodu üret/güncelle
+          6. --no-snapshot verilmemişse:
+             - ss ile aynı snapshot adımlarını uygula (history/{id}/)
+             - Snapshot read-only yapılır (chmod -w)
+          7. Mode'a göre idle davranış:
+             - pussy: hiçbir şey yapma
+             - ro: dosyaları read-only yap (chmod -w)
+             - hide: kod dosyalarını temizle
+          8. impl.lock sil
         output:
           success: |
-            Dependencies:
-              ./yamlparser @ 20260115-1000-a1b2-stable ✓
-              ./commands   @ 20260116-0900-c3d4-init   ✓
-            Ready to implement.
-          missing_dep: "✗ Dependency {dep} has no snapshot. Run 'bp apply' in {dep} first."
+            Compiled:
+              ./yamlparser @ initial-setup-a3f2 ✓
+              ./commands   @ cli-init-9f8e ✓
+            Snapshot: initial-setup-a3f2
+          missing_dep: "✗ Dependency {dep} has no snapshot. Run 'bp ss' in {dep} first."
+          no_snapshot: "Compiled (no snapshot)"
         exit_codes:
-          0: Ready to implement
-          1: Dependency snapshot eksik
+          0: Başarılı
+          1: Dependency snapshot eksik veya derleme hatası
           2: Validation hatası veya blueprint bulunamadı
 
       - name: upgrade
@@ -362,7 +367,7 @@ api:
             desc: State klasörünün yolu (_meta.state_dir, default .blueprint)
           - name: mode
             type: string
-            desc: Development mode (_meta.mode, default ro)
+            desc: Development mode (_meta.mode, default pussy)
         methods:
           - name: validate
             returns: ValidationResult
@@ -395,7 +400,7 @@ api:
         fields:
           - name: id
             type: string
-            desc: "Snapshot ID: YYYYMMDD-HHMM-{4-char-hash}-{slug}, örn '20260116-1430-a1b2-add-validate'"
+            desc: "Snapshot ID: {slug}-{hash4} veya ss-{hash8}, örn 'add-validate-a1b2'"
           - name: timestamp
             type: string
             desc: ISO 8601 format

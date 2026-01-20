@@ -60,7 +60,7 @@ api:
           "status": status_command,
           "plan": plan_command,
           "cancel": cancel_command,
-          "apply": apply_command,
+          "ss": ss_command,
           "deps": deps_command,
           "map": map_command,
           "init": init_command,
@@ -92,14 +92,14 @@ api:
         - plan: {no_recursive: bool}
         - map: {no_recursive: bool}
         - cancel: {}
-        - apply: {message: string?, skip_tests: bool}
+        - ss: {message: string?, skip_tests: bool}
         - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10
         - diff: {id1: string?, id2: string?}
         - show: {id: string?}           # null = son snapshot
-        - implement: {snapshot_id: string?, clean: bool}
-        - impl: {snapshot_id: string?, clean: bool}  # alias
+        - implement: {no_snapshot: bool}
+        - impl: {no_snapshot: bool}  # alias
         - upgrade: {dep_path: string?, safe: bool, all: bool, force: bool}
 
     - name: CommandResult
@@ -114,7 +114,7 @@ api:
         - status: StatusInfo
         - plan: PlanResult
         - cancel: null
-        - apply: SnapshotInfo
+        - ss: SnapshotInfo
         - deps: string[] (topological order) veya DepUpgrade[] (--upgrades)
         - log: HistoryEntry[]
         - diff: DiffResult
@@ -138,8 +138,8 @@ api:
         - stale_reason: string?         # "files_changed" | "blueprint_changed" | "deps_changed" | "deps_api_changed"
         - dep_updates: DepUpgrade[]     # Upgrade mevcut dependency'ler
         - dependents: DepRef[]          # Kim bize bağlı (reverse tracking)
-        - implementing: bool            # Aktif implementasyon var mı? (impl.lock)
-        - read_only: bool               # ro mode'da impl.lock yok mu?
+        - implementing: bool            # Derleme devam ediyor mu? (impl.lock)
+        - read_only: bool               # ro mode'da idle ise read-only mi?
         - working_clean: bool           # Working tree'de tracked değişiklik yok mu?
         - blueprint_changed: bool       # BLUEPRINT.yaml değişmiş mi?
         - api_changed: bool             # API section hash değişmiş mi?
@@ -157,7 +157,7 @@ api:
 
     - name: SnapshotInfo
       fields:
-        - id: string                    # Snapshot ID, örn "20260116-1430-a1b2-add-feat"
+        - id: string                    # Snapshot ID, örn "add-feat-a1b2"
         - path: string                  # {state_dir}/history/{id}/
         - content_hash: string          # Tam content hash
         - api_hash: string              # API section hash
@@ -166,7 +166,9 @@ api:
 
     - name: ImplementResult
       fields:
-        - ready: bool                   # Implementation başlatılabilir mi?
+        - compiled: bool                # Derleme başarılı mı?
+        - snapshot_id: string?          # Snapshot alındıysa ID
+        - no_snapshot: bool             # --no-snapshot kullanıldı mı?
         - deps: DepState[]              # Pin'lenmiş dependency'ler
         - missing_deps: string[]        # Snapshot'ı olmayan dependency'ler
 

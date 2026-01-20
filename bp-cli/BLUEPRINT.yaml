@@ -6,7 +6,7 @@ _meta:
   status: draft
   root: true  # Bu proje root'u - alt paketlerde argümansız komutlar buradan çalışır
   # state_dir: ".blueprint"  # default
-  # mode: ro                  # default (pussy | ro | hide)
+  # mode: pussy               # default (pussy | ro | hide)
 
 # =============================================================================
 # PROJECT INFO
@@ -51,7 +51,7 @@ overview: |
 
   Temel özellikler:
   - Blueprint validation ve schema kontrolü
-  - Hash-based snapshot sistemi (YYYYMMDD-HHMM-hash-slug formatında)
+  - Hash-based snapshot sistemi (slug-hash / ss-hash formatı)
   - Dependency tracking ve reverse tracking
   - Dependency pinning ve upgrade yönetimi
 
@@ -148,9 +148,9 @@ usage:
     - "bp status"
     - "bp plan"
     - "bp cancel"
-    - "bp implement"
     - "bp impl"
-    - "bp apply -m 'Initial snapshot'"
+    - "bp impl --no-snapshot"
+    - "bp ss -m 'Initial snapshot'"
     - "bp upgrade --all"
     - "bp deps --upgrades"
 
@@ -163,16 +163,17 @@ workflow:
     Önerilen akış:
     1) Önce BLUEPRINT.yaml / BLUEPRINT.spec.yaml güncellenir
     2) bp plan ile leaf-first sıra çıkarılır (default recursive)
-    3) Her paket için: bp impl → implementasyon → bp apply
+    3) Her paket için: bp impl (agentic derleme + snapshot) veya bp ss (manual snapshot)
     4) Mode'a göre davranış:
-       - ro (default): dosyalar read-only olur
+       - pussy (default): hiçbir şey değişmez
+       - ro: dosyalar read-only olur
        - hide: kod dosyaları silinir
-       - pussy: hiçbir şey değişmez
   notes:
-    - BLUEPRINT dosyaları apply sonrası working tree'de kalır
-    - impl.lock aktifse "implementing" state vardır
+    - BLUEPRINT dosyaları snapshot sonrası working tree'de kalır
+    - impl.lock sadece derleme sırasında "busy" flag'dir
     - Importlar working tree'de gerçek dependency klasörlerinden yapılır (deps/ yok)
     - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
+    - Snapshot içindeki tüm dosyalar read-only (write bit kaldırılır)
   symlink_structure: |
     Snapshot yapısı (impl/, deps/ yok):
     .blueprint/history/{id}/

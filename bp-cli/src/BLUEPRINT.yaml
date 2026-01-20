@@ -5,7 +5,7 @@ _meta:
   updated: 2026-01-19
   status: draft
   # state_dir: ".blueprint"  # default
-  # mode: ro                  # default
+  # mode: pussy               # default
 
 intent: Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool
 
@@ -20,9 +20,9 @@ overview: |
   - Symlink'ler snapshot history içinde (deps/ yok)
 
   Development mode'lar (_meta.mode):
-  - ro (default): Read-only enforcement
+  - pussy (default): Hiçbir şeyi zorlamaz
+  - ro: Read-only enforcement
   - hide: Kodları gizle/göster
-  - pussy: Hiçbir şeyi zorlamaz
 
   Komutlar:
   - bp validate: YAML syntax + schema check
@@ -33,9 +33,9 @@ overview: |
   - bp log: Snapshot geçmişi
   - bp diff: İki snapshot arasındaki fark
   - bp show: Belirli snapshot'ın blueprint'ini göster
-  - bp implement: Implementation başlat (dependency kontrol)
-  - bp impl: implement alias (kısa)
-  - bp apply: Snapshot al + symlink oluştur (snapshot) + mode'a göre temizle
+  - bp impl: Blueprint'i koda derle (agentic) + snapshot
+  - bp implement: impl alias (uzun)
+  - bp ss: Manuel snapshot
   - bp plan: Değişen paketleri leaf-first sırada listeler
   - bp cancel: Implementation oturumunu iptal eder
   - bp upgrade: Dependency'leri güncelle (pin günceller)

@@ -28,7 +28,7 @@ implementation:
     - status module       # + dependents gösterimi
     - plan module         # Leaf-first plan listesi
     - cancel module       # Implementation iptal
-    - apply module        # Snapshot al + dependency symlink oluştur
+    - ss module           # Manuel snapshot al
     - deps module         # + --upgrades flag
     - map module          # Project map - snapshot/dependency durumu
     - init module
@@ -77,7 +77,7 @@ implementation:
         stale: En az bir dosya veya dependency değişmiş
         no_snapshot: {state_dir}/state.yaml yok
       flags:
-        implementing: impl.lock varsa true
+        implementing: impl.lock varsa true (derleme sırasında)
         read_only: ro mode'da impl.lock yoksa true
         working_clean: tracked dosyalarda değişiklik yok
         blueprint_changed: BLUEPRINT.yaml hash değişmiş
@@ -90,7 +90,7 @@ implementation:
         deps_api_changed: Dependency'nin API'si değişmiş (kritik)
       state_yaml_schema: |
         # {state_dir}/state.yaml formatı:
-        snapshot_id: "20260116-1430-a1b2-add-feat"  # Mevcut snapshot ID
+        snapshot_id: "add-feat-a1b2"               # Mevcut snapshot ID
         blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml hash
         impl_hash: "sha256:xyz789..."               # Implementation hash
         files:
@@ -98,14 +98,14 @@ implementation:
           util.go: "sha256:ghi789..."
         deps:                                        # Pin'lenmiş dependency'ler
           "./yamlparser":
-            pinned: "20260115-1200-c3d4-stable"
-            latest: "20260116-0900-e5f6-new"
+            pinned: "stable-c3d4"
+            latest: "new-e5f6"
             api_hash: "sha256:aaa111..."
             latest_api_hash: "sha256:bbb222..."
             api_changed: true
         dependents:                                  # Kim bize bağlı (reverse)
           "../consumer":
-            using: "20260116-1430-a1b2-add-feat"
+            using: "add-feat-a1b2"
 
         Hash'lenen dosyalar:
         - implementation.structure'da listelenen dosyalar
@@ -172,7 +172,7 @@ implementation:
         1: Hata (circular dependency veya okuma hatası)
 
     cancel:
-      purpose: Aktif implementation oturumunu iptal et
+      purpose: Aktif derlemeyi iptal et (busy flag temizler)
       steps:
         1: impl.lock var mı kontrol et
         2: Yoksa: "No active implementation.", exit 1
@@ -183,16 +183,15 @@ implementation:
         0: Başarılı
         1: Aktif implementasyon yok veya hata
 
-    apply:
-      purpose: Snapshot al, dependency symlink'leri oluştur, working tree temizle
+    ss:
+      purpose: Manuel snapshot al (her zaman çalışır)
       steps:
-        0: Mode kontrolü (ro/hide → impl.lock zorunlu, pussy → kontrol yok)
         1: Blueprint'i validate et (error varsa exit 2)
         2: tests.verification çalıştır (--skip-tests ile atlanır)
         3: Snapshot oluştur (history/{id}/)
         4: history/{id}/ altına kod kopyala (direkt)
         5: history/{id}/ içinde dependency symlink'lerini oluştur (direkt)
-        6: Mode'a göre working tree işlemi (impl.lock sil dahil)
+        6: history/{id}/ altını read-only yap (chmod -w)
         7: state.yaml güncelle
         8: current dosyasını güncelle
       exit_codes:
@@ -241,7 +240,7 @@ implementation:
       format: "{snapshot_id}   \"{message}\""
       meta_yaml_schema: |
         # {state_dir}/history/{id}/meta.yaml formatı:
-        id: "20260116-1430-a1b2-add-feat"   # Snapshot ID (timestamp-hash-slug)
+        id: "add-feat-a1b2"                # Snapshot ID (slug-hash4 veya ss-hash8)
         timestamp: "2026-01-16T14:30:00"    # ISO 8601, local timezone
         message: "Add feature"               # -m ile verilen veya tarih
         content_hash: "sha256:full..."       # Tam content hash
@@ -260,8 +259,8 @@ implementation:
       algorithm: unified diff (standart unified diff algoritması)
       id_resolution: |
         - "current" veya argüman yok → mevcut BLUEPRINT.yaml
-        - "20260116-1430-a1b2-add-feat" → {state_dir}/history/{id}/BLUEPRINT.yaml
-        - Kısmi ID desteklenir (en az tarih kısmı, benzersiz olmalı)
+        - "add-feat-a1b2" → {state_dir}/history/{id}/BLUEPRINT.yaml
+        - Kısmi ID desteklenir (benzersiz olmalı)
       output: |
         Fark varsa: Standart unified diff formatı (--- +++ @@ ile)
         Fark yoksa: Boş çıktı (stdout'a hiçbir şey yazılmaz)
@@ -282,8 +281,8 @@ implementation:
       behavior: Snapshot'ın BLUEPRINT.yaml içeriğini stdout'a yazar
       id_resolution: |
         - Argüman yok → son snapshot ({state_dir}/current'tan oku)
-        - "20260116-1430-a1b2-add-feat" → ilgili snapshot
-        - Kısmi ID desteklenir (en az tarih kısmı, benzersiz olmalı)
+        - "add-feat-a1b2" → ilgili snapshot
+        - Kısmi ID desteklenir (benzersiz olmalı)
       current_file_handling: |
         {state_dir}/current dosyası:
         - Yoksa → "No snapshot history" hatası (exit 1)
@@ -299,22 +298,21 @@ implementation:
         - "Invalid current snapshot ID": {state_dir}/current geçersiz format
 
     implement:
-      purpose: Implementation başlat - dependency kontrol + reverse tracking
+      purpose: Blueprint'i koda derle (agentic) + opsiyonel snapshot
       steps:
         0: Blueprint'i validate et (error varsa exit 2)
-        1: Aktif implementasyon varsa hata ver (impl.lock varsa)
-        2: Blueprint'i yükle, dependencies bölümünü oku
-        3: Dependency yoksa → "No dependencies, ready to implement"
+        1: impl.lock varsa hata ver (busy)
+        2: impl.lock oluştur (derleme süresince busy flag)
+        3: Blueprint'i yükle, dependencies bölümünü oku
         4: Her dependency için reverse tracking + pin ekle
-        5: Working tree'de dependency klasörü varsa symlink oluşturma (snapshot'ta oluşur)
-        6: |
-          - pussy: impl.lock oluştur
-          - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
-          - hide: --clean değilse snapshot'tan restore et (snapshot_id varsa onu), impl.lock oluştur
-        7: "Ready to implement" mesajı ver
+        5: Agentic derleme: BLUEPRINT.spec'e göre kodu üret/güncelle
+        6: --no-snapshot verilmemişse ss adımları uygulanır
+        7: Mode'a göre idle davranış (ro/hide)
+        8: impl.lock sil
+        9: "Compiled" mesajı ver (snapshot var/yok)
       exit_codes:
-        0: Ready to implement
-        1: Dependency snapshot eksik
+        0: Başarılı
+        1: Dependency snapshot eksik veya derleme hatası
         2: Blueprint bulunamadı
 
     upgrade:
@@ -346,7 +344,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 14 komut var (validate, status, plan, cancel, apply, deps, map, init, log, diff, show, implement, impl, upgrade)
+      then: 14 komut var (validate, status, plan, cancel, ss, deps, map, init, log, diff, show, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut
@@ -547,8 +545,8 @@ tests:
       when: bp log
       then: |
         Format:
-        20260115-1030-a1b2-message-here    "Message here"
-        20260114-1500-9f8e-another-msg     "Another message"
+        message-here-a1b2    "Message here"
+        another-msg-9f8e     "Another message"
 
     # =========================================================================
     # DIFF
@@ -559,13 +557,13 @@ tests:
       then: Current blueprint vs son snapshot, unified diff format
 
     - id: diff_single_id
-      given: 20260115-1000-a1b2-initial snapshot var
-      when: bp diff 20260115-1000-a1b2-initial
+      given: initial-a1b2 snapshot var
+      when: bp diff initial-a1b2
       then: O snapshot vs current blueprint
 
     - id: diff_two_ids
       given: İki snapshot var
-      when: bp diff 20260114-0900-x1y2-first 20260115-1000-a1b2-second
+      when: bp diff first-x1y2 second-a1b2
       then: İlk snapshot vs ikinci snapshot
 
     - id: diff_no_changes
@@ -575,7 +573,7 @@ tests:
 
     - id: diff_not_found
       given: Snapshot yok
-      when: bp diff 20260199-9999-xxxx-nonexistent
+      when: bp diff nonexistent-xxxx
       then: '"Snapshot not found", exit 1'
 
     - id: diff_no_history
@@ -592,13 +590,13 @@ tests:
       then: Son snapshot'ın BLUEPRINT.yaml içeriği
 
     - id: show_specific
-      given: 20260115-1000-a1b2-initial snapshot var
-      when: bp show 20260115-1000-a1b2-initial
+      given: initial-a1b2 snapshot var
+      when: bp show initial-a1b2
       then: O snapshot'ın BLUEPRINT.yaml içeriği
 
     - id: show_not_found
       given: Snapshot yok
-      when: bp show 20260199-9999-xxxx-nonexistent
+      when: bp show nonexistent-xxxx
       then: '"Snapshot not found", exit 1'
 
     - id: show_no_history
@@ -612,49 +610,50 @@ tests:
       then: '"Invalid current snapshot ID", exit 1'
 
     - id: show_current_missing_snapshot
-      given: {state_dir}/current = "20260115-1000-a1b2-initial" ama o klasör yok
+      given: {state_dir}/current = "initial-a1b2" ama o klasör yok
       when: bp show
       then: '"Snapshot not found", exit 1'
 
     # =========================================================================
-    # APPLY (Snapshot)
+    # SS (Snapshot)
     # =========================================================================
-    - id: apply_success
-      given: Valid blueprint, testler geçiyor, impl.lock var
-      when: bp apply -m "v1.0 release"
+    - id: ss_success
+      given: Valid blueprint, testler geçiyor
+      when: bp ss -m "v1.0 release"
       then: |
-        - {state_dir}/history/20260116-HHMM-xxxx-v10-release/ oluşur
+        - {state_dir}/history/v10-release-a1b2/ oluşur
         - history/{id}/ altında kod + symlink'ler direkt oluşur
+        - history/{id}/ read-only yapılır
         - {state_dir}/current güncellenir
         - exit 0
 
-    - id: apply_validation_error
+    - id: ss_validation_error
       given: Invalid blueprint (_meta.version yok)
-      when: bp apply
+      when: bp ss
       then: '"Validation failed: missing _meta.version", exit 2'
 
-    - id: apply_tests_fail
+    - id: ss_tests_fail
       given: Valid blueprint, tests.verification başarısız
-      when: bp apply
+      when: bp ss
       then: '"Tests failed", exit 1, snapshot alınmaz'
 
-    - id: apply_skip_tests
+    - id: ss_skip_tests
       given: Valid blueprint, tests.verification başarısız
-      when: bp apply --skip-tests
+      when: bp ss --skip-tests
       then: Snapshot alınır (testler atlandı), exit 0
 
-    - id: apply_creates_symlinks
-      given: 2 dependency var, impl.lock var
-      when: bp apply -m "with deps"
+    - id: ss_creates_symlinks
+      given: 2 dependency var
+      when: bp ss -m "with deps"
       then: |
         history/{id}/ altında symlink'ler oluşur:
         - yamlparser/ → symlink
         - commands/ → symlink
 
-    - id: apply_no_impl_lock
-      given: ro mode, impl.lock yok
-      when: bp apply
-      then: '"No active implementation", exit 1'
+    - id: ss_makes_readonly
+      given: Snapshot alındı
+      when: history/{id}/ dosya izinleri kontrol edilir
+      then: Write bit kapalı (read-only)
 
     # =========================================================================
     # DEPENDENCY TRACKING (STATUS)
@@ -680,26 +679,26 @@ tests:
     # =========================================================================
     - id: implement_no_deps
       given: Blueprint'te dependency yok
-      when: bp implement
+      when: bp implement --no-snapshot
       then: |
-        "No dependencies, ready to implement"
+        "Compiled (no snapshot)"
         exit 0
 
     - id: implement_deps_ready
       given: 2 dependency var, ikisinin de snapshot'ı mevcut
       when: bp implement
       then: |
-        Dependencies:
-          ./yamlparser @ 20260115-1000-a1b2-stable ✓
-          ./commands   @ 20260116-0900-c3d4-init   ✓
-        Ready to implement.
+        Compiled:
+          ./yamlparser @ stable-a1b2 ✓
+          ./commands   @ init-c3d4 ✓
+        Snapshot: add-feature-a1b2
         exit 0
 
     - id: implement_dep_missing_snapshot
       given: Dependency'nin snapshot'ı yok ({state_dir}/state.yaml yok)
       when: bp implement
       then: |
-        ✗ Dependency ./yamlparser has no snapshot. Run 'bp apply' in ./yamlparser first.
+        ✗ Dependency ./yamlparser has no snapshot. Run 'bp ss' in ./yamlparser first.
         exit 1
 
     - id: implement_reverse_tracking
@@ -709,7 +708,7 @@ tests:
         B'nin {state_dir}/state.yaml'ına eklenir:
         dependents:
           "../A":
-            using: "20260116-1000-xxxx-stable"
+            using: "stable-a1b2"
 
     - id: implement_pins_deps
       given: bp implement başarılı
@@ -717,8 +716,8 @@ tests:
         Kendi state.yaml'a deps eklenir:
         deps:
           "./yamlparser":
-            pinned: "20260115-1000-a1b2-stable"
-            latest: "20260115-1000-a1b2-stable"
+            pinned: "stable-a1b2"
+            latest: "stable-a1b2"
             api_hash: "sha256:..."
             latest_api_hash: "sha256:..."
             api_changed: false
@@ -735,22 +734,22 @@ tests:
       given: ./yamlparser'ın yeni snapshot'ı var
       when: bp upgrade ./yamlparser
       then: |
-        Upgraded ./yamlparser: 20260115-1000-a1b2-stable → 20260116-0900-c3d4-new
+        Upgraded ./yamlparser: stable-a1b2 → new-c3d4
         exit 0
 
     - id: upgrade_api_changed
       given: Dependency'nin API'si değişmiş
       when: bp upgrade ./yamlparser
       then: |
-        Upgraded ./yamlparser: 20260115-1000-a1b2-stable → 20260116-0900-c3d4-new (API CHANGED!)
-          Review: bp diff ./yamlparser 20260115-1000-a1b2-stable 20260116-0900-c3d4-new
+        Upgraded ./yamlparser: stable-a1b2 → new-c3d4 (API CHANGED!)
+          Review: bp diff ./yamlparser stable-a1b2 new-c3d4
         exit 0 (uyarı verilir ama bloklanmaz)
 
     - id: upgrade_safe_flag
       given: 2 dep var (1 API değişmiş, 1 değişmemiş)
       when: bp upgrade --safe
       then: |
-        Upgraded ./commands: 20260115-xxxx → 20260116-yyyy
+        Upgraded ./commands: old-xxxx → new-yyyy
         Skipped ./yamlparser (API changed)
         exit 0
 
@@ -758,8 +757,8 @@ tests:
       given: 2 dep var, ikisi de upgrade edilebilir
       when: bp upgrade --all
       then: |
-        Upgraded ./yamlparser: 20260115-xxxx → 20260116-yyyy (API CHANGED!)
-        Upgraded ./commands: 20260115-xxxx → 20260116-yyyy
+        Upgraded ./yamlparser: old-xxxx → new-yyyy (API CHANGED!)
+        Upgraded ./commands: old-xxxx → new-yyyy
         exit 0
 
     - id: upgrade_no_upgrades
@@ -773,7 +772,7 @@ tests:
         Dependency'nin state.yaml dependents'ı güncellenir:
         dependents:
           "../me":
-            using: "20260116-0900-c3d4-new"  # yeni snapshot ID
+            using: "new-c3d4"  # yeni snapshot ID
 
     - id: upgrade_dep_not_found
       given: Dependency path yanlış
@@ -800,7 +799,7 @@ tests:
       given: Dependency'nin latest snapshot'ı rotten
       when: bp upgrade ./yamlparser --force
       then: |
-        Upgraded ./yamlparser (forced): 20260115-xxxx → 20260116-yyyy [ROTTEN]
+        Upgraded ./yamlparser (forced): old-xxxx → new-yyyy [ROTTEN]
         ⚠ Warning: using rotten snapshot
         exit 0
 
@@ -812,13 +811,13 @@ tests:
       when: bp map
       then: |
         ./
-          snapshot: 20260116-1430-a1b2-feature
+          snapshot: feature-a1b2
           api: sha256:abc123...
           deps:
-            ./yamlparser @ 20260115-1000-x1y2 (api: def456)
+            ./yamlparser @ stable-x1y2 (api: def456)
 
         ./yamlparser/
-          snapshot: 20260115-1000-x1y2-stable
+          snapshot: stable-x1y2
           api: sha256:def456...
           deps: (none)
 
@@ -845,23 +844,23 @@ tests:
       given: Dependency upgrade mevcut
       when: bp validate
       then: |
-        ⚠ ./yamlparser: 20260115-xxxx → 20260116-yyyy
+        ⚠ ./yamlparser: old-xxxx → new-yyyy
         ✓ ./BLUEPRINT.yaml
         (uyarı stderr'e, validation stdout'a)
 
-    - id: dep_warning_on_apply
+    - id: dep_warning_on_ss
       given: Dependency upgrade mevcut, API değişmiş
-      when: bp apply -m "feature"
+      when: bp ss -m "feature"
       then: |
-        ⚠ ./yamlparser: 20260115-xxxx → 20260116-yyyy (API CHANGED!)
-        Snapshot created: 20260116-1430-xxxx-feature
+        ⚠ ./yamlparser: old-xxxx → new-yyyy (API CHANGED!)
+        Snapshot created: feature-a1b2
         (uyarı verilir ama snapshot alınır)
 
     - id: deps_upgrades_flag
       given: 2 dep var (1 upgrade edilebilir, 1 güncel)
       when: bp deps --upgrades
       then: |
-        ./yamlparser: 20260115-1000-a1b2-stable → 20260116-0900-c3d4-new (API CHANGED!)
+        ./yamlparser: stable-a1b2 → new-c3d4 (API CHANGED!)
         ./commands: (up to date)
 
     # =========================================================================
@@ -873,8 +872,8 @@ tests:
       then: |
         ✓ . (fresh)
         Dependents:
-          ../A using 20260116-1430-xxxx (current)
-          ../B using 20260115-1000-yyyy (OUTDATED - 2 behind)
+          ../A using new-xxxx (current)
+          ../B using old-yyyy (OUTDATED - 2 behind)
 
     - id: status_dependents_outdated_count
       given: B, 3 versiyon gerideki snapshot'ı kullanıyor

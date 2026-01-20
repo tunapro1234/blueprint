@@ -7,7 +7,7 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 **Durum:** Planlama aşamasında
 
 ### Değişiklikler
-1. **deps/ klasörü kaldırıldı** - Symlink'ler direkt pakette
+1. **deps/ klasörü kaldırıldı** - Symlink'ler sadece snapshot history içinde
 2. **impl/ klasörü kaldırıldı** - Kod direkt snapshot'ta
 3. **3 development mode** - pussy, ro, hide (default: ro)
 4. **Default state_dir** - `.blueprint/` (gizli)
@@ -17,7 +17,7 @@ Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
 package/
 ├── BLUEPRINT.yaml
 ├── main.go
-├── yamlparser/ → ../yamlparser/.blueprint/history/{pinned_id}/
+├── yamlparser/                      # gerçek dependency klasörü
 ├── .blueprint/
 │   ├── state.yaml
 │   ├── current
@@ -60,13 +60,12 @@ _meta:
 │                           ▼                                  │
 │  3. bp impl [clean | <snapshot_id>]                         │
 │     └── ro/hide mode: dosyaları writable yapar/restore eder │
-│     └── Symlink'ler oluşturulur (direkt pakette)            │
 │     └── impl.lock açılır (implementing state)               │
 │                           │                                  │
 │                           ▼                                  │
 │  4. IMPLEMENTATION (Kod Yazma)                              │
 │     └── Working tree'de kodu düzenle                        │
-│     └── Import'lar direkt symlink üzerinden                 │
+│     └── Import'lar gerçek dependency klasörlerinden         │
 │     └── Test yaz / güncelle                                 │
 │                           │                                  │
 │                           ▼                                  │
@@ -111,8 +110,8 @@ bp validate . --no-recursive  # → sadece bu paket (non-recursive)
 package/
 ├── main.go
 ├── util.go
-├── yamlparser/ → ../yamlparser/.blueprint/history/{pinned_id}/
-└── commands/ → ../commands/.blueprint/history/{pinned_id}/
+├── yamlparser/         # gerçek dependency klasörü
+└── commands/           # gerçek dependency klasörü
 ```
 
 Snapshot içinde:
@@ -133,16 +132,16 @@ Snapshot içinde:
 # 2. (Opsiyonel) değişenleri sırala (default recursive)
 ./bp plan .
 
-# 3. Restore + implement başlat (symlink'ler oluşur)
+# 3. Restore + implement başlat (mode'a göre dosyalar hazırlanır)
 ./bp impl
 
-# 4. Kodu yaz, test et (import'lar direkt symlink üzerinden)
+# 4. Kodu yaz, test et (import'lar gerçek dependency klasörlerinden)
 cd src && go test ./...
 
 # 5. Uygula + kapat
 ./bp apply -m "implement feature X"
 
-# 6. Dependency güncelle (symlink güncellenir)
+# 6. Dependency güncelle (pin güncellenir; symlink snapshot'ta oluşur)
 ./bp upgrade --all
 
 # 7. Sonraki iterasyon için
@@ -165,17 +164,17 @@ cd src && go test ./...
   - **pussy**: impl.lock oluşturulur
   - **ro**: impl.lock oluşturulur, dosyalar writable yapılır (chmod +w)
   - **hide**: Current snapshot'tan dosyalar restore edilir, impl.lock oluşturulur
-- Symlink'ler oluşturulur (direkt pakette)
+- Working tree'de symlink oluşturulmaz (dependency klasörleri gerçek)
 
 ### `bp upgrade` çalıştırıldığında:
-1. Symlink'ler yeni pinned snapshot'a güncellenir
+1. state.yaml pinned/latest bilgileri güncellenir
 2. `tests.verification` çalıştırılır
 3. Test başarısız olursa: rollback + rotten flag
 4. Test başarılı olursa: state.yaml güncellenir
 
 ## Rotten Flag Sistemi
 Bir dependency upgrade'ı sırasında testler fail ederse:
-- Symlink eski haline döndürülür (rollback)
+- Pinned state eski halinde kalır (rollback)
 - Dependency'nin `meta.yaml` dosyasına `rotten: true` yazılır
 - Consumer'ın `state.yaml` deps bölümüne `rotten: true` eklenir
 
@@ -219,37 +218,37 @@ from deps.yamlparser import parser  # KALDIRILDI
 5. `bp impl` ve `bp apply` ardışık/tek yönlü akış:
    - `bp impl` → çalış → `bp apply` ile kapat
    - `bp apply` olmadan ikinci `bp impl` çalışmaz
-6. Import'lar direkt symlink'ler üzerinden yapılır
-7. `bp upgrade` symlink'leri günceller, kod değişikliği gerekmez
+6. Import'lar gerçek dependency klasörlerinden yapılır
+7. `bp upgrade` sadece pinleri günceller (symlink snapshot'ta oluşur)
 
 ## Agent Rehberi (Önerilen İş Akışı)
 1. `bp plan .` ile leaf-first sıra çıkar (default recursive)
 2. Her paket için:
    - `bp impl` (veya `bp impl clean`)
-   - Değişiklikleri yap (import'lar direkt symlink üzerinden)
+   - Değişiklikleri yap (import'lar gerçek dependency klasörlerinden)
    - Testleri çalıştır
    - `bp apply -m "..."` ile snapshot al
 3. Dependency güncellemek için:
-   - `bp upgrade --all` (symlink'ler güncellenir)
+   - `bp upgrade --all` (pinler güncellenir)
 4. `bp status .` ile genel kontrol (default recursive)
 
 Notlar:
 - BLUEPRINT dosyaları `bp apply` sonrası working tree'de kalır.
 - ro mode'da impl.lock yokken dosyalar read-only'dir.
-- Import'lar direkt symlink'ler üzerinden yapılır (deps/ yok).
-- `bp upgrade` çalıştırıldığında symlink hedefleri güncellenir, kod değişikliği gerekmez.
+- Import'lar gerçek dependency klasörlerinden yapılır (deps/ yok).
+- `bp upgrade` çalıştırıldığında pinler güncellenir, symlink'ler snapshot'ta oluşur.
 
 ## Komut Referansı
 
 | Komut | Açıklama |
 |-------|----------|
-| `bp implement` | impl.lock aç + symlink oluştur (mode'a göre restore/chmod) |
-| `bp apply -m "msg"` | Snapshot al + symlink + kapat (mode'a göre temizle/chmod) |
+| `bp implement` | impl.lock aç (mode'a göre restore/chmod) |
+| `bp apply -m "msg"` | Snapshot al + symlink (snapshot) + kapat (mode'a göre temizle/chmod) |
 | `bp validate [--no-recursive]` | Blueprint doğrula |
 | `bp status [--no-recursive]` | Değişiklik kontrolü |
 | `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |
 | `bp map [--no-recursive]` | Proje haritası: tüm paketler, snapshot'lar, dependency'ler |
-| `bp upgrade [--all] [--force]` | Dependency güncelle (symlink günceller, test çalıştırır) |
+| `bp upgrade [--all] [--force]` | Dependency güncelle (pin günceller, test çalıştırır) |
 | `bp cancel` | Aktif implementasyonu iptal et |
 | `bp log [-n N]` | Snapshot history |
 | `bp diff [id1] [id2]` | Snapshot karşılaştır |

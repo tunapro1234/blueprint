@@ -33,8 +33,8 @@ dependency_policy:
   summary: |
     Symlink tabanlı dependency yönetimi (yeni yapı):
     - Paket klasörü edit alanıdır
-    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (deps/ yok)
-    - Import/build için direkt symlink'ler kullanılır
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz
+    - Snapshot history içinde {dep_name}/ → pinned snapshot symlink (deps/ yok)
 
 dependencies:
   from_parent:

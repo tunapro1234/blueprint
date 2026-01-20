@@ -12,8 +12,9 @@ workflow_policy:
   summary: |
     Symlink tabanlı dependency yönetimi:
     - Paket klasörü edit alanıdır (working tree)
-    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink
-    - Import/build için direkt symlink'ler kullanılır (deps/ yok)
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz (gerçek klasör kullanılır)
+    - Snapshot history içinde dependency symlink'leri oluşturulur
+    - Import/build snapshot'ta symlink üzerinden yapılır (deps/ yok)
     Not: {state_dir} = _meta.state_dir (default .blueprint)
 
 # =============================================================================
@@ -27,14 +28,14 @@ implementation:
     - status module       # + dependents gösterimi
     - plan module         # Leaf-first plan listesi
     - cancel module       # Implementation iptal
-    - apply module        # Snapshot al + symlink oluştur
+    - apply module        # Snapshot al + dependency symlink oluştur
     - deps module         # + --upgrades flag
     - map module          # Project map - snapshot/dependency durumu
     - init module
     - log module          # Snapshot ID formatı
     - diff module
     - show module
-    - implement module    # Dependency kontrol + reverse tracking + symlink
+    - implement module    # Dependency kontrol + reverse tracking
     - upgrade module      # Dependency upgrade + test + rollback + rotten
 
   decisions:
@@ -298,14 +299,14 @@ implementation:
         - "Invalid current snapshot ID": {state_dir}/current geçersiz format
 
     implement:
-      purpose: Implementation başlat - dependency kontrol + reverse tracking + symlink
+      purpose: Implementation başlat - dependency kontrol + reverse tracking
       steps:
         0: Blueprint'i validate et (error varsa exit 2)
         1: Aktif implementasyon varsa hata ver (impl.lock varsa)
         2: Blueprint'i yükle, dependencies bölümünü oku
         3: Dependency yoksa → "No dependencies, ready to implement"
         4: Her dependency için reverse tracking + pin ekle
-        5: Paket kökünde dependency symlink'lerini oluştur/güncelle
+        5: Working tree'de dependency klasörü varsa symlink oluşturma (snapshot'ta oluşur)
         6: |
           - pussy: impl.lock oluştur
           - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
@@ -317,12 +318,12 @@ implementation:
         2: Blueprint bulunamadı
 
     upgrade:
-      purpose: Dependency'leri güncelle (symlink günceller)
+      purpose: Dependency'leri güncelle (state pin günceller)
       steps:
         1: state.yaml deps bölümünü oku
         2: Her dependency için latest_id ve api_hash al
         3: state.yaml deps güncelle
-        4: Working tree aktifse paket içindeki symlink'i güncelle
+        4: Working tree'de symlink oluşturulmaz (snapshot'ta güncel pin ile oluşur)
         5: API değişikliği varsa uyarı göster
       flags:
         safe: Sadece API değişmeyenleri upgrade et

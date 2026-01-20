@@ -151,7 +151,7 @@ api:
           1: Aktif implementasyon yok veya hata
 
       - name: apply
-        desc: Snapshot al, symlink oluştur, mode'a göre working tree ayarla
+        desc: Snapshot al, dependency symlink'lerini snapshot'a yaz, mode'a göre working tree ayarla
         usage: bp apply [path] [-m "message"] [--skip-tests]
         behavior: |
           - impl.lock yoksa hata verir (ro/hide mode'da)
@@ -278,7 +278,7 @@ api:
           1: ID bulunamadı veya hata
 
       - name: implement
-        desc: Implementation başlat - dependency kontrol + symlink + mode davranışı
+        desc: Implementation başlat - dependency kontrol + mode davranışı
         usage: bp implement [path] [snapshot_id] [--clean]
         note: "Alias: bp impl"
         behavior: |
@@ -289,8 +289,7 @@ api:
              - Pin'lenmiş snapshot mevcut mu kontrol et
              - Snapshot yoksa hata: "Dependency {dep} has no snapshot"
              - Dependency'nin state.yaml'ına kendini kaydet (reverse tracking)
-          4. Symlink'leri oluştur (direkt pakette, deps/ yok):
-             {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/
+          4. Working tree'de symlink oluşturulmaz (dependency klasörleri gerçek)
           5. Mode'a göre:
              - pussy: impl.lock oluştur
              - ro: impl.lock oluştur, dosyaları writable yap (chmod +w)
@@ -314,7 +313,7 @@ api:
           2: Validation hatası veya blueprint bulunamadı
 
       - name: upgrade
-        desc: Dependency'leri güncelle (symlink günceller, test çalıştırır)
+        desc: Dependency'leri güncelle (pin günceller, test çalıştırır)
         usage: bp upgrade [dep-path] [--safe] [--all] [--force]
         flags:
           - name: --safe
@@ -329,8 +328,7 @@ api:
           3. --safe verilmişse sadece api_changed=false olanları upgrade et
           4. Rotten snapshot'ları atla (--force ile zorla)
           5. Her upgrade için:
-             - Symlink'i güncelle (direkt pakette):
-               {dep_name}/ → {dep_path}/.blueprint/history/{new_pinned_id}/
+             - state.yaml pin bilgisini güncelle
              - tests.verification çalıştır
              - Test fail → rollback + rotten flag
              - Test pass → state.yaml güncelle

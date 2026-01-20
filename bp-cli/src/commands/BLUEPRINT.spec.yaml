@@ -46,6 +46,9 @@ implementation:
     - q: Registry nasıl çalışıyor?
       a: Ana modülde COMMANDS map'i, her komut modülünden import.
 
+    - q: Snapshot izinleri neden read+execute?
+      a: Script dosyalarının çalışabilirliğini korumak için snapshot'ta 0555 uygulanır.
+
   command_details:
     validate:
       checks:

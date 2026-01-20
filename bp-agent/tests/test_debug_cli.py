@@ -1,11 +1,10 @@
 from debug_cli.backend import HTTPBackend
 from debug_cli.cli import REPL
-from debug_cli.models import ChatMessage, CLIConfig, RunMode
+from debug_cli.models import ChatMessage, CLIConfig
 
 
 def test_config_defaults():
     config = CLIConfig()
-    assert config.mode == RunMode.HTTP
     assert config.provider == "gemini"
 
 

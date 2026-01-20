@@ -1,0 +1,21 @@
+_meta:
+  version: "0.1.0"
+  updated: 2026-01-20
+  status: mvp
+  root: true
+
+intent: |
+  Base Agent repo root blueprint.
+
+overview: |
+  Repo root for base-agent packages.
+  src/ contains the main agent package and subpackages.
+
+dependencies:
+  internal:
+    - path: ./src
+      desc: Base agent packages
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"

@@ -1,7 +1,0 @@
-id: 20260118-2041-a124-base-agent-provider
-timestamp: 2026-01-18T20:41:55
-message: base-agent: provider-aware agent + trace
-content_hash: sha256:a1248cc95c9fd0cfff22a434c795ff5b8c6f39d04d8da51945a3fc2c71653c86
-api_hash: sha256:92cf4088e7a2f67a1d07d80c414dade93e359f03549b50af7accaeac49c63305
-spec_hash: sha256:3b15b27583cb3b993dd5046e6f9d9ef54f716008524399cbfc243b1a1afcff4d
-impl_hash: sha256:e0655ad27668f9177483eb650500f419f3ef124d7c8fd91c2e1a4dff3470ab96

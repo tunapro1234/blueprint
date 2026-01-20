@@ -21,9 +21,9 @@ src/llm/codex/auth/
 # Blueprint State
 # ===========================================
 # Snapshot'lar paylaşılıyor (kod orada)
-# .blueprint/
-# blueprint/
-# *.blueprint/
+.blueprint/
+blueprint/
+**/blueprint/
 
 # ===========================================
 # Python

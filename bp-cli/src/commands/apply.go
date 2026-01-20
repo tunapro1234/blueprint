@@ -15,7 +15,7 @@ import (
 	bp "blueprint"
 )
 
-func ApplyCommand(ctx CommandContext) CommandResult {
+func SsCommand(ctx CommandContext) CommandResult {
 	path := ctx.Path
 	if path == "" {
 		path = "."
@@ -31,15 +31,6 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	warnRottenDependencies(bpObj)
-	mode := bpObj.Mode()
-	active, err := hasImplLock(bpObj.StateDir)
-	if err != nil {
-		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
-	}
-	if !active && mode != "pussy" {
-		out := "No active implementation. Run 'bp impl' first."
-		return CommandResult{ExitCode: 1, Output: out, Errors: []string{out}}
-	}
 	validation := bpObj.Validate()
 	if len(validation.Errors) > 0 {
 		out := fmt.Sprintf("✗ %s: %s", formatPath(bpObj.Path), strings.Join(validation.Errors, "; "))
@@ -50,6 +41,7 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+	testCfg.SnapshotReadOnly = true
 
 	depsState, depWarnings, err := bpObj.DependencyState()
 	if err != nil {
@@ -92,8 +84,15 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 	}
 	contentHash := bp.ComputeContentHash(blueprintHash, implHash, depsHash)
 	now := time.Now()
-	messageText := resolveMessage(now.Format("2006-01-02"), message)
-	snapshotID := bp.BuildSnapshotID(now, contentHash, messageText)
+	messageText := ""
+	if raw, ok := message.(string); ok {
+		messageText = strings.TrimSpace(raw)
+	}
+	metaMessage := messageText
+	if metaMessage == "" {
+		metaMessage = now.Format("2006-01-02")
+	}
+	snapshotID := bp.BuildSnapshotID(contentHash, messageText)
 
 	dependents := map[string]bp.DepRef{}
 	if existing, err := bp.LoadState(filepath.Join(bpObj.StateDir, "state.yaml")); err == nil {
@@ -144,16 +143,6 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
 			}
 		}
-		if err := finalizeApply(bpObj, trackedFiles); err != nil {
-			msg := err.Error()
-			out = strings.Join([]string{out, "✗ " + msg}, "\n")
-			return CommandResult{
-				ExitCode: 1,
-				Output:   out,
-				Errors:   []string{msg},
-				Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
-			}
-		}
 		return CommandResult{
 			ExitCode: 0,
 			Output:   out,
@@ -164,7 +153,7 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 	if err := copyBlueprintSnapshot(bpObj.Path, snapshotBlueprintPath(bpObj.StateDir, snapshotID)); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	if err := writeMeta(bpObj.StateDir, snapshotID, messageText, contentHash, apiHash, specHash, implHash, now, false); err != nil {
+	if err := writeMeta(bpObj.StateDir, snapshotID, metaMessage, contentHash, apiHash, specHash, implHash, now, false); err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	if err := copyImplementationSnapshot(trackedFiles, bpObj.StateDir, snapshotID, testCfg.SnapshotReadOnly); err != nil {
@@ -180,16 +169,6 @@ func ApplyCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
 	out := formatSnapshotOutput(warnings, fmt.Sprintf("Snapshot created: %s", snapshotID))
-	if err := finalizeApply(bpObj, trackedFiles); err != nil {
-		msg := err.Error()
-		out = strings.Join([]string{out, "✗ " + msg}, "\n")
-		return CommandResult{
-			ExitCode: 1,
-			Output:   out,
-			Errors:   []string{msg},
-			Data:     SnapshotInfo{ID: snapshotID, Path: snapshotDir(bpObj.StateDir, snapshotID), ContentHash: contentHash, APIHash: apiHash, SpecHash: specHash, ImplHash: implHash},
-		}
-	}
 	return CommandResult{
 		ExitCode: 0,
 		Output:   out,

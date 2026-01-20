@@ -4,9 +4,9 @@ import "testing"
 
 func TestIsSnapshotID(t *testing.T) {
 	valid := []string{
+		"add-feat-a1b2",
+		"ss-a3f2b7c1",
 		"20240102-0304-abcd-test",
-		"20240102-0304-ABCD-test",
-		"20240102-0304-1234-a",
 	}
 	for _, id := range valid {
 		if !IsSnapshotID(id) {
@@ -15,9 +15,8 @@ func TestIsSnapshotID(t *testing.T) {
 	}
 	invalid := []string{
 		"",
-		"20240102-0304-acde",      // missing slug
-		"20240102-030-aaaa-test",  // invalid time
-		"20240102-0304-zzzz-test", // invalid hex
+		"add-feat-zzzz",           // invalid hex
+		"ss-acdeff",               // too short
 		"20240102-0304-aaaa-",     // empty slug
 		"20240102-0304-aaaa-TOO_LONG_SLUG_EXCEEDS_LIMIT",
 	}

@@ -17,7 +17,7 @@ func resolveImplementationSnapshotID(stateDir, input string) (string, error) {
 		current, err := readCurrentSnapshotID(stateDir)
 		if err != nil {
 			if errors.Is(err, bp.ErrNoSnapshot) {
-				return "", fmt.Errorf("No snapshot history. Run 'bp apply' first or use 'bp impl clean'.")
+				return "", fmt.Errorf("No snapshot history. Run 'bp ss' first.")
 			}
 			return "", err
 		}

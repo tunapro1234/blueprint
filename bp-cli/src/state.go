@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type DepState struct {
@@ -102,16 +101,21 @@ func ComputeContentHash(blueprintHash, implHash, depsHash string) string {
 	return HashString(combined)
 }
 
-func BuildSnapshotID(ts time.Time, contentHash, message string) string {
-	short := shortHash(contentHash)
-	slug := slugify(message)
-	return fmt.Sprintf("%s-%s-%s", ts.Format("20060102-1504"), short, slug)
+func BuildSnapshotID(contentHash, message string) string {
+	trimmed := strings.TrimSpace(message)
+	hash := strings.TrimPrefix(contentHash, "sha256:")
+	if trimmed == "" {
+		return fmt.Sprintf("ss-%s", shortHashN(hash, 8))
+	}
+	return fmt.Sprintf("%s-%s", slugify(trimmed), shortHashN(hash, 4))
 }
 
-func shortHash(contentHash string) string {
-	hash := strings.TrimPrefix(contentHash, "sha256:")
-	if len(hash) >= 4 {
-		return hash[:4]
+func shortHashN(hash string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(hash) >= n {
+		return hash[:n]
 	}
 	return hash
 }

@@ -71,6 +71,35 @@ func NewLangCommand(ctx CommandContext) CommandResult {
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
+
+	splitTargets := []string{}
+	for _, files := range packages {
+		if len(files) != 1 {
+			continue
+		}
+		info, err := inspectBlueprintFile(files[0])
+		if err != nil {
+			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		}
+		if needsSplit(info, len(files)) {
+			splitTargets = append(splitTargets, files[0])
+		}
+	}
+	if len(splitTargets) > 0 {
+		prompt := fmt.Sprintf("Single-file blueprints with API+spec found (%d). Split into BLUEPRINT.api.yaml and BLUEPRINT.spec.yaml? [y/N]: ", len(splitTargets))
+		if confirmSplit(prompt) {
+			for _, path := range splitTargets {
+				if err := splitBlueprintFile(path); err != nil {
+					return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+				}
+			}
+			packages, err = collectBlueprints(sourceRoot, patterns)
+			if err != nil {
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
+		}
+	}
+
 	blueprintCount := 0
 	for relDir, files := range packages {
 		targetDir := targetRoot
@@ -82,7 +111,11 @@ func NewLangCommand(ctx CommandContext) CommandResult {
 		}
 		for _, srcPath := range files {
 			dstPath := filepath.Join(targetDir, filepath.Base(srcPath))
-			if isAPIBlueprintFile(filepath.Base(srcPath)) {
+			info, err := inspectBlueprintFile(srcPath)
+			if err != nil {
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
+			if info.HasAPI {
 				relLink, err := filepath.Rel(targetDir, srcPath)
 				if err != nil {
 					relLink = srcPath
@@ -248,14 +281,6 @@ func matchesBlueprint(name string, patterns []string) bool {
 		}
 	}
 	return bp.IsBlueprintFile(name)
-}
-
-func isAPIBlueprintFile(name string) bool {
-	lower := strings.ToLower(name)
-	if !strings.HasSuffix(lower, ".yaml") {
-		return false
-	}
-	return strings.Contains(lower, ".api.")
 }
 
 func collectBlueprints(root string, patterns []string) (map[string][]string, error) {

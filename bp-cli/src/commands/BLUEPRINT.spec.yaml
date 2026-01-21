@@ -213,8 +213,9 @@ implementation:
         5: |
            Kaynak kökten package ağacını kopyala:
            - Paket klasörlerini oluştur
-           - API blueprint dosyalarını symlink et (pattern bazlı)
+           - API section içeren blueprint dosyalarını symlink et (pattern bazlı)
            - Diğer blueprint dosyalarını kopyala
+           - Tek blueprint dosyası API+spec içeriyorsa split için sor
            - Implementation dosyalarını kopyalama
         6: Kaynak kökte blueprint olmayan klasörleri kopyala (shared assets)
         7: Languages listesi varsa güncelle (opsiyonel)
@@ -687,14 +688,27 @@ tests:
       then: src-rs/ oluşur, exit 0
 
     - id: new_lang_symlinks_api_blueprints
-      given: src-go/p1/BLUEPRINT.api.yaml var
+      given: src-go/p1/BLUEPRINT.yaml içinde api section var
       when: bp new-lang rs --from go
-      then: src-rs/p1/BLUEPRINT.api.yaml symlink olur (aynı blueprint'e işaret eder)
+      then: src-rs/p1/BLUEPRINT.yaml symlink olur (api section içerdiği için)
 
     - id: new_lang_copies_spec_blueprints
       given: src-go/p1/BLUEPRINT.spec.yaml var
       when: bp new-lang rs --from go
       then: src-rs/p1/BLUEPRINT.spec.yaml kopyalanır (symlink değil)
+
+    - id: new_lang_prompts_split_single_file
+      given: src-go/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya)
+      when: bp new-lang rs --from go
+      then: "API+spec tek dosyada, split edilsin mi? [y/N]" prompt gösterir
+
+    - id: new_lang_split_creates_api_spec
+      given: src-go/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya), kullanıcı "y" der
+      when: bp new-lang rs --from go
+      then: |
+        - src-go/p1/BLUEPRINT.api.yaml oluşur (api içeriği taşınır)
+        - src-go/p1/BLUEPRINT.spec.yaml oluşur (implementation/tests taşınır)
+        - src-go/p1/BLUEPRINT.yaml referanslara güncellenir
 
     - id: new_lang_copies_shared_dirs
       given: src-go/assets/ (blueprint olmayan klasör)
@@ -878,7 +892,7 @@ tests:
           deps: (none)
 
     - id: map_langs
-      given: src-go ve src-rs var, API blueprint'ler symlink
+      given: src-go ve src-rs var, API section içeren blueprint'ler symlink
       when: bp map --langs
       then: |
         Languages:

@@ -94,7 +94,8 @@ language_policy:
   summary: |
     Multi-language kökler (src-<lang>):
     - Örnek: src-go, src-rs
-    - new-lang komutu paket ağacını oluşturur; API blueprint'ler symlink, diğer blueprint'ler kopya
+    - new-lang komutu paket ağacını oluşturur; API section içeren blueprint'ler symlink, diğerleri kopya
+    - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
     - Implementasyonlar diller arasında kopyalanmaz (bağımsız)
     - API hash eşitliği map --langs ile kontrol edilir
   blueprint_patterns:

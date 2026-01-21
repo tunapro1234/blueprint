@@ -180,7 +180,7 @@ api:
         - source: string                # Kaynak dil kökü (src-*)
         - target: string                # Hedef dil kökü
         - packages: int                 # Oluşturulan paket sayısı
-        - blueprints: int               # Symlink edilen API blueprint sayısı
+        - blueprints: int               # Symlink edilen API section içeren blueprint sayısı
         - shared_copied: int            # Kopyalanan shared dosya/klasör sayısı
 
     - name: UpgradeResult

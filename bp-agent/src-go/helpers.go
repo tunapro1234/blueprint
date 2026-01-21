@@ -63,6 +63,7 @@ func buildLLMRouter(cfg AgentConfig) (*llm.LLMRouter, error) {
 		}
 		router.RegisterProvider("gemini", llm.NewGeminiAdapter(llm.GeminiConfig{
 			APIKeys:     keys,
+			BaseURL:     "https://generativelanguage.googleapis.com",
 			Model:       model,
 			Temperature: config.Temperature,
 		}))

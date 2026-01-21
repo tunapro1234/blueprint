@@ -12,7 +12,7 @@ overview: |
   - llm/types.py: Ortak Message/ToolCall/LLMResponse tipleri
   - llm/router.py: Provider secimi + ortak giris
   - llm/rotation.py: Ortak rate-limit/rotation stratejisi
-  - llm/gemini_adapter.py: Gemini adapter
+  - llm/gemini_adapter.py: Gemini adapter (REST)
   - llm/codex_adapter.py: Codex adapter
   - llm/opus_adapter.py: Opus adapter
 
@@ -123,9 +123,15 @@ providers:
     models:
       - gemini-3-flash-preview
       - gemini-3-pro-preview
-    auth: API key rotation
+    auth: API key rotation (x-goog-api-key header; key query fallback)
+    rest:
+      base_url: https://generativelanguage.googleapis.com
+      generate_content: POST /v1beta/models/{model}:generateContent
+      stream_generate_content: POST /v1beta/models/{model}:streamGenerateContent
+      list_models: GET /v1beta/models
     errors:
       rate_limit: 429 / quota / resource_exhausted
+      auth_error: 401/403
 
   codex:
     models:
@@ -166,5 +172,5 @@ dependencies:
     - path: ../tools
       desc: ToolSchema tipleri
   external:
-    - requests (HTTP client)
-    - google-generativeai SDK (veya REST API)
+    - net/http (stdlib HTTP client)
+    - Gemini REST API (generativelanguage.googleapis.com)

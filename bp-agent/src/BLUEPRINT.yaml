@@ -19,7 +19,7 @@ overview: |
     debug_cli/   - HTTP debug CLI (agent davranisi testi)
 
   LLM Providers:
-    - Gemini 3: API key ile, key rotation destekli
+    - Gemini 3: REST API (v1beta) key rotation destekli
     - Codex: ChatGPT hesabi ile, reasoning effort destekli
     - Opus: HTTP provider (configurable)
 

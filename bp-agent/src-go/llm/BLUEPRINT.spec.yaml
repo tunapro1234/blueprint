@@ -109,6 +109,7 @@ implementation:
 
       type GeminiConfig struct {
           APIKeys     []string
+          BaseURL     string
           Model       string
           Temperature float64
       }
@@ -123,7 +124,8 @@ implementation:
       }
 
       func (a *GeminiAdapter) Complete(ctx context.Context, req CompletionRequest) (LLMResponse, error) {
-          // HTTP call to Gemini API or SDK
+          // REST: POST {BaseURL}/v1beta/models/{model}:generateContent
+          // auth: x-goog-api-key header (API key)
           return LLMResponse{}, nil
       }
 

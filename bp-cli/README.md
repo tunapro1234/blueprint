@@ -49,7 +49,7 @@ This tool is **snapshot-based** (not Git-based): it stores state alongside each 
 Requires Go 1.22+
 
 ```
-cd src-go && go build -o ../bp ./cmd/bp
+cd src && go build -o ../bp ./cmd/bp
 ```
 
 ## Quick Start
@@ -129,13 +129,28 @@ Snapshot IDs:
 Timestamp is stored in `meta.yaml`.
 
 ## Multi-language Roots
-- Language roots live under `src-<lang>` (e.g. `src-go`, `src-rs`)
-- `bp new-lang rs --from go` creates a new root:
+- Default language root is `src/` (configurable)
+- Additional language roots are discovered via `language_policy.language_roots` and `language_policy.language_root_patterns` (default pattern: `src-*`)
+- `bp new-lang rs` creates a new root (default target uses `language_policy.language_root_template`, default `src-{lang}`):
   - Package directories are created
   - Blueprint files that contain an API section are symlinked; others are copied
   - If a package has a single blueprint file with API+spec, `bp` prompts to split it
   - Implementation files are **not** copied
-- `bp map --langs` shows API hash alignment across languages
+- `bp map --langs` shows API hash alignment across roots
+
+Example config:
+```
+language_policy:
+  default_root: src
+  default_language: go
+  language_root_template: src-{lang}
+  language_roots:
+    - src
+    - lang/python
+  language_root_patterns:
+    - src-*
+    - lang-*
+```
 
 `bp ss` will:
 1) Validate the blueprint
@@ -182,7 +197,7 @@ The custom parser:
 BLUEPRINT.yaml     # Root project blueprint
 README.md          # This file
 .gitignore         # Git ignore rules
-src-go/            # Language root (example)
+src/               # Default language root
   BLUEPRINT.yaml   # Library blueprint (API, types, algorithms)
   cmd/bp/          # CLI entrypoint
   commands/        # CLI command handlers
@@ -193,7 +208,7 @@ src-go/            # Language root (example)
 ## Development
 Run tests:
 ```
-cd src-go && go test ./...
+cd src && go test ./...
 ```
 
 Validate all blueprints (default recursive):

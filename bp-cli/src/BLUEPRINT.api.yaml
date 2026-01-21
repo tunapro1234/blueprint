@@ -176,18 +176,18 @@ api:
           2: Validation hatası
 
       - name: new-lang
-        desc: Yeni dil kökü oluştur (src-<lang>)
+        desc: Yeni dil kökü oluştur (default_root + language_root_template)
         usage: bp new-lang <lang> [--from <lang>] [--root <path>] [--target <dir>]
         flags:
           - name: --from
-            desc: Kaynak dil (varsayılan: bulunan ilk src-*)
+            desc: Kaynak dil (varsayılan: default_root veya bulunan ilk kök)
           - name: --root
             desc: Root path override (default: root blueprint)
           - name: --target
-            desc: Hedef klasör (default: src-<lang>)
+            desc: Hedef klasör (default: language_root_template)
         behavior: |
           - Root blueprint bulunur (veya --root kullanılır)
-          - Kaynak dil kökü seçilir (src-<from> veya ilk src-*)
+          - Kaynak dil kökü seçilir (ad/path eşleşmesi, default_root veya pattern'lar)
           - Hedef kök oluşturulur (varsa hata)
           - Kaynak kökteki package ağacı kopyalanır:
             - Her paket için klasör oluşturulur
@@ -236,6 +236,7 @@ api:
           - API hash (kısa)
           - Dependency listesi ve pinned snapshot'ları
           - Rotten flag varsa işaretle
+          --langs ile language_policy kökleri üzerinden API hash karşılaştırması yapılır
         output:
           format: |
             ./
@@ -257,12 +258,12 @@ api:
                 ./yamlparser @ stable-x1y2 (api: def456)
           langs: |
             Languages:
-              go: src-go
+              src: src
               rs: src-rs
 
             Package: ./parser
               api_hash:
-                go: sha256:abc123...
+                src: sha256:abc123...
                 rs: sha256:abc123...
               status: OK
         exit_codes:

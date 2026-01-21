@@ -126,7 +126,8 @@ Snapshot içinde:
 - Dil kökleri `src-<lang>` altında tutulur (örn. `src-go`, `src-rs`)
 - `bp new-lang rs --from go` yeni kök oluşturur
   - Paket klasörleri oluşturulur
-  - API blueprint dosyaları symlink edilir, diğer blueprint dosyaları kopyalanır
+  - API section içeren blueprint dosyaları symlink edilir, diğerleri kopyalanır
+  - Tek blueprint dosyasında API+spec varsa split için sorar (evet ise api/spec ayrılır)
   - Implementasyon dosyaları kopyalanmaz
 - `bp map --langs` API hash eşitliğini gösterir
 
@@ -251,7 +252,7 @@ Notlar:
 |-------|----------|
 | `bp implement` | Agentic derleme + opsiyonel snapshot |
 | `bp ss -m "msg"` | Manuel snapshot (validate + test + read+execute) |
-| `bp new-lang <lang>` | Yeni dil kökü oluştur (API blueprint symlink, diğerleri kopya) |
+| `bp new-lang <lang>` | Yeni dil kökü oluştur (API section içeren blueprint symlink, diğerleri kopya) |
 | `bp validate [--no-recursive]` | Blueprint doğrula |
 | `bp status [--no-recursive]` | Değişiklik kontrolü |
 | `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |

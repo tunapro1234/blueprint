@@ -191,7 +191,8 @@ api:
           - Hedef kök oluşturulur (varsa hata)
           - Kaynak kökteki package ağacı kopyalanır:
             - Her paket için klasör oluşturulur
-            - API blueprint dosyaları symlink edilir, diğer blueprint dosyaları kopyalanır (pattern bazlı)
+            - API section içeren blueprint dosyaları symlink edilir, diğerleri kopyalanır (pattern bazlı)
+            - Tek blueprint dosyası API+spec içeriyorsa split için sorulur (evet ise api/spec ayrılır)
             - Implementation dosyaları kopyalanmaz
           - Kaynak kökte blueprint olmayan klasörler dosya/dizin olarak kopyalanır (shared assets)
           - Languages listesi varsa güncellenir (yoksa dokunulmaz)

@@ -124,8 +124,9 @@ workflow_policy:
   language_policy: |
     Multi-language kökler (src-<lang>):
     - new-lang komutu package ağacını oluşturur
-    - API blueprint dosyaları symlink edilir; diğer blueprint dosyaları kopyalanır
+    - API section içeren blueprint dosyaları symlink edilir; diğer blueprint dosyaları kopyalanır
     - Implementasyon dosyaları diller arasında kopyalanmaz
+    - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
     - API hash eşitliği map --langs ile kontrol edilir
 
   modes: |
@@ -192,8 +193,9 @@ workflow_policy:
       4. Hedef varsa hata ver
       5. Kaynak kökte package ağacını tara:
          - Her paket için klasör oluştur
-         - API blueprint dosyalarını symlink et (pattern bazlı)
+         - API section içeren blueprint dosyalarını symlink et (pattern bazlı)
          - Diğer blueprint dosyalarını kopyala
+         - Tek blueprint dosyası API+spec içeriyorsa split için sor
          - Implementation dosyalarını kopyalama
       6. Kaynak kökte blueprint olmayan klasörleri kopyala (shared assets)
       7. Languages listesi varsa güncelle (opsiyonel)

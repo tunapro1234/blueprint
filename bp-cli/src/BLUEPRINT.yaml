@@ -80,7 +80,8 @@ language_policy:
   summary: |
     Multi-language kökler:
     - Dil kökleri src-<lang> formatında tutulur
-    - new-lang komutu paket ağacını oluşturur; API blueprint'ler symlink, diğer blueprint'ler kopya
+    - new-lang komutu paket ağacını oluşturur; API section içeren blueprint'ler symlink, diğerleri kopya
+    - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
     - Implementasyonlar diller arasında bağımsızdır
     - API hash eşitliği map --langs ile kontrol edilir
   collision_handling: |

@@ -132,7 +132,8 @@ Timestamp is stored in `meta.yaml`.
 - Language roots live under `src-<lang>` (e.g. `src-go`, `src-rs`)
 - `bp new-lang rs --from go` creates a new root:
   - Package directories are created
-  - API blueprint files are symlinked; other blueprint files are copied
+  - Blueprint files that contain an API section are symlinked; others are copied
+  - If a package has a single blueprint file with API+spec, `bp` prompts to split it
   - Implementation files are **not** copied
 - `bp map --langs` shows API hash alignment across languages
 

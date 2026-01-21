@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Optional
-from urllib import request as urlrequest, error as urlerror
+
+import requests
 
 from .rotation import RotationManager, RotationSlot
 from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError
@@ -18,7 +18,7 @@ class GeminiConfig:
     api_keys: list[str]
     model: str = "gemini-3-flash-preview"
     temperature: float = 0.3
-    base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    base_url: str = "https://generativelanguage.googleapis.com"
 
 
 class GeminiAdapter:
@@ -91,28 +91,29 @@ class GeminiAdapter:
         return payload
 
     def _send_request(self, payload: dict, model: str, api_key: str) -> dict:
-        url = f"{self.config.base_url}/models/{model}:generateContent?key={api_key}"
-        data = json.dumps(payload).encode("utf-8")
-        req = urlrequest.Request(url, data=data, method="POST")
-        req.add_header("Content-Type", "application/json")
-
+        base_url = self.config.base_url.rstrip("/")
+        url = f"{base_url}/v1beta/models/{model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        }
         try:
-            with urlrequest.urlopen(req) as resp:
-                body = resp.read().decode("utf-8")
-                return json.loads(body)
-        except urlerror.HTTPError as err:
-            body = err.read().decode("utf-8") if err.fp else ""
-            status = err.code
+            resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        except requests.RequestException as err:  # pragma: no cover - network issues
+            raise ProviderError("network_error", str(err), retryable=True)
+
+        if resp.status_code >= 400:
+            body = resp.text or ""
             lowered = body.lower()
-            if status == 401 or status == 403:
+            if resp.status_code in (401, 403):
                 raise ProviderError("auth_error", body or "auth error", retryable=True)
-            if status == 429 or "quota" in lowered or "resource_exhausted" in lowered:
+            if resp.status_code == 429 or "quota" in lowered or "resource_exhausted" in lowered:
                 raise ProviderError("rate_limit", body or "rate limit", retryable=True)
-            if status >= 500:
+            if resp.status_code >= 500:
                 raise ProviderError("server_error", body or "server error", retryable=True)
             raise ProviderError("api_error", body or "api error", retryable=False)
-        except urlerror.URLError as err:
-            raise ProviderError("network_error", str(err), retryable=True)
+
+        return resp.json()
 
     def _parse_response(self, response: dict) -> LLMResponse:
         candidates = response.get("candidates", [])

@@ -177,7 +177,7 @@ api:
 
     - name: NewLangResult
       fields:
-        - source: string                # Kaynak dil kökü (src-*)
+        - source: string                # Kaynak dil kökü
         - target: string                # Hedef dil kökü
         - packages: int                 # Oluşturulan paket sayısı
         - blueprints: int               # Symlink edilen API section içeren blueprint sayısı

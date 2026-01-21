@@ -12,11 +12,14 @@ import (
 )
 
 type blueprintFileInfo struct {
-	Path     string
-	RelDir   string
-	HasAPI   bool
-	HasImpl  bool
-	HasTests bool
+	Path        string
+	RelDir      string
+	HasAPI      bool
+	APIInline   bool
+	HasImpl     bool
+	ImplInline  bool
+	HasTests    bool
+	TestsInline bool
 }
 
 func inspectBlueprintFile(path string) (blueprintFileInfo, error) {
@@ -25,21 +28,32 @@ func inspectBlueprintFile(path string) (blueprintFileInfo, error) {
 	if err != nil {
 		return info, err
 	}
-	info.HasAPI = hasSectionContent(bpObj.Data["api"])
-	info.HasImpl = hasSectionContent(bpObj.Data["implementation"])
-	info.HasTests = hasSectionContent(bpObj.Data["tests"])
+	apiInfo := sectionInfo(bpObj.Data["api"])
+	implInfo := sectionInfo(bpObj.Data["implementation"])
+	testsInfo := sectionInfo(bpObj.Data["tests"])
+	info.HasAPI = apiInfo.Present
+	info.APIInline = apiInfo.Inline
+	info.HasImpl = implInfo.Present
+	info.ImplInline = implInfo.Inline
+	info.HasTests = testsInfo.Present
+	info.TestsInline = testsInfo.Inline
 	return info, nil
 }
 
-func hasSectionContent(val interface{}) bool {
+type sectionPresence struct {
+	Present bool
+	Inline  bool
+}
+
+func sectionInfo(val interface{}) sectionPresence {
 	if val == nil {
-		return false
+		return sectionPresence{}
 	}
 	switch val.(type) {
 	case string:
-		return false
+		return sectionPresence{Present: true, Inline: false}
 	default:
-		return true
+		return sectionPresence{Present: true, Inline: true}
 	}
 }
 
@@ -50,7 +64,10 @@ func needsSplit(file blueprintFileInfo, totalFiles int) bool {
 	if !file.HasAPI {
 		return false
 	}
-	return file.HasImpl || file.HasTests
+	if !file.APIInline {
+		return false
+	}
+	return file.ImplInline || file.TestsInline
 }
 
 func confirmSplit(prompt string) bool {
@@ -80,10 +97,13 @@ func splitBlueprintFile(path string) error {
 	apiVal := bpObj.Data["api"]
 	implVal := bpObj.Data["implementation"]
 	testsVal := bpObj.Data["tests"]
-	if !hasSectionContent(apiVal) {
+	apiInfo := sectionInfo(apiVal)
+	implInfo := sectionInfo(implVal)
+	testsInfo := sectionInfo(testsVal)
+	if !apiInfo.Present {
 		return nil
 	}
-	if !(hasSectionContent(implVal) || hasSectionContent(testsVal)) {
+	if !(implInfo.Inline || testsInfo.Inline) {
 		return nil
 	}
 
@@ -109,13 +129,16 @@ func splitBlueprintFile(path string) error {
 	}
 
 	specData := map[string]interface{}{}
-	if hasSectionContent(implVal) {
+	if implInfo.Inline {
 		specData["implementation"] = implVal
 	}
-	if hasSectionContent(testsVal) {
+	if testsInfo.Inline {
 		specData["tests"] = testsVal
 	}
 	if len(specData) > 0 {
+		specData["_meta"] = map[string]interface{}{
+			"type": "spec",
+		}
 		if err := writeYAML(specPath, specData); err != nil {
 			return err
 		}
@@ -130,13 +153,13 @@ func splitBlueprintFile(path string) error {
 			newData[key] = val
 		}
 	}
-	if hasSectionContent(apiVal) {
+	if apiInfo.Present {
 		newData["api"] = "./BLUEPRINT.api.yaml#api"
 	}
-	if hasSectionContent(implVal) {
+	if implInfo.Present {
 		newData["implementation"] = "./BLUEPRINT.spec.yaml#implementation"
 	}
-	if hasSectionContent(testsVal) {
+	if testsInfo.Present {
 		newData["tests"] = "./BLUEPRINT.spec.yaml#tests"
 	}
 	return writeYAML(path, newData)

@@ -18,7 +18,7 @@ overview: |
   - BLUEPRINT.yaml kullanıcı düzenler
   - .blueprint/ tool yönetir (state, history)
   - Symlink'ler snapshot history içinde (deps/ yok)
-  - Multi-language kökler: src-<lang> (örn. src-go, src-rs)
+  - Multi-language kökler: src/ (default) + src-<lang> (örn. src-go, src-rs)
 
   Development mode'lar (_meta.mode):
   - meek (default): Hiçbir şeyi zorlamaz
@@ -37,7 +37,7 @@ overview: |
   - bp impl: Blueprint'i koda derle (agentic) + snapshot
   - bp implement: impl alias (uzun)
   - bp ss: Manuel snapshot
-  - bp new-lang: Yeni dil kökü oluştur (src-<lang>)
+  - bp new-lang: Yeni dil kökü oluştur (default hedef: src-{lang})
   - bp plan: Değişen paketleri leaf-first sırada listeler
   - bp cancel: Derlemeyi iptal eder (busy flag)
   - bp upgrade: Dependency'leri güncelle (pin günceller)
@@ -60,8 +60,8 @@ plan:
     status: done
     desc: commands/yamlparser snapshot'larında dependency symlink'leri bulunur (impl/deps yok).
   - id: new_lang_command
-    status: planned
-    desc: new-lang komutu ile src-<lang> kökü oluşturma; API blueprint symlink, diğerleri kopya.
+    status: done
+    desc: new-lang komutu ile yeni dil kökü oluşturma; API blueprint symlink, diğerleri kopya.
 
 # =============================================================================
 # WORKFLOW POLICY
@@ -79,11 +79,17 @@ dependency_policy:
 language_policy:
   summary: |
     Multi-language kökler:
-    - Dil kökleri src-<lang> formatında tutulur
+    - Varsayılan kök: src/
+    - Ek kökler language_roots ve language_root_patterns ile bulunur (default pattern: src-*)
     - new-lang komutu paket ağacını oluşturur; API section içeren blueprint'ler symlink, diğerleri kopya
     - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
     - Implementasyonlar diller arasında bağımsızdır
     - API hash eşitliği map --langs ile kontrol edilir
+  default_root: src
+  # default_language: go
+  language_root_template: src-{lang}
+  language_root_patterns:
+    - src-*
   collision_handling: |
     İsim çakışması durumunda hata verilir:
     "Name collision - '{name}' exists both as code and dependency"

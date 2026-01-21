@@ -123,13 +123,28 @@ Snapshot içinde:
 ```
 
 ## Multi-language Kökler
-- Dil kökleri `src-<lang>` altında tutulur (örn. `src-go`, `src-rs`)
-- `bp new-lang rs --from go` yeni kök oluşturur
+- Varsayılan dil kökü `src/` (konfigüre edilebilir)
+- Ek dil kökleri `language_policy.language_roots` ve `language_policy.language_root_patterns` ile bulunur (default pattern: `src-*`)
+- `bp new-lang rs` yeni kök oluşturur (default hedef `language_policy.language_root_template`, default `src-{lang}`):
   - Paket klasörleri oluşturulur
   - API section içeren blueprint dosyaları symlink edilir, diğerleri kopyalanır
   - Tek blueprint dosyasında API+spec varsa split için sorar (evet ise api/spec ayrılır)
   - Implementasyon dosyaları kopyalanmaz
-- `bp map --langs` API hash eşitliğini gösterir
+- `bp map --langs` kökler arası API hash eşitliğini gösterir
+
+Örnek konfig:
+```
+language_policy:
+  default_root: src
+  default_language: go
+  language_root_template: src-{lang}
+  language_roots:
+    - src
+    - lang/python
+  language_root_patterns:
+    - src-*
+    - lang-*
+```
 
 ## Temel Komutlar
 
@@ -151,7 +166,7 @@ cd src && go test ./...
 ./bp upgrade --all
 
 # 6.5 Yeni dil kökü oluştur (opsiyonel)
-./bp new-lang rs --from go
+./bp new-lang rs
 
 # 7. Sonraki iterasyon için
 ./bp impl veya ./bp ss

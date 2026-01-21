@@ -150,7 +150,7 @@ func mapLangs(ctx CommandContext) CommandResult {
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
-	roots, err := listLanguageRoots(rootDir)
+	roots, err := loadLanguageRoots(rootDir, rootBP)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
@@ -170,8 +170,8 @@ func mapLangs(ctx CommandContext) CommandResult {
 	allPkgs := map[string]struct{}{}
 
 	for _, root := range roots {
-		langName := strings.TrimPrefix(filepath.Base(root), "src-")
-		pkgs, err := collectBlueprints(root, patterns)
+		langName := root.Name
+		pkgs, err := collectBlueprints(root.Path, patterns)
 		if err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
@@ -181,7 +181,7 @@ func mapLangs(ctx CommandContext) CommandResult {
 			allPkgs[relDir] = struct{}{}
 		}
 		langs[langName] = &langPkg{
-			root:     root,
+			root:     root.Path,
 			packages: pkgSet,
 			hashes:   map[string]string{},
 			errors:   map[string]string{},

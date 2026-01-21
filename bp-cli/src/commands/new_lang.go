@@ -37,7 +37,7 @@ func NewLangCommand(ctx CommandContext) CommandResult {
 	}
 	patterns := loadBlueprintPatterns(rootBP)
 
-	sourceRoot, err := resolveSourceLangRoot(rootDir, fromArg)
+	sourceRoot, err := resolveSourceLangRoot(rootDir, rootBP, fromArg)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
@@ -53,7 +53,7 @@ func NewLangCommand(ctx CommandContext) CommandResult {
 		msg := "Source language root not found"
 		return CommandResult{ExitCode: 1, Output: msg, Errors: []string{msg}}
 	}
-	targetRoot, err := resolveTargetLangRoot(rootDir, lang, targetArg)
+	targetRoot, err := resolveTargetLangRoot(rootDir, rootBP, lang, targetArg)
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
@@ -170,7 +170,8 @@ func resolveNewLangRoot(pathArg, rootArg string) (string, *bp.Blueprint, error) 
 	return rootBP.Dir, rootBP, nil
 }
 
-func resolveSourceLangRoot(rootDir, fromArg string) (string, error) {
+func resolveSourceLangRoot(rootDir string, rootBP *bp.Blueprint, fromArg string) (string, error) {
+	cfg := loadLanguageConfig(rootBP)
 	from := strings.TrimSpace(fromArg)
 	if from != "" {
 		if filepath.IsAbs(from) || strings.ContainsAny(from, `/\`) {
@@ -179,48 +180,230 @@ func resolveSourceLangRoot(rootDir, fromArg string) (string, error) {
 			}
 			return from, nil
 		}
-		if strings.HasPrefix(from, "src-") {
-			return filepath.Join(rootDir, from), nil
+		if roots, err := loadLanguageRoots(rootDir, rootBP); err == nil {
+			for _, root := range roots {
+				if strings.EqualFold(root.Name, from) {
+					return root.Path, nil
+				}
+			}
+		}
+		candidate := filepath.Join(rootDir, from)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, nil
+		}
+		if cfg.RootTemplate != "" {
+			target := renderRootTemplate(cfg.RootTemplate, from)
+			if target != "" && !filepath.IsAbs(target) {
+				target = filepath.Join(rootDir, target)
+			}
+			return target, nil
 		}
 		return filepath.Join(rootDir, "src-"+from), nil
 	}
-	roots, err := listLanguageRoots(rootDir)
+	roots, err := loadLanguageRoots(rootDir, rootBP)
 	if err != nil {
 		return "", err
 	}
 	if len(roots) == 0 {
 		return "", fmt.Errorf("Source language root not found")
 	}
-	sort.Strings(roots)
-	return roots[0], nil
+	if cfg.DefaultRoot != "" {
+		defaultPath := cfg.DefaultRoot
+		if !filepath.IsAbs(defaultPath) {
+			defaultPath = filepath.Join(rootDir, defaultPath)
+		}
+		defaultPath = filepath.Clean(defaultPath)
+		for _, root := range roots {
+			if filepath.Clean(root.Path) == defaultPath {
+				return root.Path, nil
+			}
+		}
+		if info, err := os.Stat(defaultPath); err == nil && info.IsDir() {
+			return defaultPath, nil
+		}
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		return roots[i].Name < roots[j].Name
+	})
+	return roots[0].Path, nil
 }
 
-func resolveTargetLangRoot(rootDir, lang, targetArg string) (string, error) {
+func resolveTargetLangRoot(rootDir string, rootBP *bp.Blueprint, lang, targetArg string) (string, error) {
 	target := strings.TrimSpace(targetArg)
 	if target == "" {
-		target = filepath.Join(rootDir, "src-"+lang)
+		cfg := loadLanguageConfig(rootBP)
+		template := cfg.RootTemplate
+		if template == "" {
+			template = "src-{lang}"
+		}
+		target = renderRootTemplate(template, lang)
+		if target == "" {
+			target = filepath.Join(rootDir, "src-"+lang)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(rootDir, target)
+		}
 	} else if !filepath.IsAbs(target) {
 		target = filepath.Join(rootDir, target)
 	}
 	return target, nil
 }
 
-func listLanguageRoots(rootDir string) ([]string, error) {
-	entries, err := os.ReadDir(rootDir)
-	if err != nil {
-		return nil, err
+type languageRoot struct {
+	Name string
+	Path string
+}
+
+type languageConfig struct {
+	DefaultRoot     string
+	DefaultLanguage string
+	RootTemplate    string
+	Roots           []string
+	Patterns        []string
+}
+
+func loadLanguageConfig(root *bp.Blueprint) languageConfig {
+	cfg := languageConfig{
+		DefaultRoot:  "src",
+		RootTemplate: "src-{lang}",
+		Patterns:     []string{"src-*"},
 	}
-	roots := []string{}
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	if root == nil {
+		return cfg
+	}
+	section, err := root.GetSection("language_policy")
+	if err != nil || section == nil {
+		return cfg
+	}
+	if raw, ok := section["default_root"].(string); ok {
+		cfg.DefaultRoot = strings.TrimSpace(raw)
+	}
+	if raw, ok := section["default_language"].(string); ok {
+		cfg.DefaultLanguage = strings.TrimSpace(raw)
+	}
+	if raw, ok := section["language_root_template"].(string); ok {
+		if val := strings.TrimSpace(raw); val != "" {
+			cfg.RootTemplate = val
+		}
+	}
+	if raw, ok := section["language_roots"]; ok {
+		cfg.Roots = parsePatternList(raw)
+	}
+	if raw, ok := section["language_root_patterns"]; ok {
+		cfg.Patterns = parsePatternList(raw)
+	}
+	return cfg
+}
+
+func loadLanguageRoots(rootDir string, rootBP *bp.Blueprint) ([]languageRoot, error) {
+	cfg := loadLanguageConfig(rootBP)
+	rootsByPath := map[string]languageRoot{}
+	addRoot := func(path string, name string, pattern string) {
+		if path == "" {
+			return
+		}
+		if info, err := os.Stat(path); err != nil || !info.IsDir() {
+			return
+		}
+		if name == "" {
+			name = deriveLanguageName(filepath.Base(path), pattern)
+		}
+		if name == "" {
+			name = filepath.Base(path)
+		}
+		if _, ok := rootsByPath[path]; ok {
+			return
+		}
+		rootsByPath[path] = languageRoot{Name: name, Path: path}
+	}
+
+	if cfg.DefaultRoot != "" {
+		path := cfg.DefaultRoot
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(rootDir, path)
+		}
+		name := cfg.DefaultLanguage
+		if name == "" {
+			name = filepath.Base(path)
+		}
+		addRoot(path, name, "")
+	}
+
+	for _, root := range cfg.Roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
 			continue
 		}
-		name := entry.Name()
-		if strings.HasPrefix(name, "src-") {
-			roots = append(roots, filepath.Join(rootDir, name))
+		path := root
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(rootDir, path)
+		}
+		addRoot(path, "", "src-*")
+	}
+
+	for _, pattern := range cfg.Patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		glob := pattern
+		if !filepath.IsAbs(glob) {
+			glob = filepath.Join(rootDir, pattern)
+		}
+		matches, err := filepath.Glob(glob)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range matches {
+			addRoot(match, "", pattern)
 		}
 	}
-	return roots, nil
+
+	if len(rootsByPath) == 0 {
+		return nil, nil
+	}
+	out := make([]languageRoot, 0, len(rootsByPath))
+	for _, root := range rootsByPath {
+		out = append(out, root)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+func deriveLanguageName(base string, pattern string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return base
+	}
+	if strings.HasPrefix(base, "src-") {
+		name := strings.TrimPrefix(base, "src-")
+		if name != "" {
+			return name
+		}
+	}
+	if strings.Contains(pattern, "*") {
+		prefix := strings.Split(pattern, "*")[0]
+		prefix = filepath.Base(prefix)
+		if prefix != "" && strings.HasPrefix(base, prefix) {
+			name := strings.TrimPrefix(base, prefix)
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return base
+}
+
+func renderRootTemplate(template, lang string) string {
+	if template == "" {
+		return ""
+	}
+	return strings.ReplaceAll(template, "{lang}", lang)
 }
 
 func loadBlueprintPatterns(root *bp.Blueprint) []string {

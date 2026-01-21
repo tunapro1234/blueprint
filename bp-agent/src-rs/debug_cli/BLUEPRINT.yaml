@@ -1,0 +1,187 @@
+_meta:
+  version: "0.2.0"
+  updated: 2026-01-21
+  status: draft
+
+intent: |
+  Base Agent debug CLI.
+  HTTP API server'a baglanir (remote test).
+
+overview: |
+  Basit REPL chat arayuzu. aichat benzeri slash komutlari.
+
+  Hedefler:
+    - Agent davranisini hizli test et
+    - Model/provider degistir, farklari gor
+    - Task'lari izle
+    - Tool calling'i gozlemle
+
+  Modlar:
+    HTTP: Server'a HTTP request atar
+
+cli:
+  usage: |
+    debug-cli repl --url http://localhost:8080
+    # Tek komut
+    debug-cli run "Merhaba"
+
+environment:
+  optional:
+    - BASE_AGENT_URL (default http://localhost:8080)
+
+commands:
+  slash:
+    - name: .model
+      description: Model sec (interactive liste)
+      example: .model
+
+    - name: .provider
+      description: Provider sec (gemini/codex/opus)
+      example: .provider
+
+    - name: .tasks
+      description: Task listesi
+      example: .tasks
+
+    - name: .task
+      description: Task detayi
+      example: .task task_abc123
+
+    - name: .tools
+      description: Kayitli tool'lari listele
+      example: .tools
+
+    - name: .system
+      description: System prompt ayarla
+      example: .system Sen yardimci bir asistansin.
+
+    - name: .clear
+      description: Chat gecmisini temizle
+      example: .clear
+
+    - name: .debug
+      description: Debug mode toggle (tool calls, raw response)
+      example: .debug
+
+    - name: .info
+      description: Mevcut ayarlari goster
+      example: .info
+
+    - name: .help
+      description: Yardim
+      example: .help
+
+    - name: .exit
+      description: Cik
+      example: .exit
+
+api:
+  types:
+    CLIConfig:
+      fields:
+        - name: base_url
+          type: string
+          default: "http://localhost:8080"
+          description: HTTP mode icin server URL
+
+        - name: provider
+          type: string
+          default: "gemini"
+
+        - name: model
+          type: string
+          nullable: true
+          description: null = provider default
+
+        - name: system_prompt
+          type: string
+          nullable: true
+
+        - name: temperature
+          type: float
+          default: 0.3
+
+        - name: debug
+          type: boolean
+          default: false
+
+    ChatMessage:
+      fields:
+        - name: role
+          type: enum(user, assistant)
+        - name: content
+          type: string
+
+    TaskInfo:
+      fields:
+        - name: id
+          type: string
+        - name: status
+          type: string
+        - name: instruction
+          type: string
+        - name: output
+          type: string
+          nullable: true
+        - name: created_at
+          type: string
+
+    ToolInfo:
+      fields:
+        - name: name
+          type: string
+        - name: description
+          type: string
+
+  exports:
+    Backend:
+      type: interface
+      description: HTTP mode icin arayuz
+      methods:
+        - name: execute
+          parameters:
+            - name: instruction
+              type: string
+            - name: history
+              type: list<ChatMessage>
+          returns: ExecuteResult
+
+        - name: list_tasks
+          parameters:
+            - name: limit
+              type: integer
+              default: 10
+          returns: list<TaskInfo>
+
+        - name: get_task
+          parameters:
+            - name: task_id
+              type: string
+          returns: TaskInfo
+
+        - name: list_tools
+          returns: list<ToolInfo>
+
+        - name: list_models
+          returns: list<string>
+
+    HTTPBackend:
+      type: class
+      implements: Backend
+      description: HTTP API client
+
+    REPL:
+      type: class
+      description: Ana REPL loop
+      methods:
+        - name: run
+          description: REPL baslat
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"
+
+dependencies:
+  internal:
+    - path: ../api
+      desc: API types (http mode)

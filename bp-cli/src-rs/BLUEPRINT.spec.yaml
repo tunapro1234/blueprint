@@ -742,7 +742,7 @@ workflow_policy:
 # =============================================================================
 
 tests:
-  dependency_snapshots: true
+  dependency_snapshots: false
   snapshot_readonly: true
   scenarios:
     # =========================================================================

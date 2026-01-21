@@ -742,8 +742,6 @@ workflow_policy:
 # =============================================================================
 
 tests:
-  packages:
-    - "./..."
   dependency_snapshots: true
   snapshot_readonly: true
   scenarios:

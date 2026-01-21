@@ -24,3 +24,11 @@ dependencies = [
  "blueprint",
  "blueprint-commands",
 ]
+
+[[package]]
+name = "bp-rs"
+version = "0.1.0"
+dependencies = [
+ "blueprint",
+ "blueprint-commands",
+]

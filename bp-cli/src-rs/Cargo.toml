@@ -8,6 +8,7 @@ members = [
   "commands",
   "yamlparser",
   "cmd/bp",
+  "cmd/bp-rs",
 ]
 resolver = "2"
 

@@ -1,0 +1,110 @@
+# Task Implementation Spec (Go)
+
+_meta:
+  version: "0.1.0"
+  type: spec
+
+implementation:
+  structure:
+    - types.go
+    - store.go
+
+  types:
+    pseudocode: |
+      package task
+
+      type TaskStatus string
+
+      const (
+          TaskPending   TaskStatus = "pending"
+          TaskRunning   TaskStatus = "running"
+          TaskCompleted TaskStatus = "completed"
+          TaskFailed    TaskStatus = "failed"
+      )
+
+      type Task struct {
+          ID          string
+          Instruction string
+          Status      TaskStatus
+          Output      string
+          Error       string
+          CreatedAt   time.Time
+      }
+
+  store:
+    pseudocode: |
+      package task
+
+      type TaskStore struct {
+          mu      sync.RWMutex
+          tasks   map[string]Task
+          persist bool
+          path    string
+      }
+
+      func NewTaskStore(persist bool, path string) *TaskStore {
+          if path == "" {
+              path = "tasks.json"
+          }
+          s := &TaskStore{tasks: map[string]Task{}, persist: persist, path: path}
+          if persist {
+              _ = s.load()
+          }
+          return s
+      }
+
+      func (s *TaskStore) Create(instruction string) Task {
+          s.mu.Lock()
+          defer s.mu.Unlock()
+          t := Task{
+              ID:          newTaskID(),
+              Instruction: instruction,
+              Status:      TaskPending,
+              CreatedAt:   time.Now().UTC(),
+          }
+          s.tasks[t.ID] = t
+          s.saveIfPersist()
+          return t
+      }
+
+      func (s *TaskStore) Update(id string, status TaskStatus, output string, err string) (Task, error) {
+          s.mu.Lock()
+          defer s.mu.Unlock()
+          t, ok := s.tasks[id]
+          if !ok {
+              return Task{}, fmt.Errorf("task not found")
+          }
+          if status != "" {
+              t.Status = status
+          }
+          if output != "" {
+              t.Output = output
+          }
+          if err != "" {
+              t.Error = err
+          }
+          s.tasks[id] = t
+          s.saveIfPersist()
+          return t, nil
+      }
+
+      func (s *TaskStore) Get(id string) (Task, bool) {
+          s.mu.RLock()
+          defer s.mu.RUnlock()
+          t, ok := s.tasks[id]
+          return t, ok
+      }
+
+      func (s *TaskStore) List(limit int) []Task {
+          s.mu.RLock()
+          defer s.mu.RUnlock()
+          out := make([]Task, 0, len(s.tasks))
+          for _, t := range s.tasks {
+              out = append(out, t)
+          }
+          sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+          if limit > 0 && len(out) > limit {
+              out = out[:limit]
+          }
+          return out
+      }

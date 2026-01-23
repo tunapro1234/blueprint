@@ -10,6 +10,9 @@ from threading import Lock, Thread
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
+from llm.codex_adapter import CODEX_MODELS
+from llm.gemini_adapter import GEMINI_ALLOWED_MODELS
+
 
 try:
     from ..agent import Agent, AgentConfig, AgentResult
@@ -88,6 +91,62 @@ class AgentServer:
                     limit = int(query.get("limit", [10])[0])
                     tasks = server.agent.tasks.list(limit=limit)
                     self._send_json(HTTPStatus.OK, {"tasks": [t.to_dict() for t in tasks]})
+                    return
+
+                if parsed.path.startswith("/tasks/"):
+                    if not server.agent.tasks:
+                        self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "task store disabled"})
+                        return
+                    task_id = parsed.path.split("/", 2)[2]
+                    if not task_id:
+                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": "task id required"})
+                        return
+                    task = None
+                    if hasattr(server.agent.tasks, "get"):
+                        task = server.agent.tasks.get(task_id)
+                    if task is None:
+                        tasks = server.agent.tasks.list(limit=50)
+                        for candidate in tasks:
+                            if getattr(candidate, "id", None) == task_id:
+                                task = candidate
+                                break
+                    if task is None:
+                        self._send_json(HTTPStatus.NOT_FOUND, {"error": "task not found"})
+                        return
+                    payload = task.to_dict() if hasattr(task, "to_dict") else task
+                    self._send_json(HTTPStatus.OK, payload)
+                    return
+
+                if parsed.path == "/tools":
+                    tools = []
+                    if hasattr(server.agent, "tools") and server.agent.tools:
+                        schemas = []
+                        if hasattr(server.agent.tools, "get_schemas"):
+                            schemas = server.agent.tools.get_schemas()
+                        for schema in schemas:
+                            if isinstance(schema, dict):
+                                name = schema.get("name")
+                                desc = schema.get("description")
+                            else:
+                                name = getattr(schema, "name", None)
+                                desc = getattr(schema, "description", None)
+                            if name:
+                                tools.append({"name": name, "description": desc or ""})
+                    self._send_json(HTTPStatus.OK, {"tools": tools})
+                    return
+
+                if parsed.path == "/models":
+                    provider = getattr(getattr(server.agent, "config", None), "provider", None)
+                    model = getattr(getattr(server.agent, "config", None), "model", None)
+                    if provider == "gemini":
+                        models = list(GEMINI_ALLOWED_MODELS)
+                    elif provider == "codex":
+                        models = list(CODEX_MODELS)
+                    elif provider == "opus":
+                        models = [model] if model else []
+                    else:
+                        models = []
+                    self._send_json(HTTPStatus.OK, {"models": models})
                     return
 
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})

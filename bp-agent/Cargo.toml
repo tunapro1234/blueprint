@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "src-rs",
+    "src-rs/debug_cli",
+]
+resolver = "2"

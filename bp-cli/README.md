@@ -49,7 +49,7 @@ This tool is **snapshot-based** (not Git-based): it stores state alongside each 
 Requires Go 1.22+
 
 ```
-cd src && go build -o ../bp ./cmd/bp
+cd src-go && go build -o ../bp ./cmd/bp
 ```
 
 ## Quick Start
@@ -129,7 +129,7 @@ Snapshot IDs:
 Timestamp is stored in `meta.yaml`.
 
 ## Multi-language Roots
-- Default language root is `src/` (configurable)
+- Default language root is `src-py/` (configurable)
 - Additional language roots are discovered via `language_policy.language_roots` and `language_policy.language_root_patterns` (default pattern: `src-*`)
 - `bp new-lang rs` creates a new root (default target uses `language_policy.language_root_template`, default `src-{lang}`):
   - Package directories are created
@@ -141,11 +141,12 @@ Timestamp is stored in `meta.yaml`.
 Example config:
 ```
 language_policy:
-  default_root: src
-  default_language: go
+  default_root: src-py
+  default_language: py
   language_root_template: src-{lang}
   language_roots:
-    - src
+    - src-py
+    - src-go
     - lang/python
   language_root_patterns:
     - src-*
@@ -197,18 +198,15 @@ The custom parser:
 BLUEPRINT.yaml     # Root project blueprint
 README.md          # This file
 .gitignore         # Git ignore rules
-src/               # Default language root
-  BLUEPRINT.yaml   # Library blueprint (API, types, algorithms)
-  cmd/bp/          # CLI entrypoint
-  commands/        # CLI command handlers
-  yamlparser/      # Blueprint-specific parser package
-  *.go             # Core library files
+src-py/            # Default language root (Python)
+src-go/            # Go implementation
+src-rs/            # Rust implementation
 ```
 
 ## Development
 Run tests:
 ```
-cd src && go test ./...
+cd src-go && go test ./...
 ```
 
 Validate all blueprints (default recursive):
@@ -218,7 +216,7 @@ Validate all blueprints (default recursive):
 
 Build:
 ```
-cd src && go build -o ../bp ./cmd/bp
+cd src-go && go build -o ../bp ./cmd/bp
 ```
 
 ## Notes

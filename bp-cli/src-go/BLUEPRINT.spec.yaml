@@ -28,8 +28,8 @@ implementation:
           ├── add-feat-a1b2/                # Snapshot ID (slug-hash4)
           │   ├── BLUEPRINT.yaml            # Blueprint snapshot
           │   ├── meta.yaml                 # id, timestamp, message, hashes
-          │   ├── main.rs                   # Kod (direkt, impl/ yok)
-          │   ├── util.rs
+          │   ├── main.go                   # Kod (direkt, impl/ yok)
+          │   ├── util.go
           │   ├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
           │   └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
           └── ss-a3f2b7c1/
@@ -41,8 +41,8 @@ implementation:
       # Working tree yapısı (her zaman aktif)
       package/
       ├── BLUEPRINT.yaml                    # Blueprint dosyası
-      ├── main.rs                           # Kod
-      ├── util.rs
+      ├── main.go                           # Kod
+      ├── util.go
       ├── yamlparser/                       # gerçek dependency klasörü
       ├── commands/                         # gerçek dependency klasörü
       └── .blueprint/                       # State directory
@@ -66,8 +66,8 @@ implementation:
       blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml'ın hash'i
       impl_hash: "sha256:xyz789..."               # Tüm impl dosyalarının birleşik hash'i
       files:
-        "main.rs": "sha256:def456..."
-        "util.rs": "sha256:ghi789..."
+        "main.go": "sha256:def456..."
+        "util.go": "sha256:ghi789..."
 
       # Dependencies: hangi snapshot'lara pin'liyiz
       deps:
@@ -742,7 +742,9 @@ workflow_policy:
 # =============================================================================
 
 tests:
-  dependency_snapshots: false
+  packages:
+    - "./..."
+  dependency_snapshots: true
   snapshot_readonly: true
   scenarios:
     # =========================================================================
@@ -983,11 +985,11 @@ tests:
         - Örnek: ss-a3f2b7c1
 
     - id: ss_copies_code
-      given: Kaynak dosyalar var (main.rs, util.rs)
+      given: Kaynak dosyalar var (main.go, util.go)
       when: bp ss -m "snapshot"
       then: |
         - {state_dir}/history/{id}/ oluşur
-        - main.rs, util.rs direkt kopyalanır (impl/ yok)
+        - main.go, util.go direkt kopyalanır (impl/ yok)
         - Dizin yapısı korunur
 
     - id: ss_different_content_different_id
@@ -1223,5 +1225,5 @@ tests:
       then: Hata verilir (snapshot symlink adı çakışır)
 
   verification:
-    - cargo test --workspace
+    - go test $(go list ./... | grep -v '/blueprint/')
     - ../bp validate || [ $? -eq 2 ]

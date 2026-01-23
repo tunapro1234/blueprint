@@ -98,8 +98,8 @@ implementation:
         blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml hash
         impl_hash: "sha256:xyz789..."               # Implementation hash
         files:
-          main.go: "sha256:def456..."
-          util.go: "sha256:ghi789..."
+          main.py: "sha256:def456..."
+          util.py: "sha256:ghi789..."
         deps:                                        # Pin'lenmiş dependency'ler
           "./yamlparser":
             pinned: "stable-c3d4"
@@ -359,8 +359,6 @@ implementation:
 # =============================================================================
 
 tests:
-  packages:
-    - "."
   snapshot_readonly: true
   scenarios:
     # =========================================================================
@@ -688,37 +686,37 @@ tests:
       then: src-rs/ oluşur, exit 0
 
     - id: new_lang_symlinks_api_blueprints
-      given: src/p1/BLUEPRINT.yaml içinde api section var
+      given: src-py/p1/BLUEPRINT.yaml içinde api section var
       when: bp new-lang rs
       then: src-rs/p1/BLUEPRINT.yaml symlink olur (api section içerdiği için)
 
     - id: new_lang_copies_spec_blueprints
-      given: src/p1/BLUEPRINT.spec.yaml var
+      given: src-py/p1/BLUEPRINT.spec.yaml var
       when: bp new-lang rs
       then: src-rs/p1/BLUEPRINT.spec.yaml kopyalanır (symlink değil)
 
     - id: new_lang_prompts_split_single_file
-      given: src/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya)
+      given: src-py/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya)
       when: bp new-lang rs
       then: "API+spec tek dosyada, split edilsin mi? [y/N]" prompt gösterir
 
     - id: new_lang_split_creates_api_spec
-      given: src/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya), kullanıcı "y" der
+      given: src-py/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya), kullanıcı "y" der
       when: bp new-lang rs
       then: |
-        - src/p1/BLUEPRINT.api.yaml oluşur (api içeriği taşınır)
-        - src/p1/BLUEPRINT.spec.yaml oluşur (implementation/tests taşınır)
-        - src/p1/BLUEPRINT.yaml referanslara güncellenir
+        - src-py/p1/BLUEPRINT.api.yaml oluşur (api içeriği taşınır)
+        - src-py/p1/BLUEPRINT.spec.yaml oluşur (implementation/tests taşınır)
+        - src-py/p1/BLUEPRINT.yaml referanslara güncellenir
 
     - id: new_lang_copies_shared_dirs
-      given: src/assets/ (blueprint olmayan klasör)
+      given: src-py/assets/ (blueprint olmayan klasör)
       when: bp new-lang rs
       then: src-rs/assets/ kopyalanır
 
     - id: new_lang_skips_impl_files
-      given: src/p1/main.go var
+      given: src-py/p1/main.py var
       when: bp new-lang rs
-      then: src-rs/p1/main.go kopyalanmaz
+      then: src-rs/p1/main.py kopyalanmaz
 
     - id: new_lang_target_exists
       given: src-rs zaten var
@@ -896,7 +894,7 @@ tests:
       when: bp map --langs
       then: |
         Languages:
-          src: src
+          py: src-py
           rs: src-rs
         Package: ./parser
           status: OK
@@ -961,5 +959,4 @@ tests:
       then: '"../B using ... (OUTDATED - 3 behind)"'
 
   verification:
-    - go test $(go list ./... | grep -v '/blueprint/')
     - ../../bp validate . || [ $? -eq 2 ]

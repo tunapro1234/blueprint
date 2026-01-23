@@ -28,8 +28,8 @@ implementation:
           ├── add-feat-a1b2/                # Snapshot ID (slug-hash4)
           │   ├── BLUEPRINT.yaml            # Blueprint snapshot
           │   ├── meta.yaml                 # id, timestamp, message, hashes
-          │   ├── main.go                   # Kod (direkt, impl/ yok)
-          │   ├── util.go
+          │   ├── main.py                   # Kod (direkt, impl/ yok)
+          │   ├── util.py
           │   ├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
           │   └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
           └── ss-a3f2b7c1/
@@ -41,8 +41,8 @@ implementation:
       # Working tree yapısı (her zaman aktif)
       package/
       ├── BLUEPRINT.yaml                    # Blueprint dosyası
-      ├── main.go                           # Kod
-      ├── util.go
+      ├── main.py                           # Kod
+      ├── util.py
       ├── yamlparser/                       # gerçek dependency klasörü
       ├── commands/                         # gerçek dependency klasörü
       └── .blueprint/                       # State directory
@@ -66,8 +66,8 @@ implementation:
       blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml'ın hash'i
       impl_hash: "sha256:xyz789..."               # Tüm impl dosyalarının birleşik hash'i
       files:
-        "main.go": "sha256:def456..."
-        "util.go": "sha256:ghi789..."
+        "main.py": "sha256:def456..."
+        "util.py": "sha256:ghi789..."
 
       # Dependencies: hangi snapshot'lara pin'liyiz
       deps:
@@ -123,7 +123,7 @@ workflow_policy:
 
   language_policy: |
     Multi-language kökler:
-    - Varsayılan kök: src/ (default_root ile değişir)
+    - Varsayılan kök: src-py/ (default_root ile değişir)
     - Ek kökler language_roots ve language_root_patterns ile bulunur (default pattern: src-*)
     - language_root_template default: src-{lang}
     - new-lang komutu package ağacını oluşturur
@@ -175,12 +175,12 @@ workflow_policy:
 
       Örnek:
         /project/             (_meta.root: true)
-        /project/src/         (normal paket)
-        /project/src/parser/  (normal paket)
+        /project/src-py/      (normal paket)
+        /project/src-py/parser/  (normal paket)
 
-        /project/src/parser/ içinde "bp validate" çalıştırılırsa:
+        /project/src-py/parser/ içinde "bp validate" çalıştırılırsa:
         1. parser/ → root değil
-        2. src/ → root değil, topmost_blueprint = src/
+        2. src-py/ → root değil, topmost_blueprint = src-py/
         3. project/ → _meta.root: true → ROOT BULUNDU
         4. "bp validate /project/" çalışır
 
@@ -558,8 +558,8 @@ workflow_policy:
 
         implementation:
           structure:
-            - src/main             # Dosya (track edilir)
-            - src/core
+            - src-py/main          # Dosya (track edilir)
+            - src-py/core
             - commands/:           # Klasör, kendi blueprint'i var
                 has_blueprint: true
             - build/:              # Klasör, blueprint yok
@@ -742,9 +742,7 @@ workflow_policy:
 # =============================================================================
 
 tests:
-  packages:
-    - "./..."
-  dependency_snapshots: true
+  dependency_snapshots: false
   snapshot_readonly: true
   scenarios:
     # =========================================================================
@@ -985,11 +983,11 @@ tests:
         - Örnek: ss-a3f2b7c1
 
     - id: ss_copies_code
-      given: Kaynak dosyalar var (main.go, util.go)
+      given: Kaynak dosyalar var (main.py, util.py)
       when: bp ss -m "snapshot"
       then: |
         - {state_dir}/history/{id}/ oluşur
-        - main.go, util.go direkt kopyalanır (impl/ yok)
+        - main.py, util.py direkt kopyalanır (impl/ yok)
         - Dizin yapısı korunur
 
     - id: ss_different_content_different_id
@@ -1225,5 +1223,4 @@ tests:
       then: Hata verilir (snapshot symlink adı çakışır)
 
   verification:
-    - go test $(go list ./... | grep -v '/blueprint/')
     - ../bp validate || [ $? -eq 2 ]

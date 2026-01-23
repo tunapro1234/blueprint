@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/tunapro1234/base-agent/src-go/agent"
+	agent "github.com/tunapro1234/base-agent/src-go"
 )
 
 // AgentServer serves HTTP endpoints.

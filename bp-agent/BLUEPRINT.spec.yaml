@@ -4,8 +4,13 @@ _meta:
 
 implementation:
   structure:
+    - Cargo.toml
     - run_api_server.py
     - LICENSE
     - tests/
     - src/:
+        has_blueprint: true
+    - src-go/:
+        has_blueprint: true
+    - src-rs/:
         has_blueprint: true

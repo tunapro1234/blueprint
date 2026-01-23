@@ -17,6 +17,7 @@ overview: |
     task/        - Task tracking (in-memory veya JSON)
     api/         - External interface (library, HTTP, Docker)
     debug_cli/   - HTTP debug CLI (agent davranisi testi)
+    cmd/base-agent - HTTP server entrypoint
 
   LLM Providers:
     - Gemini 3: REST API (v1beta) key rotation destekli

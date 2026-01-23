@@ -84,6 +84,25 @@ api:
             tasks: list<Task>
 
         - method: GET
+          path: /tasks/{id}
+          response:
+            id: string
+            status: string
+            instruction: string
+            output: string
+            created_at: string
+
+        - method: GET
+          path: /tools
+          response:
+            tools: list<ToolInfo>
+
+        - method: GET
+          path: /models
+          response:
+            models: list<string>
+
+        - method: GET
           path: /health
           response:
             status: "ok"

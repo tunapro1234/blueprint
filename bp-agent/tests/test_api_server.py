@@ -13,6 +13,7 @@ class DummyAgent:
         self.system_prompt = ""
         self.tools = DummyTools()
         self.tasks = DummyTaskStore()
+        self.config = DummyConfig()
         self._outputs = []
 
     def execute(self, instruction: str):
@@ -27,10 +28,28 @@ class DummyAgent:
 
 class DummyTools:
     def __init__(self):
-        self._names = set()
+        self._schemas = [
+            DummySchema(name="echo", description="Echo input"),
+            DummySchema(name="add", description="Add numbers"),
+        ]
 
     def has(self, name: str) -> bool:
-        return name in self._names
+        return any(schema.name == name for schema in self._schemas)
+
+    def get_schemas(self):
+        return list(self._schemas)
+
+
+class DummySchema:
+    def __init__(self, name: str, description: str):
+        self.name = name
+        self.description = description
+
+
+class DummyConfig:
+    def __init__(self):
+        self.provider = "gemini"
+        self.model = "gemini-3-flash-preview"
 
 
 class DummyTask:
@@ -70,6 +89,12 @@ class DummyTaskStore:
 
     def list(self, limit=10):
         return list(reversed(self._tasks))[:limit]
+
+    def get(self, task_id: str):
+        for task in self._tasks:
+            if task.id == task_id:
+                return task
+        return None
 
 
 @pytest.fixture
@@ -112,6 +137,24 @@ def test_execute_and_tasks(server):
         tasks_payload = json.loads(resp.read().decode("utf-8"))
     assert resp.status == HTTPStatus.OK
     assert len(tasks_payload["tasks"]) >= 1
+
+    task_id = payload["task_id"]
+    with request.urlopen(_url(server, f"/tasks/{task_id}")) as resp:
+        task_payload = json.loads(resp.read().decode("utf-8"))
+    assert resp.status == HTTPStatus.OK
+    assert task_payload["id"] == task_id
+
+
+def test_tools_and_models(server):
+    with request.urlopen(_url(server, "/tools")) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    assert resp.status == HTTPStatus.OK
+    assert payload["tools"]
+
+    with request.urlopen(_url(server, "/models")) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    assert resp.status == HTTPStatus.OK
+    assert payload["models"]
 
 
 def test_execute_missing_instruction(server):

@@ -72,6 +72,9 @@ implementation:
           server = create_http_server(self.port)
           server.route("POST", "/execute", self.handle_execute)
           server.route("GET", "/tasks", self.handle_tasks)
+          server.route("GET", "/tasks/{id}", self.handle_task_detail)
+          server.route("GET", "/tools", self.handle_tools)
+          server.route("GET", "/models", self.handle_models)
           server.route("GET", "/health", self.handle_health)
           server.listen()
 
@@ -120,6 +123,35 @@ implementation:
           return Response(200, {
             "tasks": [t.to_dict() for t in tasks]
           })
+
+        def handle_task_detail(self, request) -> Response:
+          task_id = request.path_params["id"]
+          if not self.agent.tasks:
+            return Response(503, {"error": "task store disabled"})
+          task = self.agent.tasks.get(task_id)
+          if not task:
+            return Response(404, {"error": "task not found"})
+          return Response(200, task.to_dict())
+
+        def handle_tools(self, request) -> Response:
+          tools = []
+          for schema in self.agent.tools.get_schemas():
+            tools.append({
+              "name": schema.name,
+              "description": schema.description
+            })
+          return Response(200, {"tools": tools})
+
+        def handle_models(self, request) -> Response:
+          provider = self.agent.config.provider
+          models = []
+          if provider == "gemini":
+            models = GEMINI_ALLOWED_MODELS
+          elif provider == "codex":
+            models = CODEX_MODELS
+          elif provider == "opus":
+            models = [self.agent.config.model]
+          return Response(200, {"models": models})
 
         def handle_health(self, request) -> Response:
           return Response(200, {

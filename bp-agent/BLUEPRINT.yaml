@@ -10,11 +10,17 @@ intent: |
 overview: |
   Repo root for base-agent packages.
   src/ contains the main agent package and subpackages.
+  src-go/ Go implementation (module).
+  src-rs/ Rust implementation (Cargo workspace).
 
 dependencies:
   internal:
     - path: ./src
       desc: Base agent packages
+    - path: ./src-go
+      desc: Go implementation
+    - path: ./src-rs
+      desc: Rust implementation
 
 implementation: "./BLUEPRINT.spec.yaml"
 

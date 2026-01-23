@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 path = "lib.rs"
 
+[[bin]]
+name = "base-agent"
+path = "bin/base-agent.rs"
+
 [dependencies]
 axum = "0.6"
 chrono = { version = "0.4", features = ["serde"] }

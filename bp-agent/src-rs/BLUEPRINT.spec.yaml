@@ -6,11 +6,13 @@ _meta:
 
 implementation:
   structure:
+    - Cargo.toml
     - lib.rs
     - agent.rs
     - config.rs
     - result.rs
     - helpers.rs
+    - bin/base-agent.rs
     - llm/:
         has_blueprint: true
     - tools/:

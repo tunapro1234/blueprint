@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/tunapro1234/base-agent/src-go/agent"
+	agent "github.com/tunapro1234/base-agent/src-go"
 	"github.com/tunapro1234/base-agent/src-go/llm"
 	"github.com/tunapro1234/base-agent/src-go/task"
 	"github.com/tunapro1234/base-agent/src-go/tools"

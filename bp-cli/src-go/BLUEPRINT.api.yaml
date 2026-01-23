@@ -258,12 +258,12 @@ api:
                 ./yamlparser @ stable-x1y2 (api: def456)
           langs: |
             Languages:
-              src: src
+              py: src-py
               rs: src-rs
 
             Package: ./parser
               api_hash:
-                src: sha256:abc123...
+                py: sha256:abc123...
                 rs: sha256:abc123...
               status: OK
         exit_codes:

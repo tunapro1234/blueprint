@@ -123,7 +123,7 @@ Snapshot içinde:
 ```
 
 ## Multi-language Kökler
-- Varsayılan dil kökü `src/` (konfigüre edilebilir)
+- Varsayılan dil kökü `src-py/` (konfigüre edilebilir)
 - Ek dil kökleri `language_policy.language_roots` ve `language_policy.language_root_patterns` ile bulunur (default pattern: `src-*`)
 - `bp new-lang rs` yeni kök oluşturur (default hedef `language_policy.language_root_template`, default `src-{lang}`):
   - Paket klasörleri oluşturulur
@@ -135,11 +135,12 @@ Snapshot içinde:
 Örnek konfig:
 ```
 language_policy:
-  default_root: src
-  default_language: go
+  default_root: src-py
+  default_language: py
   language_root_template: src-{lang}
   language_roots:
-    - src
+    - src-py
+    - src-go
     - lang/python
   language_root_patterns:
     - src-*
@@ -157,7 +158,7 @@ language_policy:
 ./bp impl
 
 # 4. Kodu yaz, test et (import'lar gerçek dependency klasörlerinden)
-cd src && go test ./...
+cd src-go && go test ./...
 
 # 5. Manuel snapshot
 ./bp ss -m "implement feature X"

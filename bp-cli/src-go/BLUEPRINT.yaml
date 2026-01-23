@@ -18,7 +18,7 @@ overview: |
   - BLUEPRINT.yaml kullanıcı düzenler
   - .blueprint/ tool yönetir (state, history)
   - Symlink'ler snapshot history içinde (deps/ yok)
-  - Multi-language kökler: src/ (default) + src-<lang> (örn. src-go, src-rs)
+  - Multi-language kökler: src-py/ (default) + src-<lang> (örn. src-go, src-rs)
 
   Development mode'lar (_meta.mode):
   - meek (default): Hiçbir şeyi zorlamaz
@@ -79,14 +79,14 @@ dependency_policy:
 language_policy:
   summary: |
     Multi-language kökler:
-    - Varsayılan kök: src/
+    - Varsayılan kök: src-py/
     - Ek kökler language_roots ve language_root_patterns ile bulunur (default pattern: src-*)
     - new-lang komutu paket ağacını oluşturur; API section içeren blueprint'ler symlink, diğerleri kopya
     - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
     - Implementasyonlar diller arasında bağımsızdır
     - API hash eşitliği map --langs ile kontrol edilir
-  default_root: src
-  # default_language: go
+  default_root: src-py
+  default_language: py
   language_root_template: src-{lang}
   language_root_patterns:
     - src-*

@@ -98,8 +98,8 @@ implementation:
         blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml hash
         impl_hash: "sha256:xyz789..."               # Implementation hash
         files:
-          main.rs: "sha256:def456..."
-          util.rs: "sha256:ghi789..."
+          main.py: "sha256:def456..."
+          util.py: "sha256:ghi789..."
         deps:                                        # Pin'lenmiş dependency'ler
           "./yamlparser":
             pinned: "stable-c3d4"
@@ -359,6 +359,8 @@ implementation:
 # =============================================================================
 
 tests:
+  packages:
+    - "."
   snapshot_readonly: true
   scenarios:
     # =========================================================================
@@ -714,9 +716,9 @@ tests:
       then: src-rs/assets/ kopyalanır
 
     - id: new_lang_skips_impl_files
-      given: src-py/p1/main.rs var
+      given: src-py/p1/main.py var
       when: bp new-lang rs
-      then: src-rs/p1/main.rs kopyalanmaz
+      then: src-rs/p1/main.py kopyalanmaz
 
     - id: new_lang_target_exists
       given: src-rs zaten var
@@ -959,5 +961,5 @@ tests:
       then: '"../B using ... (OUTDATED - 3 behind)"'
 
   verification:
-    - cargo test --workspace
+    - go test $(go list ./... | grep -v '/blueprint/')
     - ../../bp validate . || [ $? -eq 2 ]

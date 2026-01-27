@@ -123,9 +123,9 @@ Snapshot içinde:
 ```
 
 ## Multi-language Kökler
-- Varsayılan dil kökü `src-py/` (konfigüre edilebilir)
+- Varsayılan dil kökü `src-go/` (konfigüre edilebilir)
 - Ek dil kökleri `language_policy.language_roots` ve `language_policy.language_root_patterns` ile bulunur (default pattern: `src-*`)
-- `bp new-lang rs` yeni kök oluşturur (default hedef `language_policy.language_root_template`, default `src-{lang}`):
+- `bp new-lang <lang>` yeni kök oluşturur (default hedef `language_policy.language_root_template`, default `src-{lang}`):
   - Paket klasörleri oluşturulur
   - API section içeren blueprint dosyaları symlink edilir, diğerleri kopyalanır
   - Tek blueprint dosyasında API+spec varsa split için sorar (evet ise api/spec ayrılır)
@@ -135,16 +135,13 @@ Snapshot içinde:
 Örnek konfig:
 ```
 language_policy:
-  default_root: src-py
-  default_language: py
+  default_root: src-go
+  default_language: go
   language_root_template: src-{lang}
   language_roots:
-    - src-py
     - src-go
-    - lang/python
   language_root_patterns:
     - src-*
-    - lang-*
 ```
 
 ## Temel Komutlar
@@ -167,7 +164,7 @@ cd src-go && go test ./...
 ./bp upgrade --all
 
 # 6.5 Yeni dil kökü oluştur (opsiyonel)
-./bp new-lang rs
+./bp new-lang <lang>
 
 # 7. Sonraki iterasyon için
 ./bp impl veya ./bp ss
@@ -208,20 +205,14 @@ Rotten dependency uyarısı:
 - `bp upgrade` rotten dependency'leri atlar (--force ile zorlanabilir)
 
 ## Import Kullanımı (Yeni)
-```python
-# Python - direkt import
-import yamlparser
-
-# Go - go.mod'da replace direktifi
+```go
+// Go - go.mod'da replace direktifi
 replace proj/yamlparser => ./yamlparser
-
-# TypeScript - tsconfig paths
-import { parser } from "yamlparser"
 ```
 
 **Eski (deps/ ile):**
-```python
-from deps.yamlparser import parser  # KALDIRILDI
+```go
+import "proj/deps/yamlparser" // KALDIRILDI
 ```
 
 ## State Directory

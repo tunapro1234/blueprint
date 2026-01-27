@@ -54,7 +54,7 @@ overview: |
   - Hash-based snapshot sistemi (slug-hash / ss-hash formatı)
   - Dependency tracking ve reverse tracking
   - Dependency pinning ve upgrade yönetimi
-  - Çoklu dil kökleri için new-lang desteği (default src-py/ + config)
+  - Çoklu dil kökleri için new-lang desteği (default src-go/ + config)
 
 # =============================================================================
 # PLAN
@@ -93,14 +93,14 @@ dependency_policy:
 language_policy:
   summary: |
     Multi-language kökler:
-    - Varsayılan kök: src-py/
+    - Varsayılan kök: src-go/
     - Ek kökler language_roots ve language_root_patterns ile bulunur (default pattern: src-*)
     - new-lang komutu paket ağacını oluşturur; API section içeren blueprint'ler symlink, diğerleri kopya
     - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
     - Implementasyonlar diller arasında kopyalanmaz (bağımsız)
     - API hash eşitliği map --langs ile kontrol edilir
-  default_root: src-py
-  default_language: py
+  default_root: src-go
+  default_language: go
   language_root_template: src-{lang}
   # language_roots:
   #   - src
@@ -120,17 +120,11 @@ language_policy:
 
 structure:
   directories:
-    src-py/:
-      desc: Varsayılan dil kökü (Python)
-      has_blueprint: true
     src-go/:
       desc: Go implementasyonu
       has_blueprint: true
-    src-rs/:
-      desc: Rust implementasyonu
-      has_blueprint: true
     src-*/:
-      desc: Ek dil kökleri (örn. src-go, src-rs)
+      desc: Ek dil kökleri (örn. src-js)
       has_blueprint: true
     .blueprint/:
       desc: bp tool'un internal state'i (history, snapshots, state)
@@ -185,7 +179,7 @@ usage:
     - "bp impl"
     - "bp impl --no-snapshot"
     - "bp ss -m 'Initial snapshot'"
-    - "bp new-lang rs"
+    - "bp new-lang <lang>"
     - "bp upgrade --all"
     - "bp deps --upgrades"
 
@@ -256,14 +250,10 @@ implementation:
     - .gitignore
     - AGENTS.md
     - todo.md
-    - src-py/:
-        has_blueprint: true
     - src-go/:
-        has_blueprint: true
-    - src-rs/:
         has_blueprint: true
 
 dependencies:
   internal:
-    - path: ./src-py
-      desc: Varsayılan (Python) kaynak kökü
+    - path: ./src-go
+      desc: Varsayılan (Go) kaynak kökü

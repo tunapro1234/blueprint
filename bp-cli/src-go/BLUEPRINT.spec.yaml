@@ -123,7 +123,7 @@ workflow_policy:
 
   language_policy: |
     Multi-language kökler:
-    - Varsayılan kök: src-py/ (default_root ile değişir)
+    - Varsayılan kök: src-go/ (default_root ile değişir)
     - Ek kökler language_roots ve language_root_patterns ile bulunur (default pattern: src-*)
     - language_root_template default: src-{lang}
     - new-lang komutu package ağacını oluşturur
@@ -175,12 +175,12 @@ workflow_policy:
 
       Örnek:
         /project/             (_meta.root: true)
-        /project/src-py/      (normal paket)
-        /project/src-py/parser/  (normal paket)
+        /project/src-go/      (normal paket)
+        /project/src-go/parser/  (normal paket)
 
-        /project/src-py/parser/ içinde "bp validate" çalıştırılırsa:
+        /project/src-go/parser/ içinde "bp validate" çalıştırılırsa:
         1. parser/ → root değil
-        2. src-py/ → root değil, topmost_blueprint = src-py/
+        2. src-go/ → root değil, topmost_blueprint = src-go/
         3. project/ → _meta.root: true → ROOT BULUNDU
         4. "bp validate /project/" çalışır
 
@@ -558,8 +558,8 @@ workflow_policy:
 
         implementation:
           structure:
-            - src-py/main          # Dosya (track edilir)
-            - src-py/core
+            - src-go/main          # Dosya (track edilir)
+            - src-go/core
             - commands/:           # Klasör, kendi blueprint'i var
                 has_blueprint: true
             - build/:              # Klasör, blueprint yok

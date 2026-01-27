@@ -258,13 +258,11 @@ api:
                 ./yamlparser @ stable-x1y2 (api: def456)
           langs: |
             Languages:
-              py: src-py
-              rs: src-rs
+              go: src-go
 
             Package: ./parser
               api_hash:
-                py: sha256:abc123...
-                rs: sha256:abc123...
+                go: sha256:abc123...
               status: OK
         exit_codes:
           0: Başarılı
@@ -386,6 +384,112 @@ api:
         exit_codes:
           0: En az bir upgrade başarılı
           1: Tüm upgrade'ler başarısız veya hata
+
+      - name: remove-lang
+        desc: Dil kökünü archive'a taşı
+        usage: bp remove-lang <lang>
+        args:
+          - name: lang
+            required: true
+            desc: Kaldırılacak dil (go, py, rs, vb.)
+        behavior: |
+          1. Root blueprint bulunur
+          2. Dil kökü bulunur (src-{lang}/ veya language_policy.roots'tan)
+          3. Son kalan dil mi kontrol edilir → hata: "Cannot remove last language"
+          4. Dil kökü için son bir snapshot alınır
+          5. .blueprint/archive/src-{lang}/ oluşturulur
+          6. Dil kökü archive'a taşınır:
+             - Tüm dosyalar taşınır
+             - .blueprint/history/ dahil (snapshotlar korunur)
+          7. Archive içine meta.yaml yazılır:
+             archived_at: timestamp
+             last_snapshot: snapshot-id
+             reason: "bp remove-lang {lang}"
+          8. Orijinal src-{lang}/ silinir
+          9. Root'ta languages listesi varsa güncellenir
+        output:
+          success: |
+            Archived: src-{lang}/ → .blueprint/archive/src-{lang}/
+            Last snapshot: {snapshot-id}
+          error_last: "Cannot remove last language"
+          error_not_found: "Language root not found: {lang}"
+        exit_codes:
+          0: Başarılı
+          1: Dil bulunamadı / son dil / hata
+
+      - name: restore-lang
+        desc: Archive'dan dil kökünü geri getir
+        usage: bp restore-lang <lang>
+        args:
+          - name: lang
+            required: true
+            desc: Geri getirilecek dil (go, py, rs, vb.)
+        behavior: |
+          1. Root blueprint bulunur
+          2. .blueprint/archive/src-{lang}/ kontrol edilir
+          3. src-{lang}/ zaten varsa → hata: "Language root already exists"
+          4. Archive'dan src-{lang}/ geri taşınır:
+             - Tüm dosyalar geri gelir
+             - .blueprint/history/ dahil
+          5. Archive'daki son snapshot current yapılır
+          6. Archive'dan src-{lang}/ silinir
+          7. Root'ta languages listesi varsa güncellenir
+        output:
+          success: |
+            Restored: .blueprint/archive/src-{lang}/ → src-{lang}/
+            Current snapshot: {snapshot-id}
+          error_exists: "Language root already exists: src-{lang}/"
+          error_not_found: "No archived language found: {lang}"
+        exit_codes:
+          0: Başarılı
+          1: Archive'da yok / zaten var / hata
+
+      - name: purge
+        desc: Archive ve kullanılmayan snapshotları temizle
+        usage: bp purge [--archive-only] [--snapshots-only] [--pretend|--dry-run]
+        flags:
+          - name: --archive-only
+            desc: Sadece archive klasörünü temizle
+          - name: --snapshots-only
+            desc: Sadece kullanılmayan snapshotları temizle
+          - name: --pretend, --dry-run
+            desc: Silmeden ne kadar yer açılacağını göster
+        behavior: |
+          Default (flagsız): archive + kullanılmayan snapshotlar silinir
+
+          Archive temizleme:
+          - .blueprint/archive/ tamamen silinir
+
+          Snapshot temizleme:
+          - Her paket için .blueprint/history/ taranır
+          - "Kullanılmayan" snapshot tanımı (şimdilik basit):
+            - current olmayan snapshotlar
+            - NOT: Gelecekte dependent tracking ile aktif snapshot koruması eklenecek
+          - Kullanılmayan snapshotlar silinir
+
+          --pretend modu:
+          - Hiçbir şey silinmez
+          - Ne silinecek ve ne kadar yer açılacak gösterilir
+        output:
+          pretend: |
+            Archive:
+              src-py/     312 MB   (archived: 2026-01-27)
+              src-rs/     287 MB   (archived: 2026-01-25)
+
+            Unused snapshots:
+              src-go/     156 MB   (8 snapshots, keeping 1 current)
+              ./          89 MB    (5 snapshots, keeping 1 current)
+
+            Total: 844 MB would be freed
+          success: |
+            Purged:
+              Archive: 599 MB (2 languages)
+              Snapshots: 245 MB (13 snapshots)
+            Total freed: 844 MB
+          nothing: "Nothing to purge"
+        exit_codes:
+          0: Başarılı (veya temizlenecek bir şey yok)
+          1: Hata
 
   library:
     note: |
@@ -542,3 +646,35 @@ api:
           - name: warnings
             type: string[]
             desc: Uyarı mesajları
+
+      - name: ArchiveMeta
+        desc: Archive'lanmış dil kökü metadata'sı
+        fields:
+          - name: archived_at
+            type: string
+            desc: ISO 8601 timestamp
+          - name: last_snapshot
+            type: string
+            desc: Archive öncesi son snapshot ID
+          - name: reason
+            type: string
+            desc: Archive sebebi (örn "bp remove-lang py")
+
+      - name: PurgeResult
+        desc: Purge işlemi sonucu
+        fields:
+          - name: archive_freed
+            type: int64
+            desc: Archive'dan temizlenen byte
+          - name: archive_count
+            type: int
+            desc: Silinen archive sayısı
+          - name: snapshots_freed
+            type: int64
+            desc: Snapshot'lardan temizlenen byte
+          - name: snapshots_count
+            type: int
+            desc: Silinen snapshot sayısı
+          - name: total_freed
+            type: int64
+            desc: Toplam temizlenen byte

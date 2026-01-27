@@ -30,6 +30,9 @@ implementation:
     - cancel module       # Implementation iptal
     - ss module           # Manuel snapshot al
     - new_lang module     # Yeni dil kökü oluştur
+    - remove_lang module  # Dil kökünü archive'a taşı
+    - restore_lang module # Archive'dan dil kökünü geri getir
+    - purge module        # Archive ve kullanılmayan snapshotları temizle
     - deps module         # + --upgrades flag
     - map module          # Project map - snapshot/dependency durumu
     - init module
@@ -98,8 +101,8 @@ implementation:
         blueprint_hash: "sha256:abc123..."          # BLUEPRINT.yaml hash
         impl_hash: "sha256:xyz789..."               # Implementation hash
         files:
-          main.py: "sha256:def456..."
-          util.py: "sha256:ghi789..."
+          main.go: "sha256:def456..."
+          util.go: "sha256:ghi789..."
         deps:                                        # Pin'lenmiş dependency'ler
           "./yamlparser":
             pinned: "stable-c3d4"
@@ -354,6 +357,90 @@ implementation:
         0: Upgrade başarılı
         1: Hata
 
+    remove-lang:
+      purpose: Dil kökünü archive'a taşı
+      steps:
+        1: Root blueprint'i bul
+        2: src-{lang}/ klasörünü bul (yoksa hata)
+        3: Tek dil mi kontrol et (son dil silinmez)
+        4: Dil kökü için son snapshot al (bp ss)
+        5: .blueprint/archive/src-{lang}/ oluştur
+        6: |
+           Dil kökünü archive'a taşı:
+           - Tüm dosyaları taşı (kod, blueprint'ler)
+           - .blueprint/history/ dahil (snapshotlar korunur)
+        7: |
+           Archive içine meta.yaml yaz:
+           archived_at: timestamp
+           last_snapshot: snapshot-id
+           reason: "bp remove-lang {lang}"
+        8: Orijinal src-{lang}/ klasörünü sil
+        9: Root'ta languages listesi varsa güncelle
+      archive_structure: |
+        .blueprint/archive/
+        └── src-{lang}/
+            ├── meta.yaml           # Archive metadata
+            ├── BLUEPRINT.yaml      # Blueprint dosyaları
+            ├── BLUEPRINT.spec.yaml
+            ├── ...                 # Kod dosyaları
+            └── .blueprint/         # State ve history
+                ├── state.yaml
+                └── history/
+                    └── ...
+      exit_codes:
+        0: Başarılı
+        1: Dil bulunamadı / son dil / hata
+
+    restore-lang:
+      purpose: Archive'dan dil kökünü geri getir
+      steps:
+        1: Root blueprint'i bul
+        2: .blueprint/archive/src-{lang}/ kontrol et (yoksa hata)
+        3: src-{lang}/ zaten var mı kontrol et (varsa hata)
+        4: |
+           Archive'dan geri taşı:
+           - Tüm dosyaları geri getir
+           - .blueprint/history/ dahil
+        5: Archive'daki son snapshot'ı current yap
+        6: Archive'dan src-{lang}/ klasörünü sil
+        7: Root'ta languages listesi varsa güncelle
+      exit_codes:
+        0: Başarılı
+        1: Archive'da yok / zaten var / hata
+
+    purge:
+      purpose: Archive ve kullanılmayan snapshotları temizle
+      steps:
+        1: Root blueprint'i bul
+        2: |
+           --pretend modunda:
+           - Silinecekleri hesapla ama silme
+           - Boyut bilgisini göster
+        3: |
+           Archive temizleme (--snapshots-only yoksa):
+           - .blueprint/archive/ tamamen silinir
+        4: |
+           Snapshot temizleme (--archive-only yoksa):
+           - Her paket için .blueprint/history/ tara
+           - current olmayan snapshotları sil
+           - NOT: Gelecekte dependent tracking eklenecek
+        5: Özet yazdır (freed space)
+      unused_snapshot_definition: |
+        Şu anki basit tanım:
+        - current olmayan tüm snapshotlar "unused"
+
+        Gelecekteki gelişmiş tanım (TODO):
+        - dependent tracking ile aktif kullanılan snapshotlar korunacak
+        - Örn: başka paket "./yamlparser@stable-a1b2" kullanıyorsa korunur
+      flags:
+        archive_only: Sadece archive'ı temizle
+        snapshots_only: Sadece kullanılmayan snapshotları temizle
+        pretend: Silmeden ne kadar yer açılacağını göster
+        dry_run: --pretend ile aynı (alias)
+      exit_codes:
+        0: Başarılı (veya temizlenecek bir şey yok)
+        1: Hata
+
 # =============================================================================
 # TESTS
 # =============================================================================
@@ -368,7 +455,7 @@ tests:
     # =========================================================================
     - id: registry_all_commands
       given: COMMANDS dict
-      then: 15 komut var (validate, status, plan, cancel, ss, new-lang, deps, map, init, log, diff, show, implement, impl, upgrade)
+      then: 18 komut var (validate, status, plan, cancel, ss, new-lang, remove-lang, restore-lang, purge, deps, map, init, log, diff, show, implement, impl, upgrade)
 
     - id: unknown_command
       given: COMMANDS'ta olmayan komut
@@ -683,46 +770,46 @@ tests:
     # NEW-LANG
     # =========================================================================
     - id: new_lang_creates_root
-      given: src var, src-rs yok
-      when: bp new-lang rs
-      then: src-rs/ oluşur, exit 0
+      given: src-go var, src-new yok
+      when: bp new-lang new
+      then: src-new/ oluşur, exit 0
 
     - id: new_lang_symlinks_api_blueprints
-      given: src-py/p1/BLUEPRINT.yaml içinde api section var
-      when: bp new-lang rs
-      then: src-rs/p1/BLUEPRINT.yaml symlink olur (api section içerdiği için)
+      given: src-go/p1/BLUEPRINT.yaml içinde api section var
+      when: bp new-lang new
+      then: src-new/p1/BLUEPRINT.yaml symlink olur (api section içerdiği için)
 
     - id: new_lang_copies_spec_blueprints
-      given: src-py/p1/BLUEPRINT.spec.yaml var
-      when: bp new-lang rs
-      then: src-rs/p1/BLUEPRINT.spec.yaml kopyalanır (symlink değil)
+      given: src-go/p1/BLUEPRINT.spec.yaml var
+      when: bp new-lang new
+      then: src-new/p1/BLUEPRINT.spec.yaml kopyalanır (symlink değil)
 
     - id: new_lang_prompts_split_single_file
-      given: src-py/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya)
-      when: bp new-lang rs
+      given: src-go/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya)
+      when: bp new-lang new
       then: "API+spec tek dosyada, split edilsin mi? [y/N]" prompt gösterir
 
     - id: new_lang_split_creates_api_spec
-      given: src-py/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya), kullanıcı "y" der
-      when: bp new-lang rs
+      given: src-go/p1/BLUEPRINT.yaml içinde api + implementation var (tek dosya), kullanıcı "y" der
+      when: bp new-lang new
       then: |
-        - src-py/p1/BLUEPRINT.api.yaml oluşur (api içeriği taşınır)
-        - src-py/p1/BLUEPRINT.spec.yaml oluşur (implementation/tests taşınır)
-        - src-py/p1/BLUEPRINT.yaml referanslara güncellenir
+        - src-go/p1/BLUEPRINT.api.yaml oluşur (api içeriği taşınır)
+        - src-go/p1/BLUEPRINT.spec.yaml oluşur (implementation/tests taşınır)
+        - src-go/p1/BLUEPRINT.yaml referanslara güncellenir
 
     - id: new_lang_copies_shared_dirs
-      given: src-py/assets/ (blueprint olmayan klasör)
-      when: bp new-lang rs
-      then: src-rs/assets/ kopyalanır
+      given: src-go/assets/ (blueprint olmayan klasör)
+      when: bp new-lang new
+      then: src-new/assets/ kopyalanır
 
     - id: new_lang_skips_impl_files
-      given: src-py/p1/main.py var
-      when: bp new-lang rs
-      then: src-rs/p1/main.py kopyalanmaz
+      given: src-go/p1/main.go var
+      when: bp new-lang new
+      then: src-new/p1/main.go kopyalanmaz
 
     - id: new_lang_target_exists
-      given: src-rs zaten var
-      when: bp new-lang rs
+      given: src-new zaten var
+      when: bp new-lang new
       then: exit 1, "Target exists"
 
     # =========================================================================
@@ -874,6 +961,136 @@ tests:
         exit 0
 
     # =========================================================================
+    # REMOVE-LANG
+    # =========================================================================
+    - id: remove_lang_success
+      given: src-py var, src-go da var (birden fazla dil)
+      when: bp remove-lang py
+      then: |
+        - Son snapshot alınır
+        - .blueprint/archive/src-py/ oluşur
+        - src-py/ silinir
+        - exit 0
+
+    - id: remove_lang_creates_meta
+      given: bp remove-lang py başarılı
+      then: |
+        .blueprint/archive/src-py/meta.yaml içeriği:
+        archived_at: "2026-01-27T..."
+        last_snapshot: "final-a1b2"
+        reason: "bp remove-lang py"
+
+    - id: remove_lang_preserves_history
+      given: src-py/.blueprint/history/ içinde 5 snapshot var
+      when: bp remove-lang py
+      then: .blueprint/archive/src-py/.blueprint/history/ içinde 5 snapshot korunur
+
+    - id: remove_lang_not_found
+      given: src-xyz yok
+      when: bp remove-lang xyz
+      then: '"Language root not found: xyz", exit 1'
+
+    - id: remove_lang_last_language
+      given: Sadece src-go var (tek dil)
+      when: bp remove-lang go
+      then: '"Cannot remove last language", exit 1'
+
+    - id: remove_lang_updates_languages_list
+      given: Root'ta languages: [go, py] var
+      when: bp remove-lang py
+      then: Root'ta languages: [go] olur
+
+    # =========================================================================
+    # RESTORE-LANG
+    # =========================================================================
+    - id: restore_lang_success
+      given: .blueprint/archive/src-py/ var
+      when: bp restore-lang py
+      then: |
+        - src-py/ geri gelir
+        - Archive'daki snapshot current olur
+        - .blueprint/archive/src-py/ silinir
+        - exit 0
+
+    - id: restore_lang_not_found
+      given: .blueprint/archive/src-xyz/ yok
+      when: bp restore-lang xyz
+      then: '"No archived language found: xyz", exit 1'
+
+    - id: restore_lang_already_exists
+      given: src-py/ zaten var, .blueprint/archive/src-py/ da var
+      when: bp restore-lang py
+      then: '"Language root already exists: src-py/", exit 1'
+
+    - id: restore_lang_restores_history
+      given: Archive'da 5 snapshot var
+      when: bp restore-lang py
+      then: src-py/.blueprint/history/ içinde 5 snapshot geri gelir
+
+    - id: restore_lang_updates_languages_list
+      given: Root'ta languages: [go] var, py restore ediliyor
+      when: bp restore-lang py
+      then: Root'ta languages: [go, py] olur
+
+    # =========================================================================
+    # PURGE
+    # =========================================================================
+    - id: purge_default
+      given: Archive'da 2 dil, her pakette 5 eski snapshot var
+      when: bp purge
+      then: |
+        - Archive silinir
+        - current olmayan snapshotlar silinir
+        - Özet yazdırılır
+        - exit 0
+
+    - id: purge_pretend
+      given: Archive'da 2 dil (600MB), eski snapshotlar (250MB)
+      when: bp purge --pretend
+      then: |
+        Archive:
+          src-py/     312 MB   (archived: 2026-01-27)
+          src-rs/     287 MB   (archived: 2026-01-25)
+
+        Unused snapshots:
+          src-go/     156 MB   (8 snapshots, keeping 1 current)
+          ./          89 MB    (5 snapshots, keeping 1 current)
+
+        Total: 844 MB would be freed
+        exit 0 (hiçbir şey silinmez)
+
+    - id: purge_archive_only
+      given: Archive var, eski snapshotlar var
+      when: bp purge --archive-only
+      then: |
+        - Sadece archive silinir
+        - Snapshotlara dokunulmaz
+        - exit 0
+
+    - id: purge_snapshots_only
+      given: Archive var, eski snapshotlar var
+      when: bp purge --snapshots-only
+      then: |
+        - Archive'a dokunulmaz
+        - Sadece current olmayan snapshotlar silinir
+        - exit 0
+
+    - id: purge_nothing
+      given: Archive yok, tüm snapshotlar current
+      when: bp purge
+      then: '"Nothing to purge", exit 0'
+
+    - id: purge_dry_run_alias
+      given: --dry-run kullanıldı
+      when: bp purge --dry-run
+      then: --pretend ile aynı davranış
+
+    - id: purge_keeps_current
+      given: Paket'te 5 snapshot var, biri current
+      when: bp purge --snapshots-only
+      then: 4 snapshot silinir, current korunur
+
+    # =========================================================================
     # MAP
     # =========================================================================
     - id: map_basic
@@ -892,12 +1109,11 @@ tests:
           deps: (none)
 
     - id: map_langs
-      given: src ve src-rs var, API section içeren blueprint'ler symlink
+      given: src-go var, API section içeren blueprint'ler symlink
       when: bp map --langs
       then: |
         Languages:
-          py: src-py
-          rs: src-rs
+          go: src-go
         Package: ./parser
           status: OK
 

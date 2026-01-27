@@ -1,1 +1,94 @@
-../../src/task/BLUEPRINT.yaml
+_meta:
+  version: "0.1.0"
+  updated: 2026-01-17
+  status: mvp
+
+intent: |
+  Task tracking. Agent'in yaptigi isleri kaydet.
+  MVP icin basit: in-memory veya tek JSON dosyasi.
+
+api:
+  types:
+    TaskStatus:
+      type: enum
+      values: [pending, running, completed, failed]
+
+    Task:
+      fields:
+        - name: id
+          type: string
+
+        - name: instruction
+          type: string
+
+        - name: status
+          type: TaskStatus
+
+        - name: output
+          type: string
+          nullable: true
+
+        - name: error
+          type: string
+          nullable: true
+
+        - name: created_at
+          type: timestamp
+
+        - name: completed_at
+          type: timestamp
+          nullable: true
+
+  exports:
+    TaskStore:
+      type: class
+
+      constructor:
+        parameters:
+          - name: persist
+            type: boolean
+            default: false
+            description: true ise dosyaya yaz
+
+          - name: path
+            type: string
+            nullable: true
+            description: Persist edilecek dosya yolu
+
+      methods:
+        - name: create
+          parameters:
+            - name: instruction
+              type: string
+          returns: Task
+
+        - name: update
+          parameters:
+            - name: id
+              type: string
+            - name: status
+              type: TaskStatus
+            - name: output
+              type: string
+              nullable: true
+            - name: error
+              type: string
+              nullable: true
+          returns: Task
+
+        - name: get
+          parameters:
+            - name: id
+              type: string
+          returns: Task | null
+
+        - name: list
+          parameters:
+            - name: limit
+              type: integer
+              default: 10
+          returns: list<Task>
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"

@@ -1,0 +1,383 @@
+# Debug CLI Implementation Spec
+
+_meta:
+  version: "0.2.0"
+  type: spec
+
+implementation:
+  structure:
+    - __init__.py
+    - cli.py          # Ana REPL + argparse entrypoint
+    - backend.py      # Backend interface + HTTPBackend
+    - display.py      # Output formatting (tables, colors)
+    - models.py       # Dataclasses (CLIConfig, TaskInfo, etc)
+
+  models:
+    pseudocode: |
+      from dataclasses import dataclass
+
+      @dataclass
+      class CLIConfig:
+          base_url: str = "http://localhost:8080"
+          provider: str = "gemini"
+          model: str | None = None
+          system_prompt: str | None = None
+          temperature: float = 0.3
+          debug: bool = False
+
+      @dataclass
+      class ChatMessage:
+          role: str  # "user" | "assistant"
+          content: str
+
+      @dataclass
+      class TaskInfo:
+          id: str
+          status: str
+          instruction: str
+          output: str | None = None
+          created_at: str = ""
+
+      @dataclass
+      class ToolInfo:
+          name: str
+          description: str
+
+      @dataclass
+      class ExecuteResult:
+          success: bool
+          output: str
+          task_id: str | None = None
+          tool_calls: list[dict] | None = None
+
+  backend:
+    pseudocode: |
+      from abc import ABC, abstractmethod
+
+      class Backend(ABC):
+          @abstractmethod
+          def execute(self, instruction: str, history: list[ChatMessage], config: CLIConfig) -> ExecuteResult:
+              pass
+
+          @abstractmethod
+          def list_tasks(self, limit: int = 10) -> list[TaskInfo]:
+              pass
+
+          @abstractmethod
+          def get_task(self, task_id: str) -> TaskInfo | None:
+              pass
+
+          @abstractmethod
+          def list_tools(self) -> list[ToolInfo]:
+              pass
+
+          @abstractmethod
+          def list_models(self) -> list[str]:
+              pass
+
+
+      class HTTPBackend(Backend):
+          """HTTP API client - server'a bağlanır"""
+
+          def __init__(self, base_url: str, token: str | None = None):
+              self.base_url = base_url.rstrip("/")
+              self.token = token
+
+          def _headers(self) -> dict:
+              h = {"Content-Type": "application/json"}
+              if self.token:
+                  h["Authorization"] = f"Bearer {self.token}"
+              return h
+
+          def execute(self, instruction: str, history: list[ChatMessage], config: CLIConfig) -> ExecuteResult:
+              # Build transcript from history
+              transcript = self._build_transcript(history, instruction)
+
+              payload = {
+                  "instruction": transcript,
+                  "provider": config.provider,
+                  "model": config.model,
+                  "temperature": config.temperature,
+                  "system_prompt": config.system_prompt,
+                  "debug": config.debug
+              }
+              resp = requests.post(f"{self.base_url}/execute", json=payload, headers=self._headers())
+              data = resp.json()
+              return ExecuteResult(
+                  success=data.get("success", False),
+                  output=data.get("output", ""),
+                  task_id=data.get("task_id"),
+                  tool_calls=data.get("trace", {}).get("tool_calls")
+              )
+
+          def list_tasks(self, limit: int = 10) -> list[TaskInfo]:
+              resp = requests.get(f"{self.base_url}/tasks", params={"limit": limit}, headers=self._headers())
+              return [TaskInfo(**t) for t in resp.json().get("tasks", [])]
+
+          def get_task(self, task_id: str) -> TaskInfo | None:
+              resp = requests.get(f"{self.base_url}/tasks/{task_id}", headers=self._headers())
+              if resp.ok:
+                  return TaskInfo(**resp.json())
+              return None
+
+          def list_tools(self) -> list[ToolInfo]:
+              resp = requests.get(f"{self.base_url}/tools", headers=self._headers())
+              return [ToolInfo(**t) for t in resp.json().get("tools", [])]
+
+          def list_models(self) -> list[str]:
+              resp = requests.get(f"{self.base_url}/models", headers=self._headers())
+              return resp.json().get("models", [])
+
+          def _build_transcript(self, history: list[ChatMessage], new_msg: str) -> str:
+              lines = []
+              for msg in history:
+                  lines.append(f"{msg.role}: {msg.content}")
+              lines.append(f"user: {new_msg}")
+              return "\n".join(lines) if len(history) > 0 else new_msg
+
+
+  cli:
+    pseudocode: |
+      class REPL:
+          def __init__(self, config: CLIConfig):
+              self.config = config
+              self.backend = self._create_backend()
+              self.history: list[ChatMessage] = []
+
+          def _create_backend(self) -> Backend:
+              return HTTPBackend(self.config.base_url)
+
+          def run(self):
+              print_welcome(self.config)
+
+              while True:
+                  try:
+                      line = input("you> ").strip()
+                  except (EOFError, KeyboardInterrupt):
+                      print("\nBye!")
+                      break
+
+                  if not line:
+                      continue
+
+                  if line.startswith("."):
+                      if self._handle_command(line):
+                          break
+                      continue
+
+                  # Execute
+                  result = self.backend.execute(line, self.history, self.config)
+                  print_response(result, self.config.debug)
+
+                  # Update history
+                  self.history.append(ChatMessage("user", line))
+                  self.history.append(ChatMessage("assistant", result.output))
+
+          def _handle_command(self, line: str) -> bool:
+              parts = line.split(maxsplit=1)
+              cmd = parts[0]
+              args = parts[1] if len(parts) > 1 else ""
+
+              if cmd in (".exit", ".quit", ".q"):
+                  return True
+
+              elif cmd == ".help":
+                  print_help()
+
+              elif cmd == ".info":
+                  print_info(self.config)
+
+              elif cmd == ".model":
+                  self._select_model()
+
+              elif cmd == ".provider":
+                  self._select_provider()
+
+              elif cmd == ".tasks":
+                  tasks = self.backend.list_tasks()
+                  print_task_table(tasks)
+
+              elif cmd == ".task":
+                  task = self.backend.get_task(args)
+                  if task:
+                      print_task_detail(task)
+                  else:
+                      print(f"Task not found: {args}")
+
+              elif cmd == ".tools":
+                  tools = self.backend.list_tools()
+                  print_tool_list(tools)
+
+              elif cmd == ".system":
+                  self.config.system_prompt = args or None
+                  print(f"System prompt: {self.config.system_prompt or '(default)'}")
+
+              elif cmd == ".clear":
+                  self.history.clear()
+                  print("History cleared.")
+
+              elif cmd == ".debug":
+                  self.config.debug = not self.config.debug
+                  print(f"Debug: {'on' if self.config.debug else 'off'}")
+
+              else:
+                  print(f"Unknown command: {cmd}. Type .help")
+
+              return False
+
+          def _select_model(self):
+              models = self.backend.list_models()
+              print("Models:")
+              for i, m in enumerate(models, 1):
+                  cur = " (current)" if m == self.config.model else ""
+                  print(f"  [{i}] {m}{cur}")
+              try:
+                  choice = input("Select: ").strip()
+                  if choice.isdigit():
+                      self.config.model = models[int(choice) - 1]
+                  else:
+                      self.config.model = choice
+                  print(f"Model: {self.config.model}")
+              except (ValueError, IndexError):
+                  print("Cancelled")
+
+          def _select_provider(self):
+              providers = ["gemini", "codex", "opus"]
+              print("Providers:")
+              for i, p in enumerate(providers, 1):
+                  cur = " (current)" if p == self.config.provider else ""
+                  print(f"  [{i}] {p}{cur}")
+              try:
+                  choice = input("Select: ").strip()
+                  self.config.provider = providers[int(choice) - 1]
+                  self.config.model = None  # Reset
+                  print(f"Provider: {self.config.provider}")
+              except (ValueError, IndexError):
+                  print("Cancelled")
+
+  display:
+    pseudocode: |
+      def print_welcome(config: CLIConfig):
+          print("base-agent CLI [HTTP]")
+          print(f"Provider: {config.provider} | Model: {config.model or 'default'}")
+          print("Type .help for commands\n")
+
+      def print_help():
+          print("""
+      Commands:
+        .model       Select model (interactive)
+        .provider    Select provider (gemini/codex/opus)
+        .tasks       List recent tasks
+        .task <id>   Show task detail
+        .tools       List registered tools
+        .system <t>  Set system prompt
+        .clear       Clear chat history
+        .debug       Toggle debug mode
+        .info        Show current settings
+        .help        Show this help
+        .exit        Quit
+          """)
+
+      def print_info(config: CLIConfig):
+          print(f"URL:      {config.base_url}")
+          print(f"Provider: {config.provider}")
+          print(f"Model:    {config.model or '(default)'}")
+          print(f"System:   {config.system_prompt or '(default)'}")
+          print(f"Temp:     {config.temperature}")
+          print(f"Debug:    {config.debug}")
+
+      def print_response(result: ExecuteResult, debug: bool):
+          if debug and result.tool_calls:
+              for tc in result.tool_calls:
+                  print(f"  [tool] {tc.get('name')}({tc.get('args')})")
+          print(f"assistant> {result.output}")
+
+      def print_task_table(tasks: list[TaskInfo]):
+          if not tasks:
+              print("No tasks.")
+              return
+          print(f"{'ID':<16} {'Status':<10} {'Output':<50}")
+          print("-" * 76)
+          for t in tasks:
+              out = (t.output or "-")[:47] + "..." if len(t.output or "") > 50 else (t.output or "-")
+              print(f"{t.id:<16} {t.status:<10} {out:<50}")
+
+      def print_task_detail(task: TaskInfo):
+          print(f"ID:          {task.id}")
+          print(f"Status:      {task.status}")
+          print(f"Instruction: {task.instruction}")
+          print(f"Output:      {task.output or '-'}")
+          print(f"Created:     {task.created_at}")
+
+      def print_tool_list(tools: list[ToolInfo]):
+          if not tools:
+              print("No tools registered.")
+              return
+          print("Registered tools:")
+          for t in tools:
+              print(f"  - {t.name}: {t.description or '(no description)'}")
+
+  entrypoint:
+    pseudocode: |
+      def main():
+          parser = argparse.ArgumentParser(prog="debug-cli", description="Base Agent Debug CLI")
+          parser.add_argument("--url", default="http://localhost:8080", help="API server URL")
+          parser.add_argument("--provider", default="gemini")
+          parser.add_argument("--model", default=None)
+          parser.add_argument("--system", default=None, help="System prompt")
+          parser.add_argument("--temp", type=float, default=0.3)
+          parser.add_argument("--debug", action="store_true")
+
+          subparsers = parser.add_subparsers(dest="command")
+
+          subparsers.add_parser("repl", help="Interactive chat")
+
+          run_p = subparsers.add_parser("run", help="Single instruction")
+          run_p.add_argument("instruction", nargs="*")
+
+          args = parser.parse_args()
+
+          config = CLIConfig(
+              base_url=args.url,
+              provider=args.provider,
+              model=args.model,
+              system_prompt=args.system,
+              temperature=args.temp,
+              debug=args.debug
+          )
+
+          # Default to repl if no command
+          cmd = args.command or "repl"
+
+          if cmd == "repl":
+              REPL(config).run()
+
+          elif cmd == "run":
+              instruction = " ".join(args.instruction) if args.instruction else input("Instruction: ")
+              backend = HTTPBackend(config.base_url)
+              result = backend.execute(instruction, [], config)
+              print(result.output)
+
+      if __name__ == "__main__":
+          main()
+
+tests:
+  unit:
+    - name: config_defaults
+      test: |
+        config = CLIConfig()
+        assert config.provider == "gemini"
+
+    - name: http_backend_transcript
+      test: |
+        backend = HTTPBackend("http://test:8080")
+        history = [ChatMessage("user", "hi"), ChatMessage("assistant", "hello")]
+        transcript = backend._build_transcript(history, "how are you")
+        assert "user: hi" in transcript
+        assert "assistant: hello" in transcript
+
+    - name: command_parse
+      test: |
+        # .exit returns True
+        # .help returns False
+        pass

@@ -1,0 +1,142 @@
+_meta:
+  version: "0.2.0"
+  updated: 2026-01-18
+  status: mvp
+
+intent: |
+  Base Agent - yeniden kullanilabilir minimal agent framework.
+
+  MVP hedefi: Instruction al, LLM cagir, tool kullan, sonuc don.
+
+overview: |
+  Paketler:
+    llm/         - LLM client katmani
+      codex/     - OpenAI Codex API (ChatGPT login bazli)
+      (gemini)   - Gemini 3 client (key rotation) [default]
+    tools/       - Tool registry ve execution
+    task/        - Task tracking (in-memory veya JSON)
+    api/         - External interface (library, HTTP, Docker)
+    debug_cli/   - HTTP debug CLI (agent davranisi testi)
+    cmd/base-agent - HTTP server entrypoint
+
+  LLM Providers:
+    - Gemini 3: REST API (v1beta) key rotation destekli
+    - Codex: ChatGPT hesabi ile, reasoning effort destekli
+    - Opus: HTTP provider (configurable)
+
+  Agent sinifi src/ icinde, ayri paket degil.
+
+  Akis:
+    instruction → LLM → tool call? → execute → response
+
+environment:
+  required:
+    - GEMINI_API_KEY (default provider icin gerekli)
+  optional:
+    - GEMINI_API_KEY_2..N (rotation)
+    - CODEX_AUTH_FILE (default: ~/.codex/auth.json)
+    - CODEX_API_KEY (API key auth tercih edilirse)
+    - OPUS_API_KEY (opus provider icin)
+
+api:
+  types:
+    LLMProvider:
+      type: enum
+      values: [gemini, codex, opus]
+      default: gemini
+
+    AgentConfig:
+      fields:
+        - name: provider
+          type: LLMProvider
+          default: "gemini"
+          description: LLM provider secimi
+
+        - name: model
+          type: string
+          default: "gemini-3-flash-preview"
+          description: |
+            Gemini: gemini-3-flash-preview, gemini-3-pro-preview
+            Codex: gpt-5.2-codex, gpt-5.1-codex-max, gpt-5.1-codex-mini
+            Opus: configurable (server-side adapter)
+
+        - name: reasoning_effort
+          type: string
+          nullable: true
+          description: Sadece Codex icin (none/minimal/low/medium/high/xhigh)
+
+        - name: max_iterations
+          type: integer
+          default: 10
+          description: Tool loop max iterasyon
+
+        - name: temperature
+          type: float
+          default: 0.3
+
+        - name: enable_task_store
+          type: boolean
+          default: true
+          description: Task kaydi tutulacak mi
+
+        - name: codex_auth_file
+          type: string
+          nullable: true
+          description: Codex auth dosyasi (default ~/.codex/auth.json)
+
+    AgentResult:
+      fields:
+        - name: success
+          type: boolean
+
+        - name: output
+          type: string
+
+        - name: task_id
+          type: string
+          nullable: true
+
+  exports:
+    Agent:
+      type: class
+
+      constructor:
+        parameters:
+          - name: name
+            type: string
+
+          - name: config
+            type: AgentConfig
+            nullable: true
+
+          - name: system_prompt
+            type: string
+            nullable: true
+
+      methods:
+        - name: execute
+          description: Instruction calistir
+          parameters:
+            - name: instruction
+              type: string
+          returns: AgentResult
+
+        - name: add_tool
+          description: Tool ekle
+          parameters:
+            - name: name
+              type: string
+            - name: handler
+              type: function
+            - name: schema
+              type: ToolSchema
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"
+
+dependencies:
+  internal:
+    - ./llm
+    - ./tools
+    - ./task

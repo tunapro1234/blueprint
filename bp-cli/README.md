@@ -129,9 +129,9 @@ Snapshot IDs:
 Timestamp is stored in `meta.yaml`.
 
 ## Multi-language Roots
-- Default language root is `src-py/` (configurable)
+- Default language root is `src-go/` (configurable)
 - Additional language roots are discovered via `language_policy.language_roots` and `language_policy.language_root_patterns` (default pattern: `src-*`)
-- `bp new-lang rs` creates a new root (default target uses `language_policy.language_root_template`, default `src-{lang}`):
+- `bp new-lang <lang>` creates a new root (default target uses `language_policy.language_root_template`, default `src-{lang}`):
   - Package directories are created
   - Blueprint files that contain an API section are symlinked; others are copied
   - If a package has a single blueprint file with API+spec, `bp` prompts to split it
@@ -141,16 +141,13 @@ Timestamp is stored in `meta.yaml`.
 Example config:
 ```
 language_policy:
-  default_root: src-py
-  default_language: py
+  default_root: src-go
+  default_language: go
   language_root_template: src-{lang}
   language_roots:
-    - src-py
     - src-go
-    - lang/python
   language_root_patterns:
     - src-*
-    - lang-*
 ```
 
 `bp ss` will:
@@ -198,9 +195,7 @@ The custom parser:
 BLUEPRINT.yaml     # Root project blueprint
 README.md          # This file
 .gitignore         # Git ignore rules
-src-py/            # Default language root (Python)
-src-go/            # Go implementation
-src-rs/            # Rust implementation
+src-go/            # Go implementation (default root)
 ```
 
 ## Development

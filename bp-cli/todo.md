@@ -1,12 +1,9 @@
 # tood
 
-- [ ] api limit 300 lines
-- [ ] spec limit 900 lines
+- [ ] active snapshot tracking
 - [ ] 
-
-
-- [ ] implement snapshot
-- [ ] visualization
+- [ ] 
+- [ ] 
 - [ ] 
 - [ ] 
 - [ ] 

@@ -8,7 +8,7 @@ api:
     usage: bp <command> [path] [flags]
 
     defaults:
-      state_dir: ".blueprint"
+      state_dir: ".bp"
       mode: meek  # meek | ro | hide
 
     modes: |
@@ -31,6 +31,24 @@ api:
         - bp impl: derleme için kodları görünür yapar, sonra tekrar gizler
         - bp ss: mevcut working tree'yi snapshot'lar (hide'da kod yoksa boş olabilir)
 
+    scope_resolution: |
+      Blueprint scope kavramı:
+      - Her BLUEPRINT.yaml kendi scope'unu tanımlar
+      - scope alanı yoksa default: bulunduğu klasör (ve alt klasörleri)
+      - Alt klasörde başka BLUEPRINT.yaml varsa o klasör üst scope'tan çıkar (child wins)
+      - Scope örnekleri:
+        scope: [./src/, ./config/]     → bu iki klasörü kapsar
+        scope: [./]                     → kendi klasörü (default ile aynı)
+        scope: [./main.go]             → tek dosya bile olabilir
+        (scope tanımsız)               → bulunduğu klasör + alt klasörler
+
+    discovery: |
+      Recursive blueprint discovery:
+      - bp, çalıştırıldığı yerden recursive olarak tüm BLUEPRINT.yaml dosyalarını bulur
+      - Her bulunan blueprint kendi scope'una sahip
+      - Child blueprint'ler parent scope'tan otomatik çıkar
+      - Discovery sırası: depth-first, her seviyede BLUEPRINT.yaml kontrol
+
     root_resolution: |
       Root blueprint kavramı:
       - _meta.root: true olan blueprint proje root'udur
@@ -51,6 +69,18 @@ api:
         bp status                → root bul, root'tan recursive
         bp status .              → bulunulan paketten recursive
         bp status . --no-recursive     → sadece bulunulan paket
+
+    snapshot_sources: |
+      İki snapshot kaynağı:
+      - Lokal: bp ss → .bp/history/{id}/ altında dosya kopyası
+      - Git tag: bp/ prefix'li git tag'ler otomatik snapshot olarak tanınır
+        - Format: bp/{blueprint-path}/{slug-hash}
+        - Örn: bp/commands/v1-a3f2, bp/yamlparser/stable-b1c9
+        - bp ss git tag oluşturmaz, sadece lokal snapshot
+        - Git tag snapshot'ları bp log'da "[tag]" ile işaretlenir
+        - Dep symlink için tag'den dosya gerekirse:
+          git archive <tag> -- <path>/ ile .bp/cache/'e çekilir
+        - .bp/cache/ disposable, .gitignore'a eklenir
 
     commands:
       - name: validate
@@ -279,12 +309,17 @@ api:
           1: Zaten var veya hata
 
       - name: log
-        desc: Snapshot geçmişi
+        desc: Snapshot geçmişi (lokal + git tag)
         usage: bp log [path] [-n count]
         flags:
           - name: -n, --count
             default: 10
             desc: Gösterilecek snapshot sayısı
+        behavior: |
+          - Lokal snapshot'lar (.bp/history/) ve git tag snapshot'ları birleştirilir
+          - Git tag'ler bp/{blueprint-path}/* pattern'ı ile bulunur
+          - Tarih sırasına göre listelenir (yeniden eskiye)
+          - Git tag snapshot'ları [tag] ile işaretlenir
         output: |
           add-validation-a1b2   "Add validation logic"
           fix-edge-cases-c3d4   "Fix edge cases"
@@ -312,7 +347,7 @@ api:
         usage: bp show [path] [id]
         behavior:
           - ID verilmezse son snapshot
-          - .blueprint/history/XXXX/BLUEPRINT.yaml içeriğini stdout'a yazar
+          - .bp/history/XXXX/BLUEPRINT.yaml içeriğini stdout'a yazar
         exit_codes:
           0: Başarılı
           1: ID bulunamadı veya hata
@@ -391,16 +426,16 @@ api:
         args:
           - name: lang
             required: true
-            desc: Kaldırılacak dil (go, py, rs, vb.)
+            desc: Kaldırılacak dil (go, js, ts, vb.)
         behavior: |
           1. Root blueprint bulunur
           2. Dil kökü bulunur (src-{lang}/ veya language_policy.roots'tan)
           3. Son kalan dil mi kontrol edilir → hata: "Cannot remove last language"
           4. Dil kökü için son bir snapshot alınır
-          5. .blueprint/archive/src-{lang}/ oluşturulur
+          5. .bp/archive/src-{lang}/ oluşturulur
           6. Dil kökü archive'a taşınır:
              - Tüm dosyalar taşınır
-             - .blueprint/history/ dahil (snapshotlar korunur)
+             - .bp/history/ dahil (snapshotlar korunur)
           7. Archive içine meta.yaml yazılır:
              archived_at: timestamp
              last_snapshot: snapshot-id
@@ -409,7 +444,7 @@ api:
           9. Root'ta languages listesi varsa güncellenir
         output:
           success: |
-            Archived: src-{lang}/ → .blueprint/archive/src-{lang}/
+            Archived: src-{lang}/ → .bp/archive/src-{lang}/
             Last snapshot: {snapshot-id}
           error_last: "Cannot remove last language"
           error_not_found: "Language root not found: {lang}"
@@ -423,20 +458,20 @@ api:
         args:
           - name: lang
             required: true
-            desc: Geri getirilecek dil (go, py, rs, vb.)
+            desc: Geri getirilecek dil (go, js, ts, vb.)
         behavior: |
           1. Root blueprint bulunur
-          2. .blueprint/archive/src-{lang}/ kontrol edilir
+          2. .bp/archive/src-{lang}/ kontrol edilir
           3. src-{lang}/ zaten varsa → hata: "Language root already exists"
           4. Archive'dan src-{lang}/ geri taşınır:
              - Tüm dosyalar geri gelir
-             - .blueprint/history/ dahil
+             - .bp/history/ dahil
           5. Archive'daki son snapshot current yapılır
           6. Archive'dan src-{lang}/ silinir
           7. Root'ta languages listesi varsa güncellenir
         output:
           success: |
-            Restored: .blueprint/archive/src-{lang}/ → src-{lang}/
+            Restored: .bp/archive/src-{lang}/ → src-{lang}/
             Current snapshot: {snapshot-id}
           error_exists: "Language root already exists: src-{lang}/"
           error_not_found: "No archived language found: {lang}"
@@ -458,10 +493,10 @@ api:
           Default (flagsız): archive + kullanılmayan snapshotlar silinir
 
           Archive temizleme:
-          - .blueprint/archive/ tamamen silinir
+          - .bp/archive/ tamamen silinir
 
           Snapshot temizleme:
-          - Her paket için .blueprint/history/ taranır
+          - Her paket için .bp/history/ taranır
           - "Kullanılmayan" snapshot tanımı (şimdilik basit):
             - current olmayan snapshotlar
             - NOT: Gelecekte dependent tracking ile aktif snapshot koruması eklenecek
@@ -473,8 +508,8 @@ api:
         output:
           pretend: |
             Archive:
-              src-py/     312 MB   (archived: 2026-01-27)
-              src-rs/     287 MB   (archived: 2026-01-25)
+              src-js/     312 MB   (archived: 2026-01-27)
+              src-ts/     287 MB   (archived: 2026-01-25)
 
             Unused snapshots:
               src-go/     156 MB   (8 snapshots, keeping 1 current)
@@ -506,9 +541,12 @@ api:
           - name: data
             type: map<string, any>
             desc: Parse edilmiş YAML içeriği
+          - name: scope
+            type: string[]
+            desc: Blueprint'in kapsadığı path'ler (default: bulunduğu klasör)
           - name: state_dir
             type: string
-            desc: State klasörünün yolu (_meta.state_dir, default .blueprint)
+            desc: State klasörünün yolu (_meta.state_dir, default .bp)
           - name: mode
             type: string
             desc: Development mode (_meta.mode, default meek)
@@ -534,10 +572,10 @@ api:
             desc: api, implementation, tests bölümünü al
           - name: get_history
             returns: HistoryEntry[]
-            desc: Snapshot geçmişi
+            desc: Snapshot geçmişi (lokal + git tag birleşik, tarih sıralı)
           - name: save_state
             returns: void
-            desc: .blueprint/state.yaml güncelle
+            desc: .bp/state.yaml güncelle
 
       - name: HistoryEntry
         desc: Tek bir snapshot kaydı
@@ -563,6 +601,13 @@ api:
           - name: impl_hash
             type: string
             desc: Implementation dosyalarının birleşik hash'i
+          - name: source
+            type: string
+            desc: "Snapshot kaynağı: local | tag"
+          - name: tag_name
+            type: string
+            nullable: true
+            desc: Git tag adı (source=tag ise)
           - name: rotten
             type: bool
             desc: Snapshot rotten mı? (upgrade testleri fail ettiyse true)
@@ -658,7 +703,7 @@ api:
             desc: Archive öncesi son snapshot ID
           - name: reason
             type: string
-            desc: Archive sebebi (örn "bp remove-lang py")
+            desc: Archive sebebi (örn "bp remove-lang js")
 
       - name: PurgeResult
         desc: Purge işlemi sonucu

@@ -129,7 +129,7 @@ func cleanupDepSymlinks(destDir string, expected map[string]string) error {
 
 func looksLikeDependencyTarget(target string) bool {
 	normalized := filepath.ToSlash(target)
-	return strings.Contains(normalized, "/.blueprint/history/") || strings.HasPrefix(normalized, ".blueprint/history/")
+	return strings.Contains(normalized, "/.bp/history/") || strings.HasPrefix(normalized, ".bp/history/")
 }
 
 func ensureSymlinkTargetAvailable(path, name string, allowExistingBlueprintDirs bool) error {

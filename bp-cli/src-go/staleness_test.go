@@ -92,7 +92,7 @@ func TestStalenessDepsChanged(t *testing.T) {
 	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
 	depDir := filepath.Join(dir, "dep")
 	loadBlueprintFromDir(t, depDir, "_meta:\n  version: \"1\"\n")
-	writeFile(t, filepath.Join(depDir, ".blueprint", "current"), "20240102-0304-abcd-dep")
+	writeFile(t, filepath.Join(depDir, ".bp", "current"), "20240102-0304-abcd-dep")
 	bpHash, _ := HashFile(bpObj.Path)
 	state := &State{
 		BlueprintHash: bpHash,
@@ -121,7 +121,7 @@ func TestStalenessDepsAPIChanged(t *testing.T) {
 	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
 	depDir := filepath.Join(dir, "dep")
 	loadBlueprintFromDir(t, depDir, "_meta:\n  version: \"1\"\napi:\n  foo: bar\n")
-	writeFile(t, filepath.Join(depDir, ".blueprint", "current"), "20240102-0304-abcd-dep")
+	writeFile(t, filepath.Join(depDir, ".bp", "current"), "20240102-0304-abcd-dep")
 	bpHash, _ := HashFile(bpObj.Path)
 	state := &State{
 		BlueprintHash: bpHash,

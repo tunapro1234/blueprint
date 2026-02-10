@@ -21,7 +21,7 @@ _meta:
   version: "0.3.0"
   updated: 2026-01-19
   status: ready
-  # state_dir: ".blueprint"  # default
+  # state_dir: ".bp"  # default
   # mode: ro                  # default
 
 intent: |

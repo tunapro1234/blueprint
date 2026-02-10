@@ -8,7 +8,7 @@ import (
 )
 
 func TestReadCurrentSnapshotID(t *testing.T) {
-	stateDir := filepath.Join(t.TempDir(), ".blueprint")
+	stateDir := filepath.Join(t.TempDir(), ".bp")
 	if _, err := readCurrentSnapshotID(stateDir); !errors.Is(err, ErrNoSnapshot) {
 		t.Fatalf("expected ErrNoSnapshot, got %v", err)
 	}
@@ -48,9 +48,9 @@ func TestDependencyState(t *testing.T) {
 	loadBlueprintFromDir(t, dep1Dir, "_meta:\n  version: \"1\"\napi:\n  foo: bar\n")
 	pinnedID := "20240101-0000-abcd-old"
 	latestID := "20240102-0304-abcd-new"
-	writeFile(t, filepath.Join(dep1Dir, ".blueprint", "current"), latestID)
-	writeMeta(t, filepath.Join(dep1Dir, ".blueprint"), pinnedID, "sha256:old")
-	writeMeta(t, filepath.Join(dep1Dir, ".blueprint"), latestID, "sha256:new")
+	writeFile(t, filepath.Join(dep1Dir, ".bp", "current"), latestID)
+	writeMeta(t, filepath.Join(dep1Dir, ".bp"), pinnedID, "sha256:old")
+	writeMeta(t, filepath.Join(dep1Dir, ".bp"), latestID, "sha256:new")
 
 	dep2Dir := filepath.Join(dir, "dep2")
 	loadBlueprintFromDir(t, dep2Dir, "_meta:\n  version: \"1\"\n")

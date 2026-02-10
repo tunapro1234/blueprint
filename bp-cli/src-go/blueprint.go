@@ -60,7 +60,7 @@ func LoadBlueprint(path string) (*Blueprint, error) {
 		return nil, err
 	}
 	dir := filepath.Dir(abs)
-	stateDirRel := ".blueprint"
+	stateDirRel := ".bp"
 	if metaRaw, ok := data["_meta"]; ok {
 		if meta, ok := convertYAML(metaRaw).(map[string]interface{}); ok {
 			if raw, ok := meta["state_dir"].(string); ok {

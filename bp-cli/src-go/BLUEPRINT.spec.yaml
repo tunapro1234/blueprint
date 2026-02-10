@@ -1,7 +1,7 @@
 # bp - Implementation & Test Specification
 
 _meta:
-  version: "0.2.0"
+  version: "0.3.0"
   type: spec  # Bu bir spec dosyası, ana blueprint değil
 
 # =============================================================================
@@ -20,18 +20,20 @@ implementation:
 
   data_structures:
     blueprint_dir: |
-      {state_dir}/                         # _meta.state_dir (default .blueprint)
+      {state_dir}/                         # _meta.state_dir (default .bp)
       ├── current                           # Son snapshot ID
       ├── impl.lock                         # Derleme sırasında busy flag
       ├── state.yaml                        # Files, deps, dependents
+      ├── cache/                            # Git tag'den materialize edilmiş dosyalar (disposable)
+      │   └── dep-v1-a3f2/                  # Tag snapshot cache
       └── history/
-          ├── add-feat-a1b2/                # Snapshot ID (slug-hash4)
+          ├── add-feat-a1b2/                # Lokal snapshot ID (slug-hash4)
           │   ├── BLUEPRINT.yaml            # Blueprint snapshot
-          │   ├── meta.yaml                 # id, timestamp, message, hashes
+          │   ├── meta.yaml                 # id, timestamp, message, hashes, source
           │   ├── main.go                   # Kod (direkt, impl/ yok)
           │   ├── util.go
-          │   ├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
-          │   └── commands/ → ../../commands/.blueprint/history/{pinned_id}/
+          │   ├── yamlparser/ → ../../yamlparser/.bp/history/{pinned_id}/
+          │   └── commands/ → ../../commands/.bp/history/{pinned_id}/
           └── ss-a3f2b7c1/
               ├── BLUEPRINT.yaml
               ├── meta.yaml
@@ -40,12 +42,13 @@ implementation:
     working_tree: |
       # Working tree yapısı (her zaman aktif)
       package/
-      ├── BLUEPRINT.yaml                    # Blueprint dosyası
+      ├── BLUEPRINT.yaml                    # Blueprint dosyası (scope tanımlar)
       ├── main.go                           # Kod
       ├── util.go
       ├── yamlparser/                       # gerçek dependency klasörü
       ├── commands/                         # gerçek dependency klasörü
-      └── .blueprint/                       # State directory
+      └── .bp/                              # State directory
+          ├── cache/                        # Git tag snapshot cache (.gitignore)
           └── ...
 
     meta_yaml: |
@@ -57,6 +60,7 @@ implementation:
       api_hash: "sha256:abc123..."        # API section hash
       spec_hash: "sha256:def456..."       # Implementation section hash
       impl_hash: "sha256:xyz789..."       # Implementation dosyalarının birleşik hash'i
+      source: "local"                     # local | tag
       rotten: false                       # true = dependent testleri fail etmiş
 
     state_yaml: |
@@ -114,7 +118,21 @@ implementation:
 
 workflow_policy:
   summary: |
-    Symlink tabanlı dependency yönetimi:
+    Scope-based blueprint discovery + symlink tabanlı dependency yönetimi:
+
+    Discovery:
+    - BLUEPRINT.yaml herhangi bir klasöre konulabilir (zorunluluk yok)
+    - Her blueprint kendi scope'unu tanımlar (default: bulunduğu klasör)
+    - bp recursive tarar, tüm BLUEPRINT.yaml dosyalarını bulur
+    - Alt klasörde blueprint varsa üst scope'tan otomatik çıkar (child wins)
+
+    Snapshot kaynakları:
+    - Lokal: bp ss → .bp/history/{id}/ (dosya kopyası)
+    - Git tag: bp/{path}/{slug-hash} formatındaki tag'ler otomatik snapshot
+    - bp ss git tag oluşturmaz
+    - Tag'den dep gerekirse .bp/cache/'e materialize edilir (git archive)
+
+    Dependency:
     - Paket klasörü edit alanıdır (working tree)
     - Working tree'de dependency klasörü varsa symlink oluşturulmaz
     - Snapshot'ta kod + dependency symlink'leri direkt bulunur (impl/, deps/ yok)
@@ -233,9 +251,8 @@ workflow_policy:
       Öncelik: files_changed > blueprint_changed > deps_api_changed > deps_changed
 
     dependency_resolution: |
-      1. Alt dizinleri tara
-      2. BLUEPRINT.yaml varsa → implicit dependency
-      3. Explicit dependencies varsa → parse et ve ekle:
+      1. Scope discovery ile child blueprint'leri bul → implicit dependency
+      2. Explicit dependencies varsa → parse et ve ekle:
 
          Format A - Basit liste:
          dependencies:
@@ -276,10 +293,43 @@ workflow_policy:
       3. state "stale" veya "no_snapshot" olanları filtrele
       4. Kalanları aynı sırayla listede göster
 
+    scope_discovery: |
+      Blueprint scope discovery algoritması:
+      1. Başlangıç klasöründen recursive tara
+      2. Her klasörde BLUEPRINT.yaml ara
+      3. Bulunan her blueprint'in scope'unu oku:
+         - scope alanı varsa → belirtilen path'ler
+         - scope alanı yoksa → bulunduğu klasör (default)
+      4. Child blueprint varsa parent scope'tan o klasörü çıkar
+      5. Tüm blueprint'leri döndür
+
+      Child wins kuralı:
+      - Üst blueprint scope: [./] (tüm klasör)
+      - Alt klasörde commands/BLUEPRINT.yaml var
+      - → commands/ üst scope'tan çıkar, child'a ait olur
+      - Üst blueprint commands/ içindeki dosyaları track etmez
+
+    git_tag_snapshot: |
+      Git tag snapshot entegrasyonu:
+      1. Git repo kontrolü (git rev-parse --git-dir)
+         - Git yoksa → sadece lokal snapshot'lar, hata yok
+      2. Tag pattern: bp/{blueprint-path}/*
+         - Örn: bp/commands/*, bp/yamlparser/*
+      3. Tag listesi: git tag -l "bp/{path}/*" --sort=-creatordate
+      4. Her tag için:
+         - Tag adından snapshot ID çıkar (son segment)
+         - Tag tarihini al (git log -1 --format=%ai <tag>)
+         - HistoryEntry oluştur (source: "tag", tag_name: full tag)
+      5. Lokal snapshot'larla birleştir, tarih sırasına göre sırala
+      6. Dep symlink için tag materialize:
+         - git archive <tag> -- <scope-path>/ | tar -x -C .bp/cache/<id>/
+         - Symlink → .bp/cache/<id>/<path>/
+
     symlink_policy: |
-      Snapshot symlink policy (yeni yapı):
+      Snapshot symlink policy:
       - Symlink'ler sadece snapshot history içinde oluşturulur
-      - {dep_name}/ → {dep_path}/.blueprint/history/{pinned_id}/ (snapshot içinde)
+      - {dep_name}/ → {dep_path}/.bp/history/{pinned_id}/ (lokal snapshot)
+      - Veya → {dep_path}/.bp/cache/{tag_id}/ (git tag snapshot)
       - Working tree'de dependency klasörü varsa symlink oluşturulmaz
       - bp upgrade pinleri günceller, symlink'ler bir sonraki ss/impl snapshot'ında oluşur
       - Collision durumunda hata verilir (aynı isimde kod klasörü/dosyası varsa)
@@ -500,16 +550,17 @@ workflow_policy:
         - *.BP.yaml, .*.BP.yaml
 
         Küçük harfli alternatifler de desteklenir:
-        - blueprint.yaml, .blueprint.yaml
-        - blueprint.*.yaml, .blueprint.*.yaml
+        - blueprint.yaml, .bp.yaml
+        - blueprint.*.yaml, .bp.*.yaml
         - *.bp.yaml, .*.bp.yaml
 
         Bir klasörde tek ana blueprint olmalı. Birden fazla varsa warning.
 
     - q: state_dir/ ne işe yarar?
       a: |
-        Internal state. Son snapshot, file hash'leri.
-        _meta.state_dir ile ayarlanır (default .blueprint). Kullanıcı dokunmaz.
+        Internal state. Son snapshot, file hash'leri, git tag cache.
+        _meta.state_dir ile ayarlanır (default .bp). Kullanıcı dokunmaz.
+        .bp/cache/ git tag'lerden materialize edilmiş dosyalar içindir (.gitignore).
 
     - q: Dependency nasıl belirlenir?
       a: |
@@ -570,7 +621,10 @@ workflow_policy:
         has_blueprint belirtilmezse: klasörde BLUEPRINT.yaml varsa true, yoksa false
 
     - q: Git gerekli mi?
-      a: Hayır. Tamamen dosya sistemi bazlı. Hash'ler ile tracking.
+      a: |
+        Hayır, zorunlu değil. Lokal snapshot'lar dosya sistemi bazlı çalışır.
+        Git varsa: tag'ler otomatik snapshot olarak tanınır (opsiyonel bonus).
+        Git yoksa: sadece lokal .bp/history/ snapshot'ları kullanılır.
 
     - q: External dependency var mı?
       a: |

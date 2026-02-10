@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bp-agent"
+version = "0.2.0"
+description = "Minimal task execution agent framework"
+readme = "README.md"
+license = "GPL-3.0-only"
+requires-python = ">=3.10"
+authors = [
+    {name = "tunapro1234"}
+]
+keywords = ["agent", "llm", "automation", "task"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+bp-agent = "bp_agent.runner.tui:main"
+bp-chat = "bp_agent.runner.chat:main"
+
+[project.urls]
+Homepage = "https://github.com/tunapro1234/base-agent"
+Repository = "https://github.com/tunapro1234/base-agent"
+
+[tool.setuptools.packages.find]
+where = ["src"]

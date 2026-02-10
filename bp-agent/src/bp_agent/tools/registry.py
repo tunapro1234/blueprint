@@ -58,7 +58,10 @@ class ToolRegistry:
         try:
             output = tool.handler(**args)
             return ToolResult(success=True, output=output, error=None)
-        except Exception as exc:  # pragma: no cover - generic safeguard
+        except Exception as exc:
+            # Re-raise signal exceptions (like GiveResultSignal)
+            if exc.__class__.__name__ == "GiveResultSignal":
+                raise
             return ToolResult(success=False, output=None, error=str(exc))
 
     def get_schemas(self) -> list[ToolSchema]:

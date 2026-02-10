@@ -1,0 +1,52 @@
+structure:
+  - tui.py: |
+      TaskTUI class - interactive terminal UI
+      Sadece gorunum katmani, is mantigi Agent'ta
+
+      Layout (top to bottom):
+        1. Header
+        2. Output area (live execution feedback)
+        3. Task list (oldest top, newest bottom)
+        4. Status line
+        5. Input prompt
+
+      Agent hook'lari ile canli geri bildirim:
+        - agent.llm.complete → LLM responses (💭)
+        - agent.tools.execute → tool calls (→) ve results (✓/✗)
+
+  - __init__.py: |
+      Export: TaskTUI
+
+implementation:
+  tui.py:
+    TaskTUI:
+      constructor:
+        - agent parametresi al (Agent instance)
+        - Agent'in queue'sunu kullan (agent.list_tasks, agent.add_task, etc.)
+
+      _handle_command:
+        - "new X" veya direkt text → agent.add_task(X)
+        - "run" → _run_next_task() → agent.run_next()
+        - "runall" → agent.run_all()
+        - "show" → agent.list_tasks ile task bul, detay goster
+        - "list" → agent.list_tasks()
+        - "clear" → agent.clear_tasks()
+
+      _run_next_task:
+        - Hook agent.llm.complete ve agent.tools.execute
+        - agent.run_next() cagir
+        - Canli output goster
+        - Hook'lari geri al
+
+      _render:
+        - Helper: _pad_line(), _separator()
+        - Task list: agent.list_tasks() ile al, created_at ascending sirala
+        - Output area: self.running_output (hook'lardan dolar)
+
+  NOT: |
+    queue.py ve runner.py KALDIRILACAK
+    TaskQueue artik Agent icinde (veya task/ altinda Agent'in kullanimina)
+
+tests:
+  verification:
+    - python -c "from runner import TaskTUI"

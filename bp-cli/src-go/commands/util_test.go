@@ -69,7 +69,7 @@ func TestFindBlueprintsRecursive(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "one", "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
 	writeFile(t, filepath.Join(root, "two", "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
-	writeFile(t, filepath.Join(root, ".blueprint", "skip", "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
+	writeFile(t, filepath.Join(root, ".bp", "skip", "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
 	files, err := findBlueprintsRecursive(root)
 	if err != nil {
 		t.Fatalf("findBlueprintsRecursive: %v", err)
@@ -84,7 +84,7 @@ func TestFindBlueprintsRecursive(t *testing.T) {
 }
 
 func TestReadCurrentSnapshotID(t *testing.T) {
-	stateDir := filepath.Join(t.TempDir(), ".blueprint")
+	stateDir := filepath.Join(t.TempDir(), ".bp")
 	if _, err := readCurrentSnapshotID(stateDir); !errors.Is(err, bp.ErrNoSnapshot) {
 		t.Fatalf("expected ErrNoSnapshot, got %v", err)
 	}

@@ -17,7 +17,7 @@ workflow_policy:
     - Import/build için pinned snapshot kopyaları tercih edilir
       (örn. {state_dir}/history/{snapshot_id}/impl)
     - Snapshot'lar publish edilen stable sürümü temsil eder
-    Not: {state_dir} = _meta.state_dir (default .blueprint)
+    Not: {state_dir} = _meta.state_dir (default .bp)
 
 # =============================================================================
 # IMPLEMENTATION

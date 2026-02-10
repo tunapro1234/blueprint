@@ -71,11 +71,11 @@ func TestRelPathAndBlueprintState(t *testing.T) {
 	if rel != "a/b" {
 		t.Fatalf("unexpected relPath: %q", rel)
 	}
-	if !isUnderBlueprintState(".blueprint", ".blueprint") || !isUnderBlueprintState(".blueprint/state.yaml", ".blueprint") {
+	if !isUnderBlueprintState(".bp", ".bp") || !isUnderBlueprintState(".bp/state.yaml", ".bp") {
 		t.Fatalf("expected blueprint state detection")
 	}
-	if isUnderBlueprintState(".blueprintfake", ".blueprint") {
-		t.Fatalf("did not expect blueprint state detection for .blueprintfake")
+	if isUnderBlueprintState(".bpfake", ".bp") {
+		t.Fatalf("did not expect blueprint state detection for .bpfake")
 	}
 	if !isUnderBlueprintState("blueprint", "blueprint") || !isUnderBlueprintState("blueprint/history/meta.yaml", "blueprint") {
 		t.Fatalf("expected custom state dir detection")

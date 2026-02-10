@@ -95,7 +95,7 @@ func isUnderBlueprintState(rel, stateDirRel string) bool {
 	}
 	rel = filepath.ToSlash(rel)
 	if stateDirRel == "" {
-		stateDirRel = ".blueprint"
+		stateDirRel = ".bp"
 	}
 	if stateDirRel != "" {
 		stateDirRel = filepath.ToSlash(stateDirRel)
@@ -103,8 +103,8 @@ func isUnderBlueprintState(rel, stateDirRel string) bool {
 			return true
 		}
 	}
-	if stateDirRel != ".blueprint" {
-		if rel == ".blueprint" || strings.HasPrefix(rel, ".blueprint/") {
+	if stateDirRel != ".bp" {
+		if rel == ".bp" || strings.HasPrefix(rel, ".bp/") {
 			return true
 		}
 	}
@@ -130,12 +130,12 @@ func validateStateDirRel(rel string) error {
 
 func isStateDirName(name, stateDirRel string) bool {
 	if stateDirRel == "" {
-		stateDirRel = ".blueprint"
+		stateDirRel = ".bp"
 	}
 	if name == stateDirRel {
 		return true
 	}
-	if stateDirRel != ".blueprint" && name == ".blueprint" {
+	if stateDirRel != ".bp" && name == ".bp" {
 		return true
 	}
 	return false
@@ -155,15 +155,15 @@ func isUnderDepsDir(rel string) bool {
 
 func isDependencySnapshotPath(path string) bool {
 	normalized := filepath.ToSlash(path)
-	return strings.Contains(normalized, "/.blueprint/history/") || strings.HasPrefix(normalized, ".blueprint/history/")
+	return strings.Contains(normalized, "/.bp/history/") || strings.HasPrefix(normalized, ".bp/history/")
 }
 
 // StateDirRelFromFile reads _meta.state_dir from a blueprint file.
-// It returns ".blueprint" on any error or invalid value.
+// It returns ".bp" on any error or invalid value.
 func StateDirRelFromFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ".blueprint"
+		return ".bp"
 	}
 	parsed, err := ParseYAML(data)
 	if err == nil {
@@ -179,7 +179,7 @@ func StateDirRelFromFile(path string) string {
 	if fallback := scanStateDirRel(data); fallback != "" {
 		return fallback
 	}
-	return ".blueprint"
+	return ".bp"
 }
 
 func scanStateDirRel(data []byte) string {

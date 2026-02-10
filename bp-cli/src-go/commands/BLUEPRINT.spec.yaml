@@ -10,12 +10,26 @@ _meta:
 
 workflow_policy:
   summary: |
-    Symlink tabanlı dependency yönetimi:
+    Scope-based blueprint discovery + symlink tabanlı dependency yönetimi:
+
+    Discovery:
+    - BLUEPRINT.yaml herhangi bir klasöre konulabilir (zorunluluk yok)
+    - Her blueprint kendi scope'unu tanımlar (default: bulunduğu klasör)
+    - bp recursive tarar, tüm BLUEPRINT.yaml dosyalarını bulur
+    - Alt klasörde blueprint varsa üst scope'tan otomatik çıkar (child wins)
+
+    Snapshot kaynakları:
+    - Lokal: bp ss → .bp/history/{id}/ (dosya kopyası)
+    - Git tag: bp/{path}/{slug-hash} formatındaki tag'ler otomatik snapshot
+    - bp ss git tag oluşturmaz
+    - Tag'den dep gerekirse .bp/cache/'e materialize edilir
+
+    Dependency:
     - Paket klasörü edit alanıdır (working tree)
-    - Working tree'de dependency klasörü varsa symlink oluşturulmaz (gerçek klasör kullanılır)
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz
     - Snapshot history içinde dependency symlink'leri oluşturulur
     - Import/build snapshot'ta symlink üzerinden yapılır (deps/ yok)
-    Not: {state_dir} = _meta.state_dir (default .blueprint)
+    Not: {state_dir} = _meta.state_dir (default .bp)
 
 # =============================================================================
 # IMPLEMENTATION
@@ -230,8 +244,8 @@ implementation:
       algorithm: Kahn's algorithm (topological sort)
       dependency_sources: |
         Edge'ler iki kaynaktan gelir:
-        1. Implicit: Alt klasörlerde BLUEPRINT.yaml varsa → dependency
-           (implementation.structure'da has_blueprint: false olanlar hariç)
+        1. Discovery: Recursive tarama ile bulunan child blueprint'ler → implicit dependency
+           (scope içinde BLUEPRINT.yaml bulunan alt klasörler)
         2. Explicit: BLUEPRINT.yaml'daki dependencies bölümü
            Format A - Basit liste: dependencies: [../other, ../utils]
            Format B - Detaylı map:
@@ -264,7 +278,13 @@ implementation:
       default_count: 10
       empty_output: "No snapshot history"
       sort_order: Yeniden eskiye (son snapshot en üstte)
-      format: "{snapshot_id}   \"{message}\""
+      format: "{snapshot_id}   \"{message}\"   [{source}]"
+      sources: |
+        Lokal + git tag birleşik liste:
+        - Lokal: .bp/history/ altındaki snapshot'lar (source: local)
+        - Git tag: bp/{blueprint-path}/* pattern'ındaki tag'ler (source: tag)
+        - İkisi tarih sırasına göre birleştirilir
+        - Git tag snapshot'ları [tag] ile işaretlenir
       meta_yaml_schema: |
         # {state_dir}/history/{id}/meta.yaml formatı:
         id: "add-feat-a1b2"                # Snapshot ID (slug-hash4 veya ss-hash8)
@@ -274,6 +294,7 @@ implementation:
         api_hash: "sha256:abc..."            # API section hash
         spec_hash: "sha256:def..."           # Implementation section hash
         impl_hash: "sha256:xyz..."           # Implementation hash
+        source: "local"                      # local | tag
 
         Timestamp kuralları:
         - Format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)
@@ -364,11 +385,11 @@ implementation:
         2: src-{lang}/ klasörünü bul (yoksa hata)
         3: Tek dil mi kontrol et (son dil silinmez)
         4: Dil kökü için son snapshot al (bp ss)
-        5: .blueprint/archive/src-{lang}/ oluştur
+        5: .bp/archive/src-{lang}/ oluştur
         6: |
            Dil kökünü archive'a taşı:
            - Tüm dosyaları taşı (kod, blueprint'ler)
-           - .blueprint/history/ dahil (snapshotlar korunur)
+           - .bp/history/ dahil (snapshotlar korunur)
         7: |
            Archive içine meta.yaml yaz:
            archived_at: timestamp
@@ -377,13 +398,13 @@ implementation:
         8: Orijinal src-{lang}/ klasörünü sil
         9: Root'ta languages listesi varsa güncelle
       archive_structure: |
-        .blueprint/archive/
+        .bp/archive/
         └── src-{lang}/
             ├── meta.yaml           # Archive metadata
             ├── BLUEPRINT.yaml      # Blueprint dosyaları
             ├── BLUEPRINT.spec.yaml
             ├── ...                 # Kod dosyaları
-            └── .blueprint/         # State ve history
+            └── .bp/         # State ve history
                 ├── state.yaml
                 └── history/
                     └── ...
@@ -395,12 +416,12 @@ implementation:
       purpose: Archive'dan dil kökünü geri getir
       steps:
         1: Root blueprint'i bul
-        2: .blueprint/archive/src-{lang}/ kontrol et (yoksa hata)
+        2: .bp/archive/src-{lang}/ kontrol et (yoksa hata)
         3: src-{lang}/ zaten var mı kontrol et (varsa hata)
         4: |
            Archive'dan geri taşı:
            - Tüm dosyaları geri getir
-           - .blueprint/history/ dahil
+           - .bp/history/ dahil
         5: Archive'daki son snapshot'ı current yap
         6: Archive'dan src-{lang}/ klasörünü sil
         7: Root'ta languages listesi varsa güncelle
@@ -418,10 +439,10 @@ implementation:
            - Boyut bilgisini göster
         3: |
            Archive temizleme (--snapshots-only yoksa):
-           - .blueprint/archive/ tamamen silinir
+           - .bp/archive/ tamamen silinir
         4: |
            Snapshot temizleme (--archive-only yoksa):
-           - Her paket için .blueprint/history/ tara
+           - Her paket için .bp/history/ tara
            - current olmayan snapshotları sil
            - NOT: Gelecekte dependent tracking eklenecek
         5: Özet yazdır (freed space)
@@ -471,6 +492,67 @@ tests:
       given: Herhangi bir komut
       when: Çağrılır
       then: CommandResult döner (exit_code, output, data, errors)
+
+    # =========================================================================
+    # SCOPE / DISCOVERY
+    # =========================================================================
+    - id: discovery_finds_all_blueprints
+      given: |
+        repo/
+        ├── BLUEPRINT.yaml
+        ├── commands/BLUEPRINT.yaml
+        └── parser/BLUEPRINT.yaml
+      when: bp validate (root'tan)
+      then: 3 blueprint bulunur ve validate edilir
+
+    - id: scope_default_own_dir
+      given: commands/BLUEPRINT.yaml (scope tanımsız)
+      then: scope = ["./"] (kendi klasörü)
+
+    - id: scope_explicit
+      given: |
+        BLUEPRINT.yaml:
+          scope: [./src/, ./config/]
+      then: scope = ["./src/", "./config/"]
+
+    - id: scope_child_wins
+      given: |
+        BLUEPRINT.yaml scope: [./]
+        commands/BLUEPRINT.yaml var
+      then: commands/ üst blueprint'in scope'undan çıkar, child'a ait
+
+    - id: discovery_recursive
+      given: |
+        a/BLUEPRINT.yaml
+        a/b/BLUEPRINT.yaml
+        a/b/c/BLUEPRINT.yaml
+      when: bp validate a/
+      then: 3 blueprint bulunur, depth-first sırada
+
+    # =========================================================================
+    # GIT TAG SNAPSHOTS
+    # =========================================================================
+    - id: git_tag_recognized_as_snapshot
+      given: "git tag bp/commands/v1-a3f2" var
+      when: bp log commands/
+      then: v1-a3f2 snapshot listede [tag] olarak görünür
+
+    - id: git_tag_materialize_for_dep
+      given: Dependency tag snapshot'a pin'lenmiş
+      when: bp impl (dependency symlink gerekli)
+      then: |
+        git archive ile tag'den dosyalar .bp/cache/'e çekilir
+        Symlink .bp/cache/ içindeki dosyalara işaret eder
+
+    - id: git_tag_and_local_merged
+      given: 2 lokal snapshot + 1 git tag snapshot
+      when: bp log
+      then: 3 snapshot tarih sırasıyla listelenir (source bilgisi ile)
+
+    - id: git_tag_no_git_repo
+      given: Git repo değil (git yok)
+      when: bp log
+      then: Sadece lokal snapshot'lar gösterilir (hata yok)
 
     # =========================================================================
     # VALIDATE
@@ -652,12 +734,13 @@ tests:
       then: Son 2 snapshot gösterilir
 
     - id: log_format
-      given: Snapshot'lar var
+      given: Snapshot'lar var (lokal + git tag)
       when: bp log
       then: |
         Format:
         message-here-a1b2    "Message here"
         another-msg-9f8e     "Another message"
+        v1-release-c3d4      "v1 release"       [tag]
 
     # =========================================================================
     # DIFF
@@ -964,26 +1047,26 @@ tests:
     # REMOVE-LANG
     # =========================================================================
     - id: remove_lang_success
-      given: src-py var, src-go da var (birden fazla dil)
-      when: bp remove-lang py
+      given: src-js var, src-go da var (birden fazla dil)
+      when: bp remove-lang js
       then: |
         - Son snapshot alınır
-        - .blueprint/archive/src-py/ oluşur
-        - src-py/ silinir
+        - .bp/archive/src-js/ oluşur
+        - src-js/ silinir
         - exit 0
 
     - id: remove_lang_creates_meta
-      given: bp remove-lang py başarılı
+      given: bp remove-lang js başarılı
       then: |
-        .blueprint/archive/src-py/meta.yaml içeriği:
+        .bp/archive/src-js/meta.yaml içeriği:
         archived_at: "2026-01-27T..."
         last_snapshot: "final-a1b2"
-        reason: "bp remove-lang py"
+        reason: "bp remove-lang js"
 
     - id: remove_lang_preserves_history
-      given: src-py/.blueprint/history/ içinde 5 snapshot var
-      when: bp remove-lang py
-      then: .blueprint/archive/src-py/.blueprint/history/ içinde 5 snapshot korunur
+      given: src-js/.bp/history/ içinde 5 snapshot var
+      when: bp remove-lang js
+      then: .bp/archive/src-js/.bp/history/ içinde 5 snapshot korunur
 
     - id: remove_lang_not_found
       given: src-xyz yok
@@ -996,41 +1079,41 @@ tests:
       then: '"Cannot remove last language", exit 1'
 
     - id: remove_lang_updates_languages_list
-      given: Root'ta languages: [go, py] var
-      when: bp remove-lang py
+      given: Root'ta languages: [go, js] var
+      when: bp remove-lang js
       then: Root'ta languages: [go] olur
 
     # =========================================================================
     # RESTORE-LANG
     # =========================================================================
     - id: restore_lang_success
-      given: .blueprint/archive/src-py/ var
-      when: bp restore-lang py
+      given: .bp/archive/src-js/ var
+      when: bp restore-lang js
       then: |
-        - src-py/ geri gelir
+        - src-js/ geri gelir
         - Archive'daki snapshot current olur
-        - .blueprint/archive/src-py/ silinir
+        - .bp/archive/src-js/ silinir
         - exit 0
 
     - id: restore_lang_not_found
-      given: .blueprint/archive/src-xyz/ yok
+      given: .bp/archive/src-xyz/ yok
       when: bp restore-lang xyz
       then: '"No archived language found: xyz", exit 1'
 
     - id: restore_lang_already_exists
-      given: src-py/ zaten var, .blueprint/archive/src-py/ da var
-      when: bp restore-lang py
-      then: '"Language root already exists: src-py/", exit 1'
+      given: src-js/ zaten var, .bp/archive/src-js/ da var
+      when: bp restore-lang js
+      then: '"Language root already exists: src-js/", exit 1'
 
     - id: restore_lang_restores_history
       given: Archive'da 5 snapshot var
-      when: bp restore-lang py
-      then: src-py/.blueprint/history/ içinde 5 snapshot geri gelir
+      when: bp restore-lang js
+      then: src-js/.bp/history/ içinde 5 snapshot geri gelir
 
     - id: restore_lang_updates_languages_list
-      given: Root'ta languages: [go] var, py restore ediliyor
-      when: bp restore-lang py
-      then: Root'ta languages: [go, py] olur
+      given: Root'ta languages: [go] var, js restore ediliyor
+      when: bp restore-lang js
+      then: Root'ta languages: [go, js] olur
 
     # =========================================================================
     # PURGE
@@ -1049,8 +1132,8 @@ tests:
       when: bp purge --pretend
       then: |
         Archive:
-          src-py/     312 MB   (archived: 2026-01-27)
-          src-rs/     287 MB   (archived: 2026-01-25)
+          src-js/     312 MB   (archived: 2026-01-27)
+          src-ts/     287 MB   (archived: 2026-01-25)
 
         Unused snapshots:
           src-go/     156 MB   (8 snapshots, keeping 1 current)

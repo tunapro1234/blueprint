@@ -33,7 +33,7 @@ func (t *BlueprintTree) Walk() ([]*Blueprint, error) {
 				if isStateDirName(d.Name(), stateDirRel) {
 					return filepath.SkipDir
 				}
-			} else if d.Name() == ".blueprint" {
+			} else if d.Name() == ".bp" {
 				return filepath.SkipDir
 			} else if isDepsDirName(d.Name()) {
 				return filepath.SkipDir

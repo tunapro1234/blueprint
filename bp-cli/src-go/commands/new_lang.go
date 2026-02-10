@@ -481,7 +481,7 @@ func collectBlueprints(root string, patterns []string) (map[string][]string, err
 			if isStateDirName(d.Name(), stateDirRel) {
 				return filepath.SkipDir
 			}
-		} else if d.Name() == ".blueprint" {
+		} else if d.Name() == ".bp" {
 			return filepath.SkipDir
 		} else if d.Name() == "deps" {
 			return filepath.SkipDir
@@ -582,7 +582,7 @@ func copySharedDirs(sourceRoot, targetRoot string, packages map[string][]string)
 			continue
 		}
 		name := entry.Name()
-		if name == ".blueprint" || name == "deps" {
+		if name == ".bp" || name == "deps" {
 			continue
 		}
 		if _, ok := packageTop[name]; ok {

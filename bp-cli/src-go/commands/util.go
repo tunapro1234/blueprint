@@ -112,7 +112,7 @@ func findBlueprintsRecursive(root string) ([]string, error) {
 				if isStateDirName(d.Name(), stateDirRel) {
 					return filepath.SkipDir
 				}
-			} else if d.Name() == ".blueprint" {
+			} else if d.Name() == ".bp" {
 				return filepath.SkipDir
 			} else if d.Name() == "deps" {
 				return filepath.SkipDir
@@ -137,12 +137,12 @@ func findBlueprintsRecursive(root string) ([]string, error) {
 
 func isStateDirName(name, stateDirRel string) bool {
 	if stateDirRel == "" {
-		stateDirRel = ".blueprint"
+		stateDirRel = ".bp"
 	}
 	if name == stateDirRel {
 		return true
 	}
-	if stateDirRel != ".blueprint" && name == ".blueprint" {
+	if stateDirRel != ".bp" && name == ".bp" {
 		return true
 	}
 	return false

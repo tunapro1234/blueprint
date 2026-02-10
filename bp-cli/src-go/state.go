@@ -454,7 +454,7 @@ func (b *Blueprint) collectTrackedFiles() (map[string]string, error) {
 	}
 	stateDirRel := b.StateDirRel
 	if stateDirRel == "" {
-		stateDirRel = ".blueprint"
+		stateDirRel = ".bp"
 	}
 	files := map[string]string{}
 	visited := map[string]struct{}{}

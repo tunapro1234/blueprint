@@ -123,7 +123,7 @@ func TestCollectTrackedFilesFallback(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "main.go"), "package main")
 	writeFile(t, filepath.Join(dir, "main_test.go"), "package main")
 	writeFile(t, filepath.Join(dir, "notes.txt"), "notes")
-	writeFile(t, filepath.Join(dir, ".blueprint", "state.yaml"), "")
+	writeFile(t, filepath.Join(dir, ".bp", "state.yaml"), "")
 	writeFile(t, filepath.Join(dir, "node_modules", "skip.js"), "")
 	writeFile(t, filepath.Join(dir, "sub", "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
 	writeFile(t, filepath.Join(dir, "sub", "file.go"), "package sub")

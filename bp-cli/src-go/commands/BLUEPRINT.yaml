@@ -1,11 +1,11 @@
 # bp/commands - CLI Komutları
 
 _meta:
-  version: "0.3.0"
-  updated: 2026-01-19
+  version: "0.4.0"
+  updated: 2026-02-08
   status: ready
-  # state_dir: ".blueprint"  # default
-  # mode: ro                  # default
+  # state_dir: ".bp"  # default
+  # mode: ro           # default
 
 intent: bp CLI'ın her komutunu ayrı modül olarak implement eder
 
@@ -62,6 +62,9 @@ api:
           "cancel": cancel_command,
           "ss": ss_command,
           "new-lang": new_lang_command,
+          "remove-lang": remove_lang_command,
+          "restore-lang": restore_lang_command,
+          "purge": purge_command,
           "deps": deps_command,
           "map": map_command,
           "init": init_command,
@@ -95,6 +98,9 @@ api:
         - cancel: {}
         - ss: {message: string?, skip_tests: bool}
         - new-lang: {lang: string, from: string?, root: string?, target: string?}
+        - remove-lang: {lang: string}
+        - restore-lang: {lang: string}
+        - purge: {archive_only: bool, snapshots_only: bool, pretend: bool}
         - deps: {upgrades: bool}        # --upgrades flag
         - init: {}                      # Ek args yok, path ctx.path'te
         - log: {count: int}             # default: 10

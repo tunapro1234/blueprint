@@ -1,6 +1,6 @@
 _meta:
-  version: "0.2.0"
-  updated: 2026-01-18
+  version: "0.3.0"
+  updated: 2026-02-11
   status: mvp
 
 intent: |
@@ -10,11 +10,10 @@ intent: |
 
 overview: |
   Paketler:
-    llm/         - LLM client katmani (Gemini, Codex, Opus)
+    llm/         - LLM client katmani (Gemini, Codex, Opus) + streaming
     tools/       - Tool registry ve built-in tools
     task/        - Task queue (persistent JSON)
-    api/         - HTTP API server
-    runner/      - Terminal UI (sadece arayuz)
+    runner/      - Chat REPL, task runner CLI
 
   LLM Providers:
     - Gemini 3: REST API (v1beta) key rotation destekli

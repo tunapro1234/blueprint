@@ -1,7 +1,7 @@
 # Agent Implementation Spec
 
 _meta:
-  version: "0.1.0"
+  version: "0.3.0"
   type: spec
 
 implementation:
@@ -14,21 +14,16 @@ implementation:
         has_blueprint: true
     - task/:
         has_blueprint: true
-    - api/:
-        has_blueprint: true
-    - debug_cli/:
+    - runner/:
         has_blueprint: true
   agent:
     pseudocode: |
       class Agent:
         def __init__(self, name: str, config: AgentConfig = None, system_prompt: str = None):
-          # Dependencies resolved from working tree; snapshot entrypoints add snapshot root if needed
-
           self.name = name
           self.config = config or AgentConfig()
-          self.system_prompt = system_prompt or "You are a helpful assistant."
+          self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
 
-          # Dependencies
           self.llm = build_llm_router(self.config)
           self.tools = ToolRegistry()
           self.tasks = TaskStore() if self.config.enable_task_store else None
@@ -37,50 +32,30 @@ implementation:
           self.tools.register(name, handler, schema)
 
         def execute(self, instruction: str) -> AgentResult:
-          # 1. Create task
           task = self.tasks.create(instruction) if self.tasks else None
-
-          # 2. Build initial messages
           messages = [
             Message(role="system", content=self.system_prompt),
             Message(role="user", content=instruction)
           ]
-
-          # 3. Get tool schemas for LLM
           tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
 
-          # 4. Execution loop
           for i in range(self.config.max_iterations):
-            # Call LLM (provider router)
-            request = CompletionRequest(
-              messages=messages,
-              tools=tool_schemas,
-              temperature=self.config.temperature,
-              model=self.config.model,
-              provider=self.config.provider
-            )
-            response = self.llm.complete(request)
+            response = self.llm.complete(CompletionRequest(...))
 
-            # No tool calls = done
             if not response.tool_calls:
-              if self.tasks:
-                self.tasks.update(task.id, status="completed", output=response.content)
-              return AgentResult(success=True, output=response.content, task_id=task.id if task else None)
+              return AgentResult(success=True, output=response.content)
 
-            # Execute tool calls
-            messages.append(Message(role="assistant", content=response.content))
-
+            # Execute tool calls, handle GiveResultSignal
             for tool_call in response.tool_calls:
               result = self.tools.execute(tool_call.name, tool_call.args)
-              messages.append(Message(
-                role="user",
-                content=f"Tool {tool_call.name} result: {result.output}"
-              ))
 
-          # Max iterations reached
-          if self.tasks:
-            self.tasks.update(task.id, status="failed", error="Max iterations reached")
-          return AgentResult(success=False, output="", task_id=task.id if task else None)
+          return AgentResult(success=False, output="")
+
+        def chat(self, message: str) -> str:
+          # Multi-turn chat with tool support
+
+        def chat_stream(self, message: str) -> Iterator[str]:
+          # Streaming chat - yields text deltas, handles tool calls internally
 
   config:
     pseudocode: |
@@ -92,6 +67,8 @@ implementation:
         max_iterations: int = 10
         temperature: float = 0.3
         enable_task_store: bool = True
+        enable_builtin_tools: bool = True
+        enable_subagents: bool = False
         codex_auth_file: str | None = None
 
   result:
@@ -106,57 +83,21 @@ implementation:
     load_gemini_keys:
       pseudocode: |
         def load_gemini_keys() -> list[str]:
-          """Load Gemini API keys from environment"""
-          keys = []
-
-          # Comma-separated
-          if raw := os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS"):
-            for item in raw.split(","):
-              if item.strip():
-                keys.append(item.strip())
-
-          # Additional keys (GEMINI_API_KEY_2, _3, etc.)
-          for i in range(2, 10):
-            if key := os.getenv(f"GEMINI_API_KEY_{i}"):
-              keys.append(key)
-
-          if not keys:
-            raise ValueError("No API keys found")
-
-          return keys
+          # GEMINI_API_KEY, GEMINI_API_KEYS (comma-separated)
+          # GEMINI_API_KEY_2..9
 
     build_llm_router:
       pseudocode: |
         def build_llm_router(config: AgentConfig) -> LLMRouter:
-          keys = load_gemini_keys()
-          router = LLMRouter(default_provider=config.provider)
-          router.register_provider(
-            "gemini",
-            GeminiAdapter(GeminiConfig(api_keys=keys, model=config.model, temperature=config.temperature))
-          )
-          # Optional providers (register if credentials exist)
-          # Codex: api_keys or auth file (default ~/.codex/auth.json)
-          # Opus: api_keys + OPUS_BASE_URL
-          return router
+          # Register providers based on available credentials:
+          # - Gemini: GEMINI_API_KEY (required if provider=gemini)
+          # - Codex: CODEX_API_KEY or auth file
+          # - Opus: OPUS_API_KEY + OPUS_BASE_URL
 
 tests:
   unit:
     - name: agent_creation
-      test: |
-        agent = Agent("test-agent")
-        assert agent.name == "test-agent"
-        assert agent.config.model == "gemini-3-flash-preview"
-
     - name: execute_simple
-      test: |
-        agent = Agent("test", system_prompt="Say hello")
-        result = agent.execute("Hi")
-        assert result.success == True
-        assert result.output != ""
-
     - name: execute_with_tools
-      test: |
-        agent = Agent("test")
-        agent.add_tool("add", lambda a, b: a + b, ToolSchema(...))
-        result = agent.execute("What is 2 + 3?")
-        assert "5" in result.output
+    - name: chat_stream_text_only
+    - name: chat_stream_with_tools

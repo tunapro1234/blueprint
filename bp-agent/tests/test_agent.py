@@ -1,9 +1,9 @@
 import types
 
-import agent
-from agent import Agent, AgentConfig, AgentResult
-from llm import LLMResponse, ToolCall
-from tools import ToolSchema
+import bp_agent.agent as agent
+from bp_agent.agent import Agent, AgentConfig, AgentResult
+from bp_agent.llm import LLMResponse, ToolCall
+from bp_agent.tools import ToolSchema
 
 
 class DummyRouter:

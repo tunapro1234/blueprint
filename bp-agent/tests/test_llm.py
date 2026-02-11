@@ -1,6 +1,9 @@
-from llm import LLMRouter, CompletionRequest, Message
-from llm.rotation import RotationManager, RotationPolicy, RotationSlot
-from llm.gemini_adapter import GeminiAdapter, GeminiConfig
+import json
+
+from bp_agent.llm import LLMRouter, CompletionRequest, Message
+from bp_agent.llm.rotation import RotationManager, RotationPolicy, RotationSlot
+from bp_agent.llm.gemini_adapter import GeminiAdapter, GeminiConfig
+from bp_agent.llm.opus_adapter import OpusAdapter, OpusConfig
 
 
 def test_router_requires_provider():
@@ -40,3 +43,106 @@ def test_gemini_adapter_response_parsing():
     request = CompletionRequest(messages=[Message(role="user", content="Hi")])
     response = adapter.complete(request)
     assert response.content == "Hello!"
+
+
+# --- Opus adapter tests ---
+
+def _make_opus_adapter():
+    return OpusAdapter(OpusConfig(api_keys=["k1"], base_url="http://localhost", endpoint="/responses"))
+
+
+def test_opus_text_only_response():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {"output_text": "Hello from Opus!"}
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    response = adapter.complete(request)
+    assert response.content == "Hello from Opus!"
+    assert response.tool_calls is None
+
+
+def test_opus_tool_call_response():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {"type": "function_call", "name": "bash", "arguments": {"command": "ls"}}
+                    ]
+                }
+            ]
+        }
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="list files")])
+    response = adapter.complete(request)
+    assert response.tool_calls is not None
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].name == "bash"
+    assert response.tool_calls[0].args == {"command": "ls"}
+
+
+def test_opus_mixed_text_and_tool_call():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {"type": "text", "text": "Let me check."},
+                        {"type": "function_call", "name": "read_file", "arguments": {"path": "a.txt"}},
+                    ]
+                }
+            ]
+        }
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="read a.txt")])
+    response = adapter.complete(request)
+    assert response.content == "Let me check."
+    assert response.tool_calls is not None
+    assert response.tool_calls[0].name == "read_file"
+
+
+def test_opus_arguments_as_json_string():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {
+            "output": [
+                {
+                    "content": [
+                        {"type": "function_call", "name": "bash", "arguments": json.dumps({"command": "pwd"})}
+                    ]
+                }
+            ]
+        }
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="pwd")])
+    response = adapter.complete(request)
+    assert response.tool_calls is not None
+    assert response.tool_calls[0].args == {"command": "pwd"}
+
+
+def test_opus_fallback_text_field():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {"text": "fallback text"}
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    response = adapter.complete(request)
+    assert response.content == "fallback text"

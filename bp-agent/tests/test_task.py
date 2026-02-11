@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from task import TaskStore, TaskStatus
+from bp_agent.task import TaskStore, TaskStatus
 
 
 def test_create_task():

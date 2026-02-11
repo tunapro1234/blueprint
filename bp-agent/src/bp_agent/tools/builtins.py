@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .registry import ToolRegistry, ToolSchema, build_schema
+from .registry import ToolRegistry, ToolSchema, build_schema, GiveResultSignal
 
 
 def _bash_handler(command: str, timeout: int = 30, cwd: Optional[str] = None) -> str:
@@ -110,13 +110,6 @@ GIVE_RESULT_SCHEMA = build_schema(
     "REQUIRED: Call this tool to deliver your final answer to the user. The task is NOT complete until you call this tool.",
     result={"type": "string", "description": "The final result/answer to show the user", "required": True},
 )
-
-
-class GiveResultSignal(Exception):
-    """Signal that give_result was called."""
-    def __init__(self, result: str):
-        self.result = result
-        super().__init__(result)
 
 
 def _give_result_handler(result: str) -> str:

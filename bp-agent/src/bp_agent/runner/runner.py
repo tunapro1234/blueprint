@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Optional
 from .queue import TaskQueue
 
 if TYPE_CHECKING:
-    from agent import Agent
+    from bp_agent.agent import Agent
 
 
 class TaskRunner:

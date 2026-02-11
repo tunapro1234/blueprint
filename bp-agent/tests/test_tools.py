@@ -1,4 +1,4 @@
-from tools import ToolRegistry, ToolSchema
+from bp_agent.tools import ToolRegistry, ToolSchema
 
 
 def test_register_and_execute():

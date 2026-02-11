@@ -6,7 +6,7 @@ import os
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Callable, Any
+from typing import Iterator, Optional, Callable, Any
 
 
 def _detect_state_dir(base_dir: Path) -> Path:
@@ -60,6 +60,7 @@ from bp_agent.llm import (
     OpusAdapter,
     OpusConfig,
 )
+from bp_agent.llm.types import accumulate_stream
 from bp_agent.tools import ToolRegistry, ToolSchema, register_builtins, GiveResultSignal, build_schema
 from bp_agent.task import TaskStore
 
@@ -289,6 +290,60 @@ class Agent:
 
         return "(max iterations reached)"
 
+    def chat_stream(self, message: str, system_prompt: str | None = None) -> Iterator[str]:
+        """Multi-turn streaming chat. Yields text deltas, handles tool calls internally."""
+        if not self._chat_messages:
+            self._chat_messages = [
+                Message(role="system", content=system_prompt or self.system_prompt),
+            ]
+
+        self._chat_messages.append(Message(role="user", content=message))
+
+        tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
+
+        for _ in range(self.config.max_iterations):
+            request = CompletionRequest(
+                messages=self._chat_messages,
+                tools=tool_schemas,
+                temperature=self.config.temperature,
+                model=self.config.model,
+                provider=self.config.provider,
+            )
+
+            # Collect chunks, yield text deltas, accumulate tool call deltas
+            text_parts: list[str] = []
+            all_chunks: list = []
+            for chunk in self.llm.complete_stream(request):
+                all_chunks.append(chunk)
+                if chunk.delta:
+                    text_parts.append(chunk.delta)
+                    yield chunk.delta
+
+            response = accumulate_stream(iter(all_chunks))
+
+            if not response.tool_calls:
+                self._chat_messages.append(Message(role="assistant", content=response.content))
+                return
+
+            self._chat_messages.append(Message(role="assistant", content=response.content))
+
+            for tool_call in response.tool_calls:
+                try:
+                    result = self.tools.execute(tool_call.name, tool_call.args)
+                except GiveResultSignal as sig:
+                    self._chat_messages.append(
+                        Message(role="user", content=f"[tool:{tool_call.name}] {sig.result}")
+                    )
+                    self._chat_messages.append(Message(role="assistant", content=sig.result))
+                    yield sig.result
+                    return
+
+                self._chat_messages.append(
+                    Message(role="user", content=f"[tool:{tool_call.name}] {result.output}")
+                )
+
+        yield "(max iterations reached)"
+
     def reset_chat(self):
         """Clear chat history."""
         self._chat_messages = []
@@ -354,7 +409,6 @@ class Agent:
 
             for tool_call in response.tool_calls:
                 # Check for duplicate tool calls
-                import json
                 call_key = f"{tool_call.name}:{json.dumps(tool_call.args, sort_keys=True)}"
                 if call_key in previous_calls:
                     duplicate_count += 1

@@ -38,8 +38,17 @@ def chat_repl(agent) -> None:
             continue
 
         try:
-            response = agent.chat(user_input)
-            print(f"\nbot> {response}")
+            if hasattr(agent, "chat_stream"):
+                sys.stdout.write("\nbot> ")
+                sys.stdout.flush()
+                for delta in agent.chat_stream(user_input):
+                    sys.stdout.write(delta)
+                    sys.stdout.flush()
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            else:
+                response = agent.chat(user_input)
+                print(f"\nbot> {response}")
         except Exception as exc:
             print(f"\n[error] {exc}", file=sys.stderr)
 

@@ -10,7 +10,9 @@ from typing import Optional
 from urllib import request as urlrequest, error as urlerror
 
 from .rotation import RotationManager, RotationSlot
-from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError
+import requests as http_requests
+
+from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError, StreamChunk, StreamIterator, ToolCallDelta
 
 CODEX_MODELS = [
     "gpt-5.2-codex",
@@ -133,10 +135,7 @@ class CodexAdapter:
         data = json.dumps(payload).encode("utf-8")
         req = urlrequest.Request(url, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
-        if cred["type"] == "api_key":
-            req.add_header("Authorization", f"Bearer {cred['value']}")
-        else:
-            req.add_header("Authorization", f"Bearer {cred['value']}")
+        req.add_header("Authorization", f"Bearer {cred['value']}")
 
         try:
             with urlrequest.urlopen(req) as resp:
@@ -154,6 +153,75 @@ class CodexAdapter:
             raise ProviderError("api_error", body or "api error", retryable=False)
         except urlerror.URLError as err:
             raise ProviderError("network_error", str(err), retryable=True)
+
+    def complete_stream(self, request: CompletionRequest) -> StreamIterator:
+        model = request.model or self.config.model
+        if model not in CODEX_MODELS:
+            raise ProviderError("invalid_model", f"Model {model} not allowed", retryable=False)
+
+        payload = self._build_payload(request, model)
+        payload["stream"] = True
+
+        slot = self.rotation.select_slot()
+        cred = self._slot_creds[slot.id]
+        url = f"{self.config.base_url}/responses"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {cred['value']}",
+        }
+        try:
+            resp = http_requests.post(url, json=payload, headers=headers, timeout=60, stream=True)
+        except http_requests.RequestException as err:
+            raise ProviderError("network_error", str(err), retryable=True)
+
+        if resp.status_code >= 400:
+            body = resp.text or ""
+            if resp.status_code in (401, 403):
+                raise ProviderError("auth_error", body or "auth error", retryable=True)
+            if resp.status_code == 429:
+                raise ProviderError("rate_limit", body or "rate limit", retryable=True)
+            if resp.status_code >= 500:
+                raise ProviderError("server_error", body or "server error", retryable=True)
+            raise ProviderError("api_error", body or "api error", retryable=False)
+
+        self.rotation.report_success(slot.id)
+        return self._iter_sse(resp)
+
+    def _iter_sse(self, resp) -> StreamIterator:
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[len("data: "):]
+            if data_str.strip() == "[DONE]":
+                yield StreamChunk(finish_reason="stop")
+                return
+            try:
+                event = json.loads(data_str)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            etype = event.get("type", "")
+            if etype == "response.output_text.delta":
+                yield StreamChunk(delta=event.get("delta", ""))
+            elif etype == "response.function_call_arguments.delta":
+                yield StreamChunk(
+                    tool_call_delta=ToolCallDelta(
+                        index=event.get("output_index", 0),
+                        args_delta=event.get("delta", ""),
+                    )
+                )
+            elif etype == "response.output_item.added":
+                item = event.get("item", {})
+                if item.get("type") == "function_call":
+                    yield StreamChunk(
+                        tool_call_delta=ToolCallDelta(
+                            index=event.get("output_index", 0),
+                            name=item.get("name", ""),
+                        )
+                    )
+            elif etype == "response.completed":
+                yield StreamChunk(finish_reason="stop")
+                return
+        yield StreamChunk(finish_reason="stop")
 
     def _parse_response(self, response: dict) -> LLMResponse:
         text = response.get("output_text") or ""

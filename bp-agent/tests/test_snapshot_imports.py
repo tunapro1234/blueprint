@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-import agent
+import bp_agent.agent as agent
 
 
 def test_snapshot_history_flat_layout():

@@ -216,7 +216,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     runner = None
     if not args.no_agent:
         try:
-            from agent import Agent, AgentConfig
+            from bp_agent.agent import Agent, AgentConfig
             config = AgentConfig(enable_task_store=False)  # We use our own queue
             agent = Agent("task-runner", config=config)
             runner = TaskRunner(agent, queue)

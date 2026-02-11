@@ -8,7 +8,7 @@ from typing import Optional
 import requests
 
 from .rotation import RotationManager, RotationSlot
-from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError
+from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError, StreamChunk, StreamIterator
 
 GEMINI_ALLOWED_MODELS = ["gemini-3-flash-preview", "gemini-3-pro-preview"]
 
@@ -114,6 +114,61 @@ class GeminiAdapter:
             raise ProviderError("api_error", body or "api error", retryable=False)
 
         return resp.json()
+
+    def complete_stream(self, request: CompletionRequest) -> StreamIterator:
+        model = request.model or self.config.model
+        if model not in GEMINI_ALLOWED_MODELS:
+            raise ProviderError("invalid_model", f"Model {model} not allowed", retryable=False)
+
+        temperature = request.temperature if request.temperature is not None else self.config.temperature
+        payload = self._build_request(request, temperature)
+
+        slot = self.rotation.select_slot()
+        base_url = self.config.base_url.rstrip("/")
+        url = f"{base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": slot.id,
+        }
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=60, stream=True)
+        except requests.RequestException as err:
+            raise ProviderError("network_error", str(err), retryable=True)
+
+        if resp.status_code >= 400:
+            body = resp.text or ""
+            if resp.status_code in (401, 403):
+                raise ProviderError("auth_error", body or "auth error", retryable=True)
+            if resp.status_code == 429:
+                raise ProviderError("rate_limit", body or "rate limit", retryable=True)
+            if resp.status_code >= 500:
+                raise ProviderError("server_error", body or "server error", retryable=True)
+            raise ProviderError("api_error", body or "api error", retryable=False)
+
+        self.rotation.report_success(slot.id)
+        return self._iter_sse(resp)
+
+    def _iter_sse(self, resp) -> StreamIterator:
+        import json as _json
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[len("data: "):]
+            if data_str.strip() == "[DONE]":
+                yield StreamChunk(finish_reason="stop")
+                return
+            try:
+                data = _json.loads(data_str)
+            except (ValueError, _json.JSONDecodeError):
+                continue
+            candidates = data.get("candidates", [])
+            if not candidates:
+                continue
+            content = candidates[0].get("content", {})
+            for part in content.get("parts", []):
+                if "text" in part:
+                    yield StreamChunk(delta=part["text"])
+        yield StreamChunk(finish_reason="stop")
 
     def _parse_response(self, response: dict) -> LLMResponse:
         candidates = response.get("candidates", [])

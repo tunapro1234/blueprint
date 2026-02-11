@@ -4,7 +4,7 @@ from urllib import request, error
 
 import pytest
 
-from llm.gemini_adapter import GEMINI_ALLOWED_MODELS
+from bp_agent.llm.gemini_adapter import GEMINI_ALLOWED_MODELS
 
 
 def _fetch_models(api_key: str) -> list[str]:

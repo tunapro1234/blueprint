@@ -8,7 +8,7 @@ from typing import Optional
 from urllib import request as urlrequest, error as urlerror
 
 from .rotation import RotationManager, RotationSlot
-from .types import CompletionRequest, LLMResponse, ProviderError
+from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError
 
 
 @dataclass
@@ -41,7 +41,7 @@ class OpusAdapter:
             try:
                 response = self._send_request(payload, key)
                 self.rotation.report_success(slot.id)
-                return LLMResponse(content=self._extract_text(response), raw=response)
+                return self._parse_response(response)
             except ProviderError as exc:
                 if exc.code in ("rate_limit", "quota"):
                     self.rotation.report_rate_limit(slot.id, exc.message)
@@ -61,9 +61,12 @@ class OpusAdapter:
         if request.tools:
             payload["tools"] = [
                 {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.parameters,
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
                 }
                 for t in request.tools
             ]
@@ -93,9 +96,31 @@ class OpusAdapter:
         except urlerror.URLError as err:
             raise ProviderError("network_error", str(err), retryable=True)
 
-    def _extract_text(self, response: dict) -> str:
-        if "output_text" in response:
-            return response.get("output_text") or ""
-        if "text" in response:
-            return response.get("text") or ""
-        return ""
+    def _parse_response(self, response: dict) -> LLMResponse:
+        text = response.get("output_text") or ""
+        tool_calls: list[ToolCall] = []
+
+        if not text and "output" in response:
+            for item in response.get("output", []):
+                for content in item.get("content", []):
+                    ctype = content.get("type")
+                    if ctype in ("output_text", "text"):
+                        text += content.get("text", "")
+                    if ctype in ("tool_call", "function_call"):
+                        args = content.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except (json.JSONDecodeError, ValueError):
+                                args = {}
+                        tool_calls.append(
+                            ToolCall(
+                                name=content.get("name", ""),
+                                args=args or {},
+                            )
+                        )
+
+        if not text and "text" in response:
+            text = response.get("text") or ""
+
+        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response)

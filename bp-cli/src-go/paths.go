@@ -155,7 +155,13 @@ func isUnderDepsDir(rel string) bool {
 
 func isDependencySnapshotPath(path string) bool {
 	normalized := filepath.ToSlash(path)
-	return strings.Contains(normalized, "/.bp/history/") || strings.HasPrefix(normalized, ".bp/history/")
+	if strings.Contains(normalized, "/.bp/history/") || strings.HasPrefix(normalized, ".bp/history/") {
+		return true
+	}
+	if strings.Contains(normalized, "/.bp/cache/") || strings.HasPrefix(normalized, ".bp/cache/") {
+		return true
+	}
+	return false
 }
 
 // StateDirRelFromFile reads _meta.state_dir from a blueprint file.

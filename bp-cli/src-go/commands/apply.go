@@ -610,7 +610,7 @@ func writeSnapshotMeta(stateDir string, meta bp.HistoryEntry) error {
 	b.WriteString(meta.ImplHash)
 	b.WriteString("\nrotten: ")
 	b.WriteString(strconv.FormatBool(meta.Rotten))
-	b.WriteString("\n")
+	b.WriteString("\nsource: local\n")
 	metaPath := filepath.Join(stateDir, "history", meta.ID, "meta.yaml")
 	return os.WriteFile(metaPath, []byte(b.String()), 0o644)
 }

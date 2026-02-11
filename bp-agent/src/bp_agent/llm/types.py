@@ -24,6 +24,7 @@ class LLMResponse:
     content: str
     tool_calls: Optional[list[ToolCall]] = None
     raw: Optional[Any] = None
+    parsed: Optional[Any] = None
 
 
 @dataclass
@@ -34,6 +35,8 @@ class CompletionRequest:
     model: Optional[str] = None
     provider: Optional[str] = None
     metadata: Optional[dict] = None
+    response_schema: Optional[dict] = None
+    response_schema_name: Optional[str] = None
 
 
 @dataclass

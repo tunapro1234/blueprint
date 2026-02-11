@@ -1,8 +1,10 @@
 import json
+from unittest.mock import patch, MagicMock
 
 from bp_agent.llm import LLMRouter, CompletionRequest, Message, LLMResponse
 from bp_agent.llm.rotation import RotationManager, RotationPolicy, RotationSlot
 from bp_agent.llm.gemini_adapter import GeminiAdapter, GeminiConfig
+from bp_agent.llm.codex_adapter import CodexAdapter, CodexConfig
 from bp_agent.llm.opus_adapter import OpusAdapter, OpusConfig
 from bp_agent.llm.types import StreamChunk, ToolCallDelta, accumulate_stream
 
@@ -213,3 +215,145 @@ def test_router_complete_stream_fallback():
     assert len(chunks) == 1
     assert chunks[0].delta == "fallback response"
     assert chunks[0].finish_reason == "stop"
+
+
+# --- Opus streaming tests ---
+
+def _make_mock_sse_response(lines, status_code=200):
+    """Build a mock requests.Response for SSE streaming."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.iter_lines = MagicMock(return_value=iter(lines))
+    return mock_resp
+
+
+@patch("bp_agent.llm.opus_adapter.http_requests.post")
+def test_opus_complete_stream_text(mock_post):
+    adapter = _make_opus_adapter()
+    sse_lines = [
+        'data: {"type":"response.output_text.delta","delta":"Hello"}',
+        'data: {"type":"response.output_text.delta","delta":" world"}',
+        'data: {"type":"response.completed"}',
+    ]
+    mock_post.return_value = _make_mock_sse_response(sse_lines)
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    chunks = list(adapter.complete_stream(request))
+
+    assert len(chunks) == 3
+    assert chunks[0].delta == "Hello"
+    assert chunks[1].delta == " world"
+    assert chunks[2].finish_reason == "stop"
+
+
+@patch("bp_agent.llm.opus_adapter.http_requests.post")
+def test_opus_complete_stream_tool_calls(mock_post):
+    adapter = _make_opus_adapter()
+    sse_lines = [
+        'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","name":"bash"}}',
+        'data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"cmd\\": \\"ls\\"}"}',
+        'data: {"type":"response.completed"}',
+    ]
+    mock_post.return_value = _make_mock_sse_response(sse_lines)
+
+    request = CompletionRequest(messages=[Message(role="user", content="list files")])
+    chunks = list(adapter.complete_stream(request))
+
+    assert len(chunks) == 3
+    assert chunks[0].tool_call_delta is not None
+    assert chunks[0].tool_call_delta.name == "bash"
+    assert chunks[1].tool_call_delta is not None
+    assert chunks[1].tool_call_delta.args_delta == '{"cmd": "ls"}'
+    assert chunks[2].finish_reason == "stop"
+
+
+# --- Structured output payload tests ---
+
+def test_opus_structured_output_payload():
+    adapter = _make_opus_adapter()
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    request = CompletionRequest(
+        messages=[Message(role="user", content="Hi")],
+        response_schema=schema,
+        response_schema_name="my_schema",
+    )
+    payload = adapter._build_payload(request)
+    assert "text" in payload
+    fmt = payload["text"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["name"] == "my_schema"
+    assert fmt["json_schema"]["schema"] == schema
+    assert fmt["json_schema"]["strict"] is True
+
+
+def test_codex_structured_output_payload():
+    adapter = CodexAdapter(CodexConfig(api_keys=["k1"]))
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    request = CompletionRequest(
+        messages=[Message(role="user", content="Hi")],
+        response_schema=schema,
+    )
+    payload = adapter._build_payload(request, "gpt-5.2-codex")
+    assert "text" in payload
+    fmt = payload["text"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["name"] == "response"  # default name
+    assert fmt["json_schema"]["schema"] == schema
+    assert fmt["json_schema"]["strict"] is True
+
+
+def test_gemini_structured_output_payload():
+    adapter = GeminiAdapter(GeminiConfig(api_keys=["k1"]))
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    request = CompletionRequest(
+        messages=[Message(role="user", content="Hi")],
+        response_schema=schema,
+    )
+    payload = adapter._build_request(request, 0.3)
+    assert payload["generationConfig"]["responseMimeType"] == "application/json"
+    assert payload["generationConfig"]["responseSchema"] == schema
+
+
+# --- Parsed JSON response tests ---
+
+def test_opus_parsed_json_response():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {"output_text": '{"answer": "42"}'}
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    response = adapter.complete(request)
+    assert response.parsed == {"answer": "42"}
+
+
+def test_opus_parsed_non_json_response():
+    adapter = _make_opus_adapter()
+
+    def fake_send(payload, api_key):
+        return {"output_text": "Just plain text"}
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    response = adapter.complete(request)
+    assert response.parsed is None
+
+
+def test_gemini_parsed_json_response():
+    adapter = GeminiAdapter(GeminiConfig(api_keys=["k1"]))
+
+    def fake_send(payload, model, api_key):
+        return {
+            "candidates": [
+                {"content": {"parts": [{"text": '{"result": true}'}]}}
+            ]
+        }
+
+    adapter._send_request = fake_send
+
+    request = CompletionRequest(messages=[Message(role="user", content="Hi")])
+    response = adapter.complete(request)
+    assert response.parsed == {"result": True}

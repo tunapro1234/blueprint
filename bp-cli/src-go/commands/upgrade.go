@@ -16,9 +16,15 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 		path = "."
 	}
 	depPath, _ := ctx.Args["dep_path"].(string)
+	toVersion, _ := ctx.Args["to"].(string)
 	safe, _ := ctx.Args["safe"].(bool)
 	all, _ := ctx.Args["all"].(bool)
 	force, _ := ctx.Args["force"].(bool)
+
+	if toVersion != "" && depPath == "" {
+		msg := "--to requires a specific dependency (dep_path)"
+		return CommandResult{ExitCode: 1, Output: msg, Errors: []string{msg}}
+	}
 	bpObj, err := bp.LoadBlueprint(path)
 	if err != nil {
 		if errors.Is(err, bp.ErrNotBlueprint) {
@@ -101,37 +107,46 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			depIndex[key] = depBp
 		}
 
-		latestID, err := readCurrentSnapshotID(depBp.StateDir)
-		if err != nil {
-			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+		// Determine target snapshot ID
+		var targetID string
+		if toVersion != "" {
+			targetID, err = resolveSnapshotID(depBp.StateDir, toVersion)
+			if err != nil {
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
+		} else {
+			targetID, err = readCurrentSnapshotID(depBp.StateDir)
+			if err != nil {
+				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
+			}
 		}
 		current := depState.Pinned
 		if current == "" {
 			current = depState.Latest
 		}
-		latestAPI := ""
-		latestRotten := false
-		meta, err := bp.LoadSnapshotMeta(depBp.StateDir, latestID)
+		targetAPI := ""
+		targetRotten := false
+		meta, err := bp.LoadSnapshotMeta(depBp.StateDir, targetID)
 		if err == nil {
-			latestAPI = meta.APIHash
-			latestRotten = meta.Rotten
+			targetAPI = meta.APIHash
+			targetRotten = meta.Rotten
 		}
-		if strings.TrimSpace(latestAPI) == "" {
-			latestAPI, err = depBp.APIHash()
+		if strings.TrimSpace(targetAPI) == "" {
+			targetAPI, err = depBp.APIHash()
 			if err != nil {
 				return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 			}
 		}
-		apiChanged := depState.APIHash != "" && latestAPI != "" && depState.APIHash != latestAPI
+		apiChanged := depState.APIHash != "" && targetAPI != "" && depState.APIHash != targetAPI
 
-		depState.Latest = latestID
-		depState.LatestAPIHash = latestAPI
+		depState.Latest = targetID
+		depState.LatestAPIHash = targetAPI
 		depState.APIChanged = apiChanged
-		depState.Rotten = latestRotten
+		depState.Rotten = targetRotten
 		state.Deps[key] = depState
 		dirty = true
 
-		if latestRotten && !force {
+		if targetRotten && !force {
 			skipped = append(skipped, key)
 			skippedRotten = append(skippedRotten, key)
 			lines = append(lines, fmt.Sprintf("Skipped %s: rotten (use --force)", key))
@@ -143,14 +158,17 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			lines = append(lines, fmt.Sprintf("Skipped %s (API changed)", key))
 			continue
 		}
-		if current == latestID {
+		if current == targetID {
+			if toVersion != "" {
+				lines = append(lines, fmt.Sprintf("Already at %s: %s", targetID, key))
+			}
 			continue
 		}
 
 		prevPinned := depState.Pinned
 		prevAPIHash := depState.APIHash
-		depState.Pinned = latestID
-		depState.APIHash = latestAPI
+		depState.Pinned = targetID
+		depState.APIHash = targetAPI
 		depState.APIChanged = false
 		state.Deps[key] = depState
 		if err := bpObj.SaveState(state); err != nil {
@@ -158,7 +176,7 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 		}
 
 		if err := runBlueprintTests(bpObj, testCfg); err != nil {
-			_ = setSnapshotRotten(depBp.StateDir, latestID, true)
+			_ = setSnapshotRotten(depBp.StateDir, targetID, true)
 			depState.Pinned = prevPinned
 			depState.APIHash = prevAPIHash
 			depState.APIChanged = apiChanged
@@ -170,21 +188,27 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 			continue
 		}
 
-		depState.Latest = latestID
-		depState.LatestAPIHash = latestAPI
+		depState.Latest = targetID
+		depState.LatestAPIHash = targetAPI
 		depState.APIChanged = false
-		depState.Rotten = latestRotten
+		depState.Rotten = targetRotten
 		state.Deps[key] = depState
 		upgraded = append(upgraded, key)
-		if apiChanged {
+		if toVersion != "" {
+			lines = append(lines, fmt.Sprintf("Pinned %s: %s → %s", key, current, targetID))
+			if apiChanged {
+				apiChangedList = append(apiChangedList, key)
+				lines = append(lines, fmt.Sprintf("  ⚠ API changed! Review: bp diff %s %s %s", key, current, targetID))
+			}
+		} else if apiChanged {
 			apiChangedList = append(apiChangedList, key)
-			lines = append(lines, fmt.Sprintf("Upgraded %s: %s → %s (API CHANGED!)", key, current, latestID))
-			lines = append(lines, fmt.Sprintf("  Review: bp diff %s %s %s", key, current, latestID))
-		} else if latestRotten && force {
-			lines = append(lines, fmt.Sprintf("Upgraded %s (forced): %s → %s [ROTTEN]", key, current, latestID))
+			lines = append(lines, fmt.Sprintf("Upgraded %s: %s → %s (API CHANGED!)", key, current, targetID))
+			lines = append(lines, fmt.Sprintf("  Review: bp diff %s %s %s", key, current, targetID))
+		} else if targetRotten && force {
+			lines = append(lines, fmt.Sprintf("Upgraded %s (forced): %s → %s [ROTTEN]", key, current, targetID))
 			lines = append(lines, "⚠ Warning: using rotten snapshot")
 		} else {
-			lines = append(lines, fmt.Sprintf("Upgraded %s: %s → %s", key, current, latestID))
+			lines = append(lines, fmt.Sprintf("Upgraded %s: %s → %s", key, current, targetID))
 		}
 
 		depStateObj, err := bp.LoadState(filepath.Join(depBp.StateDir, "state.yaml"))
@@ -198,7 +222,7 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 		if err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
-		depStateObj.Dependents[rel] = bp.DepRef{Using: latestID}
+		depStateObj.Dependents[rel] = bp.DepRef{Using: targetID}
 		if err := depBp.SaveState(depStateObj); err != nil {
 			return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 		}
@@ -211,6 +235,9 @@ func UpgradeCommand(ctx CommandContext) CommandResult {
 	}
 
 	if len(upgraded) == 0 && len(skipped) == 0 && len(failed) == 0 {
+		if len(lines) > 0 {
+			return CommandResult{ExitCode: 0, Output: strings.Join(lines, "\n"), Data: UpgradeResult{}}
+		}
 		return CommandResult{ExitCode: 0, Output: "No upgrades available", Data: UpgradeResult{}}
 	}
 

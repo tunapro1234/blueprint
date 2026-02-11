@@ -27,7 +27,7 @@ func LogCommand(ctx CommandContext) CommandResult {
 		return CommandResult{ExitCode: 1, Output: out, Errors: []string{err.Error()}}
 	}
 	warnRottenDependencies(bpObj)
-	history, err := bpObj.GetHistory()
+	history, err := bpObj.GetHistoryWithTags()
 	if err != nil {
 		return CommandResult{ExitCode: 1, Output: err.Error(), Errors: []string{err.Error()}}
 	}
@@ -41,6 +41,9 @@ func LogCommand(ctx CommandContext) CommandResult {
 	for i := 0; i < count; i++ {
 		entry := history[i]
 		line := fmt.Sprintf("%s \"%s\"", entry.ID, entry.Message)
+		if entry.Source == "tag" {
+			line += " [tag]"
+		}
 		lines = append(lines, line)
 	}
 	return CommandResult{ExitCode: 0, Output: strings.Join(lines, "\n"), Data: history}

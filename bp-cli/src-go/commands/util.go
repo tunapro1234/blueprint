@@ -182,6 +182,10 @@ func resolveSnapshotID(stateDir, input string) (string, error) {
 			return "", err
 		}
 		if !hasHistory {
+			// No local history — try git tags before giving up
+			if tagID, err := resolveGitTagSnapshot(stateDir, id); err == nil {
+				return tagID, nil
+			}
 			return "", bp.ErrNoSnapshot
 		}
 		if _, err := os.Stat(snapshotDir(stateDir, id)); err != nil {
@@ -196,6 +200,10 @@ func resolveSnapshotID(stateDir, input string) (string, error) {
 				if len(matches) > 1 {
 					return "", fmt.Errorf("Snapshot #%s is ambiguous", raw)
 				}
+				// Not found locally — try git tags
+				if tagID, err := resolveGitTagSnapshot(stateDir, id); err == nil {
+					return tagID, nil
+				}
 				return "", fmt.Errorf("Snapshot #%s not found", raw)
 			}
 			return "", err
@@ -203,16 +211,65 @@ func resolveSnapshotID(stateDir, input string) (string, error) {
 		return id, nil
 	}
 	matches, err := matchSnapshotPrefix(stateDir, id)
-	if err != nil {
+	if err != nil && !errors.Is(err, bp.ErrNoSnapshot) {
 		return "", err
 	}
 	if len(matches) == 0 {
+		// Try git tags as fallback
+		if tagID, err := resolveGitTagSnapshot(stateDir, id); err == nil {
+			return tagID, nil
+		}
 		return "", fmt.Errorf("Snapshot #%s not found", raw)
 	}
 	if len(matches) > 1 {
 		return "", fmt.Errorf("Snapshot #%s is ambiguous", raw)
 	}
 	return matches[0], nil
+}
+
+// resolveGitTagSnapshot searches git tags for a snapshot ID.
+// stateDir is expected to be under a blueprint directory; the function
+// derives the blueprint dir and repo-relative path from it.
+func resolveGitTagSnapshot(stateDir, input string) (string, error) {
+	bpDir := filepath.Dir(stateDir)
+	if !bp.GitAvailable(bpDir) {
+		return "", fmt.Errorf("git not available")
+	}
+	repoRoot, err := bp.GitRepoRoot(bpDir)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(repoRoot, bpDir)
+	if err != nil {
+		return "", err
+	}
+	pattern := "bp/" + filepath.ToSlash(rel) + "/*"
+	tags, err := bp.GitListTags(bpDir, pattern)
+	if err != nil {
+		return "", err
+	}
+	lowerInput := strings.ToLower(input)
+	for _, tag := range tags {
+		tagID := bp.ExtractTagID(tag.Name)
+		if strings.ToLower(tagID) == lowerInput {
+			return tagID, nil
+		}
+	}
+	// prefix match
+	var prefixMatches []string
+	for _, tag := range tags {
+		tagID := bp.ExtractTagID(tag.Name)
+		if strings.HasPrefix(strings.ToLower(tagID), lowerInput) {
+			prefixMatches = append(prefixMatches, tagID)
+		}
+	}
+	if len(prefixMatches) == 1 {
+		return prefixMatches[0], nil
+	}
+	if len(prefixMatches) > 1 {
+		return "", fmt.Errorf("Snapshot #%s is ambiguous", input)
+	}
+	return "", fmt.Errorf("Snapshot #%s not found in git tags", input)
 }
 
 func matchSnapshotPrefix(stateDir, prefix string) ([]string, error) {

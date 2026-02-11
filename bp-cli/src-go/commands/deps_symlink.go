@@ -80,8 +80,8 @@ func ensureDepsSymlinks(bpObj *bp.Blueprint, deps []*bp.Blueprint, depStates map
 				}
 			}
 		}
-		target := filepath.Join(dep.StateDir, "history", pinned)
-		if _, err := os.Stat(target); err != nil {
+		target, err := resolveSnapshotPath(dep, pinned)
+		if err != nil {
 			return err
 		}
 		if err := ensureSymlinkTargetAvailable(linkPath, name, allowExistingBlueprintDirs); err != nil {
@@ -129,7 +129,13 @@ func cleanupDepSymlinks(destDir string, expected map[string]string) error {
 
 func looksLikeDependencyTarget(target string) bool {
 	normalized := filepath.ToSlash(target)
-	return strings.Contains(normalized, "/.bp/history/") || strings.HasPrefix(normalized, ".bp/history/")
+	if strings.Contains(normalized, "/.bp/history/") || strings.HasPrefix(normalized, ".bp/history/") {
+		return true
+	}
+	if strings.Contains(normalized, "/.bp/cache/") || strings.HasPrefix(normalized, ".bp/cache/") {
+		return true
+	}
+	return false
 }
 
 func ensureSymlinkTargetAvailable(path, name string, allowExistingBlueprintDirs bool) error {
@@ -152,6 +158,42 @@ func ensureSymlinkTargetAvailable(path, name string, allowExistingBlueprintDirs 
 		}
 	}
 	return fmt.Errorf("Name collision - '%s' exists both as code and dependency", name)
+}
+
+// resolveSnapshotPath finds the on-disk directory for a pinned snapshot.
+// It checks the local history first, then falls back to materializing
+// a matching git tag into .bp/cache/.
+func resolveSnapshotPath(dep *bp.Blueprint, pinned string) (string, error) {
+	localPath := filepath.Join(dep.StateDir, "history", pinned)
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath, nil
+	}
+	if !bp.GitAvailable(dep.Dir) {
+		return "", fmt.Errorf("snapshot %s not found", pinned)
+	}
+	repoRoot, err := bp.GitRepoRoot(dep.Dir)
+	if err != nil {
+		return "", fmt.Errorf("snapshot %s not found", pinned)
+	}
+	rel, err := filepath.Rel(repoRoot, dep.Dir)
+	if err != nil {
+		return "", fmt.Errorf("snapshot %s not found", pinned)
+	}
+	pattern := "bp/" + filepath.ToSlash(rel) + "/*"
+	tags, err := bp.GitListTags(dep.Dir, pattern)
+	if err != nil {
+		return "", fmt.Errorf("snapshot %s not found", pinned)
+	}
+	for _, tag := range tags {
+		if bp.ExtractTagID(tag.Name) == pinned {
+			cachePath, err := dep.MaterializeTagSnapshot(tag.Name)
+			if err != nil {
+				return "", err
+			}
+			return cachePath, nil
+		}
+	}
+	return "", fmt.Errorf("snapshot %s not found (local or git tag)", pinned)
 }
 
 func createRelSymlink(target, linkPath string) error {

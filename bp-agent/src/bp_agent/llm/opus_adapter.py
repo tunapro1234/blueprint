@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from typing import Optional
 from urllib import request as urlrequest, error as urlerror
 
+import requests as http_requests
+
 from .rotation import RotationManager, RotationSlot
-from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError
+from .types import CompletionRequest, LLMResponse, ToolCall, ProviderError, StreamChunk, StreamIterator, ToolCallDelta
 
 
 @dataclass
@@ -70,7 +72,83 @@ class OpusAdapter:
                 }
                 for t in request.tools
             ]
+        if request.response_schema:
+            payload["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": request.response_schema_name or "response",
+                        "schema": request.response_schema,
+                        "strict": True,
+                    },
+                }
+            }
         return payload
+
+    def complete_stream(self, request: CompletionRequest) -> StreamIterator:
+        payload = self._build_payload(request)
+        payload["stream"] = True
+
+        slot = self.rotation.select_slot()
+        key = self._keys[int(slot.id[1:])]
+        url = f"{self.config.base_url}{self.config.endpoint}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        }
+        try:
+            resp = http_requests.post(url, json=payload, headers=headers, timeout=60, stream=True)
+        except http_requests.RequestException as err:
+            raise ProviderError("network_error", str(err), retryable=True)
+
+        if resp.status_code >= 400:
+            body = resp.text or ""
+            if resp.status_code in (401, 403):
+                raise ProviderError("auth_error", body or "auth error", retryable=True)
+            if resp.status_code == 429:
+                raise ProviderError("rate_limit", body or "rate limit", retryable=True)
+            if resp.status_code >= 500:
+                raise ProviderError("server_error", body or "server error", retryable=True)
+            raise ProviderError("api_error", body or "api error", retryable=False)
+
+        self.rotation.report_success(slot.id)
+        return self._iter_sse(resp)
+
+    def _iter_sse(self, resp) -> StreamIterator:
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[len("data: "):]
+            if data_str.strip() == "[DONE]":
+                yield StreamChunk(finish_reason="stop")
+                return
+            try:
+                event = json.loads(data_str)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            etype = event.get("type", "")
+            if etype == "response.output_text.delta":
+                yield StreamChunk(delta=event.get("delta", ""))
+            elif etype == "response.function_call_arguments.delta":
+                yield StreamChunk(
+                    tool_call_delta=ToolCallDelta(
+                        index=event.get("output_index", 0),
+                        args_delta=event.get("delta", ""),
+                    )
+                )
+            elif etype == "response.output_item.added":
+                item = event.get("item", {})
+                if item.get("type") == "function_call":
+                    yield StreamChunk(
+                        tool_call_delta=ToolCallDelta(
+                            index=event.get("output_index", 0),
+                            name=item.get("name", ""),
+                        )
+                    )
+            elif etype == "response.completed":
+                yield StreamChunk(finish_reason="stop")
+                return
+        yield StreamChunk(finish_reason="stop")
 
     def _send_request(self, payload: dict, api_key: str) -> dict:
         url = f"{self.config.base_url}{self.config.endpoint}"
@@ -123,4 +201,11 @@ class OpusAdapter:
         if not text and "text" in response:
             text = response.get("text") or ""
 
-        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response)
+        parsed = None
+        if text:
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response, parsed=parsed)

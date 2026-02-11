@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Optional
 
@@ -88,6 +89,10 @@ class GeminiAdapter:
                 }
             ]
 
+        if request.response_schema:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+            payload["generationConfig"]["responseSchema"] = request.response_schema
+
         return payload
 
     def _send_request(self, payload: dict, model: str, api_key: str) -> dict:
@@ -98,7 +103,7 @@ class GeminiAdapter:
             "x-goog-api-key": api_key,
         }
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=30)
+            resp = requests.post(url, json=payload, headers=headers, timeout=120)
         except requests.RequestException as err:  # pragma: no cover - network issues
             raise ProviderError("network_error", str(err), retryable=True)
 
@@ -131,7 +136,7 @@ class GeminiAdapter:
             "x-goog-api-key": slot.id,
         }
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=60, stream=True)
+            resp = requests.post(url, json=payload, headers=headers, timeout=120, stream=True)
         except requests.RequestException as err:
             raise ProviderError("network_error", str(err), retryable=True)
 
@@ -149,7 +154,6 @@ class GeminiAdapter:
         return self._iter_sse(resp)
 
     def _iter_sse(self, resp) -> StreamIterator:
-        import json as _json
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
                 continue
@@ -158,8 +162,8 @@ class GeminiAdapter:
                 yield StreamChunk(finish_reason="stop")
                 return
             try:
-                data = _json.loads(data_str)
-            except (ValueError, _json.JSONDecodeError):
+                data = json.loads(data_str)
+            except (ValueError, json.JSONDecodeError):
                 continue
             candidates = data.get("candidates", [])
             if not candidates:
@@ -186,4 +190,11 @@ class GeminiAdapter:
                 fc = part["functionCall"]
                 tool_calls.append(ToolCall(name=fc.get("name", ""), args=fc.get("args", {})))
 
-        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response)
+        parsed = None
+        if text:
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response, parsed=parsed)

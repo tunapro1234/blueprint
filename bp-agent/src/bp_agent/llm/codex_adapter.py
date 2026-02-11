@@ -128,6 +128,17 @@ class CodexAdapter:
                 }
                 for t in request.tools
             ]
+        if request.response_schema:
+            payload["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": request.response_schema_name or "response",
+                        "schema": request.response_schema,
+                        "strict": True,
+                    },
+                }
+            }
         return payload
 
     def _send_request(self, payload: dict, cred: dict) -> dict:
@@ -241,7 +252,14 @@ class CodexAdapter:
                             )
                         )
 
-        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response)
+        parsed = None
+        if text:
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return LLMResponse(content=text, tool_calls=tool_calls if tool_calls else None, raw=response, parsed=parsed)
 
 
 def load_auth(auth_file: str | None = None) -> CodexAuth:

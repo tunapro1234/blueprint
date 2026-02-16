@@ -7,7 +7,7 @@ name = "bp-tunnel"
 version = "0.3.1"
 description = "Inter-agent messaging for Blueprint ecosystem"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
 authors = [
     { name = "Tuna Gul", email = "tunapro1234@gmail.com" },
@@ -16,7 +16,7 @@ keywords = ["agent", "messaging", "tunnel", "ipc", "blueprint"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -31,9 +31,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tunapro1234/bp-tunnel"
-Repository = "https://github.com/tunapro1234/bp-tunnel"
-Issues = "https://github.com/tunapro1234/bp-tunnel/issues"
+Homepage = "https://github.com/tunapro1234/blueprint"
+Repository = "https://github.com/tunapro1234/blueprint"
+Issues = "https://github.com/tunapro1234/blueprint/issues"
 
 [project.scripts]
 bp-tunnel = "bp_tunnel.cli:main"

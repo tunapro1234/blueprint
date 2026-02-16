@@ -1,0 +1,46 @@
+_meta:
+  version: "0.1.0"
+  updated: 2026-02-16
+  status: draft
+
+project:
+  name: bp-tui
+  tagline: Terminal UI for Blueprint ecosystem
+
+author:
+  name: Tuna Gul
+  github: tunapro1234
+
+intent: |
+  Blueprint projelerini terminal uzerinden gorsel olarak yonetmek
+  icin bubbletea tabanli TUI.
+
+overview: |
+  bp-tui, blueprint paketlerinin durumunu, agent aktivitesini ve
+  workflow ilerlemesini terminal icinde gorsellestiren bir arayuz.
+
+  Bubbletea (Go) uzerine insa edilmis, grid layout ve tower-based
+  gorsellestime kullanir.
+
+structure:
+  files:
+    README.md:
+      desc: Package overview
+    go.mod:
+      desc: Go module definition
+    LICENSE:
+      desc: GPL-3.0
+    src/main.go:
+      desc: Entry point
+    src/tui/:
+      desc: TUI rendering
+    src/grid/:
+      desc: Grid layout system
+    src/tower/:
+      desc: Tower visualization
+    src/bar/:
+      desc: Status bar
+    src/input/:
+      desc: Input handling
+    src/world/:
+      desc: World state management

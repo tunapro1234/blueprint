@@ -1,5 +1,7 @@
 # bp-multi
 
+> For the developer's vision and thoughts behind this project, see [HUMANS.md](../HUMANS.md).
+
 Multi-agent orchestration for the Blueprint ecosystem.
 
 ## Install
@@ -23,3 +25,7 @@ Or via CLI:
 ```bash
 bp-team --provider gemini
 ```
+
+## License
+
+GPL-3.0

@@ -7,7 +7,7 @@ name = "bp-multi"
 version = "0.1.0"
 description = "Multi-agent orchestration for Blueprint ecosystem"
 readme = "README.md"
-license = "MIT"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
 authors = [
     {name = "Tuna Gul", email = "tunapro1234@gmail.com"}
@@ -31,8 +31,8 @@ dev = [
 bp-team = "bp_multi.team:main"
 
 [project.urls]
-Homepage = "https://github.com/tunapro1234/bp-multi"
-Repository = "https://github.com/tunapro1234/bp-multi"
+Homepage = "https://github.com/tunapro1234/blueprint"
+Repository = "https://github.com/tunapro1234/blueprint"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bp_multi"]

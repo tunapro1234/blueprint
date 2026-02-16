@@ -35,8 +35,8 @@ bp-agent = "bp_agent.runner.tui:main"
 bp-chat = "bp_agent.runner.chat:main"
 
 [project.urls]
-Homepage = "https://github.com/tunapro1234/base-agent"
-Repository = "https://github.com/tunapro1234/base-agent"
+Homepage = "https://github.com/tunapro1234/blueprint"
+Repository = "https://github.com/tunapro1234/blueprint"
 
 [tool.setuptools.packages.find]
 where = ["src"]

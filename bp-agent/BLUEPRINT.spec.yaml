@@ -1,0 +1,10 @@
+_meta:
+  version: "0.3.0"
+  type: spec
+
+implementation:
+  structure:
+    - LICENSE
+    - tests/
+    - src/:
+        has_blueprint: true

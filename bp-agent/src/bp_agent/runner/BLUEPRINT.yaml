@@ -1,0 +1,35 @@
+_meta:
+  name: runner
+  version: 0.2.0
+
+intent: |
+  Terminal UI for Base Agent.
+  Sadece arayuz - tum task/queue logic Agent icinde.
+  Agent'in metodlarini cagirarak task yonetimi yapar.
+
+api:
+  classes:
+    TaskTUI:
+      description: Interactive terminal dashboard
+      constructor:
+        parameters:
+          - name: agent
+            type: Agent
+            description: Agent instance (task queue dahil)
+      methods:
+        run() -> None:
+          description: Main REPL loop
+
+      commands:
+        "<instruction>": Direkt task ekle (agent.add_task)
+        "new <task>": Task ekle (agent.add_task)
+        "run": Siradaki task'i calistir (agent.run_next)
+        "runall": Tum pending'leri calistir (agent.run_all)
+        "show [id]": Task detayi goster
+        "list": Task listesi (agent.list_tasks)
+        "clear": Biten task'lari temizle (agent.clear_tasks)
+        "quit": Cikis
+
+dependencies:
+  internal:
+    - ../  # Agent class (task queue dahil)

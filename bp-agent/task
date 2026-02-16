@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Task runner wrapper
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load .env if exists
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+export PYTHONPATH="$SCRIPT_DIR/src"
+
+# Default to TUI mode, use --cli for old interface
+if [[ "$1" == "--cli" ]]; then
+    shift
+    exec python -m bp_agent.runner.cli "$@"
+else
+    exec python -m bp_agent.runner.tui "$@"
+fi

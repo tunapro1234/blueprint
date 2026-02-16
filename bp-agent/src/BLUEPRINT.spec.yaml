@@ -1,0 +1,103 @@
+# Agent Implementation Spec
+
+_meta:
+  version: "0.3.0"
+  type: spec
+
+implementation:
+  structure:
+    - agent.py
+    - __init__.py
+    - llm/:
+        has_blueprint: true
+    - tools/:
+        has_blueprint: true
+    - task/:
+        has_blueprint: true
+    - runner/:
+        has_blueprint: true
+  agent:
+    pseudocode: |
+      class Agent:
+        def __init__(self, name: str, config: AgentConfig = None, system_prompt: str = None):
+          self.name = name
+          self.config = config or AgentConfig()
+          self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+
+          self.llm = build_llm_router(self.config)
+          self.tools = ToolRegistry()
+          self.tasks = TaskStore() if self.config.enable_task_store else None
+
+        def add_tool(self, name: str, handler: function, schema: ToolSchema):
+          self.tools.register(name, handler, schema)
+
+        def execute(self, instruction: str) -> AgentResult:
+          task = self.tasks.create(instruction) if self.tasks else None
+          messages = [
+            Message(role="system", content=self.system_prompt),
+            Message(role="user", content=instruction)
+          ]
+          tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
+
+          for i in range(self.config.max_iterations):
+            response = self.llm.complete(CompletionRequest(...))
+
+            if not response.tool_calls:
+              return AgentResult(success=True, output=response.content)
+
+            # Execute tool calls, handle GiveResultSignal
+            for tool_call in response.tool_calls:
+              result = self.tools.execute(tool_call.name, tool_call.args)
+
+          return AgentResult(success=False, output="")
+
+        def chat(self, message: str) -> str:
+          # Multi-turn chat with tool support
+
+        def chat_stream(self, message: str) -> Iterator[str]:
+          # Streaming chat - yields text deltas, handles tool calls internally
+
+  config:
+    pseudocode: |
+      @dataclass
+      class AgentConfig:
+        provider: str = "gemini"
+        model: str = "gemini-3-flash-preview"
+        reasoning_effort: str | None = None
+        max_iterations: int = 10
+        temperature: float = 0.3
+        enable_task_store: bool = True
+        enable_builtin_tools: bool = True
+        enable_subagents: bool = False
+        codex_auth_file: str | None = None
+
+  result:
+    pseudocode: |
+      @dataclass
+      class AgentResult:
+        success: bool
+        output: str
+        task_id: str = None
+
+  helpers:
+    load_gemini_keys:
+      pseudocode: |
+        def load_gemini_keys() -> list[str]:
+          # GEMINI_API_KEY, GEMINI_API_KEYS (comma-separated)
+          # GEMINI_API_KEY_2..9
+
+    build_llm_router:
+      pseudocode: |
+        def build_llm_router(config: AgentConfig) -> LLMRouter:
+          # Register providers based on available credentials:
+          # - Gemini: GEMINI_API_KEY (required if provider=gemini)
+          # - Codex: CODEX_API_KEY or auth file
+          # - Opus: OPUS_API_KEY + OPUS_BASE_URL
+
+tests:
+  unit:
+    - name: agent_creation
+    - name: execute_simple
+    - name: execute_with_tools
+    - name: chat_stream_text_only
+    - name: chat_stream_with_tools

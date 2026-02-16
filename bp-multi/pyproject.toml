@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bp-multi"
+version = "0.1.0"
+description = "Multi-agent orchestration for Blueprint ecosystem"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "Tuna Gul", email = "tunapro1234@gmail.com"}
+]
+keywords = ["agent", "multi-agent", "orchestration", "workflow", "blueprint"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "bp-agent>=0.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+bp-team = "bp_multi.team:main"
+
+[project.urls]
+Homepage = "https://github.com/tunapro1234/bp-multi"
+Repository = "https://github.com/tunapro1234/bp-multi"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bp_multi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

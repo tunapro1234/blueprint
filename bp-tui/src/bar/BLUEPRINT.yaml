@@ -1,0 +1,38 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: bar
+intent: |
+  Alt bar UI bileşeni.
+  SSH için minimal ve hızlı render.
+
+overview: |
+  World ile bar arasına çizgi çeker.
+  Sabit yükseklikte render edilir.
+  İçerikler: path, zoom_step, flattened, cursor, controls hint.
+  Ek metrikler: tokens per second, lines per minute, water usage per day, snapshots today.
+  Metrikler placeholder'dır; veri yoksa "--" gösterilir.
+
+api:
+  types:
+    Metrics:
+      tokens_per_second: float
+      lines_per_minute: int
+      water_usage_per_day: float
+      snapshots_today: int
+
+    BarData:
+      path: string
+      zoom: int            # zoom step count
+      flattened: bool
+      cursor_x: int
+      cursor_y: int
+      selected_layer: int
+      metrics: Metrics
+
+  functions:
+    RenderBar(width int, height int, data BarData) -> string: returns height lines; first line is separator; content trimmed to width
+
+implementation:
+  file: BLUEPRINT.spec.yaml

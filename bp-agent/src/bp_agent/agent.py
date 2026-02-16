@@ -57,12 +57,18 @@ from bp_agent.llm import (
     GeminiConfig,
     CodexAdapter,
     CodexConfig,
+    OpenAIAdapter,
+    OpenAIConfig,
     OpusAdapter,
     OpusConfig,
 )
 from bp_agent.llm.types import accumulate_stream
 from bp_agent.tools import ToolRegistry, ToolSchema, register_builtins, GiveResultSignal, build_schema
 from bp_agent.task import TaskStore
+try:
+    from bp_tunnel.hub import TunnelHub
+except ImportError:
+    TunnelHub = None  # bp-tunnel not installed
 
 
 @dataclass
@@ -140,9 +146,96 @@ class Agent:
         self._chat_messages: list[Message] = []
         self._workers: dict[str, AgentResult] = {}  # worker_id -> result
         self._worker_counter = 0
+        self._hub: Optional[TunnelHub] = None
+        self._hub_alias: Optional[str] = None
 
     def add_tool(self, name: str, handler: Callable, schema: ToolSchema):
         self.tools.register(name, handler, schema)
+
+    # --- Tunnel / messaging ---
+
+    def connect_hub(self, hub: TunnelHub, alias: str | None = None):
+        """Connect this agent to a TunnelHub for inter-agent messaging."""
+        self._hub = hub
+        self._hub_alias = alias or self.name
+        self._register_tunnel_tools()
+
+    def _register_tunnel_tools(self):
+        """Register send_message / check_messages / send_to_channel / read_channel tools."""
+        hub = self._hub
+        me = self._hub_alias or self.name
+
+        def _send_message(to: str, message: str) -> str:
+            hub.send(f"agent:{to}", message, sender=me)
+            return f"[sent to {to}]"
+
+        def _check_messages() -> str:
+            msgs = hub.receive_all(f"agent:{me}")
+            if not msgs:
+                return "[no messages]"
+            return "\n".join(str(m) for m in msgs)
+
+        def _send_to_channel(channel: str, message: str) -> str:
+            hub.send(channel, message, sender=me)
+            return f"[sent to channel:{channel}]"
+
+        def _read_channel(channel: str) -> str:
+            msgs = hub.receive_all(channel)
+            if not msgs:
+                return "[empty]"
+            return "\n".join(str(m) for m in msgs)
+
+        self.tools.register("send_message", _send_message, build_schema(
+            "send_message",
+            "Send a message to another agent by name",
+            to={"type": "string", "description": "Target agent name", "required": True},
+            message={"type": "string", "description": "Message content", "required": True},
+        ))
+        self.tools.register("check_messages", _check_messages, build_schema(
+            "check_messages",
+            "Check your inbox for messages from other agents",
+        ))
+        self.tools.register("send_to_channel", _send_to_channel, build_schema(
+            "send_to_channel",
+            "Send a message to a named channel (any agent can read it)",
+            channel={"type": "string", "description": "Channel name", "required": True},
+            message={"type": "string", "description": "Message content", "required": True},
+        ))
+        self.tools.register("read_channel", _read_channel, build_schema(
+            "read_channel",
+            "Read all messages from a named channel",
+            channel={"type": "string", "description": "Channel name", "required": True},
+        ))
+
+    def attach(self, tunnel) -> None:
+        """Attach to a bp_tunnel.Tunnel for messaging and task assignment."""
+        from bp_tunnel.hub import TunnelHub as _TunnelHub
+
+        hub = _TunnelHub(tunnel)
+        self.connect_hub(hub, alias=tunnel.agent_name)
+        self._tunnel = tunnel
+
+    def run(self, poll_interval: float = 1.0) -> None:
+        """Listen for tasks on attached tunnel and auto-execute them.
+
+        Polls for type='task' messages, runs execute(), sends results back.
+        """
+        import time as _time
+
+        if not hasattr(self, "_tunnel") or self._tunnel is None:
+            raise RuntimeError("No tunnel attached. Call agent.attach(tunnel) first.")
+
+        while True:
+            msg = self._tunnel.receive(type="task")
+            if msg:
+                result = self.execute(msg.payload)
+                self._tunnel.send(
+                    result.output if result.success else f"ERROR: {result.output}",
+                    to=msg.from_,
+                    type="result",
+                )
+            else:
+                _time.sleep(poll_interval)
 
     # --- Subagent / Worker spawning ---
 
@@ -454,7 +547,7 @@ class Agent:
                         {"name": tool_call.name, "output": result.output, "error": result.error}
                     )
                 messages.append(
-                    Message(role="user", content=f"Tool {tool_call.name} returned: {result.output}\n\nIf this answers the question, call give_result now.")
+                    Message(role="user", content=f"Tool {tool_call.name} returned: {result.output}")
                 )
 
         if self.tasks and task:
@@ -541,10 +634,10 @@ def _build_llm_router(config: AgentConfig) -> LLMRouter:
             raise
     else:
         gemini_model = (
-            config.model if config.provider == "gemini" else GeminiConfig().model
+            config.model if config.provider == "gemini" else "gemini-3-flash-preview"
         )
         gemini_temperature = (
-            config.temperature if config.provider == "gemini" else GeminiConfig().temperature
+            config.temperature if config.provider == "gemini" else 0.3
         )
         router.register_provider(
             "gemini",
@@ -603,5 +696,25 @@ def _build_llm_router(config: AgentConfig) -> LLMRouter:
         if not opus_keys:
             raise ValueError("Opus provider selected but no OPUS_API_KEY found")
         raise ValueError("Opus provider selected but OPUS_BASE_URL not set")
+
+    # --- OpenRouter / OpenAI-compatible ---
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    openrouter_base = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    if openrouter_key:
+        or_model = config.model if config.provider == "openrouter" else "openai/gpt-4o"
+        or_temp = config.temperature if config.provider == "openrouter" else 0.3
+        router.register_provider(
+            "openrouter",
+            OpenAIAdapter(
+                OpenAIConfig(
+                    api_keys=[openrouter_key],
+                    base_url=openrouter_base,
+                    model=or_model,
+                    temperature=or_temp,
+                )
+            ),
+        )
+    elif config.provider == "openrouter":
+        raise ValueError("OpenRouter provider selected but OPENROUTER_API_KEY not set")
 
     return router

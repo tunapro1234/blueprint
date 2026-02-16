@@ -1,0 +1,9 @@
+structure:
+  - grid.go: Position, Viewport, Grid types and viewport functions
+  - towers.go: tower placement and query functions
+
+tests:
+  - MoveCursor keeps cursor in bounds
+  - Viewport scrolls when cursor exits
+  - SetTower places tower correctly
+  - TowersInViewport returns only visible towers

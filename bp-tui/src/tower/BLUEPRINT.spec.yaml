@@ -1,0 +1,7 @@
+structure:
+  - tower.go: Tower type and all functions
+
+tests:
+  - NewTower creates tower with 1 layer
+  - AddLayer increments up to MaxLayers
+  - SetLayers clamps to 1-6 range

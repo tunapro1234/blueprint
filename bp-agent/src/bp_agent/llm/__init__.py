@@ -5,6 +5,7 @@ from .router import LLMRouter, ProviderAdapter
 from .rotation import RotationManager, RotationPolicy, RotationSlot
 from .gemini_adapter import GeminiAdapter, GeminiConfig, GEMINI_ALLOWED_MODELS
 from .codex_adapter import CodexAdapter, CodexConfig, CodexAuth, CODEX_MODELS
+from .openai_adapter import OpenAIAdapter, OpenAIConfig
 from .opus_adapter import OpusAdapter, OpusConfig
 
 __all__ = [
@@ -25,6 +26,8 @@ __all__ = [
     "CodexConfig",
     "CodexAuth",
     "CODEX_MODELS",
+    "OpenAIAdapter",
+    "OpenAIConfig",
     "OpusAdapter",
     "OpusConfig",
     "StreamChunk",

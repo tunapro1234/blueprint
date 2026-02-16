@@ -1,0 +1,14 @@
+structure:
+  - input.go: Action type and KeyToAction function
+
+tests:
+  - WASD maps to movement actions
+  - j maps to DrillDown
+  - k maps to DrillUp
+  - f maps to ToggleFlatten
+  - h maps to LayerDown
+  - l maps to LayerUp
+  - up maps to ZoomIn
+  - down maps to ZoomOut
+  - q maps to Quit
+  - unknown keys map to None

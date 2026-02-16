@@ -1,0 +1,54 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: input
+intent: |
+  Klavye girdilerini aksiyonlara çevirir.
+  WASD hareket, JK navigasyon, ok yukarı/aşağı zoom, Q çıkış.
+
+overview: |
+  Key mapping sistemi.
+  WASD - grid üzerinde cursor hareketi
+  J - tower'a gir (drill down)
+  K - üst katmana çık (drill up)
+  F - flattened view toggle
+  H/L - seçili tower'ın layer seçimini değiştir
+  Up/Down - zoom in/out
+  Q - çıkış
+
+api:
+  types:
+    Action:
+      enum:
+        - None
+        - MoveUp
+        - MoveDown
+        - MoveLeft
+        - MoveRight
+        - DrillDown
+        - DrillUp
+        - ToggleFlatten
+        - LayerDown
+        - LayerUp
+        - ZoomIn
+        - ZoomOut
+        - Quit
+
+  functions:
+    KeyToAction(key string) -> Action: |
+      w/W -> MoveUp
+      s/S -> MoveDown
+      a/A -> MoveLeft
+      d/D -> MoveRight
+      j/J -> DrillDown
+      k/K -> DrillUp
+      f/F -> ToggleFlatten
+      h/H -> LayerDown
+      l/L -> LayerUp
+      up -> ZoomIn
+      down -> ZoomOut
+      q/Q -> Quit
+
+implementation:
+  file: BLUEPRINT.spec.yaml

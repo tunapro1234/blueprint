@@ -1,0 +1,165 @@
+# bp - Blueprint Management Tool
+
+_meta:
+  version: "0.4.0"
+  updated: 2026-02-08
+  status: draft
+  # state_dir: ".bp"    # default
+  # mode: meek           # default
+
+intent: Blueprint dosyalarını yöneten, versiyonlayan ve takip eden CLI tool
+
+overview: |
+  bp tool, YAML formatındaki blueprint dosyalarını yönetir.
+
+  Temel konseptler:
+  - BLUEPRINT.yaml herhangi bir yere konulabilir (klasör zorunluluğu yok)
+  - Her blueprint kendi scope'unu tanımlar (default: bulunduğu klasör)
+  - bp recursive tarar, tüm BLUEPRINT.yaml dosyalarını bulur
+  - Alt klasörde blueprint varsa üst blueprint'in scope'undan otomatik çıkar
+  - .bp/ tool yönetir (state, history, cache)
+  - Snapshot: lokal (.bp/history/) + git tag (otomatik, opsiyonel)
+  - Symlink'ler snapshot history içinde (deps/ yok)
+  - Multi-language kökler: src-go/ (default) + src-<lang> (opsiyonel)
+
+  Snapshot kaynakları:
+  - Lokal: bp ss ile .bp/history/ altında dosya kopyası
+  - Git tag: bp/ prefix'li tag'ler otomatik snapshot olarak tanınır
+    - Örn: git tag bp/commands/v1 → bp bunu snapshot olarak görür
+    - Tag'den dosyalar .bp/cache/ altına materialize edilir (ihtiyaç olunca)
+    - Cache disposable, .gitignore'a eklenir
+
+  Development mode'lar (_meta.mode):
+  - meek (default): Hiçbir şeyi zorlamaz
+  - ro: Read-only enforcement
+  - hide: Kodları gizle/göster
+
+  Komutlar:
+  - bp validate: YAML syntax + schema check
+  - bp status: Kod değişmiş mi? (son snapshot'a göre) + dependents
+  - bp deps: Dependency graph (--upgrades ile upgrade kontrolü)
+  - bp map: Project map - tüm paketler, snapshot'lar, dependency'ler
+  - bp init: Yeni blueprint oluştur
+  - bp log: Snapshot geçmişi (lokal + git tag)
+  - bp diff: İki snapshot arasındaki fark
+  - bp show: Belirli snapshot'ın blueprint'ini göster
+  - bp impl: Blueprint'i koda derle (agentic) + snapshot
+  - bp implement: impl alias (uzun)
+  - bp ss: Manuel snapshot (lokal, git tag oluşturmaz)
+  - bp new-lang: Yeni dil kökü oluştur (default hedef: src-{lang})
+  - bp remove-lang: Dil kökünü archive'a taşı
+  - bp restore-lang: Archive'dan dil kökünü geri getir
+  - bp purge: Archive ve kullanılmayan snapshotları temizle
+  - bp plan: Değişen paketleri leaf-first sırada listeler
+  - bp cancel: Derlemeyi iptal eder (busy flag)
+  - bp upgrade: Dependency'leri güncelle (pin günceller)
+
+# =============================================================================
+# PLAN
+# =============================================================================
+
+plan:
+  - id: api_split
+    status: done
+    desc: API section ayrı dosyaya taşındı (BLUEPRINT.api.yaml).
+  - id: state_dir_tolerant_scan
+    status: done
+    desc: Recursive taramada _meta.state_dir okunamadığında fallback kullanılır.
+  - id: tests_exclude_state_dir
+    status: done
+    desc: tests.verification komutları state dizinini test kapsamı dışında bırakır.
+  - id: snapshot_imports
+    status: done
+    desc: commands/yamlparser snapshot'larında dependency symlink'leri bulunur (impl/deps yok).
+  - id: new_lang_command
+    status: done
+    desc: new-lang komutu ile yeni dil kökü oluşturma; API blueprint symlink, diğerleri kopya.
+  - id: remove_lang_command
+    status: planned
+    desc: remove-lang komutu ile dil kökünü archive'a taşıma.
+  - id: restore_lang_command
+    status: planned
+    desc: restore-lang komutu ile archive'dan dil kökünü geri getirme.
+  - id: purge_command
+    status: planned
+    desc: purge komutu ile archive ve kullanılmayan snapshotları temizleme.
+
+# =============================================================================
+# WORKFLOW POLICY
+# =============================================================================
+
+scope_policy:
+  summary: |
+    Blueprint scope yönetimi:
+    - BLUEPRINT.yaml herhangi bir klasöre konulabilir
+    - scope alanı ile kapsam tanımlanır (default: bulunduğu klasör)
+    - Alt klasörde BLUEPRINT.yaml varsa üst scope'tan otomatik çıkar (child wins)
+    - bp recursive discovery ile tüm BLUEPRINT.yaml dosyalarını bulur
+    - Klasör başına blueprint zorunluluğu yok
+
+dependency_policy:
+  summary: |
+    Symlink tabanlı dependency yönetimi:
+    - Paket klasörü edit alanıdır (working tree)
+    - Working tree'de dependency klasörü varsa symlink oluşturulmaz
+    - Snapshot'ta kod + dependency symlink'leri direkt bulunur (impl/, deps/ yok)
+    - {dep_name}/ → dependency'nin pinned snapshot'ına symlink (snapshot history içinde)
+    - bp upgrade pinleri günceller, symlink'ler snapshot'ta oluşur
+
+snapshot_policy:
+  summary: |
+    İki snapshot kaynağı:
+    - Lokal: bp ss → .bp/history/{id}/ (dosya kopyası)
+    - Git tag: bp/ prefix'li tag → otomatik snapshot olarak tanınır
+    - bp ss git tag oluşturmaz (sadece lokal)
+    - Git tag'ler bp log'da görünür
+    - Tag'den dep symlink gerekirse .bp/cache/'e materialize edilir
+    - Cache disposable, .gitignore'a eklenir, bp deps ile yeniden oluşturulur
+
+language_policy:
+  summary: |
+    Multi-language kökler:
+    - Varsayılan kök: src-go/
+    - Ek kökler language_roots ve language_root_patterns ile bulunur (default pattern: src-*)
+    - new-lang komutu paket ağacını oluşturur; API section içeren blueprint'ler symlink, diğerleri kopya
+    - Tek blueprint dosyası API+spec içeriyorsa split için sorar (evet ise api/spec ayrılır)
+    - Implementasyonlar diller arasında bağımsızdır
+    - API hash eşitliği map --langs ile kontrol edilir
+  default_root: src-go
+  default_language: go
+  language_root_template: src-{lang}
+  language_root_patterns:
+    - src-*
+  collision_handling: |
+    İsim çakışması durumunda hata verilir:
+    "Name collision - '{name}' exists both as code and dependency"
+    Çözüm: Kod dosyasını/klasörünü yeniden adlandır
+
+# =============================================================================
+# API
+# =============================================================================
+
+api: "./BLUEPRINT.api.yaml"
+
+# =============================================================================
+# DEPENDENCIES
+# =============================================================================
+
+dependencies:
+  internal:
+    - path: ./yamlparser
+      desc: Blueprint-aware YAML parser (fallback destekli)
+    - path: ./commands
+      desc: CLI komut handler'ları
+
+# =============================================================================
+# IMPLEMENTATION
+# =============================================================================
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+# =============================================================================
+# TESTS
+# =============================================================================
+
+tests: "./BLUEPRINT.spec.yaml"

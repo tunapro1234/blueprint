@@ -1,0 +1,29 @@
+structure:
+  - render.go: RenderTower, RenderGrid, CellDimensions
+  - tui.go: Model, Init, Update, View, Run
+
+notes:
+  - "Terminal aspect: visual square uses width = height * AspectRatio (AspectRatio=2)."
+  - "Zoom is uniform: height changes by 1, width changes by AspectRatio per step."
+  - "Box size uses additive steps on height, then clamp to MinBoxHeight/MaxBoxHeight."
+  - "CellDimensions must keep aspect ratio; no independent scaling per axis."
+  - "ViewportForWindow uses scaled cell size; partial cells are excluded (floor)."
+  - "RenderTower draws back layers first, then top layer last so lower borders never overlap top borders."
+  - "Tower layers grow to top-left; tower placement in a cell is bottom-left anchored."
+  - "Selected layer highlight only shows when tower has 2+ layers."
+  - "Selected layer starts at the top layer; h/l move down/up within bounds."
+
+tests:
+  - RenderTower shows stacked layers
+  - RenderTower highlights selected layer
+  - RenderGrid shows grid lines and towers
+  - RenderBar draws top separator and fills 6 rows
+  - RenderBar shows placeholder metrics lines
+  - WASD moves cursor
+  - j/k drill down/up
+  - h/l changes selected layer
+  - up/down zoom changes render scale by +1 height and +2 width
+  - zoom persists while drilling
+  - window resize recalculates viewport cells (no partial cells)
+  - f toggles flattened mode
+  - q quits application

@@ -1,0 +1,52 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: grid
+intent: |
+  Grid veri yapısı, viewport yönetimi ve tower koordinatları.
+  Sonsuz 2D grid üzerinde görünür alanı (viewport) takip eder.
+  Cursor pozisyonunu ve tower'ları tutar.
+
+overview: |
+  Grid, tower'ların yerleştirildiği 2D koordinat sistemi.
+  Viewport, ekranda görünen dikdörtgen alan.
+  Cursor, kullanıcının seçtiği hücre.
+  Towers map ile hangi koordinatta hangi tower var tutulur.
+
+dependencies:
+  - ../tower
+
+api:
+  types:
+    Position:
+      x: int
+      y: int
+
+    Viewport:
+      offset: Position     # sol üst köşe (world koordinatı)
+      width: int           # görünen hücre sayısı
+      height: int
+
+    Grid:
+      cursor: Position
+      viewport: Viewport
+      towers: map[Position]Tower
+
+  functions:
+    NewGrid(width, height int) -> Grid: creates grid with viewport size, empty towers
+
+    MoveCursor(g Grid, dx, dy int) -> Grid: moves cursor by delta, adjusts viewport if needed
+
+    SetTower(g Grid, pos Position, t Tower) -> Grid: places tower at position
+
+    GetTower(g Grid, pos Position) -> (Tower, bool): returns tower at position if exists
+
+    RemoveTower(g Grid, pos Position) -> Grid: removes tower from position
+
+    SetTowerLayers(g Grid, pos Position, layers int) -> Grid: sets layer count for tower at position
+
+    TowersInViewport(g Grid) -> []Position: returns positions of all towers visible in viewport
+
+implementation:
+  file: BLUEPRINT.spec.yaml

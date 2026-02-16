@@ -133,7 +133,8 @@ func TestCollectTrackedFilesFallback(t *testing.T) {
 		t.Fatalf("collectTrackedFiles: %v", err)
 	}
 	keys := sortedKeys(files)
-	expected := []string{"main.go", "notes.txt", "sub/file.go"}
+	// sub/ has its own BLUEPRINT.yaml — excluded from parent snapshot
+	expected := []string{"main.go", "notes.txt"}
 	if !reflect.DeepEqual(keys, expected) {
 		t.Fatalf("unexpected tracked files: %v", keys)
 	}
@@ -221,6 +222,135 @@ func TestChangedFilesFromState(t *testing.T) {
 	expected := []string{"BLUEPRINT.yaml", "a.txt", "deleted: old.txt", "new: new.txt"}
 	if !reflect.DeepEqual(changed, expected) {
 		t.Fatalf("unexpected changed files: %v", changed)
+	}
+}
+
+func TestCollectTrackedFilesFallback_DeepNestedBlueprint(t *testing.T) {
+	dir := t.TempDir()
+	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main")
+	// deep/inner has a blueprint — should be excluded
+	writeFile(t, filepath.Join(dir, "deep", "inner", "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
+	writeFile(t, filepath.Join(dir, "deep", "inner", "code.go"), "package inner")
+	// deep/ itself has no blueprint — its direct files should be included
+	writeFile(t, filepath.Join(dir, "deep", "util.go"), "package deep")
+
+	files, err := bpObj.collectTrackedFiles()
+	if err != nil {
+		t.Fatalf("collectTrackedFiles: %v", err)
+	}
+	keys := sortedKeys(files)
+	expected := []string{"deep/util.go", "main.go"}
+	if !reflect.DeepEqual(keys, expected) {
+		t.Fatalf("unexpected tracked files: %v, want %v", keys, expected)
+	}
+}
+
+func TestCollectTrackedFilesFallback_MultipleChildBlueprints(t *testing.T) {
+	dir := t.TempDir()
+	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
+	writeFile(t, filepath.Join(dir, "root.go"), "package root")
+
+	// Three child blueprints — all should be excluded
+	for _, child := range []string{"database", "api", "tools"} {
+		writeFile(t, filepath.Join(dir, child, "BLUEPRINT.yaml"), "_meta:\n  version: \"1\"\n")
+		writeFile(t, filepath.Join(dir, child, "main.go"), "package "+child)
+	}
+	// One regular directory — should be included
+	writeFile(t, filepath.Join(dir, "utils", "helpers.go"), "package utils")
+
+	files, err := bpObj.collectTrackedFiles()
+	if err != nil {
+		t.Fatalf("collectTrackedFiles: %v", err)
+	}
+	keys := sortedKeys(files)
+	expected := []string{"root.go", "utils/helpers.go"}
+	if !reflect.DeepEqual(keys, expected) {
+		t.Fatalf("unexpected tracked files: %v, want %v", keys, expected)
+	}
+}
+
+func TestCollectTrackedFiles_StructureEntryMissingOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	content := "_meta:\n  version: \"1\"\nimplementation:\n  structure:\n    - existing.go\n    - missing.go\n"
+	bpObj := loadBlueprintFromDir(t, dir, content)
+	writeFile(t, filepath.Join(dir, "existing.go"), "package main")
+	// missing.go does not exist on disk
+
+	files, err := bpObj.collectTrackedFiles()
+	if err != nil {
+		t.Fatalf("collectTrackedFiles: %v", err)
+	}
+	keys := sortedKeys(files)
+	expected := []string{"existing.go"}
+	if !reflect.DeepEqual(keys, expected) {
+		t.Fatalf("unexpected tracked files: %v, want %v", keys, expected)
+	}
+}
+
+func TestCollectTrackedFiles_SymlinkToSnapshotSkipped(t *testing.T) {
+	dir := t.TempDir()
+	bpObj := loadBlueprintFromDir(t, dir, "_meta:\n  version: \"1\"\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main")
+
+	// Create a symlink that points to a .bp/history/ path (dependency symlink)
+	snapTarget := filepath.Join(dir, ".bp", "history", "ss-aabb1122")
+	if err := os.MkdirAll(snapTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(snapTarget, "dep.go"), "package dep")
+	depLink := filepath.Join(dir, "mydep")
+	rel, _ := filepath.Rel(dir, snapTarget)
+	if err := os.Symlink(rel, depLink); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := bpObj.collectTrackedFiles()
+	if err != nil {
+		t.Fatalf("collectTrackedFiles: %v", err)
+	}
+	keys := sortedKeys(files)
+	// mydep/ symlink to .bp/history/ should be skipped
+	expected := []string{"main.go"}
+	if !reflect.DeepEqual(keys, expected) {
+		t.Fatalf("unexpected tracked files: %v, want %v", keys, expected)
+	}
+}
+
+func TestComputeImplHash_Empty(t *testing.T) {
+	h := ComputeImplHash(map[string]string{})
+	expected := HashString("")
+	if h != expected {
+		t.Fatalf("expected empty hash, got %s", h)
+	}
+}
+
+func TestComputeDepsHash_Empty(t *testing.T) {
+	h := ComputeDepsHash(map[string]DepState{})
+	expected := HashString("")
+	if h != expected {
+		t.Fatalf("expected empty hash, got %s", h)
+	}
+}
+
+func TestComputeDepsHash_SkipsEmptyIDs(t *testing.T) {
+	deps := map[string]DepState{
+		"./empty": {Pinned: "", Latest: ""},
+		"./has":   {Pinned: "snap-1234"},
+	}
+	h := ComputeDepsHash(deps)
+	// Should only include ./has
+	expected := HashString("./has:snap-1234\n")
+	if h != expected {
+		t.Fatalf("unexpected deps hash: %s", h)
+	}
+}
+
+func TestSaveState_NilReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	bpObj := &Blueprint{Dir: dir, StateDir: filepath.Join(dir, ".bp")}
+	if err := bpObj.SaveState(nil); err == nil {
+		t.Fatal("expected error for nil state")
 	}
 }
 

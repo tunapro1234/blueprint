@@ -1,0 +1,142 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-13 12:06:43",
+    "total_runs": 6,
+    "runs_per_mode": 1,
+    "models": [
+      "kimi25"
+    ],
+    "task_types": [
+      "translation"
+    ],
+    "total_elapsed_seconds": 988.0
+  },
+  "results": [
+    {
+      "task_type": "translation",
+      "task_id": "translation/en-tr/000",
+      "bp_mode": "no_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 37.5,
+      "score": {
+        "total": 1.0,
+        "passed": 1,
+        "tests_total": 1,
+        "details": {
+          "predicted": "Bug\u00fcn hava \u00e7ok g\u00fczel.",
+          "reference": "Bug\u00fcn hava \u00e7ok g\u00fczel.",
+          "similarity": 1.0
+        }
+      },
+      "model_key": "kimi25",
+      "model_label": "Kimi K2.5",
+      "run_index": 1
+    },
+    {
+      "task_type": "translation",
+      "task_id": "translation/en-tr/000",
+      "bp_mode": "with_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 19.5,
+      "score": {
+        "total": 1.0,
+        "passed": 1,
+        "tests_total": 1,
+        "details": {
+          "predicted": "Bug\u00fcn hava \u00e7ok g\u00fczel.",
+          "reference": "Bug\u00fcn hava \u00e7ok g\u00fczel.",
+          "similarity": 1.0
+        }
+      },
+      "model_key": "kimi25",
+      "model_label": "Kimi K2.5",
+      "run_index": 1
+    },
+    {
+      "task_type": "translation",
+      "task_id": "translation/en-tr/001",
+      "bp_mode": "no_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 875.7,
+      "score": {
+        "total": 0.923,
+        "passed": 1,
+        "tests_total": 1,
+        "details": {
+          "predicted": "En yak\u0131n hastaneyi bulmama yard\u0131mc\u0131 olabilir misiniz?",
+          "reference": "En yak\u0131n hastaneyi bulmama yard\u0131m edebilir misiniz?",
+          "similarity": 0.923
+        }
+      },
+      "model_key": "kimi25",
+      "model_label": "Kimi K2.5",
+      "run_index": 1
+    },
+    {
+      "task_type": "translation",
+      "task_id": "translation/en-tr/001",
+      "bp_mode": "with_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 15.9,
+      "score": {
+        "total": 0.944,
+        "passed": 1,
+        "tests_total": 1,
+        "details": {
+          "predicted": "En yak\u0131n hastaneyi bulmamda bana yard\u0131m edebilir misiniz?",
+          "reference": "En yak\u0131n hastaneyi bulmama yard\u0131m edebilir misiniz?",
+          "similarity": 0.944
+        }
+      },
+      "model_key": "kimi25",
+      "model_label": "Kimi K2.5",
+      "run_index": 1
+    },
+    {
+      "task_type": "translation",
+      "task_id": "translation/en-tr/002",
+      "bp_mode": "no_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 25.4,
+      "score": {
+        "total": 1.0,
+        "passed": 1,
+        "tests_total": 1,
+        "details": {
+          "predicted": "Bir fincan kahve sipari\u015f etmek istiyorum, l\u00fctfen.",
+          "reference": "Bir fincan kahve sipari\u015f etmek istiyorum, l\u00fctfen.",
+          "similarity": 1.0
+        }
+      },
+      "model_key": "kimi25",
+      "model_label": "Kimi K2.5",
+      "run_index": 1
+    },
+    {
+      "task_type": "translation",
+      "task_id": "translation/en-tr/002",
+      "bp_mode": "with_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 14.0,
+      "score": {
+        "total": 0.867,
+        "passed": 1,
+        "tests_total": 1,
+        "details": {
+          "predicted": "Bir fincan kahve almak istiyorum, l\u00fctfen.",
+          "reference": "Bir fincan kahve sipari\u015f etmek istiyorum, l\u00fctfen.",
+          "similarity": 0.867
+        }
+      },
+      "model_key": "kimi25",
+      "model_label": "Kimi K2.5",
+      "run_index": 1
+    }
+  ]
+}

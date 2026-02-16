@@ -1,0 +1,84 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: tui
+intent: |
+  Bubbletea tabanlı interaktif TUI.
+  Grid ve tower render, WASD ile hareket.
+
+overview: |
+  Bubbletea Model-Update-View pattern.
+  render.go - ASCII art çizim (tower, grid)
+  tui.go - interaktif uygulama
+  WASD hareket, JK drill down/up, H/L layer seçimi, ok yukarı/aşağı zoom, F flattened toggle, Q çıkış.
+  Window resize ile viewport dinamik güncellenir (yarım kalan bloklar görünmez).
+  Alt kısımda 6 satırlık bar alanı ayrılır; viewport bu alanı kullanmaz.
+  Üstte sabit header yok; viewport üstten başlar.
+  Bar ayrı bir bileşen olarak render edilir ve dünya sınırına çizgi çeker.
+  Bar, placeholder metrikleri gösterir: tokens per second, lines per minute, water usage per day, snapshots today.
+  Terminal karakter oranı nedeniyle **görsel kare** için 2:1 en/boy oranı kullanılır.
+  Zoom seviyesi box ölçülerine **aditif** uygulanır; her adımda yükseklik 1, genişlik 2 karakter değişir.
+  Box boyutu: height = clamp(BaseBoxHeight + zoom_step, MinBoxHeight, MaxBoxHeight),
+  width = height * AspectRatio (AspectRatio=2).
+  Tower layer çizimi arka katmanlardan başlar, en üst katman en son çizilir.
+  Üst katmanın kenarları alttaki katmanların çizgilerini kapatır; overlap görünmez.
+  Tower layer yönü eskisi gibi sol‑üst büyür.
+  Tower, grid hücresinde sol‑alta hizalanır; katman sayısı artsa da taban çizgisi yerinde kalır.
+  Selected layer vurgusu sadece 2+ layer olan tower'larda görünür.
+  SSH üzerinden kullanım için tam klavye odaklı, düşük bant genişliğine uygun render.
+
+dependencies:
+  - ../bar
+  - ../input
+  - ../world
+
+api:
+  types:
+    Model:
+      world: World
+      bar: BarData
+
+  constants:
+    AspectRatio: 2          # width = height * AspectRatio
+    BaseBoxHeight: 4
+    MinBoxHeight: 1
+    MaxBoxHeight: 6
+    BottomBarRows: 6
+
+  functions:
+    RenderTower(t HierTower, zoom_step int, selected bool) -> string: renders tower with 2:1 aspect (visual square) and highlights selected_layer
+
+    RenderGrid(g HierGrid, zoom_step int) -> string: renders viewport with grid lines and towers (zoom-aware)
+
+    CellDimensions(zoom_step int) -> (width, height int): returns cell size using 2:1 aspect
+
+    ViewportForWindow(width, height, zoom_step int) -> (cols, rows int): returns visible cell counts (floor; no partial cells)
+
+    NewModel() -> Model: creates initial model with sample towers
+
+    Run() -> error: starts bubbletea program
+
+examples:
+  zoom_steps:
+    - zoom_step: 0
+      box: "8x4"
+    - zoom_step: -4
+      box: "2x1"
+    - zoom_step: 2
+      box: "12x6"
+  tower_layering:
+    - good: "     ┌─────────────┐\n   ┌─│             │\n ┌─│ │             │\n │ │ │             │\n │ │ │             │\n │ │ │             │\n │ │ └─────────────┘\n │ └─────────────┘\n └─────────────┘"
+  square_example:
+    - good: |
+          ┌──────┐
+          │      │
+          │      │
+          └──────┘
+  rules:
+    - "height = clamp(BaseBoxHeight + zoom_step, MinBoxHeight, MaxBoxHeight)"
+    - "width = height * AspectRatio"
+    - "horizontal and vertical use the same zoom_step; do not scale independently"
+
+implementation:
+  file: BLUEPRINT.spec.yaml

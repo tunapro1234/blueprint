@@ -1,0 +1,32 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: tower
+intent: |
+  Tower veri yapısı.
+  Bir paketi temsil eder, layer sayısı snapshot sayısına karşılık gelir.
+
+overview: |
+  Tower bir grid hücresinde durur.
+  Her layer bir snapshot/versiyon.
+  Max 6 layer.
+
+api:
+  types:
+    Tower:
+      name: string
+      layers: int           # 1-6 arası
+
+  constants:
+    MaxLayers: 6
+
+  functions:
+    NewTower(name string) -> Tower: creates tower with 1 layer
+
+    AddLayer(t Tower) -> Tower: adds layer if under max, returns same if at max
+
+    SetLayers(t Tower, n int) -> Tower: sets layer count (clamped to 1-6)
+
+implementation:
+  file: BLUEPRINT.spec.yaml

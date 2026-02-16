@@ -1,0 +1,91 @@
+_meta:
+  version: "0.2.0"
+  updated: 2026-02-13
+  status: mvp
+  root: true
+
+project:
+  name: bp-tunnel
+  tagline: Inter-agent messaging for Blueprint ecosystem
+
+author:
+  name: Tuna Gul
+  github: tunapro1234
+
+intent: |
+  Ajanlar arasi mesajlasma sistemi. Standart mesaj formati tanimi +
+  pluggable transport katmani ile farkli iletim yontemlerini destekler.
+  Ilk transport: file-based (mailbox dizinleri).
+
+overview: |
+  bp-tunnel, Blueprint ekosistemindeki ajanlarin birbirleriyle
+  haberlesebilmesini saglar.
+
+  Temel kavramlar:
+  - Message: Standart mesaj formati (YAML) - from, payload, opsiyonel to
+  - Transport: Mesajlarin nasil iletildigini belirleyen katman (ABC)
+  - Tunnel: Named channel - birden fazla agent katilabilir, admin sistemi
+  - Mailbox: Her agent'in tunnel icindeki mesaj kutusu
+
+  Ozellikler:
+  - Broadcast (to=None) ve direct mesaj (to="agent")
+  - wait_for(from_=) ile blocking bekle, send_wait() ile gonder+bekle
+  - Admin sistemi: creator admin, promote/demote/leave
+  - Path traversal koruması, atomik dosya yazimi, file locking
+  - Bozuk YAML ve race condition dayanikliligi
+
+  Ilk transport file-based: /tmp/bp-tunnel/ altinda her tunnel bir dizin,
+  her agent'in mailbox'i bir alt dizin, her mesaj bir YAML dosyasi.
+
+plan:
+  - id: message_format
+    status: done
+    desc: Message dataclass + YAML serialization
+  - id: transport_abc
+    status: done
+    desc: Transport abstract base class
+  - id: file_transport
+    status: done
+    desc: File-based transport implementasyonu
+  - id: tunnel_wrapper
+    status: done
+    desc: Tunnel class (agent identity + transport + admin)
+  - id: cli
+    status: done
+    desc: CLI (create, join, send, recv, listen, promote, demote, leave, info, ls)
+  - id: security_fixes
+    status: done
+    desc: Path traversal, race condition, auth, corrupt YAML, idempotency fixleri
+
+structure:
+  directories:
+    src/:
+      desc: Python source
+    src/bp_tunnel/:
+      desc: Core package
+  files:
+    pyproject.toml:
+      desc: Package metadata + build config (hatchling)
+    README.md:
+      desc: PyPI readme
+    LICENSE:
+      desc: MIT license
+    src/bp_tunnel/__init__.py:
+      desc: Public API exports + __version__
+    src/bp_tunnel/message.py:
+      desc: Message dataclass + serialization
+    src/bp_tunnel/transport.py:
+      desc: Transport ABC
+    src/bp_tunnel/file_transport.py:
+      desc: File-based transport
+    src/bp_tunnel/tunnel.py:
+      desc: Tunnel wrapper class
+    src/bp_tunnel/cli.py:
+      desc: CLI entry point (bp-tunnel command)
+    src/bp_tunnel/tools.py:
+      desc: AI-callable tool functions
+
+dependencies:
+  external:
+    - name: pyyaml
+      desc: YAML serialization

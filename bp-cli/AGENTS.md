@@ -1,273 +1,308 @@
-# bp-cli Implementation Playbook
+# Blueprint Development Guide
 
-Bu repo `bp` (blueprint-cli) ile snapshot-based implementation kullanır.
+Blueprint (`bp`) is a snapshot-based code management tool. Code is organized into packages defined by `BLUEPRINT.yaml` files. Each package maintains immutable snapshots of its code and tracks dependencies on other packages through pinned snapshot versions.
 
-## Aktif Plan: Yapısal Sadeleştirme
+## Core Concepts
 
-**Durum:** Planlama aşamasında
+### Snapshots Are the Unit of Work
 
-### Değişiklikler
-1. **deps/ klasörü kaldırıldı** - Symlink'ler sadece snapshot history içinde
-2. **impl/ klasörü kaldırıldı** - Kod direkt snapshot'ta
-3. **3 development mode** - meek, ro, hide (default: meek)
-4. **Default state_dir** - `.blueprint/` (gizli)
+A **snapshot** is a frozen copy of a package's code at a point in time. Snapshots live in `.bp/history/{id}/` and are **immutable** (read+execute permissions, no writes).
 
-### Yeni Snapshot Yapısı
 ```
-package/
-├── BLUEPRINT.yaml
-├── main.go
-├── yamlparser/                      # gerçek dependency klasörü
-├── .blueprint/
-│   ├── state.yaml
-│   ├── current
-│   └── history/
-│       └── {snapshot_id}/
-│           ├── BLUEPRINT.yaml
-│           ├── meta.yaml
-│           ├── main.go
-│           └── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
+.bp/history/add-parser-a1b2/
+├── BLUEPRINT.yaml          # Blueprint definition at that point
+├── meta.yaml               # Timestamp, hashes, message, source
+├── main.go                 # Code files (direct copies)
+├── util.go
+├── yamlparser/ → symlink   # Dependency: pinned version
+└── commands/  → symlink    # Dependency: pinned version
 ```
 
-### Development Modes
-| Mode | `bp impl` | `bp ss` | Dosyalar |
-|------|-----------|---------|----------|
-| **meek** (default) | busy flag only | snapshot only | Her zaman var, her zaman writable |
-| **ro** | derleme boyunca writable, sonra read-only | izin değiştirmez | Her zaman var, idle'da read-only |
-| **hide** | derleme için görünür, sonra gizle | snapshot alır (kod yoksa boş) | Sadece derleme sırasında var |
+Working tree files are always live and editable. Snapshots are the stable, versioned artifacts.
 
-```yaml
-_meta:
-  state_dir: ".blueprint"  # default
-  mode: meek               # default (meek | ro | hide)
+### Dependencies Are Symlinks to Pinned Snapshots
+
+When a snapshot is created, each dependency becomes a **symlink** pointing to a specific snapshot of that dependency:
+
+```
+# Inside a snapshot:
+yamlparser/ → ../../../yamlparser/.bp/history/stable-c3d4/
+commands/   → ../../../commands/.bp/history/v2-api-e5f6/
+```
+
+This means each snapshot records **exactly which version** of every dependency it was built against. Changing the pinned version changes which snapshot the symlink targets.
+
+### Two Snapshot Sources
+
+**Local snapshots** — created by `bp ss`, stored in `.bp/history/`:
+```bash
+bp ss -m "add validation"    # Creates: add-validation-a1b2
+```
+
+**Git tag snapshots** — tags matching `bp/{path}/*` are auto-recognized:
+```bash
+git tag bp/commands/v1-release    # Appears in bp log as [tag]
+```
+
+Git tags are materialized on demand into `.bp/cache/` when needed as dependency targets. `bp ss` never creates git tags — it only creates local snapshots.
+
+### Scope and Discovery
+
+Each `BLUEPRINT.yaml` defines its own **scope** (which folders it manages). Default scope: the directory containing the blueprint.
+
+**Child wins rule**: If a subdirectory has its own `BLUEPRINT.yaml`, it is excluded from the parent's scope automatically.
+
+```
+project/
+├── BLUEPRINT.yaml              # Scope: project/ (excluding src-go/)
+└── src-go/
+    ├── BLUEPRINT.yaml          # Scope: src-go/ (excluding commands/)
+    └── commands/
+        └── BLUEPRINT.yaml      # Scope: commands/
+```
+
+`bp` recursively discovers all blueprints and builds the dependency graph.
+
+---
+
+## Workflow
+
+### Creating Snapshots
+
+```bash
+# 1. Edit code in working tree
+# 2. Validate + test + freeze
+bp ss -m "feature: new parser"
+
+# What happens:
+#   - BLUEPRINT.yaml validated
+#   - tests.verification commands run
+#   - Code copied to .bp/history/{id}/
+#   - Dependency symlinks created (pointing to pinned versions)
+#   - Files set to read+execute (0555)
+#   - state.yaml and .bp/current updated
+```
+
+### Upgrading Dependencies
+
+```bash
+# Upgrade to latest available snapshot
+bp upgrade ./yamlparser
+
+# What happens:
+#   - Finds latest snapshot of yamlparser
+#   - Updates pinned version in state.yaml
+#   - Runs tests — if fail: rollback + mark rotten
+#   - If pass: pin is updated
+```
+
+### Pinning to a Specific Version
+
+```bash
+# Pin to any snapshot (upgrade or downgrade)
+bp upgrade --to stable-c3d4 ./yamlparser
+
+# Works with:
+#   - Local snapshot IDs
+#   - Git tag snapshot IDs
+#   - Partial ID prefix matching
+```
+
+### Checking Status
+
+```bash
+bp status              # Health check: fresh/stale, dependency upgrades
+bp log -n 10           # Snapshot history (local + git tags)
+bp deps                # Dependency graph
+bp diff id1 id2        # Compare two snapshots
+```
+
+### Agentic Compilation
+
+```bash
+bp implement           # Compile from blueprint + auto-snapshot
+bp implement --no-snapshot   # Compile without snapshotting
+bp cancel              # Abort active compilation
 ```
 
 ---
 
-## Blueprint Akışı
+## Blueprint File Structure
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  1. PLAN (Tasarım Aşaması)                                  │
-│     └── BLUEPRINT.yaml yaz: intent, api, dependencies       │
-│     └── BLUEPRINT.spec.yaml yaz: structure (dosya listesi)  │
-│                           │                                  │
-│                           ▼                                  │
-│  2. bp plan (default recursive)                             │
-│     └── Leaf-first sırada değişen paketleri listeler        │
-│                           │                                  │
-│                           ▼                                  │
-│  3. bp impl [--no-snapshot|-ns]                             │
-│     └── Agentic derleme + opsiyonel snapshot                │
-│     └── impl.lock sadece derleme sırasında "busy" flag      │
-│                           │                                  │
-│                           ▼                                  │
-│  4. MANUAL IMPLEMENTATION (Opsiyonel)                       │
-│     └── Working tree her zaman aktif                        │
-│     └── Kod düzenle, test et                                │
-│                           │                                  │
-│                           ▼                                  │
-│  5. bp ss -m "message"                                      │
-│     └── Validate + test çalıştır                            │
-│     └── history/{id}/ altına kopyalar + symlink             │
-│     └── snapshot read+execute yapılır                       │
-│                           │                                  │
-│                           ▼                                  │
-│  6. ITERATION (Sonraki değişiklik)                          │
-│     └── bp impl veya bp ss                                  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+### Minimal
+
+```yaml
+_meta:
+  version: "0.1.0"
+
+intent: |
+  What this package does and why
 ```
 
-## Root Blueprint
-- `_meta.root: true` ile proje root'u işaretlenir
-- Alt paketlerde argümansız komut → root bulunur, recursive çalıştırılır
-- Explicit path verilirse (`.`, `./sub`) bulunduğun yerden recursive çalışır
-- `--no-recursive` verilirse sadece tek paket çalışır
-- Root bulunamazsa en üstteki blueprint root sayılır
+### Full
+
+```yaml
+_meta:
+  version: "0.1.0"
+  status: draft           # draft | ready | deprecated
+  state_dir: ".bp"        # Default
+  mode: meek              # meek | ro | hide
+  root: true              # Mark as project root
+
+intent: |
+  Purpose description
+
+api:
+  exports:
+    - name: Parser
+      type: interface
+
+implementation:
+  structure:
+    - main.go
+    - util.go
+    - commands/:
+        has_blueprint: true
+
+dependencies:
+  internal:
+    - path: ./yamlparser
+    - path: ./commands
+
+tests:
+  verification:
+    - go test ./...
+```
+
+### File Variants
+
+| File | Purpose |
+|------|---------|
+| `BLUEPRINT.yaml` | Main definition (intent, api, dependencies) |
+| `BLUEPRINT.api.yaml` | API section (separated for large projects) |
+| `BLUEPRINT.spec.yaml` | Implementation spec + test scenarios |
+
+---
+
+## State Directory (`.bp/`)
+
+```
+.bp/
+├── current              # Active snapshot ID (text file)
+├── state.yaml           # Pinned deps, file hashes, dependents
+├── impl.lock            # Present only during compilation
+├── history/
+│   └── {snapshot-id}/   # Immutable snapshot directories
+└── cache/               # Materialized git tag snapshots (disposable)
+```
+
+### state.yaml
+
+```yaml
+snapshot_id: "add-parser-a1b2"
+deps:
+  "./yamlparser":
+    pinned: "stable-c3d4"       # Currently used version
+    latest: "new-api-e5f6"      # Newest available
+    api_hash: "sha256:..."
+    api_changed: true            # Breaking change detected
+    rotten: false                # true if upgrade tests failed
+dependents:
+  "../root":
+    using: "add-parser-a1b2"    # Reverse tracking
+```
+
+---
+
+## Snapshot ID Format
+
+| Pattern | Example | When |
+|---------|---------|------|
+| `{slug}-{hash4}` | `add-validation-a1b2` | With message |
+| `ss-{hash8}` | `ss-a3f2b7c1` | Without message |
+
+Slug: lowercase, max 20 chars. Hash: SHA-256 truncated.
+
+---
+
+## Modes
+
+| Mode | Working Tree | After Compile | Use Case |
+|------|-------------|---------------|----------|
+| **meek** (default) | Always writable | No change | Development |
+| **ro** | Writable during compile | Read-only | Production |
+| **hide** | Visible during compile | Files deleted | Proprietary |
+
+---
+
+## Rotten Snapshots
+
+When `bp upgrade` runs tests and they **fail**:
+1. Pin is rolled back to previous version
+2. Target snapshot marked `rotten: true`
+3. All commands warn about rotten dependencies
+4. Future upgrades skip rotten snapshots (use `--force` to override)
+
+---
+
+## Multi-Language
 
 ```bash
-# yamlparser/ içindeyken
-bp validate                 # → root bul, tüm proje için recursive
-bp validate .               # → sadece bu paket (recursive)
-bp validate . --no-recursive  # → sadece bu paket (non-recursive)
+bp new-lang js           # Create src-js/ from src-go/
+bp remove-lang ts        # Archive src-ts/ → .bp/archive/
+bp restore-lang ts       # Restore from archive
+bp purge                 # Clean archives and old snapshots
+bp map --langs           # Compare API hashes across languages
 ```
 
-## Dosya Yapısı
-- `BLUEPRINT.yaml`: intent, API, dependencies (root'ta `_meta.root: true`)
-- `BLUEPRINT.spec.yaml`: structure (impl dosyaları), tests
-- `.blueprint/history/{id}/`: Snapshot'lanmış kod + symlink'ler
-- `.blueprint/current`: Aktif snapshot ID
-- `.blueprint/impl.lock`: Derleme sırasında busy flag
-- `.blueprint/state.yaml`: Dependency pin'leri, staleness bilgisi
+API blueprints are **symlinked** (shared interface). Spec blueprints are **copied** (language-specific).
 
-## Symlink Yapısı (Yeni)
-```
-package/
-├── main.go
-├── util.go
-├── yamlparser/         # gerçek dependency klasörü
-└── commands/           # gerçek dependency klasörü
-```
+---
 
-Snapshot içinde:
-```
-.blueprint/history/{id}/
-├── BLUEPRINT.yaml
-├── meta.yaml
-├── main.go
-├── util.go
-├── yamlparser/ → ../../yamlparser/.blueprint/history/{pinned_id}/
-└── commands/ → ../../commands/.blueprint/history/{pinned_id}/
-```
+## Command Reference
 
-## Multi-language Kökler
-- Varsayılan dil kökü `src-go/` (konfigüre edilebilir)
-- Ek dil kökleri `language_policy.language_roots` ve `language_policy.language_root_patterns` ile bulunur (default pattern: `src-*`)
-- `bp new-lang <lang>` yeni kök oluşturur (default hedef `language_policy.language_root_template`, default `src-{lang}`):
-  - Paket klasörleri oluşturulur
-  - API section içeren blueprint dosyaları symlink edilir, diğerleri kopyalanır
-  - Tek blueprint dosyasında API+spec varsa split için sorar (evet ise api/spec ayrılır)
-  - Implementasyon dosyaları kopyalanmaz
-- `bp map --langs` kökler arası API hash eşitliğini gösterir
+| Command | Description |
+|---------|-------------|
+| `bp ss -m "msg"` | Create snapshot (validate + test + freeze) |
+| `bp implement` | Agentic compile + optional snapshot |
+| `bp upgrade [dep]` | Update dependency pin to latest |
+| `bp upgrade --to <id> <dep>` | Pin dependency to specific version |
+| `bp status` | Check freshness and dependency state |
+| `bp log [-n N]` | Snapshot history (local + git tags) |
+| `bp diff [id1] [id2]` | Compare snapshots |
+| `bp show [id]` | View snapshot contents |
+| `bp deps` | Dependency graph (topological order) |
+| `bp plan` | List stale packages (leaf-first) |
+| `bp validate` | Check blueprint syntax and schema |
+| `bp map` | Full project snapshot map |
+| `bp init` | Create new BLUEPRINT.yaml |
+| `bp cancel` | Abort active compilation |
+| `bp new-lang <lang>` | Create language variant |
+| `bp remove-lang <lang>` | Archive language |
+| `bp restore-lang <lang>` | Restore archived language |
+| `bp purge` | Clean old snapshots and archives |
 
-Örnek konfig:
-```
-language_policy:
-  default_root: src-go
-  default_language: go
-  language_root_template: src-{lang}
-  language_roots:
-    - src-go
-  language_root_patterns:
-    - src-*
-```
+### Common Flags
 
-## Temel Komutlar
+| Flag | Where | Effect |
+|------|-------|--------|
+| `--no-recursive` | Most commands | Run on single package only |
+| `--skip-tests` | `bp ss` | Skip test verification |
+| `--no-snapshot` | `bp implement` | Compile without snapshotting |
+| `--all` | `bp upgrade` | Upgrade all dependencies |
+| `--safe` | `bp upgrade` | Skip if API changed |
+| `--force` | `bp upgrade` | Allow rotten snapshots |
+| `--to <id>` | `bp upgrade` | Pin to specific version |
+| `-n <count>` | `bp log` | Limit history entries |
 
-```bash
-# 1. Blueprint yaz (manuel)
-# 2. (Opsiyonel) değişenleri sırala (default recursive)
-./bp plan .
+---
 
-# 3. Agentic derleme + snapshot (opsiyonel)
-./bp impl
+## Key Rules
 
-# 4. Kodu yaz, test et (import'lar gerçek dependency klasörlerinden)
-cd src-go && go test ./...
-
-# 5. Manuel snapshot
-./bp ss -m "implement feature X"
-
-# 6. Dependency güncelle (pin güncellenir; symlink snapshot'ta oluşur)
-./bp upgrade --all
-
-# 6.5 Yeni dil kökü oluştur (opsiyonel)
-./bp new-lang <lang>
-
-# 7. Sonraki iterasyon için
-./bp impl veya ./bp ss
-```
-
-## Snapshot Davranışı
-
-### `bp ss` çalıştırıldığında:
-1. Blueprint validate edilir
-2. `tests.verification` komutları çalıştırılır
-3. Dosyalar `history/{id}/` altına kopyalanır (BLUEPRINT.yaml, kod, symlink'ler)
-4. Snapshot altındaki tüm dosyalar read+execute yapılır (chmod 0555, symlink hariç)
-5. Working tree'ye dokunulmaz
-
-### `bp impl` çalıştırıldığında:
-- Agentic derleme yapılır, opsiyonel snapshot alınır (`--no-snapshot` ile kapatılır)
-- Mode'a göre idle davranış:
-  - **meek**: hiçbir şey yapma
-  - **ro**: dosyaları read-only yap
-  - **hide**: kod dosyalarını gizle
-- impl.lock sadece derleme süresince "busy" flag'dir
-
-### `bp upgrade` çalıştırıldığında:
-1. state.yaml pinned/latest bilgileri güncellenir
-2. `tests.verification` çalıştırılır
-3. Test başarısız olursa: rollback + rotten flag
-4. Test başarılı olursa: state.yaml güncellenir
-
-## Rotten Flag Sistemi
-Bir dependency upgrade'ı sırasında testler fail ederse:
-- Pinned state eski halinde kalır (rollback)
-- Dependency'nin `meta.yaml` dosyasına `rotten: true` yazılır
-- Consumer'ın `state.yaml` deps bölümüne `rotten: true` eklenir
-
-Rotten dependency uyarısı:
-- **Tüm bp komutları** başlangıçta rotten dependency kontrolü yapar
-- Rotten varsa uyarı gösterir: `⚠ Rotten dependency: {dep} (upgrade failed)`
-- `bp upgrade` rotten dependency'leri atlar (--force ile zorlanabilir)
-
-## Import Kullanımı (Yeni)
-```go
-// Go - go.mod'da replace direktifi
-replace proj/yamlparser => ./yamlparser
-```
-
-**Eski (deps/ ile):**
-```go
-import "proj/deps/yamlparser" // KALDIRILDI
-```
-
-## State Directory
-- `_meta.state_dir` ile ayarlanır (default: `.blueprint/`)
-- İçerik: `current`, `state.yaml`, `history/`
-
-## Development Mode
-- `_meta.mode` ile ayarlanır (default: `meek`)
-- **meek**: Hiçbir şeyi zorlamaz
-- **ro**: idle durumda read-only zorlar (chmod)
-- **hide**: derleme sonrası kodları gizler
-
-## Kurallar
-1. Önce blueprint yaz, sonra implement et
-2. Blueprint değişikliği olmadan yeni özellik ekleme
-3. API imzalarını koru (breaking change için yeni versiyon)
-4. Her snapshot için anlamlı mesaj yaz
-5. `bp impl` derleme + opsiyonel snapshot yapar (`--no-snapshot` hariç)
-6. Manuel değişiklikler için `bp ss` kullan
-7. Import'lar gerçek dependency klasörlerinden yapılır
-8. `bp upgrade` sadece pinleri günceller (symlink snapshot'ta oluşur)
-
-## Agent Rehberi (Önerilen İş Akışı)
-1. `bp plan .` ile leaf-first sıra çıkar (default recursive)
-2. Her paket için:
-   - `bp impl` (agentic) veya manuel düzenle
-   - Değişiklikleri yap (import'lar gerçek dependency klasörlerinden)
-   - Testleri çalıştır
-   - `bp ss -m "..."` ile snapshot al
-3. Dependency güncellemek için:
-   - `bp upgrade --all` (pinler güncellenir)
-4. `bp status .` ile genel kontrol (default recursive)
-
-Notlar:
-- BLUEPRINT dosyaları snapshot sonrası working tree'de kalır.
-- ro mode'da idle durumda dosyalar read-only'dir.
-- Import'lar gerçek dependency klasörlerinden yapılır (deps/ yok).
-- `bp upgrade` çalıştırıldığında pinler güncellenir, symlink'ler snapshot'ta oluşur.
-- Snapshot altındaki tüm dosyalar read+execute yapılır (symlink hariç).
-
-## Komut Referansı
-
-| Komut | Açıklama |
-|-------|----------|
-| `bp implement` | Agentic derleme + opsiyonel snapshot |
-| `bp ss -m "msg"` | Manuel snapshot (validate + test + read+execute) |
-| `bp new-lang <lang>` | Yeni dil kökü oluştur (API section içeren blueprint symlink, diğerleri kopya) |
-| `bp validate [--no-recursive]` | Blueprint doğrula |
-| `bp status [--no-recursive]` | Değişiklik kontrolü |
-| `bp plan [--no-recursive]` | Leaf-first uygulanacak paketleri listeler |
-| `bp map [--no-recursive] [--langs]` | Proje haritası + dil karşılaştırması |
-| `bp upgrade [--all] [--force]` | Dependency güncelle (pin günceller, test çalıştırır) |
-| `bp cancel` | Aktif derlemeyi iptal et |
-| `bp log [-n N]` | Snapshot history |
-| `bp diff [id1] [id2]` | Snapshot karşılaştır |
-| `bp show [id]` | Belirli snapshot'ı göster |
-| `bp deps` | Dependency graph |
-| `bp init` | Yeni BLUEPRINT.yaml oluştur |
+1. **Blueprint first, code second** — Write or update BLUEPRINT.yaml before implementing
+2. **Snapshots are immutable** — Never modify files inside `.bp/history/`
+3. **Working tree is always live** — Edit freely, snapshot when ready
+4. **Leaf-first order** — Build dependencies before dependents (`bp plan` shows the order)
+5. **Pin explicitly** — Dependencies use exact snapshot IDs, not "latest"
+6. **Test before snapshot** — `bp ss` runs verification by default
+7. **Review API changes** — `api_changed: true` means breaking change; review with `bp diff`

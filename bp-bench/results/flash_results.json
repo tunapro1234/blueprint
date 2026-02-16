@@ -1,0 +1,373 @@
+{
+  "metadata": {
+    "timestamp": "2026-02-11 17:43:00",
+    "total_runs": 12,
+    "runs_per_mode": 3,
+    "models": [
+      "flash"
+    ],
+    "total_elapsed_seconds": 533.4
+  },
+  "results": [
+    {
+      "bp_mode": "no_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 29.2,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 1
+    },
+    {
+      "bp_mode": "no_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 33.1,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 2
+    },
+    {
+      "bp_mode": "no_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 31.2,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 3
+    },
+    {
+      "bp_mode": "no_blueprint",
+      "agent_mode": "multi",
+      "success": true,
+      "elapsed": 74.1,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 1
+    },
+    {
+      "bp_mode": "no_blueprint",
+      "agent_mode": "multi",
+      "success": true,
+      "elapsed": 20.3,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 2
+    },
+    {
+      "bp_mode": "no_blueprint",
+      "agent_mode": "multi",
+      "success": true,
+      "elapsed": 20.0,
+      "score": {
+        "structure": 0.143,
+        "functional": 0.0,
+        "spec": 0.0,
+        "integration": 0.0,
+        "total": 0.043,
+        "details": {
+          "store/models.py": false,
+          "store/repository.py": false,
+          "store/memory.py": false,
+          "api/server.py": false,
+          "cli/main.py": false,
+          "__init__.py files": false,
+          "no_third_party": true,
+          "import store.models": false,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": false,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 3
+    },
+    {
+      "bp_mode": "with_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 45.3,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 1
+    },
+    {
+      "bp_mode": "with_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 43.2,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 2
+    },
+    {
+      "bp_mode": "with_blueprint",
+      "agent_mode": "single",
+      "success": true,
+      "elapsed": 47.9,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 3
+    },
+    {
+      "bp_mode": "with_blueprint",
+      "agent_mode": "multi",
+      "success": true,
+      "elapsed": 30.7,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.667,
+        "spec": 1.0,
+        "integration": 1.0,
+        "total": 0.9,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": true,
+          "has_protocol": true,
+          "integration_placeholder": true
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 1
+    },
+    {
+      "bp_mode": "with_blueprint",
+      "agent_mode": "multi",
+      "success": true,
+      "elapsed": 71.8,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 2
+    },
+    {
+      "bp_mode": "with_blueprint",
+      "agent_mode": "multi",
+      "success": true,
+      "elapsed": 86.5,
+      "score": {
+        "structure": 1.0,
+        "functional": 0.333,
+        "spec": 1.0,
+        "integration": 0.0,
+        "total": 0.6,
+        "details": {
+          "store/models.py": true,
+          "store/repository.py": true,
+          "store/memory.py": true,
+          "api/server.py": true,
+          "cli/main.py": true,
+          "__init__.py files": true,
+          "no_third_party": true,
+          "import store.models": true,
+          "import store.memory": false,
+          "import api.server": false,
+          "has_protocol": true,
+          "integration_placeholder": false
+        }
+      },
+      "model_key": "flash",
+      "model_label": "Gemini 3 Flash",
+      "run_index": 3
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ func setupUpgradeTest(t *testing.T) (string, string) {
 	// Create consumer blueprint
 	consumerDir := filepath.Join(dir, "consumer")
 	writeFile(t, filepath.Join(consumerDir, "BLUEPRINT.yaml"),
-		"_meta:\n  version: \"1\"\nintent: consumer\ndependencies:\n  - path: ../dep\n")
+		"_meta:\n  version: \"1\"\nintent: consumer\ndependencies:\n  - path: ../dep\ntests:\n  packages:\n    - ./...\n")
 
 	// Create dependency blueprint
 	depDir := filepath.Join(dir, "dep")
@@ -144,5 +145,147 @@ func TestUpgradeCommand_ToFlag_SnapshotNotFound(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "not found") {
 		t.Fatalf("expected 'not found' in output, got: %s", result.Output)
+	}
+}
+
+func TestUpgradeCommand_NormalUpgradeToLatest(t *testing.T) {
+	consumerDir, _ := setupUpgradeTest(t)
+
+	old := goTestRunner
+	defer func() { goTestRunner = old }()
+	goTestRunner = func(string, []string) error { return nil }
+
+	result := UpgradeCommand(CommandContext{
+		Path: consumerDir,
+		Args: map[string]interface{}{
+			"dep_path": "../dep",
+		},
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "Upgraded") {
+		t.Fatalf("expected 'Upgraded' in output, got: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "ss-ccdd3344") {
+		t.Fatalf("expected new snapshot ID in output, got: %s", result.Output)
+	}
+
+	state, err := bp.LoadState(filepath.Join(consumerDir, ".bp", "state.yaml"))
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if state.Deps["../dep"].Pinned != "ss-ccdd3344" {
+		t.Fatalf("expected pinned=ss-ccdd3344, got %s", state.Deps["../dep"].Pinned)
+	}
+}
+
+func TestUpgradeCommand_NoDeps(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "BLUEPRINT.yaml"),
+		"_meta:\n  version: \"1\"\nintent: nodeps\n")
+	writeFile(t, filepath.Join(dir, ".bp", "state.yaml"),
+		"snapshot_id: ss-00001111\nfiles: {}\n")
+
+	result := UpgradeCommand(CommandContext{
+		Path: dir,
+		Args: map[string]interface{}{},
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "No upgrades available") {
+		t.Fatalf("expected 'No upgrades available', got: %s", result.Output)
+	}
+}
+
+func TestUpgradeCommand_NoState(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "BLUEPRINT.yaml"),
+		"_meta:\n  version: \"1\"\nintent: nostate\n")
+
+	result := UpgradeCommand(CommandContext{
+		Path: dir,
+		Args: map[string]interface{}{},
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "No upgrades available") {
+		t.Fatalf("expected 'No upgrades available', got: %s", result.Output)
+	}
+}
+
+func TestUpgradeCommand_TestFailure_Rollback(t *testing.T) {
+	consumerDir, _ := setupUpgradeTest(t)
+
+	old := goTestRunner
+	defer func() { goTestRunner = old }()
+	testCalled := false
+	goTestRunner = func(string, []string) error {
+		testCalled = true
+		return fmt.Errorf("tests failed")
+	}
+
+	result := UpgradeCommand(CommandContext{
+		Path: consumerDir,
+		Args: map[string]interface{}{
+			"dep_path": "../dep",
+		},
+	})
+
+	if !testCalled {
+		t.Fatal("expected tests to be called")
+	}
+	if !strings.Contains(result.Output, "rolled back") {
+		t.Fatalf("expected 'rolled back' in output, got: %s", result.Output)
+	}
+
+	// Pin should remain at old version
+	state, err := bp.LoadState(filepath.Join(consumerDir, ".bp", "state.yaml"))
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if state.Deps["../dep"].Pinned != "ss-aabb1122" {
+		t.Fatalf("expected pin rolled back to ss-aabb1122, got %s", state.Deps["../dep"].Pinned)
+	}
+}
+
+func TestUpgradeCommand_SafeFlag_SkipsAPIChanged(t *testing.T) {
+	consumerDir, depDir := setupUpgradeTest(t)
+
+	// Make the latest snapshot have a different API hash
+	meta := "id: ss-ccdd3344\ntimestamp: 2025-06-01T00:00:00\nmessage: ss-ccdd3344\ncontent_hash: sha256:abc\napi_hash: sha256:api2\nspec_hash: \"\"\nimpl_hash: \"\"\nrotten: false\nsource: local\n"
+	writeFile(t, filepath.Join(depDir, ".bp", "history", "ss-ccdd3344", "meta.yaml"), meta)
+
+	old := goTestRunner
+	defer func() { goTestRunner = old }()
+	goTestRunner = func(string, []string) error { return nil }
+
+	result := UpgradeCommand(CommandContext{
+		Path: consumerDir,
+		Args: map[string]interface{}{
+			"dep_path": "../dep",
+			"safe":     true,
+		},
+	})
+
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", result.ExitCode, result.Output)
+	}
+	if !strings.Contains(result.Output, "Skipped") && !strings.Contains(result.Output, "API changed") {
+		t.Fatalf("expected skip message for API change, got: %s", result.Output)
+	}
+
+	// Pin should remain unchanged
+	state, err := bp.LoadState(filepath.Join(consumerDir, ".bp", "state.yaml"))
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if state.Deps["../dep"].Pinned != "ss-aabb1122" {
+		t.Fatalf("expected pin unchanged, got %s", state.Deps["../dep"].Pinned)
 	}
 }

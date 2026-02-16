@@ -1,0 +1,6 @@
+structure:
+  - main.go: entrypoint (runs tui)
+
+tests:
+  - Packages live under src/
+  - main.go imports from src/tui snapshot

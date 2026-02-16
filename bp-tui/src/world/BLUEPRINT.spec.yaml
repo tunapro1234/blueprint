@@ -1,0 +1,19 @@
+structure:
+  - world.go: World, HierGrid, HierTower types and functions
+
+tests:
+  - NewWorld creates empty root grid
+  - AddTower places tower at position
+  - AddTower initializes selected_layer to top layer
+  - DrillDown enters tower with children
+  - DrillDown does nothing on leaf tower
+  - DrillUp returns to parent
+  - DrillUp does nothing at root
+  - ToggleFlatten switches mode
+  - LayerDown decreases selected layer and clamps min
+  - LayerUp increases selected layer and clamps max
+  - ZoomIn increases zoom by step and clamps max
+  - ZoomOut decreases zoom by step and clamps min
+  - Zoom persists when drilling down/up
+  - ResizeViewport updates visible size and keeps cursor visible
+  - Breadcrumb tracks navigation path

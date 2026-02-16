@@ -1,0 +1,8 @@
+structure:
+  - bar.go: BarData type and RenderBar function
+
+tests:
+  - RenderBar returns exact height rows
+  - First line is separator
+  - Content lines are trimmed to width
+  - Metrics placeholders render as "--" when values are negative

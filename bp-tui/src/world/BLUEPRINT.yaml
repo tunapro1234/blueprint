@@ -1,0 +1,79 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: world
+intent: |
+  Hierarchical grid sistemi.
+  Tower'lar iç grid içerebilir (klasör yapısı).
+  Drill down/up ile navigasyon.
+
+overview: |
+  World, iç içe grid'leri yönetir.
+  Her tower children grid içerebilir.
+  DrillDown seçili tower'ın içine girer.
+  DrillUp parent grid'e döner.
+  Flattened mode tüm alt tower'ları düz gösterir.
+  Klasör yapısıyla birebir eşleşir.
+  Zoom seviyesi tüm nested grid'lerde korunur.
+  Zoom, karakter bazlı adımlarla (zoom_step) uygulanır ve renderer bu adımı kullanır.
+
+dependencies:
+  - ../grid
+  - ../tower
+
+api:
+  constants:
+    MinZoomStep: -8
+    MaxZoomStep: 2
+    DefaultZoomStep: 0
+    ZoomStep: 1
+
+  types:
+    HierTower:
+      name: string
+      layers: int
+      path: string
+      selected_layer: int  # 1..layers
+      children: *HierGrid   # nil = leaf tower
+
+    HierGrid:
+      towers: map[Position]HierTower
+      cursor: Position
+      viewport: Viewport
+      parent: *HierGrid     # nil = root
+
+    World:
+      root: *HierGrid
+      current: *HierGrid
+      breadcrumb: []string
+      flattened: bool
+      zoom: int            # zoom_step (MinZoomStep..MaxZoomStep)
+
+  functions:
+    NewWorld(viewportW, viewportH int) -> World: creates empty world with root grid
+
+    AddTower(w World, pos Position, t HierTower) -> World: adds tower to current grid (sets selected_layer to top if unset)
+
+    DrillDown(w World) -> World: enters tower at cursor (if has children)
+
+    DrillUp(w World) -> World: returns to parent grid
+
+    ToggleFlatten(w World) -> World: toggles flattened view mode
+
+    LayerDown(w World) -> World: moves selected layer down for tower at cursor (clamped)
+
+    LayerUp(w World) -> World: moves selected layer up for tower at cursor (clamped)
+
+    ZoomIn(w World) -> World: increases zoom by ZoomStep (clamped)
+
+    ZoomOut(w World) -> World: decreases zoom by ZoomStep (clamped)
+
+    CurrentPath(w World) -> string: returns current location as path
+
+    MoveCursor(w World, dx, dy int) -> World: moves cursor in current grid
+
+    ResizeViewport(w World, width, height int) -> World: updates current grid viewport size (cells) and keeps cursor visible
+
+implementation:
+  file: BLUEPRINT.spec.yaml

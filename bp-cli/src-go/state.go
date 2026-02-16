@@ -672,6 +672,10 @@ func walkDirEntries(dir, stateDirRel string, visited map[string]struct{}, fn fun
 			return err
 		}
 		if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			// Skip child directories that have their own blueprint
+			if _, err := FindBlueprintFile(path); err == nil {
+				continue
+			}
 			if err := walkFiles(path, stateDirRel, visited, fn); err != nil {
 				return err
 			}

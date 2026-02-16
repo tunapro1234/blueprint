@@ -1,0 +1,26 @@
+_meta:
+  version: 1
+  state_dir: blueprint
+
+name: src
+intent: |
+  Kaynak kodların ve blueprint paketlerinin kök klasörü.
+
+overview: |
+  Tüm paketler src altında konumlanır.
+  Blueprint keşfi ve implementasyon bu dizinden başlar.
+  main.go bu klasörde yer alır ve uygulama buradan çalıştırılır.
+
+dependencies:
+  - ./bar
+  - ./grid
+  - ./input
+  - ./tower
+  - ./world
+  - ./tui
+
+implementation:
+  file: BLUEPRINT.spec.yaml
+  structure:
+    - main.go
+    - tower_example.txt

@@ -189,5 +189,6 @@ cd src-go && go build -o ../bp ./cmd/bp
 - Snapshot history lives next to each package and is independent.
 - `tests.verification` is executed in the blueprint’s directory and must be valid shell commands.
 
----
-If you want this README to focus on a specific audience (contributors vs. users), say the word and I’ll refine it. (this is codex i dont know why it decided to write this but iwont delete this)
+## License
+
+GPL-3.0

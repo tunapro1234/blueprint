@@ -1,0 +1,45 @@
+_meta:
+  version: "0.1.0"
+  updated: 2026-02-16
+  status: draft
+
+project:
+  name: bp-bench
+  tagline: Benchmark suite for Blueprint ecosystem
+
+author:
+  name: Tuna Gul
+  github: tunapro1234
+
+intent: |
+  Blueprint spec'leri ve multi-agent yapilarinin kod uretim kalitesine
+  etkisini olcen benchmark suite. 4 mod karsilastirilir:
+  no_blueprint+single, no_blueprint+multi, with_blueprint+single, with_blueprint+multi.
+
+overview: |
+  Deterministik judge (LLM yok) ile 21 check uzerinden puanlama.
+  Senaryo: multi-package Python API server (store + api + cli).
+
+structure:
+  files:
+    README.md:
+      desc: Benchmark overview
+    CONTEXT.md:
+      desc: Detayli benchmark dokumantasyonu
+    run_bench.py:
+      desc: Tek dosya benchmark runner
+    run_full_bench.py:
+      desc: Full benchmark suite
+    test_checks.py:
+      desc: Judge check'lerini pytest ile dogrulama
+    analysis.py:
+      desc: Sonuc analizi
+    tasks/:
+      desc: Benchmark task tanimlari
+
+dependencies:
+  internal:
+    - path: ../bp-agent
+      desc: Agent framework (benchmark subject)
+    - path: ../bp-multi
+      desc: Multi-agent orchestration (benchmark subject)

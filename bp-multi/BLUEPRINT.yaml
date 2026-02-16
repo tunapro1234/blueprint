@@ -1,0 +1,44 @@
+_meta:
+  version: "0.1.0"
+  updated: 2026-02-16
+  status: draft
+
+project:
+  name: bp-multi
+  tagline: Multi-agent orchestration for Blueprint ecosystem
+
+author:
+  name: Tuna Gul
+  github: tunapro1234
+
+intent: |
+  Birden fazla bp-agent instance'ini orkestre eder.
+  Team chat ve workflow yonetimi saglar.
+
+overview: |
+  bp-multi, bp-agent ve bp-tunnel uzerine insa edilmis orkestrasyon katmani.
+
+  - TeamChat: Birden fazla agent'i ayni konusma icinde yonetir
+  - Workflow: Agent'lar arasi gorev dagitimi ve siralama
+
+structure:
+  files:
+    README.md:
+      desc: Package overview
+    pyproject.toml:
+      desc: Build config (hatchling)
+    LICENSE:
+      desc: GPL-3.0
+    src/bp_multi/team.py:
+      desc: TeamChat orkestrasyon sinifi
+    src/bp_multi/workflow.py:
+      desc: Workflow yonetimi
+    src/bp_multi/tunnel.py:
+      desc: bp-tunnel re-export
+
+dependencies:
+  internal:
+    - path: ../bp-agent
+      desc: Base agent framework
+    - path: ../bp-tunnel
+      desc: Inter-agent messaging

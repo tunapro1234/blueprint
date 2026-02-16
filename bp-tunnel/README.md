@@ -1,5 +1,7 @@
 # bp-tunnel
 
+> For the developer's vision and thoughts behind this project, see [HUMANS.md](../HUMANS.md).
+
 Inter-agent messaging for the [Blueprint](https://github.com/tunapro1234/blueprint) ecosystem.
 
 Lightweight tunnel system that lets AI agents (or any process) communicate through named channels with pluggable transport backends.
@@ -118,4 +120,4 @@ Python API / AI Tools / CLI
 
 ## License
 
-MIT
+GPL-3.0

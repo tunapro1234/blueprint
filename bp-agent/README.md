@@ -1,5 +1,7 @@
 # bp-agent
 
+> For the developer's vision and thoughts behind this project, see [HUMANS.md](../HUMANS.md).
+
 Minimal task execution agent framework with multi-provider LLM support.
 
 ## Features

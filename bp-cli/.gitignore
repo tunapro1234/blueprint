@@ -1,23 +1,5 @@
 # Compiled binary
 bp
 
-# Blueprint internal state
-.blueprint/
-blueprint/
-**/blueprint/
-
-# Editor
-*.swp
-*.swo
-*~
-.idea/
-.vscode/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Temporary files
-*.tmp
-*.bak
+# Temp notes
 todo.md

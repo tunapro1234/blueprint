@@ -1,0 +1,94 @@
+# Blueprint Monorepo
+
+_meta:
+  version: "0.4.0"
+  updated: 2026-02-16
+  status: draft
+  root: true
+
+project:
+  name: blueprint
+  tagline: AI-assisted software development paradigm
+
+author:
+  name: Tuna Gul
+  github: tunapro1234
+
+license:
+  type: GPL-3.0-or-later
+  file: LICENSE
+
+repository:
+  url: https://github.com/tunapro1234/blueprint
+  issues: https://github.com/tunapro1234/blueprint/issues
+
+intent: |
+  Blueprint, planları kalıcı hale getirir, context'i paket bazında sınırlandırır
+  ve birden fazla ajanı aynı codebase üzerinde koordine eder.
+
+  Bu monorepo, blueprint ekosisteminin tüm paketlerini barındırır.
+
+overview: |
+  Paketler:
+  - bp-cli: BLUEPRINT.yaml dosyalarını yöneten, snapshot alan Go CLI
+  - bp-agent: Multi-provider LLM agent framework (Gemini, Codex, Opus)
+  - bp-tunnel: Ajanlar arası mesajlaşma (named channels, pluggable transport)
+  - bp-multi: Multi-agent orkestrasyon (team chat, workflow)
+  - bp-tui: Blueprint yönetimi için terminal UI
+  - bp-bench: Benchmark ve test suite
+
+structure:
+  directories:
+    bp-cli/:
+      desc: Blueprint CLI (Go) - validation, snapshot, dependency tracking
+      has_blueprint: true
+    bp-agent/:
+      desc: Base agent framework (Python) - LLM routing, tool execution
+      has_blueprint: true
+    bp-tunnel/:
+      desc: Inter-agent messaging (Python) - tunnels, transports
+      has_blueprint: true
+    bp-multi/:
+      desc: Multi-agent orchestration (Python) - team, workflow
+    bp-tui/:
+      desc: Terminal UI (Go) - blueprint visualization
+    bp-bench/:
+      desc: Benchmark suite (Python) - testing and evaluation
+
+  files:
+    README.md:
+      desc: Monorepo overview ve paket tablosu
+    HUMANS.md:
+      desc: Geliştiricinin vizyonu ve notları
+      rules:
+        - NEVER_MODIFY: AI tarafından değiştirilemez, sadece geliştirici düzenler
+    LICENSE:
+      desc: GNU General Public License v3.0
+      rules:
+        - NEVER_MODIFY
+    AGENTS.md:
+      desc: AI agent'lar için monorepo rehberi
+    .gitignore:
+      desc: Monorepo-wide ignore kuralları
+
+dependencies:
+  internal:
+    - path: ./bp-cli
+      desc: Blueprint CLI
+    - path: ./bp-agent
+      desc: Base agent framework
+    - path: ./bp-tunnel
+      desc: Inter-agent messaging
+    - path: ./bp-multi
+      desc: Multi-agent orchestration
+
+ai_rules:
+  protected_content:
+    - file: HUMANS.md
+      rule: NEVER_MODIFY
+      reason: Geliştiricinin kişisel notları ve vizyonu
+
+  general:
+    - Her paket kendi BLUEPRINT.yaml ile yönetilir
+    - Paketler arası değişikliklerde bağımlılık sırasını takip et (leaf-first)
+    - Root BLUEPRINT.yaml monorepo yapısını tanımlar, paket detayları kendi blueprint'lerinde

@@ -1,0 +1,198 @@
+_meta:
+  version: "0.3.0"
+  updated: 2026-02-11
+  status: mvp
+
+intent: |
+  Base Agent - yeniden kullanilabilir minimal agent framework.
+
+  MVP hedefi: Instruction al, LLM cagir, tool kullan, sonuc don.
+
+overview: |
+  Paketler:
+    llm/         - LLM client katmani (Gemini, Codex, Opus) + streaming
+    tools/       - Tool registry ve built-in tools
+    task/        - Task queue (persistent JSON)
+    runner/      - Chat REPL, task runner CLI
+
+  LLM Providers:
+    - Gemini 3: REST API (v1beta) key rotation destekli
+    - Codex: ChatGPT hesabi ile, reasoning effort destekli
+    - Opus: HTTP provider (configurable)
+
+  Agent sinifi src/ icinde - task queue dahil.
+
+  Akis:
+    add_task(instruction) → queue'ya ekle
+    run_next() → queue'dan al → LLM → tool calls → give_result → output
+
+environment:
+  required:
+    - GEMINI_API_KEY (default provider icin gerekli)
+  optional:
+    - GEMINI_API_KEY_2..N (rotation)
+    - CODEX_AUTH_FILE (default: ~/.codex/auth.json)
+    - CODEX_API_KEY (API key auth tercih edilirse)
+    - OPUS_API_KEY (opus provider icin)
+
+api:
+  types:
+    LLMProvider:
+      type: enum
+      values: [gemini, codex, opus]
+      default: gemini
+
+    AgentConfig:
+      fields:
+        - name: provider
+          type: LLMProvider
+          default: "gemini"
+          description: LLM provider secimi
+
+        - name: model
+          type: string
+          default: "gemini-3-flash-preview"
+          description: |
+            Gemini: gemini-3-flash-preview, gemini-3-pro-preview
+            Codex: gpt-5.2-codex, gpt-5.1-codex-max, gpt-5.1-codex-mini
+            Opus: configurable (server-side adapter)
+
+        - name: reasoning_effort
+          type: string
+          nullable: true
+          description: Sadece Codex icin (none/minimal/low/medium/high/xhigh)
+
+        - name: max_iterations
+          type: integer
+          default: 10
+          description: Tool loop max iterasyon
+
+        - name: temperature
+          type: float
+          default: 0.3
+
+        - name: enable_task_queue
+          type: boolean
+          default: true
+          description: Task queue aktif mi
+
+        - name: task_queue_path
+          type: string
+          nullable: true
+          description: Task queue JSON dosyasi (default .task_queue.json)
+
+        - name: codex_auth_file
+          type: string
+          nullable: true
+          description: Codex auth dosyasi (default ~/.codex/auth.json)
+
+    AgentResult:
+      fields:
+        - name: success
+          type: boolean
+
+        - name: output
+          type: string
+
+        - name: task_id
+          type: string
+          nullable: true
+
+    QueuedTask:
+      description: Task queue'daki bir gorev
+      fields:
+        - name: id
+          type: string
+        - name: instruction
+          type: string
+        - name: status
+          type: string
+          description: pending | running | completed | failed
+        - name: output
+          type: string
+          nullable: true
+        - name: error
+          type: string
+          nullable: true
+        - name: created_at
+          type: float
+        - name: started_at
+          type: float
+          nullable: true
+        - name: completed_at
+          type: float
+          nullable: true
+
+  exports:
+    Agent:
+      type: class
+
+      constructor:
+        parameters:
+          - name: name
+            type: string
+
+          - name: config
+            type: AgentConfig
+            nullable: true
+
+          - name: system_prompt
+            type: string
+            nullable: true
+
+      methods:
+        - name: execute
+          description: Instruction calistir (direkt, queue kullanmadan)
+          parameters:
+            - name: instruction
+              type: string
+          returns: AgentResult
+
+        - name: add_tool
+          description: Tool ekle
+          parameters:
+            - name: name
+              type: string
+            - name: handler
+              type: function
+            - name: schema
+              type: ToolSchema
+
+        # Task Queue metodlari
+        - name: add_task
+          description: Task queue'ya ekle
+          parameters:
+            - name: instruction
+              type: string
+          returns: QueuedTask
+
+        - name: run_next
+          description: Siradaki pending task'i calistir
+          returns: AgentResult | None
+
+        - name: run_all
+          description: Tum pending task'lari calistir
+          returns: list[AgentResult]
+
+        - name: list_tasks
+          description: Tum task'lari listele
+          parameters:
+            - name: status
+              type: string
+              nullable: true
+              description: Filtre (pending, running, completed, failed)
+          returns: list[QueuedTask]
+
+        - name: clear_tasks
+          description: Tamamlanan/basarisiz task'lari temizle
+          returns: int
+
+implementation: "./BLUEPRINT.spec.yaml"
+
+tests: "./BLUEPRINT.spec.yaml"
+
+dependencies:
+  internal:
+    - ./llm
+    - ./tools
+    - ./task

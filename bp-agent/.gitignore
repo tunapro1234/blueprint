@@ -1,0 +1,81 @@
+# ===========================================
+# API Keys ve Secrets - ASLA COMMIT ETME
+# ===========================================
+.env
+*.env
+.env.*
+!.env.example
+
+# Secrets
+secrets/
+*.secret
+*.key
+credentials.json
+service_account.json
+
+# Codex Auth (OAuth tokens)
+**/auth/*.json
+src/llm/codex/auth/
+
+# ===========================================
+# Blueprint State
+# ===========================================
+# Snapshot'lar paylaşılıyor (kod orada)
+.blueprint/
+blueprint/
+**/blueprint/
+
+# ===========================================
+# Python
+# ===========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ===========================================
+# IDE / Editor
+# ===========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===========================================
+# Build artifacts
+# ===========================================
+target/
+Cargo.lock
+
+# ===========================================
+# Data / Logs
+# ===========================================
+data/
+logs/
+*.log
+*.tmp
+*.temp
+.task_queue.json
+
+# ===========================================
+# Testing
+# ===========================================
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+coverage.xml
+*.cover

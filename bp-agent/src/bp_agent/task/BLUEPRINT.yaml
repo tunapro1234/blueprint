@@ -1,0 +1,105 @@
+_meta:
+  version: "0.2.0"
+  updated: 2026-01-27
+  status: mvp
+
+intent: |
+  Task queue ve tracking. Agent'in gorev kuyrugu.
+  Persistent JSON storage ile task'lar kaybolmaz.
+  Agent bu modulu kullanarak task yonetimi yapar.
+
+api:
+  types:
+    TaskStatus:
+      type: enum
+      values: [pending, running, completed, failed]
+
+    QueuedTask:
+      fields:
+        - name: id
+          type: string
+        - name: instruction
+          type: string
+        - name: status
+          type: TaskStatus
+          default: pending
+        - name: output
+          type: string
+          nullable: true
+        - name: error
+          type: string
+          nullable: true
+        - name: created_at
+          type: float
+        - name: started_at
+          type: float
+          nullable: true
+        - name: completed_at
+          type: float
+          nullable: true
+
+  exports:
+    TaskQueue:
+      type: class
+      description: Persistent task queue with JSON storage
+
+      constructor:
+        parameters:
+          - name: storage_path
+            type: Path
+            nullable: true
+            description: JSON dosya yolu (None ise in-memory)
+
+      methods:
+        - name: add
+          description: Yeni task ekle
+          parameters:
+            - name: instruction
+              type: string
+          returns: QueuedTask
+
+        - name: get
+          description: ID ile task al
+          parameters:
+            - name: task_id
+              type: string
+          returns: QueuedTask | None
+
+        - name: get_next_pending
+          description: Siradaki pending task
+          returns: QueuedTask | None
+
+        - name: update
+          description: Task guncelle
+          parameters:
+            - name: task_id
+              type: string
+            - name: status
+              type: TaskStatus
+              nullable: true
+            - name: output
+              type: string
+              nullable: true
+            - name: error
+              type: string
+              nullable: true
+          returns: QueuedTask | None
+
+        - name: list_all
+          returns: list[QueuedTask]
+
+        - name: list_by_status
+          parameters:
+            - name: status
+              type: TaskStatus
+          returns: list[QueuedTask]
+
+        - name: pending_count
+          returns: int
+
+        - name: clear_completed
+          description: completed/failed task'lari sil
+          returns: int
+
+implementation: "./BLUEPRINT.spec.yaml"
+tests: "./BLUEPRINT.spec.yaml"

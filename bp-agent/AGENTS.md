@@ -1,0 +1,1 @@
+../blueprint/bp-cli/AGENTS.md

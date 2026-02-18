@@ -1,4 +1,4 @@
-"""Tests for continuous chat mode (run_chat / push_message / send_message tool)."""
+"""Tests for chat_stream cancellation and push_message integration."""
 
 import threading
 import time
@@ -53,14 +53,6 @@ def _make_agent(router, **kwargs):
     return a
 
 
-def _send_msg_response(text: str) -> LLMResponse:
-    """Helper: LLM response that calls send_message tool."""
-    return LLMResponse(
-        content="ok",  # short thinking (fast stream)
-        tool_calls=[ToolCall(name="send_message", args={"message": text})],
-    )
-
-
 # ── MessageInbox ──
 
 def test_inbox_push_pull():
@@ -100,351 +92,212 @@ def test_inbox_has_messages():
     assert inbox.has_messages is False
 
 
-# ── run_chat basic flow (send_message model) ──
+# ── chat_stream basic ──
 
-def test_run_chat_sends_via_tool():
-    """Agent sends message to user via send_message tool, not stream."""
+def test_chat_stream_basic():
+    """chat_stream yields text deltas."""
     router = SlowRouter()
-    router.responses = [_send_msg_response("hello!")]
+    router.responses = [LLMResponse(content="hello!", tool_calls=None)]
+    ag = _make_agent(router)
+
+    result = "".join(ag.chat_stream("hi"))
+    assert result == "hello!"
+
+
+def test_chat_stream_no_message_no_inbox():
+    """chat_stream with no message and empty inbox does nothing."""
+    router = SlowRouter()
+    ag = _make_agent(router)
+
+    result = list(ag.chat_stream())
+    assert result == []
+    # No LLM call should have been made
+    assert len(router.calls) == 0
+
+
+def test_chat_stream_message_optional():
+    """chat_stream(message=None) pulls from inbox."""
+    router = SlowRouter()
+    router.responses = [LLMResponse(content="from inbox!", tool_calls=None)]
+    ag = _make_agent(router)
+
+    ag._inbox.push("queued message")
+    result = "".join(ag.chat_stream())
+    assert result == "from inbox!"
+
+    # Check that queued message is in history
+    user_msgs = [m for m in ag.chat_history if m.role == "user"]
+    assert any("queued message" in m.content for m in user_msgs)
+
+
+# ── push_message + chat_stream ──
+
+def test_push_message_cancels_stream():
+    """push_message cancels active chat_stream."""
+    router = SlowRouter()
+    router.responses = [LLMResponse(content="A" * 100, tool_calls=None)]
     ag = _make_agent(router)
 
     collected = []
+    done = threading.Event()
 
     def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
+        for delta in ag.chat_stream("hello"):
+            collected.append(delta)
+        done.set()
 
     t = threading.Thread(target=consume)
     t.start()
-    time.sleep(0.02)
-    ag.push_message("hi")
-    time.sleep(0.5)
-    ag.stop_chat()
+    time.sleep(0.05)  # let stream start
+    ag.push_message("interrupt!")
+    done.wait(timeout=2)
     t.join(timeout=2)
 
-    assert collected == ["hello!"]
-
-
-def test_run_chat_auto_send_fallback():
-    """If model doesn't call send_message on user message, text is auto-sent."""
-    router = SlowRouter()
-    router.responses = [
-        LLMResponse(content="hmm let me think about this...", tool_calls=None),
-    ]
-    ag = _make_agent(router)
-
-    collected = []
-
-    def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("hi")
-    time.sleep(0.5)
-    ag.stop_chat()
-    t.join(timeout=2)
-
-    # Auto-sent because model didn't call send_message
-    assert collected == ["hmm let me think about this..."]
-
-
-def test_run_chat_multiple_messages_before_response():
-    """Multiple messages pushed before agent starts responding — all seen at once."""
-    router = SlowRouter()
-    router.responses = [_send_msg_response("got both")]
-    ag = _make_agent(router)
-
-    collected = []
-
-    def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("first")
-    ag.push_message("second")
-    time.sleep(0.5)
-    ag.stop_chat()
-    t.join(timeout=2)
-
-    user_msgs = [m for m in ag.chat_history if m.role == "user" and not m.content.startswith("[")]
-    assert len(user_msgs) == 2
-    assert user_msgs[0].content == "first"
-    assert user_msgs[1].content == "second"
-
-
-def test_run_chat_sequential_conversations():
-    """Agent responds, waits, then responds to next message."""
-    router = SlowRouter()
-    router.responses = [
-        _send_msg_response("first reply"),
-        _send_msg_response("second reply"),
-    ]
-    ag = _make_agent(router)
-
-    collected = []
-
-    def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("hello")
-    time.sleep(0.3)
-    ag.push_message("another question")
-    time.sleep(0.3)
-    ag.stop_chat()
-    t.join(timeout=2)
-
-    assert "first reply" in collected
-    assert "second reply" in collected
-
-
-def test_run_chat_message_during_stream_cancels():
-    """New message during streaming cancels and re-generates."""
-    router = SlowRouter()
-    router.responses = [
-        LLMResponse(content="A" * 100, tool_calls=None),  # slow, will be interrupted
-        _send_msg_response("combined answer"),
-    ]
-    ag = _make_agent(router)
-
-    collected = []
-
-    def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("first question")
-    time.sleep(0.05)
-    ag.push_message("actually, different question")
-    time.sleep(0.5)
-    ag.stop_chat()
-    t.join(timeout=2)
-
-    assert "combined answer" in collected
-    # Interrupted thinking should be in history
+    # Stream was interrupted — got partial response
+    full = "".join(collected)
+    assert len(full) < 100  # didn't get all 100 chars
+    # Interrupted message in history
     assistant_msgs = [m for m in ag.chat_history if m.role == "assistant"]
-    interrupted = [m for m in assistant_msgs if "[interrupted]" in m.content]
-    assert len(interrupted) >= 1
+    assert any("[interrupted]" in m.content for m in assistant_msgs)
 
 
-# ── send_message + check_messages tools ──
-
-def test_send_message_tool_registered():
+def test_push_message_then_chat_stream_consumes_inbox():
+    """After push_message interrupts, next chat_stream() pulls inbox."""
     router = SlowRouter()
-    router.responses = [_send_msg_response("ok")]
+    router.responses = [
+        LLMResponse(content="A" * 100, tool_calls=None),  # will be interrupted
+        LLMResponse(content="response to interrupt", tool_calls=None),
+    ]
     ag = _make_agent(router)
 
-    def consume():
-        for _ in ag.run_chat():
-            pass
+    # First call — gets interrupted
+    done = threading.Event()
 
-    t = threading.Thread(target=consume)
+    def consume_first():
+        for _ in ag.chat_stream("hello"):
+            pass
+        done.set()
+
+    t = threading.Thread(target=consume_first)
     t.start()
-    time.sleep(0.02)
-    ag.push_message("start")
-    time.sleep(0.2)
-    ag.stop_chat()
+    time.sleep(0.05)
+    ag.push_message("new question")
+    done.wait(timeout=2)
     t.join(timeout=2)
 
-    assert ag.tools.has("send_message")
-    assert ag.tools.has("check_messages")
+    # Second call — no explicit message, pulls from inbox
+    result = "".join(ag.chat_stream())
+    assert result == "response to interrupt"
+
+    # "new question" should be in history
+    user_msgs = [m for m in ag.chat_history if m.role == "user"]
+    assert any("new question" in m.content for m in user_msgs)
 
 
-def test_check_messages_tool_pulls_from_inbox():
+def test_push_message_multiple_queued():
+    """Multiple push_message calls queue up, all consumed by next chat_stream."""
     router = SlowRouter()
+    router.responses = [LLMResponse(content="got all", tool_calls=None)]
     ag = _make_agent(router)
-
-    ag._register_continuous_tools()
 
     ag._inbox.push("msg1")
     ag._inbox.push("msg2")
-    result = ag.tools.execute("check_messages", {})
-    assert result.success
-    assert "msg1" in result.output
-    assert "msg2" in result.output
+    ag._inbox.push("msg3")
 
-    result2 = ag.tools.execute("check_messages", {})
-    assert "no new messages" in result2.output
+    result = "".join(ag.chat_stream())
+    assert result == "got all"
+
+    user_msgs = [m for m in ag.chat_history if m.role == "user"]
+    user_contents = [m.content for m in user_msgs]
+    assert "msg1" in user_contents
+    assert "msg2" in user_contents
+    assert "msg3" in user_contents
 
 
-def test_send_message_tool_pushes_to_outbox():
+def test_push_message_with_explicit_message():
+    """push_message + explicit chat_stream(message) — both added."""
     router = SlowRouter()
+    router.responses = [LLMResponse(content="combined", tool_calls=None)]
     ag = _make_agent(router)
 
-    ag._register_continuous_tools()
+    ag._inbox.push("from inbox")
+    result = "".join(ag.chat_stream("explicit"))
+    assert result == "combined"
 
-    result = ag.tools.execute("send_message", {"message": "hello user"})
-    assert result.success
-    assert "hello user" in result.output
-    assert "delivered" in result.output.lower()
-    assert ag._outbox == ["hello user"]
+    user_msgs = [m for m in ag.chat_history if m.role == "user"]
+    user_contents = [m.content for m in user_msgs]
+    assert "explicit" in user_contents
+    assert "from inbox" in user_contents
 
 
-def test_check_messages_during_tool_execution():
-    """Agent uses check_messages tool mid-turn, sees new user message."""
+# ── cancel() still works directly ──
+
+def test_cancel_stops_stream():
+    """Direct cancel() call stops chat_stream."""
     router = SlowRouter()
-    router.responses = [
-        LLMResponse(content="", tool_calls=[ToolCall(name="check_messages", args={})]),
-        _send_msg_response("I see both messages"),
-    ]
-    ag = _make_agent(router)
-
-    collected = []
-
-    def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("first")
-    time.sleep(0.05)
-    ag._inbox.push("second via check")
-    time.sleep(0.5)
-    ag.stop_chat()
-    t.join(timeout=2)
-
-    assert "I see both messages" in collected
-
-
-# ── stop_chat ──
-
-def test_stop_chat():
-    router = SlowRouter()
-    ag = _make_agent(router)
-
-    stopped = threading.Event()
-
-    def consume():
-        for _ in ag.run_chat():
-            pass
-        stopped.set()
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.05)
-    ag.stop_chat()
-    stopped.wait(timeout=2)
-    t.join(timeout=2)
-
-    assert stopped.is_set()
-    assert ag._chat_running is False
-
-
-def test_stop_chat_during_stream():
-    router = SlowRouter()
-    router.responses = [LLMResponse(content="A" * 200, tool_calls=None)]
+    router.responses = [LLMResponse(content="X" * 200, tool_calls=None)]
     ag = _make_agent(router)
 
     collected = []
+    done = threading.Event()
 
     def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
+        for delta in ag.chat_stream("hi"):
+            collected.append(delta)
+        done.set()
 
     t = threading.Thread(target=consume)
     t.start()
-    time.sleep(0.02)
-    ag.push_message("start")
     time.sleep(0.05)
-    ag.stop_chat()
+    ag.cancel()
+    done.wait(timeout=2)
     t.join(timeout=2)
 
-    # Nothing yielded (stream is internal, no send_message was called)
-    assert collected == []
-    assert ag._chat_running is False
+    full = "".join(collected)
+    assert len(full) < 200
 
 
-# ── push_message cancels stream ──
+# ── Session persistence ──
 
-def test_push_message_cancels_active_stream():
+def test_chat_stream_persists_session(tmp_path):
     router = SlowRouter()
-    router.responses = [
-        LLMResponse(content="X" * 100, tool_calls=None),
-        _send_msg_response("fresh"),
-    ]
-    ag = _make_agent(router)
-
-    collected = []
-
-    def consume():
-        for msg in ag.run_chat():
-            collected.append(msg)
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("first")
-    time.sleep(0.05)
-    ag.push_message("interrupt!")
-    time.sleep(0.5)
-    ag.stop_chat()
-    t.join(timeout=2)
-
-    assert "fresh" in collected
-
-
-# ── Session persistence in continuous mode ──
-
-def test_run_chat_persists_session(tmp_path):
-    router = SlowRouter()
-    router.responses = [_send_msg_response("saved")]
+    router.responses = [LLMResponse(content="saved", tool_calls=None)]
     ag = _make_agent(router, store_dir=str(tmp_path))
 
-    def consume():
-        for _ in ag.run_chat():
-            pass
-
-    t = threading.Thread(target=consume)
-    t.start()
-    time.sleep(0.02)
-    ag.push_message("persist this")
-    time.sleep(0.3)
-    ag.stop_chat()
-    t.join(timeout=2)
+    list(ag.chat_stream("persist this"))
 
     sessions = ag.store.list_sessions()
     assert len(sessions) == 1
 
 
-def test_interrupted_turn_not_persisted(tmp_path):
+def test_interrupted_stream_not_persisted(tmp_path):
+    """Interrupted stream doesn't persist, but next complete call does."""
     router = SlowRouter()
     router.responses = [
-        LLMResponse(content="A" * 100, tool_calls=None),
-        _send_msg_response("final"),
+        LLMResponse(content="A" * 100, tool_calls=None),  # interrupted
+        LLMResponse(content="final", tool_calls=None),
     ]
     ag = _make_agent(router, store_dir=str(tmp_path))
 
+    done = threading.Event()
+
     def consume():
-        for _ in ag.run_chat():
+        for _ in ag.chat_stream("first"):
             pass
+        done.set()
 
     t = threading.Thread(target=consume)
     t.start()
-    time.sleep(0.02)
-    ag.push_message("first")
     time.sleep(0.05)
     ag.push_message("interrupt")
-    time.sleep(0.5)
-    ag.stop_chat()
+    done.wait(timeout=2)
     t.join(timeout=2)
 
+    # No session persisted yet (interrupted)
+    sessions = ag.store.list_sessions()
+    assert len(sessions) == 0
+
+    # Now complete a normal call
+    list(ag.chat_stream())
     sessions = ag.store.list_sessions()
     assert len(sessions) == 1
-    msgs = ag.store.load_session(sessions[0]["id"])
-    # The persisted session should have the send_message tool result
-    all_contents = [m["content"] for m in msgs]
-    assert any("send_message" in c or "message sent" in c.lower() for c in all_contents)

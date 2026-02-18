@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Optional, Callable, Any
@@ -65,6 +66,7 @@ from bp_agent.llm import (
 from bp_agent.llm.types import accumulate_stream
 from bp_agent.tools import ToolRegistry, ToolSchema, register_builtins, GiveResultSignal, build_schema
 from bp_agent.task import TaskStore
+from bp_agent.store import AgentStore
 try:
     from bp_tunnel.hub import TunnelHub
 except ImportError:
@@ -82,6 +84,7 @@ class AgentConfig:
     enable_builtin_tools: bool = True
     enable_subagents: bool = False
     codex_auth_file: Optional[str] = None
+    store_dir: Optional[str] = None  # base dir for agent storage (None = no persistence)
     # Subagent worker config (used when this agent spawns workers)
     worker_model: Optional[str] = None  # defaults to same model
     worker_provider: Optional[str] = None  # defaults to same provider
@@ -141,9 +144,13 @@ class Agent:
         if self.config.enable_subagents:
             self._register_subagent_tools()
         self.tasks = TaskStore() if self.config.enable_task_store else None
+        self.store = AgentStore(name, self.config.store_dir) if self.config.store_dir else None
         self._trace_enabled = False
         self._last_trace: Optional[dict[str, Any]] = None
         self._chat_messages: list[Message] = []
+        self._session_id: Optional[str] = None
+        self._cancel = threading.Event()
+        self._streaming = False
         self._workers: dict[str, AgentResult] = {}  # worker_id -> result
         self._worker_counter = 0
         self._hub: Optional[TunnelHub] = None
@@ -363,6 +370,7 @@ class Agent:
 
             if not response.tool_calls:
                 self._chat_messages.append(Message(role="assistant", content=response.content))
+                self._persist_session()
                 return response.content
 
             self._chat_messages.append(Message(role="assistant", content=response.content))
@@ -375,16 +383,35 @@ class Agent:
                         Message(role="user", content=f"[tool:{tool_call.name}] {sig.result}")
                     )
                     self._chat_messages.append(Message(role="assistant", content=sig.result))
+                    self._persist_session()
                     return sig.result
 
                 self._chat_messages.append(
                     Message(role="user", content=f"[tool:{tool_call.name}] {result.output}")
                 )
 
+        self._persist_session()
         return "(max iterations reached)"
 
+    def cancel(self) -> None:
+        """Cancel current stream. Safe to call from another thread."""
+        self._cancel.set()
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._streaming
+
     def chat_stream(self, message: str, system_prompt: str | None = None) -> Iterator[str]:
-        """Multi-turn streaming chat. Yields text deltas, handles tool calls internally."""
+        """Multi-turn streaming chat. Yields text deltas, handles tool calls internally.
+
+        Supports cancellation via cancel(). When cancelled:
+        - Partial response is saved to history as [interrupted]
+        - Session is NOT persisted
+        - Next chat_stream call will have the partial context
+        """
+        self._cancel.clear()
+        self._streaming = True
+
         if not self._chat_messages:
             self._chat_messages = [
                 Message(role="system", content=system_prompt or self.system_prompt),
@@ -394,57 +421,110 @@ class Agent:
 
         tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
 
-        for _ in range(self.config.max_iterations):
-            request = CompletionRequest(
-                messages=self._chat_messages,
-                tools=tool_schemas,
-                temperature=self.config.temperature,
-                model=self.config.model,
-                provider=self.config.provider,
-            )
-
-            # Collect chunks, yield text deltas, accumulate tool call deltas
-            text_parts: list[str] = []
-            all_chunks: list = []
-            for chunk in self.llm.complete_stream(request):
-                all_chunks.append(chunk)
-                if chunk.delta:
-                    text_parts.append(chunk.delta)
-                    yield chunk.delta
-
-            response = accumulate_stream(iter(all_chunks))
-
-            if not response.tool_calls:
-                self._chat_messages.append(Message(role="assistant", content=response.content))
-                return
-
-            self._chat_messages.append(Message(role="assistant", content=response.content))
-
-            for tool_call in response.tool_calls:
-                try:
-                    result = self.tools.execute(tool_call.name, tool_call.args)
-                except GiveResultSignal as sig:
-                    self._chat_messages.append(
-                        Message(role="user", content=f"[tool:{tool_call.name}] {sig.result}")
-                    )
-                    self._chat_messages.append(Message(role="assistant", content=sig.result))
-                    yield sig.result
+        try:
+            for _ in range(self.config.max_iterations):
+                if self._cancel.is_set():
                     return
 
-                self._chat_messages.append(
-                    Message(role="user", content=f"[tool:{tool_call.name}] {result.output}")
+                request = CompletionRequest(
+                    messages=self._chat_messages,
+                    tools=tool_schemas,
+                    temperature=self.config.temperature,
+                    model=self.config.model,
+                    provider=self.config.provider,
                 )
 
-        yield "(max iterations reached)"
+                # Collect chunks, yield text deltas, check cancel between chunks
+                text_parts: list[str] = []
+                all_chunks: list = []
+                interrupted = False
+                for chunk in self.llm.complete_stream(request):
+                    if self._cancel.is_set():
+                        interrupted = True
+                        break
+                    all_chunks.append(chunk)
+                    if chunk.delta:
+                        text_parts.append(chunk.delta)
+                        yield chunk.delta
+
+                if interrupted:
+                    partial = "".join(text_parts)
+                    if partial:
+                        self._chat_messages.append(
+                            Message(role="assistant", content=partial + "\n[interrupted]")
+                        )
+                    # Don't persist — next call will have context
+                    return
+
+                response = accumulate_stream(iter(all_chunks))
+
+                if not response.tool_calls:
+                    self._chat_messages.append(Message(role="assistant", content=response.content))
+                    self._persist_session()
+                    return
+
+                self._chat_messages.append(Message(role="assistant", content=response.content))
+
+                for tool_call in response.tool_calls:
+                    if self._cancel.is_set():
+                        return
+
+                    try:
+                        result = self.tools.execute(tool_call.name, tool_call.args)
+                    except GiveResultSignal as sig:
+                        self._chat_messages.append(
+                            Message(role="user", content=f"[tool:{tool_call.name}] {sig.result}")
+                        )
+                        self._chat_messages.append(Message(role="assistant", content=sig.result))
+                        self._persist_session()
+                        yield sig.result
+                        return
+
+                    self._chat_messages.append(
+                        Message(role="user", content=f"[tool:{tool_call.name}] {result.output}")
+                    )
+
+            self._persist_session()
+            yield "(max iterations reached)"
+        finally:
+            self._streaming = False
+            self._cancel.clear()
 
     def reset_chat(self):
-        """Clear chat history."""
+        """Clear chat history and start a new session."""
         self._chat_messages = []
+        self._session_id = None
 
     @property
     def chat_history(self) -> list[Message]:
         """Get current chat messages (read-only view)."""
         return list(self._chat_messages)
+
+    @property
+    def session_id(self) -> Optional[str]:
+        return self._session_id
+
+    def load_session(self, session_id: str) -> bool:
+        """Load a previous session's chat history. Returns True if found."""
+        if not self.store:
+            return False
+        messages = self.store.load_session(session_id)
+        if messages is None:
+            return False
+        self._chat_messages = [Message(**m) for m in messages]
+        self._session_id = session_id
+        return True
+
+    def _persist_session(self) -> None:
+        """Save current chat to store if persistence is enabled."""
+        if not self.store or not self._chat_messages:
+            return
+        if not self._session_id:
+            self._session_id = self.store.new_session_id()
+        self.store.save_session(
+            self._session_id,
+            [{"role": m.role, "content": m.content} for m in self._chat_messages],
+        )
 
     def execute(self, instruction: str) -> AgentResult:
         task = self.tasks.create(instruction) if self.tasks else None

@@ -1,10 +1,11 @@
 """BP Agent - Minimal task execution agent framework."""
 
 from bp_agent.agent import Agent, AgentConfig, AgentResult, CHAT_SYSTEM_PROMPT, DEFAULT_SYSTEM_PROMPT
+from bp_agent.store import AgentStore
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
-    "Agent", "AgentConfig", "AgentResult",
+    "Agent", "AgentConfig", "AgentResult", "AgentStore",
     "CHAT_SYSTEM_PROMPT", "DEFAULT_SYSTEM_PROMPT",
 ]
 

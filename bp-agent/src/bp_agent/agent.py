@@ -159,22 +159,6 @@ a worker agent. Workers run independently with their own context - give them
 clear, self-contained instructions. For multiple independent tasks, use
 spawn_workers to run them in parallel."""
 
-CONTINUOUS_SYSTEM_PROMPT = """You are in continuous chat mode.
-
-IMPORTANT — READ CAREFULLY:
-- Your text output is NEVER shown to the user. They cannot see it. It is internal.
-- To reply to the user, you MUST call the send_message tool. There is no other way.
-- If you write text without calling send_message, the user sees nothing.
-- Use check_messages to see if the user sent new messages.
-- When you see [system] in a message, it means no new user messages yet.
-- Do not repeat yourself via send_message — only send when you have something new.
-
-Example flow:
-1. User says "hello" → you think internally, then call send_message("Hi! How can I help?")
-2. [system] nudge → you think privately, no send_message needed
-3. User says "pricing?" → you think, then call send_message("Our pricing starts at...")"""
-
-
 class Agent:
     def __init__(self, name: str, config: AgentConfig | None = None, system_prompt: str | None = None):
         self.name = name
@@ -195,8 +179,6 @@ class Agent:
         self._session_id: Optional[str] = None
         self._cancel = threading.Event()
         self._streaming = False
-        self._chat_running = False
-        self._outbox: list[str] = []
         self._inbox = MessageInbox()
         self._workers: dict[str, AgentResult] = {}  # worker_id -> result
         self._worker_counter = 0
@@ -448,13 +430,17 @@ class Agent:
     def is_streaming(self) -> bool:
         return self._streaming
 
-    def chat_stream(self, message: str, system_prompt: str | None = None) -> Iterator[str]:
+    def chat_stream(self, message: str | None = None, system_prompt: str | None = None) -> Iterator[str]:
         """Multi-turn streaming chat. Yields text deltas, handles tool calls internally.
 
-        Supports cancellation via cancel(). When cancelled:
+        Supports cancellation via cancel() or push_message(). When cancelled:
         - Partial response is saved to history as [interrupted]
         - Session is NOT persisted
         - Next chat_stream call will have the partial context
+
+        Args:
+            message: User message. If None, only inbox messages (from push_message) are processed.
+            system_prompt: System prompt for first turn.
         """
         self._cancel.clear()
         self._streaming = True
@@ -464,7 +450,18 @@ class Agent:
                 Message(role="system", content=system_prompt or self.system_prompt),
             ]
 
-        self._chat_messages.append(Message(role="user", content=message))
+        if message:
+            self._chat_messages.append(Message(role="user", content=message))
+
+        # Pull any queued messages from push_message()
+        inbox_msgs = [m for m in self._inbox.pull_all() if m]
+        for msg in inbox_msgs:
+            self._chat_messages.append(Message(role="user", content=msg))
+
+        # Nothing to process — no explicit message and no inbox messages
+        if not message and not inbox_msgs:
+            self._streaming = False
+            return
 
         tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
 
@@ -573,228 +570,15 @@ class Agent:
             [{"role": m.role, "content": m.content} for m in self._chat_messages],
         )
 
-    # ── Continuous chat mode ──
-
     def push_message(self, message: str) -> None:
-        """Push a message to the inbox. If agent is streaming, cancels current stream."""
+        """Push a message to the inbox. If agent is streaming, cancels current stream.
+
+        Use with chat_stream: push a message from another thread, then call
+        chat_stream() (no args) to process queued messages.
+        """
         self._inbox.push(message)
         if self._streaming:
             self._cancel.set()
-
-    def stop_chat(self) -> None:
-        """Stop the continuous chat loop."""
-        self._chat_running = False
-        self._cancel.set()
-        self._inbox.push("")  # wake up wait
-
-    DEFAULT_IDLE_NUDGE = (
-        "[system] No new messages. "
-        "Do not call send_message unless you have something new to say."
-    )
-
-    def run_chat(
-        self,
-        system_prompt: str | None = None,
-        idle_timeout: float = 3.0,
-        max_idle_timeout: float = 30.0,
-        idle_nudge: str | None = None,
-        auto_send: bool = True,
-        register_tools: bool = True,
-    ) -> Iterator[str]:
-        """Continuous chat mode. Agent thinks internally, sends messages via send_message tool.
-
-        Args:
-            system_prompt: System prompt for the agent. Defaults to self.system_prompt.
-            idle_timeout: Base seconds between idle thinking turns.
-            max_idle_timeout: Max seconds between idle turns (backoff cap).
-            idle_nudge: Message injected when no new user messages. Set to None to disable idle turns.
-            auto_send: If True, auto-send agent text when model doesn't call send_message.
-            register_tools: If True, register send_message/check_messages tools automatically.
-                Set to False if you want to register your own versions before calling run_chat.
-
-        Yields:
-            Messages sent via send_message tool (or auto-sent text as fallback).
-        """
-        self._chat_running = True
-        self._cancel.clear()
-        self._outbox: list[str] = []
-        nudge = idle_nudge if idle_nudge is not None else self.DEFAULT_IDLE_NUDGE
-
-        if not self._chat_messages:
-            self._chat_messages = [
-                Message(role="system", content=system_prompt or self.system_prompt),
-            ]
-
-        if register_tools:
-            self._register_continuous_tools()
-
-        tool_schemas = self.tools.get_schemas() if self.tools.count() > 0 else None
-        got_first_message = False
-        idle_count = 0
-
-        try:
-            while self._chat_running:
-                if not got_first_message:
-                    self._inbox.wait()
-                else:
-                    wait_time = min(idle_timeout * (2 ** idle_count), max_idle_timeout)
-                    self._inbox.wait(timeout=wait_time)
-
-                if not self._chat_running:
-                    return
-
-                new_msgs = self._inbox.pull_all()
-                new_msgs = [m for m in new_msgs if m]
-
-                is_user_turn = False
-                if new_msgs:
-                    for msg in new_msgs:
-                        self._chat_messages.append(Message(role="user", content=msg))
-                    got_first_message = True
-                    idle_count = 0
-                    is_user_turn = True
-                elif not got_first_message:
-                    continue
-                elif nudge:
-                    self._chat_messages.append(
-                        Message(role="user", content=nudge)
-                    )
-                    idle_count += 1
-                else:
-                    # idle_nudge=None → no idle turns, just wait
-                    continue
-
-                yield from self._run_internal_turn(tool_schemas)
-
-                # Fallback: if model responded to a user message but didn't call
-                # send_message, auto-send the text. (Some models skip tool calling.)
-                if auto_send and is_user_turn and not self._outbox:
-                    last_assistant = ""
-                    for m in reversed(self._chat_messages):
-                        if m.role == "assistant":
-                            last_assistant = m.content.strip()
-                            break
-                        if m.role == "user":
-                            break
-                    if last_assistant and "[interrupted]" not in last_assistant:
-                        self._outbox.append(last_assistant)
-
-                while self._outbox:
-                    yield self._outbox.pop(0)
-
-        finally:
-            self._chat_running = False
-            self._streaming = False
-            self._cancel.clear()
-
-    def _run_internal_turn(self, tool_schemas: list | None) -> Iterator[str]:
-        """Internal turn — LLM stream is NOT yielded. Only send_message content is yielded."""
-        self._cancel.clear()
-        self._streaming = True
-
-        try:
-            for _ in range(self.config.max_iterations):
-                if self._cancel.is_set():
-                    break
-
-                request = CompletionRequest(
-                    messages=self._chat_messages,
-                    tools=tool_schemas,
-                    temperature=self.config.temperature,
-                    model=self.config.model,
-                    provider=self.config.provider,
-                )
-
-                text_parts: list[str] = []
-                all_chunks: list = []
-                interrupted = False
-
-                for chunk in self.llm.complete_stream(request):
-                    if self._cancel.is_set():
-                        interrupted = True
-                        break
-                    all_chunks.append(chunk)
-                    if chunk.delta:
-                        text_parts.append(chunk.delta)
-
-                if interrupted:
-                    partial = "".join(text_parts)
-                    if partial:
-                        self._chat_messages.append(
-                            Message(role="assistant", content=partial + "\n[interrupted]")
-                        )
-                    new_msgs = self._inbox.pull_all()
-                    for msg in [m for m in new_msgs if m]:
-                        self._chat_messages.append(Message(role="user", content=msg))
-                    self._cancel.clear()
-                    continue
-
-                response = accumulate_stream(iter(all_chunks))
-
-                if not response.tool_calls:
-                    self._chat_messages.append(Message(role="assistant", content=response.content))
-                    self._persist_session()
-                    # Yield any outbox messages
-                    while self._outbox:
-                        yield self._outbox.pop(0)
-                    return
-
-                self._chat_messages.append(Message(role="assistant", content=response.content))
-
-                for tool_call in response.tool_calls:
-                    if self._cancel.is_set():
-                        break
-
-                    try:
-                        result = self.tools.execute(tool_call.name, tool_call.args)
-                    except GiveResultSignal as sig:
-                        self._chat_messages.append(
-                            Message(role="user", content=f"[tool:{tool_call.name}] {sig.result}")
-                        )
-                        continue
-
-                    self._chat_messages.append(
-                        Message(role="user", content=f"[tool:{tool_call.name}] {result.output}")
-                    )
-
-                    # Yield outbox after each tool call (send_message triggers immediately)
-                    while self._outbox:
-                        yield self._outbox.pop(0)
-
-            self._persist_session()
-        finally:
-            self._streaming = False
-            self._cancel.clear()
-
-    def _register_continuous_tools(self):
-        """Register send_message and check_messages tools for continuous mode."""
-        inbox = self._inbox
-        agent = self
-
-        if not self.tools.has("send_message"):
-            def _send_message(message: str) -> str:
-                agent._outbox.append(message)
-                return f"[message delivered to user: \"{message}\"]"
-
-            self.tools.register("send_message", _send_message, build_schema(
-                "send_message",
-                "Send a message to the user. This is the ONLY way to communicate with the user. "
-                "Your thinking/stream output is never shown to them.",
-                message={"type": "string", "description": "The message to send to the user", "required": True},
-            ))
-
-        if not self.tools.has("check_messages"):
-            def _check_messages() -> str:
-                msgs = inbox.pull_all()
-                msgs = [m for m in msgs if m]
-                if not msgs:
-                    return "[no new messages]"
-                return "\n".join(f"- {m}" for m in msgs)
-
-            self.tools.register("check_messages", _check_messages, build_schema(
-                "check_messages",
-                "Check if the user sent any new messages. Call this regularly.",
-            ))
 
     def execute(self, instruction: str) -> AgentResult:
         task = self.tasks.create(instruction) if self.tasks else None

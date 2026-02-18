@@ -1,0 +1,25 @@
+snapshot_id: v0-4-0-agentstore-st-bc21
+blueprint_hash: sha256:6e3d7be600d0cb5f9ab95a03408d7484ad046e9e0ecf028354b72517b5f55837
+impl_hash: sha256:591df95816fde562c1c364bffce77f4fd0efb71f8839df0ca539337c51b85f71
+files:
+  "LICENSE": sha256:3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
+  "tests/conftest.py": sha256:6d5b7a4ab5e4e8393c679e5299de7d622479cdd70295d14ecc82a79f44a743ee
+  "tests/test_agent.py": sha256:15fab9278df0697cec6d28acb8ec403b33c6e6811573bb504f48e958760f2e6a
+  "tests/test_api_server.py": sha256:a7297dc7180465a9a33077b36980826133cced16bc86fe21b3d7be1f4ab9b981
+  "tests/test_debug_cli.py": sha256:246b462a8e653a60110f8960055910221a948a410bb2af03744692f12fbe2211
+  "tests/test_live_models.py": sha256:3392373650f4173029f78ddac658d2818eb4406f19964fcc43cd5e29d5690080
+  "tests/test_llm.py": sha256:3b9f4fcb1ae6d1edfb31ce75660a10f7f66e322a4d993b8eb3c00877f941cfb9
+  "tests/test_model_policy.py": sha256:e3deb84eb5effa43b2ae9aab4821d6838fa8fef11e56d8dded2f44874f1b314d
+  "tests/test_snapshot_imports.py": sha256:b10ac9cb15524c3e02e1671e33d31dd59fb0b987a80a3898ef8d3a0180bcd2ec
+  "tests/test_store.py": sha256:c8b38bbea35d311e1741fd0998932d40475417e161dde013350390583987ad01
+  "tests/test_stream_cancel.py": sha256:53108e3900f58b25379d317242f2c87f66e17ab87cd13d0f0f85c54a6c9af5c7
+  "tests/test_task.py": sha256:992080f57c8e1185f609175016096d8a332ab1ea25c0ba687dd28e00519826e1
+  "tests/test_tools.py": sha256:826c4ca3fff4a2afeda7e29801eb9020ba92e8ef343c663fe84b14f3302870a1
+deps:
+  "./src":
+    pinned: ss-0bb0881c
+    latest: ss-0bb0881c
+    api_hash: sha256:46d4eee4fa71d77bfaa39c6aebd3c32e20b949c44993c04257da5f3337872775
+    latest_api_hash: sha256:46d4eee4fa71d77bfaa39c6aebd3c32e20b949c44993c04257da5f3337872775
+    api_changed: false
+    rotten: false

@@ -154,6 +154,7 @@ class GeminiAdapter:
         return self._iter_sse(resp)
 
     def _iter_sse(self, resp) -> StreamIterator:
+        resp.encoding = "utf-8"
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
                 continue

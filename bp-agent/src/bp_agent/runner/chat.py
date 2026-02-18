@@ -53,8 +53,27 @@ def chat_repl(agent) -> None:
             print(f"\n[error] {exc}", file=sys.stderr)
 
 
+def _load_dotenv():
+    """Load .env file from cwd or parents."""
+    from pathlib import Path
+    for d in [Path.cwd()] + list(Path.cwd().parents):
+        env_file = d / ".env"
+        if env_file.exists():
+            import os
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, val = line.partition("=")
+                    os.environ.setdefault(key.strip(), val.strip())
+            break
+
+
 def main():
     import argparse
+
+    _load_dotenv()
 
     parser = argparse.ArgumentParser(description="bp-agent chat")
     parser.add_argument("--provider", "-p", default=None)

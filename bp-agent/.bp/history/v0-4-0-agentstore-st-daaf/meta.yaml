@@ -1,0 +1,9 @@
+id: v0-4-0-agentstore-st-daaf
+timestamp: 2026-02-18T16:28:54
+message: v0.4.0: AgentStore, stream cancel, message merge
+content_hash: sha256:daaf0fbde10493f1c12472d1c183cbc285da9bd2aa77bf438b85d489f6eff20e
+api_hash: sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+spec_hash: sha256:cbea3bf88dd5c25c736fbf26e20c04bede3815335e02592c295c9902b5e370ef
+impl_hash: sha256:591df95816fde562c1c364bffce77f4fd0efb71f8839df0ca539337c51b85f71
+rotten: false
+source: local

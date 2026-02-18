@@ -1,0 +1,9 @@
+id: v0-4-0-agentstore-st-bc21
+timestamp: 2026-02-18T16:29:04
+message: v0.4.0: AgentStore, stream cancel, message merge
+content_hash: sha256:bc219e53ef8ce2dab3a391b1620626c272822b1344ba62b914fda9e6721fa87d
+api_hash: sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
+spec_hash: sha256:cbea3bf88dd5c25c736fbf26e20c04bede3815335e02592c295c9902b5e370ef
+impl_hash: sha256:591df95816fde562c1c364bffce77f4fd0efb71f8839df0ca539337c51b85f71
+rotten: false
+source: local

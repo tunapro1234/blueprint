@@ -1,6 +1,6 @@
 # BLUEPRINT
 
-> **This project is no longer maintained.** The coding-related tooling that Blueprint aimed to provide is being absorbed into AI assistants like Claude natively. The author is now focused on [Omega](https://github.com/tunapro1234).
+> **This project is no longer maintained.** The coding-related tooling that Blueprint aimed to provide is being absorbed into AI assistants like Claude natively. The author is now focused on [Omega](https://github.com/trasumanar-ai/omega).
 
 ---
 

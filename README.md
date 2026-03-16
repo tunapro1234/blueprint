@@ -1,5 +1,9 @@
 # BLUEPRINT
 
+> **This project is no longer maintained.** The coding-related tooling that Blueprint aimed to provide is being absorbed into AI assistants like Claude natively. The author is now focused on [Omega](https://github.com/tunapro1234).
+
+---
+
 > For the developer's vision and thoughts behind this project, see [HUMANS.md](HUMANS.md).
 
 Blueprint is a paradigm for AI-assisted software development. It makes plans permanent, scopes context per-package, and coordinates multiple agents on the same codebase.

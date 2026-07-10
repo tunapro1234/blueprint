@@ -37,12 +37,18 @@ func Typing(pane string) bool {
 	return after != ""
 }
 
+var busyIndicator = regexp.MustCompile(`\(\s*\d+\s*[a-z]?\s*s?\s*[·•]|⏵`)
+
 func Busy(pane string) bool {
-	// Line-level check: a footer like "2 shells · esc to interrupt" only means background
-	// shells are running; the main loop may be idle. Count a pane busy only when a line
-	// mentions "esc to interrupt" WITHOUT "shell" on the same line (alp bug report, 2026-07-10).
+	// "esc to interrupt" alone is NOT enough: transcripts often QUOTE the phrase (rule
+	// announcements), and a "2 shells · esc to interrupt" footer only means background shells.
+	// Count busy only when the line carries a live indicator signature: the ⏵ footer or a
+	// spinner timer like "(23s ·" (2026-07-10, third false-positive class).
 	for _, line := range strings.Split(strings.ToLower(pane), "\n") {
-		if strings.Contains(line, "esc to interrupt") && !strings.Contains(line, "shell") {
+		if !strings.Contains(line, "esc to interrupt") || strings.Contains(line, "shell") {
+			continue
+		}
+		if busyIndicator.MatchString(line) {
 			return true
 		}
 	}

@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="blueprint orchestrates a fleet of AI agents in tmux.">
+  <title>blueprint (bp) — AI agent orchestration in tmux</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #647087;
+      --line: #dfe5ec;
+      --soft: #f5f7fa;
+      --paper: #ffffff;
+      --blue: #2459d3;
+      --blue-dark: #153f9b;
+      --code: #101827;
+      --code-ink: #e8edf5;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: var(--blue); }
+
+    .shell {
+      width: min(100% - 40px, 1040px);
+      margin: 0 auto;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 80% 20%, rgba(36, 89, 211, .10), transparent 34%),
+        linear-gradient(180deg, #fbfcff 0%, #fff 100%);
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 68px;
+    }
+
+    .brand {
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-weight: 750;
+      letter-spacing: -.04em;
+      text-decoration: none;
+    }
+
+    .nav-links { display: flex; gap: 22px; }
+    .nav-links a { color: var(--muted); font-size: .9rem; text-decoration: none; }
+    .nav-links a:hover { color: var(--ink); }
+
+    .hero { padding: 92px 0 96px; }
+
+    .eyebrow,
+    h2 {
+      color: var(--blue);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 850px;
+      margin: 12px 0 22px;
+      font-size: clamp(2.35rem, 7vw, 5.1rem);
+      font-weight: 760;
+      letter-spacing: -.065em;
+      line-height: 1.02;
+    }
+
+    h1 span { color: var(--muted); font-weight: 570; }
+
+    .lede {
+      max-width: 680px;
+      margin: 0 0 34px;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+    }
+
+    .install-line {
+      display: flex;
+      align-items: center;
+      width: min(100%, 700px);
+      overflow: hidden;
+      border: 1px solid #263348;
+      border-radius: var(--radius);
+      background: var(--code);
+      box-shadow: 0 16px 40px rgba(16, 24, 39, .14);
+    }
+
+    .install-line code {
+      flex: 1;
+      overflow-x: auto;
+      padding: 17px 19px;
+      color: var(--code-ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .9rem;
+      white-space: nowrap;
+    }
+
+    .copy {
+      align-self: stretch;
+      border: 0;
+      border-left: 1px solid #354258;
+      padding: 0 18px;
+      background: #192338;
+      color: #cfd8e7;
+      cursor: pointer;
+      font: inherit;
+      font-size: .78rem;
+      font-weight: 700;
+    }
+
+    .copy:hover { background: #23304a; color: white; }
+
+    main section { padding: 74px 0; border-bottom: 1px solid var(--line); }
+    h2 { margin: 0 0 26px; }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 1.12rem;
+      letter-spacing: -.02em;
+    }
+
+    p { margin: 0; }
+
+    .concepts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--line);
+    }
+
+    .concept { min-height: 145px; padding: 25px; background: var(--paper); }
+    .concept p, .step p, .architecture p { color: var(--muted); }
+
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+
+    .step {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 24px;
+      background: var(--soft);
+    }
+
+    .number {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      margin-bottom: 18px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      font-size: .75rem;
+      font-weight: 800;
+    }
+
+    pre {
+      margin: 16px 0 0;
+      overflow-x: auto;
+      border-radius: 9px;
+      padding: 14px;
+      background: var(--code);
+      color: var(--code-ink);
+      font: .79rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+
+    table { width: 100%; border-collapse: collapse; font-size: .93rem; }
+    th, td { padding: 14px 18px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    th { background: var(--soft); color: var(--muted); font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; }
+    td:first-child { width: 38%; color: var(--blue-dark); font: .86rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+    tbody tr:hover { background: #fafbfe; }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 34px;
+      align-items: start;
+    }
+
+    .architecture h3 { font-size: clamp(1.5rem, 4vw, 2.4rem); line-height: 1.15; }
+
+    .flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 25px;
+      color: var(--muted);
+      font: .78rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .node { border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--soft); }
+
+    footer { padding: 32px 0 54px; color: var(--muted); font-size: .85rem; }
+
+    @media (max-width: 760px) {
+      .nav-links { display: none; }
+      .hero { padding: 68px 0 72px; }
+      .concepts, .steps, .architecture { grid-template-columns: 1fr; }
+      .steps { gap: 12px; }
+      .flow { justify-content: flex-start; flex-wrap: wrap; }
+      main section { padding: 58px 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="shell">
+      <nav aria-label="Primary navigation">
+        <a class="brand" href="#top">bp_</a>
+        <div class="nav-links">
+          <a href="#concepts">Concepts</a>
+          <a href="#quickstart">Quickstart</a>
+          <a href="#commands">Commands</a>
+          <a href="#architecture">Architecture</a>
+        </div>
+      </nav>
+      <div class="hero" id="top">
+        <div class="eyebrow">Agent infrastructure CLI</div>
+        <h1>blueprint (bp) <span>— orchestrate a fleet of AI agents in tmux</span></h1>
+        <p class="lede">One small binary to connect, observe, coordinate, and supervise long-running CLI agents across a server.</p>
+        <div class="install-line" aria-label="Installation command">
+          <code id="install-command">curl -fsSL https://bp.trasumanar.ai/install.sh | bash</code>
+          <button class="copy" type="button" aria-label="Copy installation command" onclick="copyInstall(this)">Copy</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section id="concepts">
+      <h2>Concepts</h2>
+      <div class="concepts">
+        <article class="concept">
+          <h3>Agent</h3>
+          <p>A CLI such as Claude or Codex living in its own named tmux session.</p>
+        </article>
+        <article class="concept">
+          <h3>Subagent</h3>
+          <p>An agent spawned inside a CLI through Task, a workflow, or <code>codex exec</code>.</p>
+        </article>
+        <article class="concept">
+          <h3>tmux is the fabric</h3>
+          <p>Sessions keep agents alive, addressable, observable, and easy to reconnect to.</p>
+        </article>
+        <article class="concept">
+          <h3>mosh makes remote sweet</h3>
+          <p>Roaming and intermittent connections are comfortable; SSH remains the automatic fallback.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="quickstart">
+      <h2>Quickstart</h2>
+      <div class="steps">
+        <article class="step">
+          <span class="number">1</span>
+          <h3>Install on the server</h3>
+          <p>From the blueprint checkout, build and link the server binary.</p>
+          <pre><code>cd /srv/blueprint
+./install.sh</code></pre>
+        </article>
+        <article class="step">
+          <span class="number">2</span>
+          <h3>Install on your laptop</h3>
+          <p>The installer downloads the native binary and asks for your <code>user@host</code>.</p>
+          <pre><code>curl -fsSL https://bp.trasumanar.ai/install.sh | bash</code></pre>
+        </article>
+        <article class="step">
+          <span class="number">3</span>
+          <h3>Connect to an agent</h3>
+          <p>Local sessions attach directly; remote sessions use mosh or SSH.</p>
+          <pre><code>bp con server-main</code></pre>
+        </article>
+      </div>
+    </section>
+
+    <section id="commands">
+      <h2>Command reference</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>bp status</td><td>Compare live tmux sessions with the agentbook.</td></tr>
+            <tr><td>bp tree</td><td>Show the agent hierarchy and live state.</td></tr>
+            <tr><td>bp open &lt;name&gt; &lt;dir&gt;</td><td>Start an agent in a new tmux session.</td></tr>
+            <tr><td>bp close &lt;name&gt;</td><td>Close an agent session while retaining its history.</td></tr>
+            <tr><td>bp msg &lt;name&gt; &lt;message&gt;</td><td>Send now or queue safely when the agent is busy.</td></tr>
+            <tr><td>bp q</td><td>List queued agent messages.</td></tr>
+            <tr><td>bp qstat &lt;channel-id&gt;</td><td>Inspect delivery status for a queued message.</td></tr>
+            <tr><td>bp peek &lt;name&gt; [n]</td><td>Read the latest non-empty lines from a session.</td></tr>
+            <tr><td>bp announce &lt;message&gt;</td><td>Broadcast down the sender's agent hierarchy.</td></tr>
+            <tr><td>bp wa send|read|chats</td><td>Use the supervised WhatsApp bridge.</td></tr>
+            <tr><td>bp usage</td><td>Show the latest model-usage snapshot.</td></tr>
+            <tr><td>bp policy status|override</td><td>Inspect or temporarily override usage policy.</td></tr>
+            <tr><td>bp service</td><td>Show supervised job state.</td></tr>
+            <tr><td>bp con [agent-name]</td><td>List sessions or attach locally/remotely to an agent.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <div class="architecture">
+        <h3>One daemon.<br>Long-lived work.</h3>
+        <div>
+          <p>A single systemd unit, <code>blueprint.service</code>, runs the blueprint daemon. It supervises scheduled jobs and the WhatsApp bridge while tmux remains the durable session layer for the agent fleet.</p>
+          <div class="flow" aria-label="Architecture flow">
+            <span class="node">blueprint.service</span><span>→</span><span class="node">bp daemon</span><span>→</span><span class="node">jobs + WhatsApp</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell">blueprint keeps the machinery small and the agents visible.</footer>
+
+  <script>
+    function copyInstall(button) {
+      var command = document.getElementById('install-command').textContent;
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(command).then(function () {
+        button.textContent = 'Copied';
+        window.setTimeout(function () { button.textContent = 'Copy'; }, 1400);
+      });
+    }
+  </script>
+</body>
+</html>

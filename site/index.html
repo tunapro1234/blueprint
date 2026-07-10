@@ -44,9 +44,8 @@
     header {
       border-bottom: 1px solid var(--line);
       background:
-        radial-gradient(circle at 80% 20%, rgba(36, 89, 211, .22), transparent 42%),
-        radial-gradient(circle at 12% 85%, rgba(36, 89, 211, .10), transparent 38%),
-        linear-gradient(180deg, #f6f9ff 0%, #fff 100%);
+        radial-gradient(circle at 78% 12%, rgba(36, 89, 211, .09), transparent 46%),
+        linear-gradient(180deg, #fbfcff 0%, #fff 100%);
     }
 
     nav {
@@ -68,12 +67,19 @@
     .nav-links a { color: var(--muted); font-size: .9rem; text-decoration: none; }
     .nav-links a:hover { color: var(--ink); }
 
-    .hero { padding: 92px 0 96px; }
+    .hero { padding: 64px 0 72px; text-align: center; }
+    .hero .eyebrow { justify-content: center; }
     .showcase { margin-top: 56px; }
     .showcase h3 { margin-bottom: 14px; }
-    .showcase .ps { opacity: .55; margin-right: 6px; }
-    .showcase .dim { opacity: .45; }
-    .showcase pre { overflow-x: auto; }
+    .showcase pre {
+      overflow-x: auto;
+      padding: 22px 26px;
+      font-size: .86rem;
+      line-height: 1.75;
+    }
+    .showcase .ps { color: #7ea6ff; font-weight: 700; margin-right: 8px; user-select: none; }
+    .showcase .cmd { color: #ffffff; font-weight: 600; }
+    .showcase .dim { color: #93a3bf; }
 
     .eyebrow,
     h2 {
@@ -85,19 +91,19 @@
     }
 
     h1 {
-      max-width: 850px;
-      margin: 12px 0 22px;
-      font-size: clamp(2.35rem, 7vw, 5.1rem);
+      max-width: 900px;
+      margin: 14px auto 20px;
+      font-size: clamp(2.1rem, 4.6vw, 3.6rem);
       font-weight: 760;
-      letter-spacing: -.065em;
-      line-height: 1.02;
+      letter-spacing: -.05em;
+      line-height: 1.08;
     }
 
     h1 span { color: var(--muted); font-weight: 570; }
 
     .lede {
-      max-width: 680px;
-      margin: 0 0 34px;
+      max-width: 620px;
+      margin: 0 auto 30px;
       color: var(--muted);
       font-size: clamp(1.05rem, 2vw, 1.25rem);
     }
@@ -105,7 +111,8 @@
     .install-line {
       display: flex;
       align-items: center;
-      width: min(100%, 700px);
+      width: min(100%, 640px);
+      margin: 0 auto;
       overflow: hidden;
       border: 1px solid #263348;
       border-radius: var(--radius);
@@ -138,7 +145,7 @@
 
     .copy:hover { background: #23304a; color: white; }
 
-    main section { padding: 74px 0; border-bottom: 1px solid var(--line); }
+    main section { padding: 60px 0; border-bottom: 1px solid var(--line); }
     h2 { margin: 0 0 26px; }
 
     h3 {
@@ -185,6 +192,7 @@
       font-weight: 800;
     }
 
+    .steps pre code { white-space: pre-wrap; word-break: break-all; }
     pre {
       margin: 16px 0 0;
       overflow-x: auto;
@@ -314,7 +322,7 @@
 
       <div class="showcase">
         <h3>What a day with bp looks like</h3>
-        <pre><code><span class="ps">$</span> bp tree
+        <pre><code><span class="ps">$</span><span class="cmd">bp tree</span>
 server-main <span class="dim">[idle/open]</span>
  ├── server-mail <span class="dim">[idle/open]</span>
  ├── server-monitor-dash <span class="dim">[working/open]</span>
@@ -323,19 +331,19 @@ server-main <span class="dim">[idle/open]</span>
      │   └── probot-builder <span class="dim">blueprint@builder/dev</span>
      └── probot-business <span class="dim">[idle/open]</span>
 
-<span class="ps">$</span> bp msg probot-studio "ship the pricing page when tests pass"
+<span class="ps">$</span><span class="cmd">bp msg probot-studio "ship the pricing page when tests pass"</span>
 BUSY: queued (channel: q482910337). Check: bp qstat q482910337
 
-<span class="ps">$</span> bp qstat q482910337
+<span class="ps">$</span><span class="cmd">bp qstat q482910337</span>
 DELIVERED: probot-studio (at 14:32)
 
-<span class="ps">$</span> bp open probot-pricing /srv/probot/studio --worktree pricing
+<span class="ps">$</span><span class="cmd">bp open probot-pricing /srv/probot/studio --worktree pricing</span>
 /srv/probot/studio/.worktrees/pricing · branch pricing/dev · agent ready
 
-<span class="ps">$</span> bp usage
+<span class="ps">$</span><span class="cmd">bp usage</span>
 Claude: 5h %12 · 7d %27 · Fable 7d %43   Codex: 5h %4 · 7d %14
 
-<span class="ps">$</span> bp announce "deploy frozen for 1h, finish open work"
+<span class="ps">$</span><span class="cmd">bp announce "deploy frozen for 1h, finish open work"</span>
 sent: 6, queued: 2 (q519, q533)</code></pre>
         <p class="lede">One binary. A fleet of agents in tmux — opened, messaged, queued,
         branched into worktrees, usage-governed. Nothing talks over a busy agent, ever.</p>

@@ -1,0 +1,14 @@
+TASK (v1.8): bp monitor - CLI mirror of the monitor dashboard. Everything visible on the dash
+must be viewable in the terminal. Data source: /srv/monitor/site/data.json if readable locally,
+else fetch <DASH_URL>/data.json (config, default https://monitor.trasumanar.ai).
+Subcommands (all English, tabular/plain, no color codes beyond bold optional):
+  bp monitor            overview: usage gauges (claude 5h/7d/fable, codex), state, reset countdowns
+  bp monitor usage      usage history summary (last 24h/7d min-max-now per meter)
+  bp monitor cost       API-equivalent cost panel: month total, per-model breakdown, subscription
+                        value multiple, cache savings (fields exist in data.json - inspect it)
+  bp monitor agents     agent tree/status + last-activity + per-agent tokens if present
+  bp monitor projects   per-project token output (respect data.json ranges)
+  bp monitor services   supervised job/service health (merge daemon jobs.json state)
+  bp monitor radar      model radar findings if radar.json/data present
+Graceful: missing fields -> skip section with note, never crash. go build/vet/test clean,
+rebuild bp + make release. Commits on dev. No /etc, no live msg/open/close/daemon. Short report.

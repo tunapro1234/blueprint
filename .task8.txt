@@ -1,0 +1,16 @@
+TASK (subagent usage tracking — extend /srv/server-main/bin/usage-pulse, python):
+A) CLAUDE SUBAGENTS: transcript scan is single-level (CLAUDE_PROJECTS.glob("*/*.jsonl")).
+   Make it RECURSIVE (rglob) so nested subagent transcripts
+   (<proj>/<session>/subagents/agent-*.jsonl) are counted; attribute every file to its TOP-LEVEL
+   project dir (first path component under /root/.claude/projects). Keep offsets.json format
+   (path->byte offset) working for new nested paths.
+B) CODEX COLLECTOR (new): incrementally scan /root/.codex/sessions/**/*.jsonl with the same
+   offsets mechanism. From new lines extract: cwd (session meta) and token usage events
+   (inspect a recent rollout file to learn the exact event schema first - look for token_count /
+   total_token_usage / input_tokens fields). Aggregate per cwd -> map to project label (use the
+   cwd path dash-encoded like claude projects, or raw path). Add to the agents.jsonl record as
+   "codex_tokens": {<project>: {in, out, total}}.
+C) Do NOT break existing fields/consumers (gen.py, policy read history/agents formats).
+   Run usage-pulse once, show the new codex_tokens and that claude totals grew (subagents now
+   counted). Errors must not crash the run (per-source try/except as existing style).
+No Go changes. No service restarts (daemon runs pulse next tick automatically). Short report.

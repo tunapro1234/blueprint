@@ -46,7 +46,7 @@ func (s *Service) Run(ctx context.Context) {
 			return command(run, "/srv/server-main/bin/usage-policy")
 		})
 	})
-	s.startLoop(ctx, "usage-pulse-chain", 90*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "usage-pulse-chain", 90*time.Second, 5*time.Minute, func(run context.Context, interval time.Duration) {
 		steps := []struct {
 			name string
 			args []string

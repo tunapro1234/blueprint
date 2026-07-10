@@ -1,0 +1,18 @@
+[Unit]
+Description=blueprint agentic infrastructure supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/blueprint
+ExecStart=/srv/blueprint/bp daemon
+Restart=always
+RestartSec=5
+Environment=HOME=/root TMUX_TMPDIR=/tmp
+KillMode=process
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

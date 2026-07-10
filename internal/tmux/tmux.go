@@ -161,6 +161,31 @@ func (c *Client) IsBusy(ctx context.Context, session string) (bool, error) {
 var ErrTyping = errors.New("composer is not empty")
 
 // Send preserves the timing and submit verification of bin/agent send_msg.
+// composerMatches reports whether the live composer contains exactly our pasted
+// message (tail comparison; tolerant to wrapping). Any extra user characters at
+// either end make it fail, so Enter never submits mixed input.
+func composerMatches(paneAnsi, message string) bool {
+	var composer string
+	for _, line := range strings.Split(paneAnsi, "\n") {
+		if promptLine.MatchString(line) {
+			composer = line
+		}
+	}
+	if composer == "" {
+		return false
+	}
+	composer = StripDim(composer)
+	composer = promptLine.ReplaceAllString(composer, "")
+	composer = strings.TrimSpace(strings.ReplaceAll(composer, "\u00a0", " "))
+	lines := strings.Split(message, "\n")
+	lastMsg := strings.TrimSpace(lines[len(lines)-1])
+	if lastMsg == "" {
+		return composer == ""
+	}
+	tail := tailBytes(lastMsg, 30)
+	return strings.HasSuffix(composer, tail)
+}
+
 func (c *Client) Send(ctx context.Context, session, message string) error {
 	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
@@ -180,6 +205,15 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 		return err
 	}
 	c.Sleep(400 * time.Millisecond)
+	// ENTER GUARD (2026-07-10, TOCTOU): kontrol ile paste arasinda kullanici yazmaya
+	// baslamis olabilir. Enter'a basmadan once composer SADECE bizim mesajimiz mi dogrula;
+	// yabanci karakter varsa Enter YOK - satiri temizle ve ErrTyping don (kuyruk yeniden dener).
+	if verify, verifyErr := c.CaptureAnsi(ctx, session); verifyErr == nil {
+		if !composerMatches(verify, message) {
+			_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "C-u")
+			return ErrTyping
+		}
+	}
 	if _, err = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter"); err != nil {
 		return err
 	}

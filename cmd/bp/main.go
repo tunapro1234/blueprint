@@ -18,6 +18,7 @@ import (
 
 	"blueprint/internal/book"
 	"blueprint/internal/daemon"
+	"blueprint/internal/dashboard"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
@@ -44,6 +45,7 @@ bp policy status|override <hours>
 bp service
 bp con [agent-name]
 bp img [recv]
+bp dash [--port N]
 bp daemon`
 
 type app struct {
@@ -101,6 +103,8 @@ func (a *app) run(args []string) error {
 		return a.connect(args[1:])
 	case "img":
 		return a.image(args[1:])
+	case "dash":
+		return a.dashboard(args[1:])
 	case "daemon":
 		return a.daemon(args[1:])
 	case "help", "-h", "--help":
@@ -169,6 +173,84 @@ func loadConnectConfig(path string) (connectConfig, error) {
 		return connectConfig{}, fmt.Errorf("%s: REMOTE_METHOD must be mosh or ssh", path)
 	}
 	return config, nil
+}
+
+func loadDashboardURL(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return dashboard.DefaultURL, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	for lineNumber, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return "", fmt.Errorf("%s:%d: expected KEY=VALUE", path, lineNumber+1)
+		}
+		if strings.TrimSpace(key) == "DASH_URL" {
+			value = strings.Trim(strings.TrimSpace(value), `"'`)
+			if value == "" {
+				return "", fmt.Errorf("%s:%d: DASH_URL cannot be empty", path, lineNumber+1)
+			}
+			return value, nil
+		}
+	}
+	return dashboard.DefaultURL, nil
+}
+
+func parseDashboardPort(args []string) (int, error) {
+	port := dashboard.DefaultPort
+	seen := false
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		value := ""
+		switch {
+		case argument == "--port":
+			if index+1 >= len(args) {
+				return 0, fmt.Errorf("usage: bp dash [--port N]")
+			}
+			value = args[index+1]
+			index++
+		case strings.HasPrefix(argument, "--port="):
+			value = strings.TrimPrefix(argument, "--port=")
+		default:
+			return 0, fmt.Errorf("usage: bp dash [--port N]")
+		}
+		if seen {
+			return 0, fmt.Errorf("--port may only be specified once")
+		}
+		seen = true
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 65535 {
+			return 0, fmt.Errorf("invalid dashboard port: %s", value)
+		}
+		port = parsed
+	}
+	return port, nil
+}
+
+func (a *app) dashboard(args []string) error {
+	port, err := parseDashboardPort(args)
+	if err != nil {
+		return err
+	}
+	path, err := connectConfigPath()
+	if err != nil {
+		return err
+	}
+	dashboardURL, err := loadDashboardURL(path)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(a.ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return dashboard.Serve(ctx, dashboard.Options{Port: port, URL: dashboardURL, Out: a.out})
 }
 
 func findCommand(bin string, args ...string) (commandSpec, error) {

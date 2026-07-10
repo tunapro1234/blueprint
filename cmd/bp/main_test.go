@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"blueprint/internal/book"
+	"blueprint/internal/dashboard"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/worktree"
 )
@@ -88,6 +89,58 @@ func TestLoadConnectConfigRejectsInvalidMethod(t *testing.T) {
 	_, err := loadConnectConfig(path)
 	if err == nil || !strings.Contains(err.Error(), "mosh or ssh") {
 		t.Fatalf("error=%v, want invalid method error", err)
+	}
+}
+
+func TestLoadDashboardURL(t *testing.T) {
+	t.Run("default when missing", func(t *testing.T) {
+		got, err := loadDashboardURL(filepath.Join(t.TempDir(), "missing"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != dashboard.DefaultURL {
+			t.Fatalf("URL=%q, want %q", got, dashboard.DefaultURL)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config")
+		contents := "REMOTE=ops@example.com\nDASH_URL = 'https://dash.example.com/monitor'\n"
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := loadDashboardURL(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "https://dash.example.com/monitor" {
+			t.Fatalf("URL=%q, want configured URL", got)
+		}
+	})
+}
+
+func TestParseDashboardPort(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want int
+	}{
+		{want: dashboard.DefaultPort},
+		{args: []string{"--port", "9000"}, want: 9000},
+		{args: []string{"--port=4321"}, want: 4321},
+	} {
+		got, err := parseDashboardPort(test.args)
+		if err != nil {
+			t.Fatalf("parseDashboardPort(%v): %v", test.args, err)
+		}
+		if got != test.want {
+			t.Fatalf("parseDashboardPort(%v)=%d, want %d", test.args, got, test.want)
+		}
+	}
+
+	for _, args := range [][]string{{"--port"}, {"--port", "0"}, {"--port", "70000"}, {"--listen", "9000"}, {"--port", "1", "--port", "2"}} {
+		if _, err := parseDashboardPort(args); err == nil {
+			t.Errorf("parseDashboardPort(%v) succeeded, want error", args)
+		}
 	}
 }
 

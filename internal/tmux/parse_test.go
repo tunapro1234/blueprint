@@ -28,9 +28,20 @@ func TestTypingNoPrompt(t *testing.T) {
 	}
 }
 
-func TestBusyCaseInsensitive(t *testing.T) {
-	if !Busy("Esc to interrupt") || Busy("ready") {
-		t.Fatal("busy marker parsing failed")
+func TestBusyRequiresLiveIndicator(t *testing.T) {
+	// Live indicators: spinner timer or the ⏵ footer.
+	if !Busy("✻ Working… (23s · Esc to interrupt)") {
+		t.Fatal("spinner line should be busy")
+	}
+	if !Busy("⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt") {
+		t.Fatal("footer line should be busy")
+	}
+	// Quoted prose, bare phrase and background-shell footers are NOT busy.
+	if Busy(`transcript quoting "esc to interrupt" in a rule message`) ||
+		Busy("Esc to interrupt") ||
+		Busy("⏵⏵ bypass permissions on · 2 shells · esc to interrupt") ||
+		Busy("ready") {
+		t.Fatal("false positive busy")
 	}
 }
 

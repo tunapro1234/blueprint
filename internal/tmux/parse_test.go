@@ -51,3 +51,16 @@ func TestTailBytesMatchesShellTail(t *testing.T) {
 		t.Fatalf("unexpected tail: %q", got)
 	}
 }
+
+func TestComposerMatches(t *testing.T) {
+	pane := "output\n❯ hello world tail-of-message\nfooter"
+	if !composerMatches(pane, "hello world tail-of-message") {
+		t.Fatal("clean paste must match")
+	}
+	if composerMatches("output\n❯ hello world tail-of-messageX\nfooter", "hello world tail-of-message") {
+		t.Fatal("user suffix must fail")
+	}
+	if composerMatches("output\n❯ \nfooter", "hello") {
+		t.Fatal("empty composer must fail for non-empty message")
+	}
+}

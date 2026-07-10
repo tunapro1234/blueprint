@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"blueprint/internal/dashboard"
 	"context"
 	"fmt"
 	"io"
@@ -88,6 +89,28 @@ func (s *Service) Run(ctx context.Context) {
 			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=server-monitor-dash"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
 		})
 	})
+	// Serve the owner's dashboard on loopback so nginx can proxy monitor.trasumanar.ai to it.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for ctx.Err() == nil {
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: fmt.Sprintf("panic: %v", recovered)})
+					}
+				}()
+				s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "running"})
+				if err := dashboard.Serve(ctx, dashboard.Options{Port: 8787, Open: func(string) {}}); err != nil && ctx.Err() == nil {
+					s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: err.Error()})
+					s.log.Printf("dash-server: %v", err)
+				}
+			}()
+			if !wait(ctx, 5*time.Second) {
+				return
+			}
+		}
+	}()
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

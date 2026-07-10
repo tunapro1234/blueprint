@@ -52,7 +52,9 @@ func Send(outbox, agent, to, reply, text string) error {
 		replyPtr = &replyCopy
 	}
 	record := Outgoing{Agent: agent, To: toPtr, ReplyTo: replyPtr, Text: text}
-	tmp, err := os.CreateTemp(outbox, ".outbox-*.json")
+	// The bridge consumes visible *.json files. Keep the producer's temporary
+	// file outside that namespace so fs.watch can never claim it mid-rename.
+	tmp, err := os.CreateTemp(outbox, ".outbox-*")
 	if err != nil {
 		return err
 	}

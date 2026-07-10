@@ -118,3 +118,27 @@ bp account assign <agent> <ad>      agent'ı sonraki açılışta o hesaba bağl
 ### Sıra
 Cutover (v1) bitip 24h stabil olduktan sonra v1.1 başlar. İlk adım: kullanıcı ikinci hesabın
 girişini yapar (bp account add+login), sonra pulse çoklu-hesap, sonra policy yönlendirme.
+
+## v1.2 — KAPSAM GENİŞLEMESİ: blueprint her şeyin evi (kullanıcı, 2026-07-10)
+Agentbook, ansiklopedi/bilgi tabanı, model-araştırma watcherları VE monitor dashboard'ın kendisi
+blueprint çatısına taşınır. Hedef yerleşim:
+```
+/srv/blueprint/
+  cmd/ internal/            Go kaynak
+  bp                        binary
+  book/agentbook.json       ★ agentbook (canonical; eski yollar symlink):
+                              /srv/server-main/agentbook.json -> buraya
+                              probot book AYRI kalır (alp'in) ama bp tree ikisini birleşik okur
+  knowledge/                ★ model-ansiklopedisi.md, gpt56-kilavuz.md, model-prices.json
+                              (eski resources/ yolları symlink)
+  watch/                    ★ model_watch.py, reactions.py, reset_watch.py (+radar.json state)
+                              (/srv/monitor/watch -> symlink)
+  dashboard/                ★ monitor.trasumanar.ai sitesi (index.html, gen.py, data.json)
+                              nginx root buraya döner; /srv/monitor/site -> symlink
+                              sahibi yine server-monitor-dash agent'ı (evi güncellenir)
+  accounts/ state/
+```
+Yeni bp komutları: `bp book [list|set <agent> <alan> <deger>]`, `bp models` (ansiklopediden
+özet seçim tablosu terminale), `bp radar` (son model-radar bulguları).
+Taşıma kuralı: her taşınan yol için ESKİ KONUMA SYMLINK bırakılır (hiçbir referans kırılmaz);
+taşımalar cutover'la birlikte ada tarafından yapılır (Sol'a dosya taşıtılmaz).

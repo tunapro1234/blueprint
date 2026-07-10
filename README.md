@@ -15,6 +15,19 @@ The binary is written to `/srv/blueprint/bp`.
 Run `bp help` for a command summary. `blueprint.service` is at the repository
 root; it is not installed or enabled under `/etc` until cutover.
 
+Use managed Git worktrees when agents need isolated branches in the same
+repository:
+
+```sh
+bp worktree add /srv/project shop
+bp worktree list /srv/project
+bp open shop-agent /srv/project --worktree shop
+bp worktree rm /srv/project shop
+```
+
+Managed worktrees live at `<repo>/.worktrees/<topic>` on `<topic>/dev`.
+Removal refuses uncommitted changes unless `--force` is supplied.
+
 Install from the product site:
 
 ```sh

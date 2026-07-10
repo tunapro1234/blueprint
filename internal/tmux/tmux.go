@@ -45,6 +45,14 @@ type Client struct {
 	Sleep func(time.Duration)
 }
 
+// Location records both the current pane directory and the directory in which
+// its tmux session was created.
+type Location struct {
+	Session    string
+	CurrentDir string
+	StartDir   string
+}
+
 func New() *Client {
 	return &Client{Bin: "tmux", Sleep: time.Sleep}
 }
@@ -87,6 +95,26 @@ func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 		}
 	}
 	return sessions, nil
+}
+
+func (c *Client) Locations(ctx context.Context) ([]Location, error) {
+	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}\t#{session_path}")
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var locations []Location
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 || strings.TrimSpace(fields[0]) == "" {
+			continue
+		}
+		locations = append(locations, Location{Session: fields[0], CurrentDir: fields[1], StartDir: fields[2]})
+	}
+	return locations, nil
 }
 
 func (c *Client) IsTyping(ctx context.Context, session string) (bool, error) {

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,12 +22,16 @@ import (
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
 	"blueprint/internal/wa"
+	"blueprint/internal/worktree"
 )
 
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp status | bp tree
-bp open <name> <directory> [--resume] [--codex] [--no-prompt]
+bp open <name> <directory> [--worktree <topic>] [--resume] [--codex] [--no-prompt]
+bp worktree add <repo-directory> <topic>
+bp worktree list <repo-directory>
+bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
 bp msg <name> <message...>
 bp announce <message...>
@@ -70,6 +75,8 @@ func (a *app) run(args []string) error {
 		return a.tree()
 	case "open":
 		return a.open(args[1:])
+	case "worktree":
+		return a.worktree(args[1:])
 	case "close":
 		return a.close(args[1:])
 	case "msg":
@@ -297,6 +304,10 @@ func (a *app) tree() error {
 	if err != nil {
 		return err
 	}
+	worktreeLabels, err := a.worktreeLabels()
+	if err != nil {
+		return err
+	}
 	children := map[string][]string{}
 	for _, name := range fleet.Order {
 		if name == fleet.Root {
@@ -336,6 +347,9 @@ func (a *app) tree() error {
 		if agent.Nickname != "" {
 			label += " (" + agent.Nickname + ")"
 		}
+		if worktreeLabel := worktreeLabels[name]; worktreeLabel != "" {
+			label += " " + worktreeLabel
+		}
 		status := agent.Status
 		if status == "" {
 			status = "unregistered"
@@ -368,11 +382,13 @@ func (a *app) tree() error {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--resume] [--codex] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--resume] [--codex] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
 	opts := bptmux.OpenOptions{}
-	for _, arg := range args[2:] {
+	worktreeTopic := ""
+	for index := 2; index < len(args); index++ {
+		arg := args[index]
 		switch arg {
 		case "--resume":
 			opts.Resume = true
@@ -380,6 +396,15 @@ func (a *app) open(args []string) error {
 			opts.Codex = true
 		case "--no-prompt":
 			opts.NoPrompt = true
+		case "--worktree":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--worktree requires a topic")
+			}
+			if worktreeTopic != "" {
+				return fmt.Errorf("--worktree may only be specified once")
+			}
+			worktreeTopic = args[index+1]
+			index++
 		default:
 			return fmt.Errorf("unknown open option: %s", arg)
 		}
@@ -390,6 +415,13 @@ func (a *app) open(args []string) error {
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("directory does not exist: %s", dir)
+	}
+	if worktreeTopic != "" {
+		entry, err := worktree.New().Ensure(a.ctx, dir, worktreeTopic)
+		if err != nil {
+			return err
+		}
+		dir = entry.Path
 	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		return err
@@ -406,6 +438,146 @@ func (a *app) open(args []string) error {
 	}
 	fmt.Fprintf(a.out, "%s opened%s\n", name, rc)
 	return nil
+}
+
+func (a *app) worktree(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: bp worktree add|list|rm ...")
+	}
+	manager := worktree.New()
+	switch args[0] {
+	case "add":
+		if len(args) != 3 {
+			return fmt.Errorf("usage: bp worktree add <repo-directory> <topic>")
+		}
+		entry, err := manager.Ensure(a.ctx, args[1], args[2])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.out, entry.Path)
+		return nil
+	case "list":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: bp worktree list <repo-directory>")
+		}
+		entries, err := manager.List(a.ctx, args[1])
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			fmt.Fprintln(a.out, "(no worktrees)")
+			return nil
+		}
+		locations, err := a.tmux.Locations(a.ctx)
+		if err != nil {
+			return err
+		}
+		agents := agentsByWorktree(entries, locations)
+		fmt.Fprintln(a.out, "PATH\tBRANCH\tAGENT")
+		for _, entry := range entries {
+			names := agents[entry.Path]
+			agent := "-"
+			if len(names) > 0 {
+				agent = strings.Join(names, ",")
+			}
+			fmt.Fprintf(a.out, "%s\t%s\t%s\n", entry.Path, entry.Branch, agent)
+		}
+		return nil
+	case "rm":
+		force := false
+		positional := make([]string, 0, len(args)-1)
+		for _, arg := range args[1:] {
+			if arg == "--force" {
+				force = true
+				continue
+			}
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown worktree rm option: %s", arg)
+			}
+			positional = append(positional, arg)
+		}
+		if len(positional) != 2 {
+			return fmt.Errorf("usage: bp worktree rm <repo-directory> <topic> [--force]")
+		}
+		repo, err := manager.ResolveRepo(a.ctx, positional[0])
+		if err != nil {
+			return err
+		}
+		derived, err := worktree.Derive(repo, positional[1])
+		if err != nil {
+			return err
+		}
+		if err := manager.Remove(a.ctx, repo, positional[1], force); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "%s removed\n", derived.Path)
+		return nil
+	default:
+		return fmt.Errorf("unknown worktree command: %s", args[0])
+	}
+}
+
+func agentsByWorktree(entries []worktree.Info, locations []bptmux.Location) map[string][]string {
+	sets := make(map[string]map[string]bool, len(entries))
+	for _, entry := range entries {
+		sets[entry.Path] = map[string]bool{}
+	}
+	for _, location := range locations {
+		for _, dir := range []string{location.CurrentDir, location.StartDir} {
+			if dir == "" {
+				continue
+			}
+			for _, entry := range entries {
+				if worktree.ContainsPath(entry.Path, dir) {
+					sets[entry.Path][location.Session] = true
+				}
+			}
+		}
+	}
+	agents := make(map[string][]string, len(entries))
+	for _, entry := range entries {
+		for name := range sets[entry.Path] {
+			agents[entry.Path] = append(agents[entry.Path], name)
+		}
+		sort.Strings(agents[entry.Path])
+	}
+	return agents
+}
+
+func (a *app) worktreeLabels() (map[string]string, error) {
+	locations, err := a.tmux.Locations(a.ctx)
+	if err != nil {
+		return nil, err
+	}
+	manager := worktree.New()
+	labels := map[string]string{}
+	inspected := map[string]worktree.Info{}
+	failed := map[string]bool{}
+	for _, location := range locations {
+		if labels[location.Session] != "" {
+			continue
+		}
+		for _, dir := range []string{location.CurrentDir, location.StartDir} {
+			if dir == "" || failed[dir] {
+				continue
+			}
+			entry, ok := inspected[dir]
+			if !ok {
+				entry, err = manager.Inspect(a.ctx, dir)
+				if err != nil {
+					failed[dir] = true
+					continue
+				}
+				inspected[dir] = entry
+			}
+			if entry.Main {
+				continue
+			}
+			labels[location.Session] = filepath.Base(entry.Repo) + "@" + entry.Branch
+			break
+		}
+	}
+	return labels, nil
 }
 
 func (a *app) close(args []string) error {

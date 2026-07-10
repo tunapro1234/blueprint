@@ -298,6 +298,11 @@
       .term pre { font-size: 12.5px; }
     }
 
+
+    /* wide-screen scaling: content must not look tiny on large displays */
+    @media (min-width: 1600px) { body { zoom: 1.15; } }
+    @media (min-width: 2100px) { body { zoom: 1.35; } }
+    @media (min-width: 2800px) { body { zoom: 1.65; } }
     @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
   </style>
 </head>

@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -58,6 +61,8 @@ func Busy(pane string) bool {
 type Client struct {
 	Bin   string
 	Sleep func(time.Duration)
+	Now   func() time.Time
+	exec  func(context.Context, []byte, ...string) ([]byte, error)
 }
 
 // Location records both the current pane directory and the directory in which
@@ -69,10 +74,13 @@ type Location struct {
 }
 
 func New() *Client {
-	return &Client{Bin: "tmux", Sleep: time.Sleep}
+	return &Client{Bin: "tmux", Sleep: time.Sleep, Now: time.Now}
 }
 
 func (c *Client) run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+	if c.exec != nil {
+		return c.exec(ctx, stdin, args...)
+	}
 	cmd := exec.CommandContext(ctx, c.Bin, args...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
@@ -160,79 +168,115 @@ func (c *Client) IsBusy(ctx context.Context, session string) (bool, error) {
 
 var ErrTyping = errors.New("composer is not empty")
 
-// Send preserves the timing and submit verification of bin/agent send_msg.
-// composerMatches reports whether the live composer contains exactly our pasted
-// message (tail comparison; tolerant to wrapping). Any extra user characters at
-// either end make it fail, so Enter never submits mixed input.
-func composerMatches(paneAnsi, message string) bool {
-	var composer string
-	for _, line := range strings.Split(paneAnsi, "\n") {
-		if promptLine.MatchString(line) {
-			composer = line
+func parseClientActivity(output, session string) time.Time {
+	var latest time.Time
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 || fields[0] != session {
+			continue
+		}
+		seconds, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 64)
+		if err == nil && seconds > latest.Unix() {
+			latest = time.Unix(seconds, 0)
 		}
 	}
-	if composer == "" {
-		return false
-	}
-	composer = StripDim(composer)
-	composer = promptLine.ReplaceAllString(composer, "")
-	composer = strings.TrimSpace(strings.ReplaceAll(composer, "\u00a0", " "))
-	lines := strings.Split(message, "\n")
-	lastMsg := strings.TrimSpace(lines[len(lines)-1])
-	if lastMsg == "" {
-		return composer == ""
-	}
-	tail := tailBytes(lastMsg, 30)
-	return strings.HasSuffix(composer, tail)
+	return latest
 }
 
+func (c *Client) clientActivity(ctx context.Context, session string) (time.Time, error) {
+	out, err := c.run(ctx, nil, "list-clients", "-F", "#{session_name}\t#{client_activity}")
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parseClientActivity(string(out), session), nil
+}
+
+const (
+	composerQuietWindow  = 300 * time.Millisecond
+	composerSettleWindow = 400 * time.Millisecond
+	clientIdleWindow     = 2 * time.Second
+)
+
+// readyToSend requires a stable empty composer and a short period without
+// keyboard activity in any client attached to the target session. The second
+// composer check closes the old check-then-paste window in which a user could
+// begin typing just as a queued message was injected.
+func (c *Client) readyToSend(ctx context.Context, session string) (bool, error) {
+	firstPane, err := c.CaptureAnsi(ctx, session)
+	if err != nil || Typing(firstPane) {
+		return false, err
+	}
+	firstActivity, err := c.clientActivity(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	c.Sleep(composerQuietWindow)
+	secondPane, err := c.CaptureAnsi(ctx, session)
+	if err != nil || Typing(secondPane) {
+		return false, err
+	}
+	secondActivity, err := c.clientActivity(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if secondActivity.After(firstActivity) {
+		return false, nil
+	}
+	now := c.Now()
+	if !secondActivity.IsZero() && now.Sub(secondActivity) < clientIdleWindow {
+		return false, nil
+	}
+	return true, nil
+}
+
+var bufferSequence uint64
+
+// Send first injects the message, then lets the TUI turn a large paste into its
+// internal "Pasted text" object before submitting it. Once injection succeeds,
+// the operation is at-most-once: later ambiguity is treated as delivered so the
+// dispatcher can never paste the same message again. If a user touches the
+// attached client during the settle window, their mixed composer is left alone
+// and Enter is deliberately not sent.
 func (c *Client) Send(ctx context.Context, session, message string) error {
-	pane, err := c.CaptureAnsi(ctx, session)
+	ready, err := c.readyToSend(ctx, session)
 	if err != nil {
 		return err
 	}
-	if Typing(pane) {
+	if !ready {
 		return ErrTyping
 	}
+	target := "=" + session + ":"
 	if strings.Contains(message, "\n") {
-		if _, err = c.run(ctx, []byte(message), "load-buffer", "-b", "agentmsg", "-"); err != nil {
+		buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
+		if _, err = c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
 			return err
 		}
-		if _, err = c.run(ctx, nil, "paste-buffer", "-b", "agentmsg", "-d", "-t", "="+session+":"); err != nil {
+		_, err = c.run(ctx, nil, "paste-buffer", "-b", buffer, "-d", "-t", target)
+		if err != nil {
+			// A failed paste may leave the uniquely named buffer behind.
+			_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
 			return err
 		}
-	} else if _, err = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "-l", message); err != nil {
-		return err
-	}
-	c.Sleep(400 * time.Millisecond)
-	// ENTER GUARD (2026-07-10, TOCTOU): kontrol ile paste arasinda kullanici yazmaya
-	// baslamis olabilir. Enter'a basmadan once composer SADECE bizim mesajimiz mi dogrula;
-	// yabanci karakter varsa Enter YOK - satiri temizle ve ErrTyping don (kuyruk yeniden dener).
-	if verify, verifyErr := c.CaptureAnsi(ctx, session); verifyErr == nil {
-		if !composerMatches(verify, message) {
-			_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "C-u")
-			return ErrTyping
+	} else {
+		_, err = c.run(ctx, nil, "send-keys", "-t", target, "-l", message)
+		if err != nil {
+			return err
 		}
 	}
-	if _, err = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter"); err != nil {
-		return err
-	}
-	c.Sleep(1200 * time.Millisecond)
-	pane, err = c.Capture(ctx, session)
-	if err != nil {
-		return err
-	}
-	if !Busy(pane) && strings.Contains(pane, tailBytes(message, 40)) {
-		_, err = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
-	}
-	return err
-}
 
-func tailBytes(value string, count int) string {
-	if len(value) <= count {
-		return value
+	// From this point onward, returning an error would leave the queue record
+	// pending and cause a duplicate paste on the next dispatch.
+	c.Sleep(composerSettleWindow)
+	pane, captureErr := c.CaptureAnsi(ctx, session)
+	activity, activityErr := c.clientActivity(ctx, session)
+	if captureErr != nil || activityErr != nil || !Typing(pane) {
+		return nil
 	}
-	return value[len(value)-count:]
+	if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
+		return nil
+	}
+	_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
+	return nil
 }
 
 type OpenOptions struct {

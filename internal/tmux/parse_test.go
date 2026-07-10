@@ -1,6 +1,12 @@
 package tmux
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestTypingUsesOnlyLastPrompt(t *testing.T) {
 	pane := "❯ old message\nresponse\n  ❯ \u00a0  \t\n"
@@ -45,22 +51,89 @@ func TestBusyRequiresLiveIndicator(t *testing.T) {
 	}
 }
 
-func TestTailBytesMatchesShellTail(t *testing.T) {
-	got := tailBytes("abcdefghijklmnopqrstuvwxyz0123456789ABCDE", 40)
-	if got != "bcdefghijklmnopqrstuvwxyz0123456789ABCDE" {
-		t.Fatalf("unexpected tail: %q", got)
+func TestParseClientActivityUsesLatestMatchingClient(t *testing.T) {
+	got := parseClientActivity("other\t100\ntarget\t120\ntarget\t125\nbad\tnope\n", "target")
+	if got.Unix() != 125 {
+		t.Fatalf("activity=%v", got)
+	}
+	if got := parseClientActivity("other\t100\n", "target"); !got.Equal(time.Time{}) {
+		t.Fatalf("unattached session activity=%v", got)
 	}
 }
 
-func TestComposerMatches(t *testing.T) {
-	pane := "output\n❯ hello world tail-of-message\nfooter"
-	if !composerMatches(pane, "hello world tail-of-message") {
-		t.Fatal("clean paste must match")
+type sendHarness struct {
+	captures   []string
+	activities []string
+	mutations  []string
+}
+
+func (h *sendHarness) run(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+	switch args[0] {
+	case "capture-pane":
+		value := h.captures[0]
+		h.captures = h.captures[1:]
+		return []byte(value), nil
+	case "list-clients":
+		value := h.activities[0]
+		h.activities = h.activities[1:]
+		return []byte(value), nil
+	case "load-buffer", "paste-buffer", "send-keys", "delete-buffer":
+		h.mutations = append(h.mutations, strings.Join(args, " "))
+		return nil, nil
+	default:
+		return nil, errors.New("unexpected command: " + strings.Join(args, " "))
 	}
-	if composerMatches("output\n❯ hello world tail-of-messageX\nfooter", "hello world tail-of-message") {
-		t.Fatal("user suffix must fail")
+}
+
+func testClient(h *sendHarness) *Client {
+	return &Client{
+		Sleep: func(time.Duration) {},
+		Now:   func() time.Time { return time.Unix(1000, 0) },
+		exec:  h.run,
 	}
-	if composerMatches("output\n❯ \nfooter", "hello") {
-		t.Fatal("empty composer must fail for non-empty message")
+}
+
+func TestSendWaitsForStableEmptyComposer(t *testing.T) {
+	h := &sendHarness{
+		captures:   []string{"❯ \n", "❯ user started typing\n"},
+		activities: []string{"target\t900\n"},
+	}
+	err := testClient(h).Send(context.Background(), "target", "queued")
+	if !errors.Is(err, ErrTyping) {
+		t.Fatalf("err=%v", err)
+	}
+	if len(h.mutations) != 0 {
+		t.Fatalf("message was injected during typing: %v", h.mutations)
+	}
+}
+
+func TestSendSettlesLargePasteBeforeSubmitting(t *testing.T) {
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n",
+			"❯ \n",
+			"❯ [Pasted text #1 +2 lines]\n",
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "line one\nline two"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.mutations) != 3 || !strings.HasPrefix(h.mutations[0], "load-buffer ") ||
+		!strings.HasPrefix(h.mutations[1], "paste-buffer ") || h.mutations[2] != "send-keys -t =target: Enter" {
+		t.Fatalf("mutations=%v", h.mutations)
+	}
+}
+
+func TestSendDoesNotSubmitIfUserTypesAfterInjection(t *testing.T) {
+	h := &sendHarness{
+		captures:   []string{"❯ \n", "❯ \n", "❯ queued plus user text\n"},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t1000\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "queued"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.mutations) != 1 || !strings.HasPrefix(h.mutations[0], "send-keys -t =target: -l queued") {
+		t.Fatalf("user text was submitted or message was retried: %v", h.mutations)
 	}
 }

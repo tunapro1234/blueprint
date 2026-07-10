@@ -95,6 +95,26 @@ func TestHandlerServesExistingSiteWithoutUpstream(t *testing.T) {
 	if got := strings.TrimSpace(recorder.Body.String()); got != `{"local":true}` {
 		t.Fatalf("body=%q, want local data", got)
 	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control=%q, want no-store", got)
+	}
+}
+
+func TestOnlyExplicitDataRequestAsksForRefresh(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{"/data.json?t=1", false},
+		{"/data.json?t=1&refresh=1", true},
+		{"/index.html?refresh=1", false},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		got := explicitDataRefresh(request)
+		if got != test.want {
+			t.Errorf("path=%q refresh=%v, want %v", test.path, got, test.want)
+		}
+	}
 }
 
 func TestParseURLRejectsUnsafeOrIncompleteValues(t *testing.T) {

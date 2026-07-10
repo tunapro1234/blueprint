@@ -178,6 +178,18 @@ type Target interface {
 	Send(context.Context, string, string) error
 }
 
+// Cancel removes a pending message by channel id, archiving it as canceled.
+func (q *Queue) Cancel(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	path := filepath.Join(q.pending(), id+".json")
+	message, err := read(path)
+	if err != nil {
+		return fmt.Errorf("no pending message %s: %w", id, err)
+	}
+	return q.finish(path, message, "canceled (by operator)")
+}
+
 func (q *Queue) finish(path string, message Message, status string) error {
 	if err := os.MkdirAll(q.done(), 0755); err != nil {
 		return err

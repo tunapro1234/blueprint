@@ -37,7 +37,15 @@ func Typing(pane string) bool {
 }
 
 func Busy(pane string) bool {
-	return strings.Contains(strings.ToLower(pane), "esc to interrupt")
+	// Line-level check: a footer like "2 shells · esc to interrupt" only means background
+	// shells are running; the main loop may be idle. Count a pane busy only when a line
+	// mentions "esc to interrupt" WITHOUT "shell" on the same line (alp bug report, 2026-07-10).
+	for _, line := range strings.Split(strings.ToLower(pane), "\n") {
+		if strings.Contains(line, "esc to interrupt") && !strings.Contains(line, "shell") {
+			return true
+		}
+	}
+	return false
 }
 
 type Client struct {
@@ -70,12 +78,12 @@ func (c *Client) run(ctx context.Context, stdin []byte, args ...string) ([]byte,
 }
 
 func (c *Client) Capture(ctx context.Context, session string) (string, error) {
-	out, err := c.run(ctx, nil, "capture-pane", "-t", session, "-p")
+	out, err := c.run(ctx, nil, "capture-pane", "-t", "="+session, "-p")
 	return string(out), err
 }
 
 func (c *Client) HasSession(ctx context.Context, session string) bool {
-	_, err := c.run(ctx, nil, "has-session", "-t", session)
+	_, err := c.run(ctx, nil, "has-session", "-t", "="+session)
 	return err == nil
 }
 
@@ -142,14 +150,14 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 		if _, err = c.run(ctx, []byte(message), "load-buffer", "-b", "agentmsg", "-"); err != nil {
 			return err
 		}
-		if _, err = c.run(ctx, nil, "paste-buffer", "-b", "agentmsg", "-d", "-t", session); err != nil {
+		if _, err = c.run(ctx, nil, "paste-buffer", "-b", "agentmsg", "-d", "-t", "="+session); err != nil {
 			return err
 		}
-	} else if _, err = c.run(ctx, nil, "send-keys", "-t", session, "-l", message); err != nil {
+	} else if _, err = c.run(ctx, nil, "send-keys", "-t", "="+session, "-l", message); err != nil {
 		return err
 	}
 	c.Sleep(400 * time.Millisecond)
-	if _, err = c.run(ctx, nil, "send-keys", "-t", session, "Enter"); err != nil {
+	if _, err = c.run(ctx, nil, "send-keys", "-t", "="+session, "Enter"); err != nil {
 		return err
 	}
 	c.Sleep(1200 * time.Millisecond)
@@ -158,7 +166,7 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 		return err
 	}
 	if !Busy(pane) && strings.Contains(pane, tailBytes(message, 40)) {
-		_, err = c.run(ctx, nil, "send-keys", "-t", session, "Enter")
+		_, err = c.run(ctx, nil, "send-keys", "-t", "="+session, "Enter")
 	}
 	return err
 }
@@ -192,7 +200,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if opts.Codex {
 		command = `codex -c model_reasoning_effort="high"`
 	}
-	if _, err := c.run(ctx, nil, "send-keys", "-t", session, command, "Enter"); err != nil {
+	if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session, command, "Enter"); err != nil {
 		return err
 	}
 
@@ -206,7 +214,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 			lower := strings.ToLower(pane)
 			if opts.Codex {
 				if !trusted && strings.Contains(lower, "trust") && strings.Contains(lower, "directory") {
-					_, _ = c.run(ctx, nil, "send-keys", "-t", session, "Enter")
+					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session, "Enter")
 					trusted = true
 					c.Sleep(2 * time.Second)
 					continue
@@ -217,9 +225,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 				}
 			} else {
 				if !picked && (strings.Contains(lower, "resume from summary") || strings.Contains(lower, "resume full session")) {
-					_, _ = c.run(ctx, nil, "send-keys", "-t", session, "Down")
+					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session, "Down")
 					c.Sleep(500 * time.Millisecond)
-					_, _ = c.run(ctx, nil, "send-keys", "-t", session, "Enter")
+					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session, "Enter")
 					picked = true
 					c.Sleep(2 * time.Second)
 					continue
@@ -253,7 +261,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 }
 
 func (c *Client) Close(ctx context.Context, session string) error {
-	_, err := c.run(ctx, nil, "kill-session", "-t", session)
+	_, err := c.run(ctx, nil, "kill-session", "-t", "="+session)
 	return err
 }
 

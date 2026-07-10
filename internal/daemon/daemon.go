@@ -78,7 +78,7 @@ func (s *Service) Run(ctx context.Context) {
 				return
 			}
 			if err := s.tracked(run, step.name, interval, func() error {
-				return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=server-monitor-dash"}, step.args...)
+				return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, step.args...)
 			}); err != nil {
 				return
 			}
@@ -86,7 +86,7 @@ func (s *Service) Run(ctx context.Context) {
 	})
 	s.startLoop(ctx, "watch-reset", 150*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "watch-reset", interval, func() error {
-			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=server-monitor-dash"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
+			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
 		})
 	})
 	// Serve the owner's dashboard on loopback so nginx can proxy monitor.trasumanar.ai to it.

@@ -1,0 +1,19 @@
+TASK (v1.7 site redesign + local dash):
+A) SITE REDESIGN (site/index.html): keep all content/sections, redesign the look inspired by
+   this palette & typography (from the owner's old site — elegant manuscript feel):
+   --ink:#1a2744 --ink-light:#2d4470 --ink-faint:#4a6a9b --ink-ghost:#8aa4cc
+   --parchment:#f5f0e8 --parchment-dark:#e8e0d0 --gold:#b8943e --gold-light:#d4b45c
+   Serif typography (NO external fonts/CDN — use a system serif stack like
+   'Iowan Old Style', 'Palatino Linotype', Georgia, serif), subtle inline-SVG noise texture,
+   thin gold rules/ornaments between sections, generous whitespace. It should feel like an
+   elegant technical manuscript ("blueprint"). Still fully self-contained + responsive.
+B) NEW COMMAND: bp dash [--port N (default 8787)]
+   - Serves the monitor dashboard LOCALLY (laptop): fetches index.html once and proxies
+     /data.json (and ansiklopedi.json if referenced) from DASH_URL (config key in
+     ~/.config/bp/config, default https://monitor.trasumanar.ai) so the page auto-refresh works
+     through localhost. Prints "dashboard: http://localhost:N" and tries to open browser
+     (xdg-open/open, ignore failure). Ctrl-C stops.
+   - On server (where /srv/monitor/site exists) serve that dir directly with same proxy-free path.
+C) Landing page: add a small "bp dash" mention under quickstart.
+RULES: English; build/vet/test clean; rebuild bp + make release (binaries+checksums);
+meaningful commits on dev; no /etc, no live msg/open/close/daemon. Short report.

@@ -1,0 +1,28 @@
+TASK (v1.5 distribution & desktop-integration package):
+A) NPM PACKAGE: create npm/ dir -> package "@tunapro/blueprint" (bin: "bp"). Wrapper approach
+   like codex: small install.js postinstall downloads the right binary from
+   https://bp.trasumanar.ai/bp-<os>-<arch> (already built in site/), verifies sha256
+   (generate checksums file site/checksums.txt via make release), installs into package bin.
+   Also direct-run fallback: if download fails, print manual install instructions.
+   Do NOT publish (npm login is the user's; leave 'npm publish' note in npm/README.md).
+B) NEW COMMAND: bp img
+   - client mode (no local /srv/blueprint): read clipboard image (try wl-paste -t image/png,
+     xclip -selection clipboard -t image/png -o, pngpaste - in that order), pipe over ssh to
+     REMOTE (from ~/.config/bp/config): 'bp img recv'. Print returned server path AND copy it
+     back to local clipboard (wl-copy/xclip/pbcopy). Behavior parity reference:
+     /srv/server-main/bin/pasteimg (server receiver) + /srv/server-main/LAPTOP-IMAGE-PASTE-BRIEF.md (client simg).
+   - server mode: 'bp img recv' = stdin image bytes -> /srv/server-main/clipboard/clip-<ts>.<ext>
+     (mime detect png/jpg/gif/webp/bmp, reject non-image, collision-safe, chmod 644, print path).
+     Reuse dir; do not break existing pasteimg script.
+C) INSTALLER ADDITIONS (site/install.sh + npm postinstall notes):
+   - client: offer kitty keybinding snippet (ctrl+shift+i -> launch --type=background bp img)
+     printed at end, not auto-applied; ensure ~/.local/bin on PATH note.
+   - server & client: tmux quality-of-life setup (idempotent append to ~/.tmux.conf if missing):
+     set -g mouse on; set -g history-limit 100000; setw -g mode-keys vi; set -sg escape-time 10;
+     set -s set-clipboard on; set -as terminal-features ',xterm*:clipboard'; set -g allow-passthrough on
+     (OSC52 clipboard over mosh). Ask before writing (or --yes flag). Do NOT touch prefix key.
+D) LANDING PAGE: add short sections: "Image paste over SSH (bp img)" and "Clipboard & scroll
+   (tmux + OSC52 + mosh)" with 2-3 lines each + kitty keybinding snippet.
+RULES: English; go build/vet/test clean; rebuild binaries + checksums (make release); meaningful
+commits; don't touch /etc, nginx, existing pasteimg/simg; don't run msg/open/close/daemon.
+Short report at end.

@@ -148,7 +148,7 @@ func (f *Fleet) AddLive(names []string) {
 				}
 			}
 		}
-		f.Agents[name] = Agent{Name: name, Status: "kayitsiz"}
+		f.Agents[name] = Agent{Name: name, Status: "unregistered"}
 		f.Parents[name] = parent
 		f.Order = append(f.Order, name)
 	}
@@ -161,6 +161,19 @@ func (f Fleet) SortedNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// IsDescendant reports whether name is below ancestor in the agentbook parent chain.
+func (f Fleet) IsDescendant(name, ancestor string) bool {
+	seen := map[string]bool{}
+	for name != "" && !seen[name] {
+		seen[name] = true
+		name = f.Parents[name]
+		if name == ancestor {
+			return true
+		}
+	}
+	return false
 }
 
 func SetStatus(name, status, folder string) error {
@@ -211,7 +224,7 @@ func SetStatus(name, status, folder string) error {
 		}
 	}
 	if !found {
-		agents = append(agents, map[string]any{"name": name, "folder": folder, "class": "other", "role": "(yeni - rol gir)", "status": status})
+		agents = append(agents, map[string]any{"name": name, "folder": folder, "class": "other", "role": "(new - add role)", "status": status})
 	}
 	raw["agents"] = agents
 	raw["updated"] = time.Now().Format("2006-01-02")

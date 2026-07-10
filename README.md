@@ -1,16 +1,16 @@
 # blueprint (`bp`)
 
-`bp`, sunucudaki agent/tmux, mesaj kuyruğu, usage-policy ve WhatsApp istemci
-işlerini tek bir bağımsız Go binary'sinde toplar. `bp daemon` mevcut Python/Node
-işlerini zamanlayan supervisor modudur; iş mantığını yeniden yazmaz.
+`bp` combines the server's agent/tmux, message queue, usage-policy, and WhatsApp
+client operations in one standalone Go binary. `bp daemon` is a supervisor that
+schedules the existing Python/Node jobs without rewriting their business logic.
 
-Derleme ve doğrulama:
+Build and verify:
 
 ```sh
 make check
 ```
 
-Binary çalışma alanına yazılır: `/srv/blueprint/bp`.
+The binary is written to `/srv/blueprint/bp`.
 
-Komut özeti için `bp help` çalıştırın. `blueprint.service` repo kökündedir;
-cutover yapılana kadar `/etc` altına kurulmaz veya etkinleştirilmez.
+Run `bp help` for a command summary. `blueprint.service` is at the repository
+root; it is not installed or enabled under `/etc` until cutover.

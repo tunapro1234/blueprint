@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -21,18 +22,19 @@ import (
 	"blueprint/internal/wa"
 )
 
-const usage = `blueprint (bp) — agentic altyapi CLI
+const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp status | bp tree
-bp open <ad> <dizin> [--resume] [--codex] [--no-prompt]
-bp close <ad>
-bp msg <ad> <mesaj...>
-bp q | bp qstat <kanal-id>
-bp peek <ad> [n]
-bp wa send [--to <hedef>] [--reply <msgId>] <mesaj...>
-bp wa read <hedef> [n] | bp wa chats
+bp open <name> <directory> [--resume] [--codex] [--no-prompt]
+bp close <name>
+bp msg <name> <message...>
+bp announce <message...>
+bp q | bp qstat <channel-id>
+bp peek <name> [n]
+bp wa send [--to <target>] [--reply <msgId>] <message...>
+bp wa read <target> [n] | bp wa chats
 bp usage
-bp policy status|override <saat>
+bp policy status|override <hours>
 bp service
 bp daemon`
 
@@ -52,7 +54,7 @@ func main() {
 		args = []string{"status"}
 	}
 	if err := a.run(args); err != nil {
-		fmt.Fprintln(os.Stderr, "HATA:", err)
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		os.Exit(1)
 	}
 }
@@ -69,6 +71,8 @@ func (a *app) run(args []string) error {
 		return a.close(args[1:])
 	case "msg":
 		return a.message(args[1:])
+	case "announce":
+		return a.announce(args[1:])
 	case "q":
 		return a.queueList(args[1:])
 	case "qstat":
@@ -90,7 +94,7 @@ func (a *app) run(args []string) error {
 		return nil
 	default:
 		fmt.Fprintln(a.err, usage)
-		return fmt.Errorf("bilinmeyen komut: %s", args[0])
+		return fmt.Errorf("unknown command: %s", args[0])
 	}
 }
 
@@ -111,11 +115,11 @@ func (a *app) status() error {
 	fmt.Fprintf(a.out, "%-24s %-10s %s\n", "AGENT", "TMUX", "AGENTBOOK")
 	for _, name := range fleet.SortedNames() {
 		state, alive := states[name]
-		tmuxState := "-"
+		tmuxState := "closed"
 		if alive && state.Busy {
-			tmuxState = "CALISIYOR"
+			tmuxState = "working"
 		} else if alive {
-			tmuxState = "bosta"
+			tmuxState = "idle"
 		}
 		bookState := fleet.Agents[name].Status
 		if bookState == "" {
@@ -123,10 +127,10 @@ func (a *app) status() error {
 		}
 		flag := ""
 		if !alive && bookState == "open" {
-			flag = "  <-- book:open ama tmux YOK"
+			flag = "  <-- book:open but tmux is missing"
 		}
 		if alive && bookState == "closed" {
-			flag = "  <-- tmux acik ama book:closed"
+			flag = "  <-- tmux is open but book:closed"
 		}
 		fmt.Fprintf(a.out, "%-24s %-10s %-10s%s\n", name, tmuxState, bookState, flag)
 	}
@@ -165,12 +169,12 @@ func (a *app) tree() error {
 			}
 		}
 		agent := fleet.Agents[name]
-		live := "kapali"
+		live := "closed"
 		if state, ok := states[name]; ok {
 			if state.Busy {
-				live = "CALISIYOR"
+				live = "working"
 			} else {
-				live = "bosta"
+				live = "idle"
 			}
 		}
 		label := name
@@ -179,7 +183,7 @@ func (a *app) tree() error {
 		}
 		status := agent.Status
 		if status == "" {
-			status = "kayitsiz"
+			status = "unregistered"
 		}
 		fmt.Fprintf(a.out, "%s%s%s [%s/%s]\n", prefix, branch, label, live, status)
 		nextPrefix := prefix
@@ -209,7 +213,7 @@ func (a *app) tree() error {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("kullanim: bp open <ad> <dizin> [--resume] [--codex] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--resume] [--codex] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
 	opts := bptmux.OpenOptions{}
@@ -222,15 +226,15 @@ func (a *app) open(args []string) error {
 		case "--no-prompt":
 			opts.NoPrompt = true
 		default:
-			return fmt.Errorf("bilinmeyen open secenegi: %s", arg)
+			return fmt.Errorf("unknown open option: %s", arg)
 		}
 	}
 	if a.tmux.HasSession(a.ctx, name) {
-		fmt.Fprintf(a.out, "%s zaten acik\n", name)
+		fmt.Fprintf(a.out, "%s is already open\n", name)
 		return nil
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return fmt.Errorf("dizin yok: %s", dir)
+		return fmt.Errorf("directory does not exist: %s", dir)
 	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		return err
@@ -245,22 +249,22 @@ func (a *app) open(args []string) error {
 			rc = "  rc:https://" + matches[len(matches)-1]
 		}
 	}
-	fmt.Fprintf(a.out, "%s ACIK%s\n", name, rc)
+	fmt.Fprintf(a.out, "%s opened%s\n", name, rc)
 	return nil
 }
 
 func (a *app) close(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("kullanim: bp close <ad>")
+		return fmt.Errorf("usage: bp close <name>")
 	}
 	name := args[0]
 	if a.tmux.HasSession(a.ctx, name) {
 		if err := a.tmux.Close(a.ctx, name); err != nil {
 			return err
 		}
-		fmt.Fprintf(a.out, "%s kapatildi (gecmis jsonl'de durur)\n", name)
+		fmt.Fprintf(a.out, "%s closed (history remains in JSONL)\n", name)
 	} else {
-		fmt.Fprintf(a.out, "%s zaten kapali\n", name)
+		fmt.Fprintf(a.out, "%s is already closed\n", name)
 	}
 	return book.SetStatus(name, "closed", "")
 }
@@ -277,49 +281,103 @@ func (a *app) sender() string {
 
 func (a *app) message(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("kullanim: bp msg <ad> <mesaj...>")
+		return fmt.Errorf("usage: bp msg <name> <message...>")
 	}
 	name, message := args[0], strings.Join(args[1:], " ")
-	if !a.tmux.HasSession(a.ctx, name) {
-		return fmt.Errorf("%s diye acik oturum yok", name)
-	}
-	pane, err := a.tmux.Capture(a.ctx, name)
+	queued, channelID, err := a.deliver(name, a.sender(), message)
 	if err != nil {
 		return err
 	}
-	if bptmux.Typing(pane) || bptmux.Busy(pane) {
-		id, enqueueErr := a.queue.Enqueue(name, a.sender(), message)
-		if enqueueErr != nil {
-			return enqueueErr
+	if !queued {
+		fmt.Fprintln(a.out, "sent")
+		return nil
+	}
+	fmt.Fprintf(a.out, "BUSY: queued (channel: %s). Check: bp qstat %s\n", channelID, channelID)
+	return nil
+}
+
+func (a *app) deliver(name, sender, message string) (queued bool, channelID string, err error) {
+	if !a.tmux.HasSession(a.ctx, name) {
+		return false, "", fmt.Errorf("no open session named %s", name)
+	}
+	pane, err := a.tmux.Capture(a.ctx, name)
+	if err != nil {
+		return false, "", err
+	}
+	if !bptmux.Typing(pane) && !bptmux.Busy(pane) {
+		err = a.tmux.Send(a.ctx, name, message)
+		if err == nil {
+			return false, "", nil
 		}
-		fmt.Fprintf(a.out, "MESGUL: kuyruga alindi (kanal: %s).\n%s bosalinca otomatik gonderilecek. Teslim kontrolu (istedigin zaman):\n  bp qstat %s\n(bekliyor / iletildi / iptal doner. Bildirim GELMEZ - merak edersen bakarsin.)\n", id, name, id)
-		return nil
+		if !errors.Is(err, bptmux.ErrTyping) {
+			return false, "", err
+		}
 	}
-	if err = a.tmux.Send(a.ctx, name, message); err == nil {
-		fmt.Fprintln(a.out, "gonderildi")
-		return nil
+	channelID, err = a.queue.Enqueue(name, sender, message)
+	return true, channelID, err
+}
+
+func (a *app) announce(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: bp announce <message...>")
 	}
-	if !errors.Is(err, bptmux.ErrTyping) {
+	sender := a.sender()
+	fleet, states, err := a.fleet()
+	if err != nil {
 		return err
 	}
-	id, enqueueErr := a.queue.Enqueue(name, a.sender(), message)
-	if enqueueErr != nil {
-		return enqueueErr
+	if _, ok := fleet.Agents[sender]; !ok && sender != "server-main" {
+		return fmt.Errorf("sender %s is not in the agentbook hierarchy", sender)
 	}
-	fmt.Fprintf(a.out, "son anda doldu -> kuyruga alindi (kanal: %s). Kontrol: bp qstat %s\n", id, id)
-	return nil
+	targets := announcementTargets(fleet, states, sender)
+	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, strings.Join(args, " "))
+	sent := 0
+	channels := make([]string, 0)
+	var deliveryErrors []error
+	for _, target := range targets {
+		queued, channelID, deliveryErr := a.deliver(target, sender, message)
+		if deliveryErr != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s: %w", target, deliveryErr))
+			continue
+		}
+		if queued {
+			channels = append(channels, channelID)
+		} else {
+			sent++
+		}
+	}
+	fmt.Fprintf(a.out, "sent: %d, queued: %d", sent, len(channels))
+	if len(channels) > 0 {
+		fmt.Fprintf(a.out, " (%s)", strings.Join(channels, ", "))
+	}
+	fmt.Fprintln(a.out)
+	return errors.Join(deliveryErrors...)
+}
+
+func announcementTargets(fleet book.Fleet, states map[string]book.State, sender string) []string {
+	targets := make([]string, 0)
+	for _, name := range fleet.Order {
+		state, open := states[name]
+		if name == sender || strings.HasPrefix(name, "lab-") || !open || !state.Alive {
+			continue
+		}
+		if sender == "server-main" || sender == fleet.Root || fleet.IsDescendant(name, sender) {
+			targets = append(targets, name)
+		}
+	}
+	return targets
 }
 
 func (a *app) queueList(args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("kullanim: bp q")
+		return fmt.Errorf("usage: bp q")
 	}
 	rows, err := a.queue.List()
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(a.out, "(kuyruk bos)")
+		fmt.Fprintln(a.out, "(queue empty)")
 		return nil
 	}
 	for _, row := range rows {
@@ -334,7 +392,7 @@ func (a *app) queueList(args []string) error {
 
 func (a *app) queueStatus(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("kullanim: bp qstat <kanal-id>")
+		return fmt.Errorf("usage: bp qstat <channel-id>")
 	}
 	status, err := a.queue.Status(args[0])
 	if err == nil {
@@ -345,14 +403,14 @@ func (a *app) queueStatus(args []string) error {
 
 func (a *app) peek(args []string) error {
 	if len(args) < 1 || len(args) > 2 {
-		return fmt.Errorf("kullanim: bp peek <ad> [n]")
+		return fmt.Errorf("usage: bp peek <name> [n]")
 	}
 	count := 8
 	var err error
 	if len(args) == 2 {
 		count, err = strconv.Atoi(args[1])
 		if err != nil || count < 1 {
-			return fmt.Errorf("gecersiz satir sayisi: %s", args[1])
+			return fmt.Errorf("invalid line count: %s", args[1])
 		}
 	}
 	pane, err := a.tmux.Capture(a.ctx, args[0])
@@ -376,7 +434,7 @@ func (a *app) peek(args []string) error {
 
 func (a *app) whatsapp(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("kullanim: bp wa send|read|chats ...")
+		return fmt.Errorf("usage: bp wa send|read|chats ...")
 	}
 	switch args[0] {
 	case "send":
@@ -385,13 +443,13 @@ func (a *app) whatsapp(args []string) error {
 			switch args[index] {
 			case "--to":
 				if index+1 >= len(args) {
-					return fmt.Errorf("--to hedef bekliyor")
+					return fmt.Errorf("--to requires a target")
 				}
 				to = args[index+1]
 				index += 2
 			case "--reply":
 				if index+1 >= len(args) {
-					return fmt.Errorf("--reply msgId bekliyor")
+					return fmt.Errorf("--reply requires a msgId")
 				}
 				reply = args[index+1]
 				index += 2
@@ -402,31 +460,31 @@ func (a *app) whatsapp(args []string) error {
 	message:
 		text := strings.Join(args[index:], " ")
 		if text == "" {
-			return fmt.Errorf("kullanim: bp wa send [--to <hedef>] [--reply <msgId>] <mesaj...>")
+			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] <message...>")
 		}
 		if err := wa.Send(wa.DefaultOutbox, wa.Agent(a.ctx, a.tmux), to, reply, text); err != nil {
 			return err
 		}
 		destination := to
 		if destination == "" {
-			destination = "<varsayilan kanal>"
+			destination = "<default channel>"
 		}
 		suffix := ""
 		if reply != "" {
 			suffix = " (reply: " + reply + ")"
 		}
-		fmt.Fprintf(a.out, "kuyruga alindi -> %s%s\n", destination, suffix)
+		fmt.Fprintf(a.out, "queued -> %s%s\n", destination, suffix)
 		return nil
 	case "read":
 		if len(args) < 2 || len(args) > 3 {
-			return fmt.Errorf("kullanim: bp wa read <grup/kisi> [n]")
+			return fmt.Errorf("usage: bp wa read <group/person> [n]")
 		}
 		count := 15
 		var err error
 		if len(args) == 3 {
 			count, err = strconv.Atoi(args[2])
 			if err != nil || count < 1 {
-				return fmt.Errorf("gecersiz mesaj sayisi: %s", args[2])
+				return fmt.Errorf("invalid message count: %s", args[2])
 			}
 		}
 		lines, err := wa.Read(wa.DefaultStore, args[1], count)
@@ -434,7 +492,7 @@ func (a *app) whatsapp(args []string) error {
 			return err
 		}
 		if len(lines) == 0 {
-			fmt.Fprintln(a.out, "(kayit yok)")
+			fmt.Fprintln(a.out, "(no records)")
 		} else {
 			for _, line := range lines {
 				fmt.Fprintln(a.out, line)
@@ -443,14 +501,14 @@ func (a *app) whatsapp(args []string) error {
 		return nil
 	case "chats":
 		if len(args) != 1 {
-			return fmt.Errorf("kullanim: bp wa chats")
+			return fmt.Errorf("usage: bp wa chats")
 		}
 		lines, err := wa.Chats(wa.DefaultStore)
 		if err != nil {
 			return err
 		}
 		if len(lines) == 0 {
-			fmt.Fprintln(a.out, "(kayit yok)")
+			fmt.Fprintln(a.out, "(no records)")
 		} else {
 			for _, line := range lines {
 				fmt.Fprintln(a.out, line)
@@ -458,7 +516,7 @@ func (a *app) whatsapp(args []string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("kullanim: bp wa send|read|chats ...")
+		return fmt.Errorf("usage: bp wa send|read|chats ...")
 	}
 }
 
@@ -475,23 +533,38 @@ func (a *app) usage() error {
 
 func (a *app) policy(args []string) error {
 	if !(len(args) == 1 && args[0] == "status") && !(len(args) == 2 && args[0] == "override") {
-		return fmt.Errorf("kullanim: bp policy status|override <saat>")
+		return fmt.Errorf("usage: bp policy status|override <hours>")
 	}
 	cmd := exec.CommandContext(a.ctx, "/srv/server-main/bin/usage-policy", args...)
-	cmd.Stdout, cmd.Stderr, cmd.Stdin = a.out, a.err, os.Stdin
-	return cmd.Run()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr, cmd.Stdin = &stdout, &stderr, os.Stdin
+	err := cmd.Run()
+	fmt.Fprint(a.out, translatePolicyOutput(stdout.String()))
+	fmt.Fprint(a.err, translatePolicyOutput(stderr.String()))
+	return err
+}
+
+var policyResetHours = regexp.MustCompile(`reset ([^,]+)s,`)
+
+func translatePolicyOutput(output string) string {
+	output = strings.ReplaceAll(output, "kullanim: usage-policy override <saat>  (0 = kaldir)", "usage: bp policy override <hours> (0 = clear)")
+	output = strings.ReplaceAll(output, "kullanim: usage-policy [status | override <saat>]", "usage: bp policy status | override <hours>")
+	output = strings.ReplaceAll(output, "override kaldirildi", "override cleared")
+	output = strings.ReplaceAll(output, "usage: 7g %", "usage: 7d %")
+	output = strings.ReplaceAll(output, ", 5s %", ", 5h %")
+	return policyResetHours.ReplaceAllString(output, "reset ${1}h,")
 }
 
 func (a *app) service() error {
 	jobs, err := daemon.LoadState(daemon.StatePath)
 	if os.IsNotExist(err) {
-		fmt.Fprintln(a.out, "(daemon durumu yok)")
+		fmt.Fprintln(a.out, "(no daemon state)")
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.out, "%-18s %-9s %-25s %-25s %s\n", "IS", "DURUM", "SON", "SONRAKI", "HATA")
+	fmt.Fprintf(a.out, "%-18s %-9s %-25s %-25s %s\n", "JOB", "STATUS", "LAST", "NEXT", "ERROR")
 	for _, name := range daemon.StateNames(jobs) {
 		job := jobs[name]
 		fmt.Fprintf(a.out, "%-18s %-9s %-25s %-25s %s\n", name, job.Status, job.LastRun, job.NextRun, job.Error)
@@ -501,7 +574,7 @@ func (a *app) service() error {
 
 func (a *app) daemon(args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("kullanim: bp daemon")
+		return fmt.Errorf("usage: bp daemon")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

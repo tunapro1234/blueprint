@@ -42,7 +42,7 @@ func Latest(path string) (Sample, error) {
 		return Sample{}, err
 	}
 	if len(last) == 0 {
-		return Sample{}, fmt.Errorf("history bos")
+		return Sample{}, fmt.Errorf("history is empty")
 	}
 	var sample Sample
 	err = json.Unmarshal(last, &sample)

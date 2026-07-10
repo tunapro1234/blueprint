@@ -24,4 +24,8 @@ curl -fsSL https://bp.trasumanar.ai/install.sh | bash
 On the server, the installer links `/srv/blueprint/bp` into `/usr/local/bin`.
 On a laptop, it downloads the matching release into `~/.local/bin` and creates
 `~/.config/bp/config`. Connect with `bp con <agent-name>`; run `bp con` to list
-available sessions.
+available sessions. `bp img` uploads a local clipboard image over SSH and copies
+the resulting server path back to the local clipboard.
+
+The npm wrapper package is prepared in `npm/`. It intentionally is not
+published by the release build; see `npm/README.md` for the manual publish step.

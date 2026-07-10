@@ -1,0 +1,25 @@
+{
+  "name": "@tunapro/blueprint",
+  "version": "1.5.0",
+  "description": "Blueprint agent infrastructure CLI",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tunapro1234/blueprint.git"
+  },
+  "homepage": "https://bp.trasumanar.ai",
+  "bin": {
+    "bp": "bin/bp.js"
+  },
+  "files": [
+    "bin/bp.js",
+    "install.js",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

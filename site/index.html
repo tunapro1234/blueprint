@@ -242,6 +242,7 @@
           <a href="#concepts">Concepts</a>
           <a href="#quickstart">Quickstart</a>
           <a href="#commands">Commands</a>
+          <a href="#integration">Integration</a>
           <a href="#architecture">Architecture</a>
         </div>
       </nav>
@@ -325,8 +326,26 @@
             <tr><td>bp policy status|override</td><td>Inspect or temporarily override usage policy.</td></tr>
             <tr><td>bp service</td><td>Show supervised job state.</td></tr>
             <tr><td>bp con [agent-name]</td><td>List sessions or attach locally/remotely to an agent.</td></tr>
+            <tr><td>bp img</td><td>Upload a local clipboard image over SSH and copy its server path back.</td></tr>
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <section id="integration">
+      <h2>Desktop integration</h2>
+      <div class="concepts">
+        <article class="concept">
+          <h3>Image paste over SSH (bp img)</h3>
+          <p>Copy an image on your laptop and run <code>bp img</code>. It uploads the image to the server, prints the saved path, and puts that path back on your local clipboard.</p>
+          <p>Add a one-key launcher to <code>~/.config/kitty/kitty.conf</code>:</p>
+          <pre><code>map ctrl+shift+i launch --type=background bp img</code></pre>
+        </article>
+        <article class="concept">
+          <h3>Clipboard &amp; scroll (tmux + OSC52 + mosh)</h3>
+          <p>The installer can add mouse scrolling, deep history, vi copy mode, and tmux clipboard integration after asking for permission.</p>
+          <p>OSC52 clipboard forwarding and tmux passthrough keep text copy working through mosh; no prefix-key changes are made.</p>
+        </article>
       </div>
     </section>
 

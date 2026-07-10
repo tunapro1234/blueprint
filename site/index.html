@@ -68,6 +68,11 @@
     .nav-links a:hover { color: var(--ink); }
 
     .hero { padding: 92px 0 96px; }
+    .showcase { margin-top: 56px; }
+    .showcase h3 { margin-bottom: 14px; }
+    .showcase .ps { opacity: .55; margin-right: 6px; }
+    .showcase .dim { opacity: .45; }
+    .showcase pre { overflow-x: auto; }
 
     .eyebrow,
     h2 {
@@ -224,6 +229,7 @@
     @media (max-width: 760px) {
       .nav-links { display: none; }
       .hero { padding: 68px 0 72px; }
+      .showcase { margin-top: 40px; }
       .concepts, .steps, .architecture { grid-template-columns: 1fr; }
       .steps { gap: 12px; }
       .flow { justify-content: flex-start; flex-wrap: wrap; }
@@ -304,6 +310,35 @@
           <pre><code>bp con server-main</code></pre>
         </article>
       </div>
+
+      <div class="showcase">
+        <h3>What a day with bp looks like</h3>
+        <pre class="shell"><code><span class="ps">$</span> bp tree
+server-main <span class="dim">[idle/open]</span>
+ ├── server-mail <span class="dim">[idle/open]</span>
+ ├── server-monitor-dash <span class="dim">[working/open]</span>
+ └── probot-main <span class="dim">[idle/open]</span>
+     ├── probot-studio <span class="dim">[working/open]</span>
+     │   └── probot-builder <span class="dim">blueprint@builder/dev</span>
+     └── probot-business <span class="dim">[idle/open]</span>
+
+<span class="ps">$</span> bp msg probot-studio "ship the pricing page when tests pass"
+BUSY: queued (channel: q482910337). Check: bp qstat q482910337
+
+<span class="ps">$</span> bp qstat q482910337
+DELIVERED: probot-studio (at 14:32)
+
+<span class="ps">$</span> bp open probot-pricing /srv/probot/studio --worktree pricing
+/srv/probot/studio/.worktrees/pricing · branch pricing/dev · agent ready
+
+<span class="ps">$</span> bp usage
+Claude: 5h %12 · 7d %27 · Fable 7d %43   Codex: 5h %4 · 7d %14
+
+<span class="ps">$</span> bp announce "deploy frozen for 1h, finish open work"
+sent: 6, queued: 2 (q519, q533)</code></pre>
+        <p class="lede">One binary. A fleet of agents in tmux — opened, messaged, queued,
+        branched into worktrees, usage-governed. Nothing talks over a busy agent, ever.</p>
+      </div>
     </section>
 
     <section id="commands">
@@ -321,7 +356,6 @@
             <tr><td>bp qstat &lt;channel-id&gt;</td><td>Inspect delivery status for a queued message.</td></tr>
             <tr><td>bp peek &lt;name&gt; [n]</td><td>Read the latest non-empty lines from a session.</td></tr>
             <tr><td>bp announce &lt;message&gt;</td><td>Broadcast down the sender's agent hierarchy.</td></tr>
-            <tr><td>bp wa send|read|chats</td><td>Use the supervised WhatsApp bridge.</td></tr>
             <tr><td>bp usage</td><td>Show the latest model-usage snapshot.</td></tr>
             <tr><td>bp policy status|override</td><td>Inspect or temporarily override usage policy.</td></tr>
             <tr><td>bp service</td><td>Show supervised job state.</td></tr>
@@ -354,9 +388,9 @@
       <div class="architecture">
         <h3>One daemon.<br>Long-lived work.</h3>
         <div>
-          <p>A single systemd unit, <code>blueprint.service</code>, runs the blueprint daemon. It supervises scheduled jobs and the WhatsApp bridge while tmux remains the durable session layer for the agent fleet.</p>
+          <p>A single systemd unit, <code>blueprint.service</code>, runs the blueprint daemon. It supervises the scheduled jobs — usage tracking, policy, message queue, keepalive — while tmux remains the durable session layer for the agent fleet.</p>
           <div class="flow" aria-label="Architecture flow">
-            <span class="node">blueprint.service</span><span>→</span><span class="node">bp daemon</span><span>→</span><span class="node">jobs + WhatsApp</span>
+            <span class="node">blueprint.service</span><span>→</span><span class="node">bp daemon</span><span>→</span><span class="node">scheduled jobs</span>
           </div>
         </div>
       </div>

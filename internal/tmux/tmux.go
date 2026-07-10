@@ -12,7 +12,7 @@ import (
 	"unicode"
 )
 
-var promptLine = regexp.MustCompile(`^[\t ]*[❯›]`)
+var promptLine = regexp.MustCompile("^(?:\x1b\\[[0-9;]*m|[\t ])*[❯›](?:\x1b\\[[0-9;]*m)?")
 
 // Typing reports whether the final rendered composer line contains real text.
 // Older prompt lines are deliberately ignored.
@@ -26,6 +26,7 @@ func Typing(pane string) bool {
 	if composer == "" {
 		return false
 	}
+	composer = StripDim(composer) // dim placeholder/ghost metni gercek yazi DEGIL (2026-07-10)
 	after := promptLine.ReplaceAllString(composer, "")
 	after = strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
@@ -77,6 +78,22 @@ func (c *Client) run(ctx context.Context, stdin []byte, args ...string) ([]byte,
 	return out, nil
 }
 
+var ansiSeq = regexp.MustCompile("\x1b\\[[0-9;]*m")
+var dimSeg = regexp.MustCompile("\x1b\\[2m.*?\x1b\\[(?:0|22)m")
+
+// StripDim removes dim-rendered segments (placeholders / ghost suggestions render dim in
+// both Codex and Claude Code composers), then strips remaining ANSI colour codes.
+func StripDim(s string) string {
+	return ansiSeq.ReplaceAllString(dimSeg.ReplaceAllString(s, ""), "")
+}
+
+// CaptureAnsi returns the pane content with escape sequences preserved (-e), which lets
+// Typing distinguish real typed text from dim placeholder/ghost text.
+func (c *Client) CaptureAnsi(ctx context.Context, session string) (string, error) {
+	out, err := c.run(ctx, nil, "capture-pane", "-t", "="+session+":", "-e", "-p")
+	return string(out), err
+}
+
 func (c *Client) Capture(ctx context.Context, session string) (string, error) {
 	out, err := c.run(ctx, nil, "capture-pane", "-t", "="+session+":", "-p")
 	return string(out), err
@@ -126,7 +143,7 @@ func (c *Client) Locations(ctx context.Context) ([]Location, error) {
 }
 
 func (c *Client) IsTyping(ctx context.Context, session string) (bool, error) {
-	pane, err := c.Capture(ctx, session)
+	pane, err := c.CaptureAnsi(ctx, session)
 	return Typing(pane), err
 }
 
@@ -139,7 +156,7 @@ var ErrTyping = errors.New("composer is not empty")
 
 // Send preserves the timing and submit verification of bin/agent send_msg.
 func (c *Client) Send(ctx context.Context, session, message string) error {
-	pane, err := c.Capture(ctx, session)
+	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
 		return err
 	}

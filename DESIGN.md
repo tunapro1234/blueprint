@@ -37,9 +37,9 @@ bp daemon                      (servis modu — systemd bunu çalıştırır)
 |---|---|---|
 | msgq dispatcher | 30s | NATIVE Go (channel tabanlı; pending/ dizini kaynak, done/'a kayıt) |
 | keepalive (server-main) | 2m | native: tmux has-session; yoksa `agent open` mantığı (exec bash script fallback OK) |
-| usage-pulse | 10m | exec /srv/server-main/bin/usage-pulse; ardından policy + gen.py ZİNCİR |
-| usage-policy | pulse sonrası | exec /srv/server-main/bin/usage-policy |
-| dashboard gen | pulse sonrası | exec python3 /srv/monitor/site/gen.py |
+| usage-pulse | 10m | exec /srv/server-main/bin/usage-pulse; ardından sonuçtan bağımsız gen.py |
+| usage-policy | 10m, bağımsız | exec /srv/server-main/bin/usage-policy |
+| dashboard gen | pulse sonrası | exec python3 /srv/monitor/site/gen.py (pulse hatasında da çalışır) |
 | usage-watch | 10m | exec /srv/server-main/bin/usage-watch |
 | watch-radar | 30m | exec python3 /srv/monitor/watch/model_watch.py; ardından reactions.py |
 | watch-reset | 10m | exec python3 /srv/monitor/watch/reset_watch.py |
@@ -47,6 +47,8 @@ bp daemon                      (servis modu — systemd bunu çalıştırır)
 Kurallar: işler birbirini bloklamaz (ayrı goroutine); aynı işin iki kopyası üst üste binmez
 (per-iş mutex); her çalışma /srv/blueprint/state/jobs.json'a yazılır (bp service okur);
 panic-recover ile daemon ölmez; SIGTERM'de wa-bridge child'a TERM iletilir.
+İlk çalıştırmalar thundering-herd önlemek için kademelidir: msgq 5s, keepalive 30s,
+policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
 
 ### tmux etkileşimi (bash paritesinden birebir taşınacak KRİTİK detaylar)
 - typing(): SADECE SON '❯' satırı (canlı composer); NBSP(U+00A0)+boşluk strip; doluysa gönderme.

@@ -32,36 +32,39 @@ func New(logger *log.Logger) *Service {
 }
 
 func (s *Service) Run(ctx context.Context) {
-	s.startLoop(ctx, "msgq", 30*time.Second, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "msgq", 5*time.Second, 30*time.Second, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "msgq", interval, func() error {
 			return s.queue.Dispatch(run, s.tmux, func(message string) { s.log.Print(message) })
 		})
 	})
-	s.startLoop(ctx, "keepalive", 2*time.Minute, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "keepalive", 30*time.Second, 2*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "keepalive", interval, func() error { return s.keepalive(run) })
 	})
-	s.startLoop(ctx, "usage-pulse-chain", 10*time.Minute, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "usage-policy", time.Minute, 10*time.Minute, func(run context.Context, interval time.Duration) {
+		s.tracked(run, "usage-policy", interval, func() error {
+			return command(run, "/srv/server-main/bin/usage-policy")
+		})
+	})
+	s.startLoop(ctx, "usage-pulse-chain", 90*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
 		steps := []struct {
 			name string
 			args []string
 		}{
 			{"usage-pulse", []string{"/srv/server-main/bin/usage-pulse"}},
-			{"usage-policy", []string{"/srv/server-main/bin/usage-policy"}},
 			{"dashboard-gen", []string{"/usr/bin/python3", "/srv/monitor/site/gen.py"}},
 		}
 		for _, step := range steps {
 			if run.Err() != nil {
 				return
 			}
-			if err := s.tracked(run, step.name, interval, func() error { return command(run, step.args...) }); err != nil {
-				return
-			}
+			// Dashboard generation must still run when the pulse command fails.
+			_ = s.tracked(run, step.name, interval, func() error { return command(run, step.args...) })
 		}
 	})
-	s.startLoop(ctx, "usage-watch", 10*time.Minute, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "usage-watch", 2*time.Minute, 10*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "usage-watch", interval, func() error { return command(run, "/srv/server-main/bin/usage-watch") })
 	})
-	s.startLoop(ctx, "watch-radar-chain", 30*time.Minute, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "watch-radar-chain", 3*time.Minute, 30*time.Minute, func(run context.Context, interval time.Duration) {
 		steps := []struct {
 			name string
 			args []string
@@ -80,7 +83,7 @@ func (s *Service) Run(ctx context.Context) {
 			}
 		}
 	})
-	s.startLoop(ctx, "watch-reset", 10*time.Minute, func(run context.Context, interval time.Duration) {
+	s.startLoop(ctx, "watch-reset", 150*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "watch-reset", interval, func() error {
 			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=server-monitor-dash"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
 		})
@@ -110,12 +113,15 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // startLoop uses a buffered work channel and one worker, so ticks never overlap.
-func (s *Service) startLoop(ctx context.Context, name string, interval time.Duration, work func(context.Context, time.Duration)) {
+func (s *Service) startLoop(ctx context.Context, name string, initialDelay, interval time.Duration, work func(context.Context, time.Duration)) {
 	trigger := make(chan struct{}, 1)
-	trigger <- struct{}{}
 	s.wg.Add(2)
 	go func() {
 		defer s.wg.Done()
+		if !wait(ctx, initialDelay) {
+			return
+		}
+		trigger <- struct{}{}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -172,7 +178,7 @@ func (s *Service) tracked(ctx context.Context, name string, interval time.Durati
 
 func (s *Service) setState(name string, state JobState) {
 	if err := s.state.update(name, state); err != nil {
-		s.log.Printf("jobs state yazilamadi (%s): %v", name, err)
+		s.log.Printf("could not write jobs state (%s): %v", name, err)
 	}
 }
 
@@ -186,7 +192,7 @@ func commandDir(ctx context.Context, dir string, args ...string) error {
 
 func commandDirEnv(ctx context.Context, dir string, extraEnv []string, args ...string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("bos komut")
+		return fmt.Errorf("empty command")
 	}
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = dir
@@ -204,7 +210,7 @@ func (s *Service) keepalive(ctx context.Context) error {
 	if s.tmux.HasSession(ctx, "server-main") {
 		return nil
 	}
-	s.log.Print("server-main tmux YOK — aciliyor")
+	s.log.Print("server-main tmux is missing; opening it")
 	if err := s.tmux.Open(ctx, "server-main", "/srv", bptmux.OpenOptions{Resume: true, NoPrompt: true}, func(message string) { s.log.Print(message) }); err != nil {
 		return err
 	}
@@ -240,7 +246,7 @@ func (s *Service) superviseWA(ctx context.Context) {
 			if err != nil {
 				state.Error = err.Error()
 			} else {
-				state.Error = "beklenmedik cikis"
+				state.Error = "unexpected exit"
 			}
 			s.setState(name, state)
 			if !wait(ctx, 5*time.Second) {

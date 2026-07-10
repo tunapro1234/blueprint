@@ -143,12 +143,17 @@ Yeni bp komutları: `bp book [list|set <agent> <alan> <deger>]`, `bp models` (an
 Taşıma kuralı: her taşınan yol için ESKİ KONUMA SYMLINK bırakılır (hiçbir referans kırılmaz);
 taşımalar cutover'la birlikte ada tarafından yapılır (Sol'a dosya taşıtılmaz).
 
-## v1.3 — ANONS (kullanıcı, 2026-07-10)
-`bp anons <mesaj...>` — hiyerarşik toplu duyuru (örn. bp toolunda değişiklik, global kural).
+## DİL KURALI (kullanıcı, 2026-07-10): bp TAMAMEN İNGİLİZCE
+Komut adları, flag'ler, yardım metni, TÜM çıktı ve kod içi isimlendirme İngilizce olacak
+(tree'deki "bosta/kapali" gibi Türkçe çıktılar da İngilizce'ye çevrilecek: idle/closed/working).
+Agentlara giden MESAJ İÇERİĞİ göndericiye aittir (o Türkçe olabilir) — araç dili İngilizce.
+
+## v1.3 — ANNOUNCE (kullanıcı, 2026-07-10)
+`bp announce <message...>` — hiyerarşik toplu duyuru (örn. bp toolunda değişiklik, global kural).
 - Hedef kümesi: gönderenin (tmux oturum adı / AGENT env) agentbook hiyerarşisinde ALTINDA kalan
   ve şu an AÇIK olan tüm agentlar (parent zinciri takip edilir). ada(server-main) → tüm filo;
   alp(probot-main) → probot alt-ağacı. lab-* oturumları hariç.
-- Mesaj otomatik "[ANONS <gönderen>] " prefix'i alır.
+- Mesaj otomatik "[ANNOUNCE <sender>] " prefix'i alır.
 - Her hedef için standart msg akışı: boşsa direkt, dolu/yazılıyorsa KUYRUK (kanal id).
-- Çıktı: özet tablo — "gönderildi: N, kuyruğa: M (kanal id'leri)". `bp qstat` ile takip.
+- Çıktı (İngilizce): "sent: N, queued: M (channel ids)". `bp qstat` ile takip.
 - Codex oturumları da dahil (aynı send mekanizması çalışır).

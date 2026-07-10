@@ -3,6 +3,15 @@ set -eu
 
 SERVER_ROOT=/srv/blueprint
 INSTALL_MODE=${BP_INSTALL_MODE:-}
+YES=${BP_YES:-0}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --yes|-y) YES=1 ;;
+        *) printf 'error: unknown option: %s\n' "$1" >&2; exit 1 ;;
+    esac
+    shift
+done
 
 say() {
     printf '%s\n' "$*"
@@ -106,22 +115,90 @@ install_client_binary() {
 
     configure_remote
     say "installed $target_binary"
+}
+
+tmux_is_configured() {
+    tmux_file=$HOME/.tmux.conf
+    [ -f "$tmux_file" ] || return 1
+    grep -Fqx "set -g mouse on" "$tmux_file" &&
+        grep -Fqx "set -g history-limit 100000" "$tmux_file" &&
+        grep -Fqx "setw -g mode-keys vi" "$tmux_file" &&
+        grep -Fqx "set -sg escape-time 10" "$tmux_file" &&
+        grep -Fqx "set -s set-clipboard on" "$tmux_file" &&
+        grep -Fqx "set -as terminal-features ',xterm*:clipboard'" "$tmux_file" &&
+        grep -Fqx "set -g allow-passthrough on" "$tmux_file"
+}
+
+append_tmux_line() {
+    tmux_line=$1
+    if ! grep -Fqx "$tmux_line" "$HOME/.tmux.conf" 2>/dev/null; then
+        printf '%s\n' "$tmux_line" >>"$HOME/.tmux.conf"
+    fi
+}
+
+configure_tmux() {
+    if tmux_is_configured; then
+        say "tmux clipboard and scroll settings are already configured"
+        return
+    fi
+
+    tmux_write=no
+    case "$YES" in
+        1|yes|true) tmux_write=yes ;;
+    esac
+    if [ "$tmux_write" != yes ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        printf 'Add recommended tmux clipboard and scroll settings to ~/.tmux.conf? [y/N] ' >/dev/tty
+        IFS= read -r tmux_answer </dev/tty || tmux_answer=
+        case "$tmux_answer" in
+            y|Y|yes|YES) tmux_write=yes ;;
+        esac
+    fi
+    if [ "$tmux_write" != yes ]; then
+        say "skipped tmux setup (rerun with --yes or BP_YES=1 to apply it)"
+        return
+    fi
+
+    touch "$HOME/.tmux.conf"
+    if ! grep -Fqx "# blueprint: clipboard, scroll, and mosh integration" "$HOME/.tmux.conf"; then
+        printf '\n# blueprint: clipboard, scroll, and mosh integration\n' >>"$HOME/.tmux.conf"
+    fi
+    append_tmux_line "set -g mouse on"
+    append_tmux_line "set -g history-limit 100000"
+    append_tmux_line "setw -g mode-keys vi"
+    append_tmux_line "set -sg escape-time 10"
+    append_tmux_line "set -s set-clipboard on"
+    append_tmux_line "set -as terminal-features ',xterm*:clipboard'"
+    append_tmux_line "set -g allow-passthrough on"
+    say "updated $HOME/.tmux.conf (reload with: tmux source-file ~/.tmux.conf)"
+}
+
+print_client_notes() {
+    install_dir="$HOME/.local/bin"
     case ":${PATH:-}:" in
         *":$install_dir:"*) ;;
         *) say "note: add $install_dir to your PATH" ;;
     esac
     say "try: bp con server-main"
+    say "kitty keybinding (add to ~/.config/kitty/kitty.conf):"
+    say "map ctrl+shift+i launch --type=background bp img"
 }
 
 case "$INSTALL_MODE" in
-    server) link_server_binary ;;
-    client) install_client_binary ;;
+    server) link_server_binary; ACTIVE_MODE=server ;;
+    client) install_client_binary; ACTIVE_MODE=client ;;
     "")
         if [ -d "$SERVER_ROOT" ]; then
             link_server_binary
+            ACTIVE_MODE=server
         else
             install_client_binary
+            ACTIVE_MODE=client
         fi
         ;;
     *) say "error: BP_INSTALL_MODE must be server or client"; exit 1 ;;
 esac
+
+configure_tmux
+if [ "$ACTIVE_MODE" = client ]; then
+    print_client_notes
+fi

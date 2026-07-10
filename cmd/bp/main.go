@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ bp wa read <target> [n] | bp wa chats
 bp usage
 bp policy status|override <hours>
 bp service
+bp con [agent-name]
 bp daemon`
 
 type app struct {
@@ -87,6 +89,8 @@ func (a *app) run(args []string) error {
 		return a.policy(args[1:])
 	case "service":
 		return a.service()
+	case "con":
+		return a.connect(args[1:])
 	case "daemon":
 		return a.daemon(args[1:])
 	case "help", "-h", "--help":
@@ -96,6 +100,154 @@ func (a *app) run(args []string) error {
 		fmt.Fprintln(a.err, usage)
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+type connectConfig struct {
+	Remote string
+	Method string
+}
+
+type commandSpec struct {
+	Path string
+	Args []string
+}
+
+var safeSessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+
+func connectConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find home directory: %w", err)
+	}
+	return filepath.Join(home, ".config", "bp", "config"), nil
+}
+
+func loadConnectConfig(path string) (connectConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return connectConfig{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	config := connectConfig{Method: "mosh"}
+	for lineNumber, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return connectConfig{}, fmt.Errorf("%s:%d: expected KEY=VALUE", path, lineNumber+1)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		switch key {
+		case "REMOTE":
+			config.Remote = value
+		case "REMOTE_METHOD":
+			config.Method = strings.ToLower(value)
+		}
+	}
+	if config.Remote == "" {
+		return connectConfig{}, fmt.Errorf("%s: REMOTE is required", path)
+	}
+	if strings.HasPrefix(config.Remote, "-") || strings.ContainsAny(config.Remote, " \t\r\n") {
+		return connectConfig{}, fmt.Errorf("%s: REMOTE must be a single user@host or SSH host", path)
+	}
+	if config.Method == "" {
+		config.Method = "mosh"
+	}
+	if config.Method != "mosh" && config.Method != "ssh" {
+		return connectConfig{}, fmt.Errorf("%s: REMOTE_METHOD must be mosh or ssh", path)
+	}
+	return config, nil
+}
+
+func findCommand(bin string, args ...string) (commandSpec, error) {
+	path, err := exec.LookPath(bin)
+	if err != nil {
+		return commandSpec{}, fmt.Errorf("%s is not installed", bin)
+	}
+	return commandSpec{Path: path, Args: append([]string{bin}, args...)}, nil
+}
+
+func remoteAttachCommand(config connectConfig, name string) (commandSpec, error) {
+	if config.Method == "mosh" {
+		if spec, err := findCommand("mosh", config.Remote, "--", "tmux", "attach", "-t", name); err == nil {
+			return spec, nil
+		}
+	}
+	return findCommand("ssh", "-t", config.Remote, "tmux", "attach", "-t", name)
+}
+
+func replaceWith(spec commandSpec) error {
+	return syscall.Exec(spec.Path, spec.Args, os.Environ())
+}
+
+func (a *app) connect(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("usage: bp con [agent-name]")
+	}
+	if len(args) == 0 {
+		return a.listConnections()
+	}
+
+	name := args[0]
+	if !safeSessionName.MatchString(name) {
+		return fmt.Errorf("invalid agent name: %s", name)
+	}
+	if a.tmux.HasSession(a.ctx, name) {
+		operation := "attach"
+		if os.Getenv("TMUX") != "" {
+			operation = "switch-client"
+		}
+		spec, err := findCommand("tmux", operation, "-t", name)
+		if err != nil {
+			return err
+		}
+		return replaceWith(spec)
+	}
+
+	path, err := connectConfigPath()
+	if err != nil {
+		return err
+	}
+	config, err := loadConnectConfig(path)
+	if err != nil {
+		return fmt.Errorf("no local session named %s and remote is not configured: %w", name, err)
+	}
+	spec, err := remoteAttachCommand(config, name)
+	if err != nil {
+		return err
+	}
+	return replaceWith(spec)
+}
+
+func (a *app) listConnections() error {
+	sessions, err := a.tmux.Sessions(a.ctx)
+	if err == nil && len(sessions) > 0 {
+		for _, name := range sessions {
+			fmt.Fprintln(a.out, name)
+		}
+		return nil
+	}
+
+	path, pathErr := connectConfigPath()
+	if pathErr != nil {
+		return pathErr
+	}
+	config, configErr := loadConnectConfig(path)
+	if configErr != nil {
+		if err != nil {
+			return errors.Join(err, configErr)
+		}
+		return configErr
+	}
+	spec, specErr := findCommand("ssh", config.Remote, "tmux", "ls")
+	if specErr != nil {
+		return specErr
+	}
+	cmd := exec.CommandContext(a.ctx, spec.Path, spec.Args[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.err
+	return cmd.Run()
 }
 
 func (a *app) fleet() (book.Fleet, map[string]book.State, error) {

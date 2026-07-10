@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"blueprint/internal/book"
@@ -43,6 +46,97 @@ func TestAnnouncementTargetsFollowHierarchy(t *testing.T) {
 	}
 	if got, want := announcementTargets(fleet, states, "server-main"), []string{"alpha", "alpha-child", "alpha-grandchild", "beta", "orphan"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("root targets=%v, want %v", got, want)
+	}
+}
+
+func TestLoadConnectConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte("# laptop target\nREMOTE = ops@example.com\nREMOTE_METHOD=SSH\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadConnectConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := connectConfig{Remote: "ops@example.com", Method: "ssh"}
+	if got != want {
+		t.Fatalf("config=%+v, want %+v", got, want)
+	}
+}
+
+func TestLoadConnectConfigDefaultsToMosh(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte("REMOTE=server.example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadConnectConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Method != "mosh" {
+		t.Fatalf("method=%q, want mosh", got.Method)
+	}
+}
+
+func TestLoadConnectConfigRejectsInvalidMethod(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte("REMOTE=server\nREMOTE_METHOD=telnet\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := loadConnectConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "mosh or ssh") {
+		t.Fatalf("error=%v, want invalid method error", err)
+	}
+}
+
+func TestSafeSessionName(t *testing.T) {
+	for _, name := range []string{"server-main", "agent_2", "build.v3"} {
+		if !safeSessionName.MatchString(name) {
+			t.Errorf("expected %q to be safe", name)
+		}
+	}
+	for _, name := range []string{"", "-server", "agent name", "agent;whoami"} {
+		if safeSessionName.MatchString(name) {
+			t.Errorf("expected %q to be rejected", name)
+		}
+	}
+}
+
+func TestRemoteAttachCommandUsesMoshByDefault(t *testing.T) {
+	binDir := t.TempDir()
+	writeTestExecutable(t, binDir, "mosh")
+	writeTestExecutable(t, binDir, "ssh")
+	t.Setenv("PATH", binDir)
+
+	got, err := remoteAttachCommand(connectConfig{Remote: "ops@example.com", Method: "mosh"}, "server-main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"mosh", "ops@example.com", "--", "tmux", "attach", "-t", "server-main"}
+	if !reflect.DeepEqual(got.Args, want) {
+		t.Fatalf("args=%v, want %v", got.Args, want)
+	}
+}
+
+func TestRemoteAttachCommandFallsBackToSSH(t *testing.T) {
+	binDir := t.TempDir()
+	writeTestExecutable(t, binDir, "ssh")
+	t.Setenv("PATH", binDir)
+
+	got, err := remoteAttachCommand(connectConfig{Remote: "ops@example.com", Method: "mosh"}, "server-main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ssh", "-t", "ops@example.com", "tmux", "attach", "-t", "server-main"}
+	if !reflect.DeepEqual(got.Args, want) {
+		t.Fatalf("args=%v, want %v", got.Args, want)
+	}
+}
+
+func writeTestExecutable(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -28,6 +28,11 @@ bp worktree rm /srv/project shop
 Managed worktrees live at `<repo>/.worktrees/<topic>` on `<topic>/dev`.
 Removal refuses uncommitted changes unless `--force` is supplied.
 
+Mirror the monitor dashboard in a terminal with `bp monitor`. Detailed views
+are available as `bp monitor usage|cost|agents|projects|services|radar`. The
+CLI reads `/srv/monitor/site/data.json` when available and otherwise uses the
+configured `DASH_URL` (default `https://monitor.trasumanar.ai`).
+
 Install from the product site:
 
 ```sh

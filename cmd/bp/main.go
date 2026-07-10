@@ -15,10 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"blueprint/internal/book"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
@@ -41,6 +43,7 @@ bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] <message...>
 bp wa read <target> [n] | bp wa chats
 bp usage
+bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>
 bp service
 bp con [agent-name]
@@ -95,6 +98,8 @@ func (a *app) run(args []string) error {
 		return a.whatsapp(args[1:])
 	case "usage":
 		return a.usage()
+	case "monitor":
+		return a.monitor(args[1:])
 	case "policy":
 		return a.policy(args[1:])
 	case "service":
@@ -937,6 +942,62 @@ func (a *app) usage() error {
 	for _, line := range usagecli.Lines(sample) {
 		fmt.Fprintln(a.out, line)
 	}
+	return nil
+}
+
+func (a *app) monitor(args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("usage: bp monitor [usage|cost|agents|projects|services|radar]")
+	}
+	view := "overview"
+	if len(args) == 1 {
+		view = args[0]
+	}
+	valid := map[string]bool{"overview": true, "usage": true, "cost": true, "agents": true, "projects": true, "services": true, "radar": true}
+	if !valid[view] {
+		return fmt.Errorf("usage: bp monitor [usage|cost|agents|projects|services|radar]")
+	}
+	configPath, err := connectConfigPath()
+	if err != nil {
+		return err
+	}
+	dashboardURL, err := loadDashboardURL(configPath)
+	if err != nil {
+		return err
+	}
+	options := monitorcli.SourceOptions{BaseURL: dashboardURL}
+	doc, source, err := monitorcli.Load(a.ctx, options)
+	if err != nil {
+		return err
+	}
+	renderOptions := monitorcli.RenderOptions{Now: time.Now()}
+	var trailingNote string
+	if view == "services" {
+		jobs, jobsErr := monitorcli.LoadJobs(monitorcli.DefaultJobsPath)
+		if jobsErr == nil {
+			renderOptions.Jobs = jobs
+		} else if !os.IsNotExist(jobsErr) {
+			renderOptions.JobsNote = "daemon jobs state unavailable: " + jobsErr.Error()
+		} else {
+			renderOptions.JobsNote = "daemon jobs state not present"
+		}
+	}
+	if view == "radar" {
+		radar, radarSource, radarErr := monitorcli.LoadRadar(a.ctx, doc, options)
+		if radarErr == nil {
+			renderOptions.Radar = radar
+			source = radarSource
+		} else {
+			trailingNote = "radar feed unavailable: " + radarErr.Error()
+		}
+	}
+	if err := monitorcli.Render(a.out, doc, view, renderOptions); err != nil {
+		return err
+	}
+	if trailingNote != "" {
+		fmt.Fprintln(a.out, "Note:", trailingNote)
+	}
+	fmt.Fprintln(a.out, "Source:", source)
 	return nil
 }
 

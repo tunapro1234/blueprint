@@ -92,6 +92,15 @@ func (a *app) run(args []string) error {
 		return a.queueList(args[1:])
 	case "qstat":
 		return a.queueStatus(args[1:])
+	case "qcancel":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: bp qcancel <channel-id>")
+		}
+		if err := a.queue.Cancel(args[1]); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "canceled: %s\n", args[1])
+		return nil
 	case "peek":
 		return a.peek(args[1:])
 	case "wa":

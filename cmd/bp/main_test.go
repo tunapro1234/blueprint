@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"blueprint/internal/book"
+	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/worktree"
 )
 
 func TestAnnouncementTargetsFollowHierarchy(t *testing.T) {
@@ -145,5 +147,27 @@ func TestTranslatePolicyOutput(t *testing.T) {
 	want := "usage: 7d %42, fable %10, 5h %8, reset 12.5h, E %25, fresh (1s)\noverride cleared\n"
 	if got := translatePolicyOutput(input); got != want {
 		t.Fatalf("translated output=%q, want %q", got, want)
+	}
+}
+
+func TestAgentsByWorktreeMatchesPaneAndSessionDirectories(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo", ".worktrees")
+	entries := []worktree.Info{
+		{Path: filepath.Join(root, "shop"), Branch: "shop/dev"},
+		{Path: filepath.Join(root, "builder"), Branch: "builder/dev"},
+	}
+	locations := []bptmux.Location{
+		{Session: "shop-agent", CurrentDir: filepath.Join(root, "shop", "cmd")},
+		{Session: "builder-agent", CurrentDir: "/tmp", StartDir: filepath.Join(root, "builder")},
+		{Session: "unrelated-agent", CurrentDir: filepath.Join(root, "shop-old")},
+		{Session: "shop-agent", StartDir: filepath.Join(root, "shop")},
+	}
+
+	got := agentsByWorktree(entries, locations)
+	if want := []string{"shop-agent"}; !reflect.DeepEqual(got[entries[0].Path], want) {
+		t.Fatalf("shop agents=%v, want %v", got[entries[0].Path], want)
+	}
+	if want := []string{"builder-agent"}; !reflect.DeepEqual(got[entries[1].Path], want) {
+		t.Fatalf("builder agents=%v, want %v", got[entries[1].Path], want)
 	}
 }

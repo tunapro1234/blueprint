@@ -142,3 +142,13 @@ Yeni bp komutları: `bp book [list|set <agent> <alan> <deger>]`, `bp models` (an
 özet seçim tablosu terminale), `bp radar` (son model-radar bulguları).
 Taşıma kuralı: her taşınan yol için ESKİ KONUMA SYMLINK bırakılır (hiçbir referans kırılmaz);
 taşımalar cutover'la birlikte ada tarafından yapılır (Sol'a dosya taşıtılmaz).
+
+## v1.3 — ANONS (kullanıcı, 2026-07-10)
+`bp anons <mesaj...>` — hiyerarşik toplu duyuru (örn. bp toolunda değişiklik, global kural).
+- Hedef kümesi: gönderenin (tmux oturum adı / AGENT env) agentbook hiyerarşisinde ALTINDA kalan
+  ve şu an AÇIK olan tüm agentlar (parent zinciri takip edilir). ada(server-main) → tüm filo;
+  alp(probot-main) → probot alt-ağacı. lab-* oturumları hariç.
+- Mesaj otomatik "[ANONS <gönderen>] " prefix'i alır.
+- Her hedef için standart msg akışı: boşsa direkt, dolu/yazılıyorsa KUYRUK (kanal id).
+- Çıktı: özet tablo — "gönderildi: N, kuyruğa: M (kanal id'leri)". `bp qstat` ile takip.
+- Codex oturumları da dahil (aynı send mekanizması çalışır).

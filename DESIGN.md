@@ -87,3 +87,34 @@ panic-recover ile daemon ölmez; SIGTERM'de wa-bridge child'a TERM iletilir.
 - ada (Fable): tasarım (bu doküman), entegrasyon kararları, cutover.
 - Sol (gpt-5.6-sol, codex): Go implementasyonu (bu spec'e göre), build+birim test.
 - Opus (subagent): kod review — özellikle tmux etkileşim paritesi, race'ler, migration checklist.
+
+## v1.1 — ÇOKLU HESAP YÖNETİMİ (plan, kullanıcı istegi 2026-07-10)
+Amaç: birden fazla Claude (ve Codex) aboneliğini tek filoda yönetmek — limit dolunca
+agent'ları başka hesaba kaydırabilmek.
+
+### Mekanizma (per-agent hesap)
+- Claude Code: `CLAUDE_CONFIG_DIR=<dizin>` env'i ile farklı credential/config seti kullanır.
+- Codex: `CODEX_HOME=<dizin>` ile aynı şekilde.
+- Hesap deposu: `/srv/blueprint/accounts/{claude,codex}/<hesap-adı>/` (her biri tam config dizini;
+  chmod 700). `default` = mevcut /root/.claude ve /root/.codex (symlink ya da kayıt).
+- `bp open` yeni bayrak: `--account <ad>` → tmux oturumu ilgili env ile başlar. Agentbook'a
+  `account` alanı yazılır; `bp tree` hesap etiketi gösterir.
+
+### bp komutları
+```
+bp account list                     hesaplar + her birinin canlı usage yüzdeleri
+bp account add claude <ad>          dizini hazırlar; kullanıcı 'bp account login <ad>' ile
+bp account login <ad>               interaktif girişi kendi terminalinde yapar (CLAUDE_CONFIG_DIR set edilmiş claude açar)
+bp account assign <agent> <ad>      agent'ı sonraki açılışta o hesaba bağlar (book'a yazar)
+```
+
+### usage-pulse / policy entegrasyonu
+- pulse TÜM claude hesaplarının OAuth usage endpoint'ini gezer → history satırına
+  `accounts:{<ad>:{5h,7d,fable_7d}}` ekler; dashboard hesap-bazlı gösterir.
+- policy v2: hesap-bazlı state; bir hesabın haftalığı eşiği aşarsa YENİ açılan agent'lar
+  otomatik diğer hesaba yönlenir (açık oturum taşınmaz — restart gerektirir, o MANUEL/onaylı).
+- WhatsApp'a "hesap A doldu, yeni agentlar B'den açılıyor" bildirimi.
+
+### Sıra
+Cutover (v1) bitip 24h stabil olduktan sonra v1.1 başlar. İlk adım: kullanıcı ikinci hesabın
+girişini yapar (bp account add+login), sonra pulse çoklu-hesap, sonra policy yönlendirme.

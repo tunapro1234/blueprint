@@ -22,6 +22,10 @@ func (f *fakeTarget) Send(_ context.Context, to, text string) error {
 	return nil
 }
 
+func (f *fakeTarget) CaptureAnsi(ctx context.Context, session string) (string, error) {
+	return f.Capture(ctx, session)
+}
+
 func TestEnqueueListAndStatus(t *testing.T) {
 	q := New(t.TempDir())
 	now := time.Date(2026, 7, 10, 10, 0, 0, 123456789, time.Local)

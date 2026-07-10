@@ -175,6 +175,7 @@ func (q *Queue) Status(id string) (string, error) {
 type Target interface {
 	HasSession(context.Context, string) bool
 	Capture(context.Context, string) (string, error)
+	CaptureAnsi(context.Context, string) (string, error)
 	Send(context.Context, string, string) error
 }
 
@@ -260,7 +261,8 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			continue
 		}
 		pane, captureErr := target.Capture(ctx, message.To)
-		if captureErr != nil || bptmux.Typing(pane) || bptmux.Busy(pane) {
+		paneAnsi, ansiErr := target.CaptureAnsi(ctx, message.To)
+		if captureErr != nil || ansiErr != nil || bptmux.Typing(paneAnsi) || bptmux.Busy(pane) {
 			continue
 		}
 		if err := target.Send(ctx, message.To, message.Msg); err != nil {

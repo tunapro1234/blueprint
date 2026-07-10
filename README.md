@@ -14,3 +14,14 @@ The binary is written to `/srv/blueprint/bp`.
 
 Run `bp help` for a command summary. `blueprint.service` is at the repository
 root; it is not installed or enabled under `/etc` until cutover.
+
+Install from the product site:
+
+```sh
+curl -fsSL https://bp.trasumanar.ai/install.sh | bash
+```
+
+On the server, the installer links `/srv/blueprint/bp` into `/usr/local/bin`.
+On a laptop, it downloads the matching release into `~/.local/bin` and creates
+`~/.config/bp/config`. Connect with `bp con <agent-name>`; run `bp con` to list
+available sessions.

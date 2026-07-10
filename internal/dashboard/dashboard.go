@@ -12,8 +12,10 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -90,9 +92,48 @@ func Serve(ctx context.Context, options Options) error {
 
 // NewHandler serves sitePath directly when it exists. Otherwise it caches the
 // upstream index page and reverse-proxies the dashboard's data and assets.
+// refreshOnDemand serializes on-demand data refreshes so an F5 storm cannot
+// stampede the collectors. Data older than freshWindow triggers pulse+gen.
+type refreshOnDemand struct {
+	mu       sync.Mutex
+	lastRun  time.Time
+	sitePath string
+}
+
+const freshWindow = 45 * time.Second
+
+func (r *refreshOnDemand) maybeRefresh() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dataPath := filepath.Join(r.sitePath, "data.json")
+	if info, err := os.Stat(dataPath); err == nil && time.Since(info.ModTime()) < freshWindow {
+		return
+	}
+	if time.Since(r.lastRun) < 20*time.Second {
+		return
+	}
+	r.lastRun = time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	pulse := exec.CommandContext(ctx, "/srv/server-main/bin/usage-pulse")
+	_ = pulse.Run()
+	gen := exec.CommandContext(ctx, "/usr/bin/python3", filepath.Join(r.sitePath, "gen.py"))
+	gen.Dir = r.sitePath
+	_ = gen.Run()
+}
+
 func NewHandler(ctx context.Context, sitePath, rawURL string, client *http.Client) (http.Handler, error) {
 	if info, err := os.Stat(sitePath); err == nil && info.IsDir() {
-		return http.FileServer(http.Dir(sitePath)), nil
+		files := http.FileServer(http.Dir(sitePath))
+		fresh := &refreshOnDemand{sitePath: sitePath}
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			// F5 = fresh data: refresh collectors before serving stale data.json.
+			if strings.HasSuffix(request.URL.Path, "/data.json") || request.URL.Path == "/data.json" {
+				fresh.maybeRefresh()
+				writer.Header().Set("Cache-Control", "no-store")
+			}
+			files.ServeHTTP(writer, request)
+		}), nil
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect dashboard site: %w", err)
 	}

@@ -24,8 +24,8 @@ type Message struct {
 	From     string  `json:"from"`
 	Msg      string  `json:"msg"`
 	TS       float64 `json:"ts"`
-	Durum    string  `json:"durum,omitempty"`
-	Finished float64 `json:"bitis,omitempty"`
+	Status   string  `json:"status,omitempty"`
+	Finished float64 `json:"finished,omitempty"`
 }
 
 type Queue struct {
@@ -110,7 +110,34 @@ func read(path string) (Message, error) {
 	}
 	var message Message
 	err = json.Unmarshal(data, &message)
+	if err == nil && (message.Status == "" || message.Finished == 0) {
+		// Read legacy queue records written before the storage keys became English.
+		var legacy struct {
+			Status   string  `json:"durum"`
+			Finished float64 `json:"bitis"`
+		}
+		if json.Unmarshal(data, &legacy) == nil {
+			if message.Status == "" {
+				message.Status = legacy.Status
+			}
+			if message.Finished == 0 {
+				message.Finished = legacy.Finished
+			}
+		}
+	}
+	message.Status = englishStatus(message.Status)
 	return message, err
+}
+
+func englishStatus(status string) string {
+	switch status {
+	case "iletildi":
+		return "delivered"
+	case "iptal (hedef kapali)":
+		return "canceled (target closed)"
+	default:
+		return status
+	}
 }
 
 func (q *Queue) List() ([]Message, error) {
@@ -136,13 +163,13 @@ func (q *Queue) Status(id string) (string, error) {
 		if seconds < 0 {
 			seconds = 0
 		}
-		return fmt.Sprintf("BEKLIYOR: %s hala musait degil (%d sn kuyrukta)", message.To, seconds), nil
+		return fmt.Sprintf("PENDING: %s is still busy (%d seconds queued)", message.To, seconds), nil
 	}
 	if message, err := read(filepath.Join(q.done(), id+".json")); err == nil {
 		when := time.Unix(0, int64(message.Finished*1e9)).Local().Format("15:04")
-		return fmt.Sprintf("%s: %s (saat %s)", strings.ToUpper(message.Durum), message.To, when), nil
+		return fmt.Sprintf("%s: %s (at %s)", strings.ToUpper(message.Status), message.To, when), nil
 	}
-	return fmt.Sprintf("BILINMIYOR: %s kayitlarda yok (2 gunden eski kayitlar silinir)", id), nil
+	return fmt.Sprintf("UNKNOWN: %s is not in the records (records older than 2 days are removed)", id), nil
 }
 
 type Target interface {
@@ -155,7 +182,7 @@ func (q *Queue) finish(path string, message Message, status string) error {
 	if err := os.MkdirAll(q.done(), 0755); err != nil {
 		return err
 	}
-	message.Durum = status
+	message.Status = status
 	message.Finished = float64(q.Now().UnixNano()) / 1e9
 	target := filepath.Join(q.done(), message.ID+".json")
 	tmp, err := os.CreateTemp(q.done(), ".done-*.json")
@@ -208,13 +235,15 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 		message, readErr := read(path)
 		if readErr != nil {
 			if report != nil {
-				report(fmt.Sprintf("msgq: %s okunamadi: %v", path, readErr))
+				report(fmt.Sprintf("msgq: could not read %s: %v", path, readErr))
 			}
 			continue
 		}
 		if !target.HasSession(ctx, message.To) {
-			if err := q.finish(path, message, "iptal (hedef kapali)"); err != nil {
-				return err
+			if err := q.finish(path, message, "canceled (target closed)"); err != nil {
+				if report != nil {
+					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+				}
 			}
 			continue
 		}
@@ -227,15 +256,18 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 				continue
 			}
 			if report != nil {
-				report(fmt.Sprintf("msgq: %s gonderilemedi: %v", message.ID, err))
+				report(fmt.Sprintf("msgq: could not send %s: %v", message.ID, err))
 			}
 			continue
 		}
-		if err := q.finish(path, message, "iletildi"); err != nil {
-			return err
+		if err := q.finish(path, message, "delivered"); err != nil {
+			if report != nil {
+				report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+			}
+			continue
 		}
 		if report != nil {
-			report(fmt.Sprintf("iletildi: %s -> %s", message.ID, message.To))
+			report(fmt.Sprintf("delivered: %s -> %s", message.ID, message.To))
 		}
 	}
 	return q.Cleanup()

@@ -12,7 +12,7 @@ import (
 	"unicode"
 )
 
-var promptLine = regexp.MustCompile(`^[\t ]*❯`)
+var promptLine = regexp.MustCompile(`^[\t ]*[❯›]`)
 
 // Typing reports whether the final rendered composer line contains real text.
 // Older prompt lines are deliberately ignored.
@@ -26,10 +26,7 @@ func Typing(pane string) bool {
 	if composer == "" {
 		return false
 	}
-	_, after, ok := strings.Cut(composer, "❯")
-	if !ok {
-		return false
-	}
+	after := promptLine.ReplaceAllString(composer, "")
 	after = strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
 			return -1
@@ -102,7 +99,7 @@ func (c *Client) IsBusy(ctx context.Context, session string) (bool, error) {
 	return Busy(pane), err
 }
 
-var ErrTyping = errors.New("composer dolu")
+var ErrTyping = errors.New("composer is not empty")
 
 // Send preserves the timing and submit verification of bin/agent send_msg.
 func (c *Client) Send(ctx context.Context, session, message string) error {
@@ -208,7 +205,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		c.Sleep(2 * time.Second)
 	}
 	if !ready && warn != nil {
-		warn("UYARI: agent hazir gorunmedi (yine de devam)")
+		warn("WARNING: agent did not appear ready; continuing anyway")
 	}
 	c.Sleep(time.Second)
 	if !opts.Codex {
@@ -220,7 +217,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if !opts.NoPrompt {
 		if err := c.Send(ctx, session, fmt.Sprintf(onboarding, session)); err != nil {
 			if warn != nil {
-				warn("UYARI: onboarding prompt gonderilemedi: " + err.Error())
+				warn("WARNING: could not send onboarding prompt: " + err.Error())
 			}
 		}
 	}

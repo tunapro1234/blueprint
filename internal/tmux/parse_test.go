@@ -3,13 +3,22 @@ package tmux
 import "testing"
 
 func TestTypingUsesOnlyLastPrompt(t *testing.T) {
-	pane := "❯ eski mesaj\ncevap\n  ❯ \u00a0  \t\n"
+	pane := "❯ old message\nresponse\n  ❯ \u00a0  \t\n"
 	if Typing(pane) {
 		t.Fatal("empty final composer was reported as typing")
 	}
-	pane += "çıktı\n  ❯ yeni mesaj\n"
+	pane += "output\n  ❯ new message\n"
 	if !Typing(pane) {
 		t.Fatal("non-empty final composer was not reported as typing")
+	}
+}
+
+func TestTypingRecognizesCodexPrompt(t *testing.T) {
+	if Typing("output\n  › \u00a0 \t\n") {
+		t.Fatal("empty Codex composer was reported as typing")
+	}
+	if !Typing("output\n  › draft message\n") {
+		t.Fatal("non-empty Codex composer was not reported as typing")
 	}
 }
 

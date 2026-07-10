@@ -723,7 +723,7 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	if !a.tmux.HasSession(a.ctx, name) {
 		return false, "", fmt.Errorf("no open session named %s", name)
 	}
-	pane, err := a.tmux.Capture(a.ctx, name)
+	pane, err := a.tmux.CaptureAnsi(a.ctx, name)
 	if err != nil {
 		return false, "", err
 	}

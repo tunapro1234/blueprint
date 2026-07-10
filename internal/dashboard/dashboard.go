@@ -92,24 +92,20 @@ func Serve(ctx context.Context, options Options) error {
 
 // NewHandler serves sitePath directly when it exists. Otherwise it caches the
 // upstream index page and reverse-proxies the dashboard's data and assets.
-// refreshOnDemand serializes on-demand data refreshes so an F5 storm cannot
-// stampede the collectors. Data older than freshWindow triggers pulse+gen.
+// refreshOnDemand serializes explicit refreshes so an F5 storm cannot stampede
+// the collectors. Ordinary data.json polling must never invoke usage APIs.
 type refreshOnDemand struct {
 	mu       sync.Mutex
 	lastRun  time.Time
 	sitePath string
 }
 
-const freshWindow = 45 * time.Second
+const refreshCooldown = 10 * time.Second
 
 func (r *refreshOnDemand) maybeRefresh() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	dataPath := filepath.Join(r.sitePath, "data.json")
-	if info, err := os.Stat(dataPath); err == nil && time.Since(info.ModTime()) < freshWindow {
-		return
-	}
-	if time.Since(r.lastRun) < 20*time.Second {
+	if time.Since(r.lastRun) < refreshCooldown {
 		return
 	}
 	r.lastRun = time.Now()
@@ -122,14 +118,22 @@ func (r *refreshOnDemand) maybeRefresh() {
 	_ = gen.Run()
 }
 
+func explicitDataRefresh(request *http.Request) bool {
+	return (strings.HasSuffix(request.URL.Path, "/data.json") || request.URL.Path == "/data.json") &&
+		request.URL.Query().Get("refresh") == "1"
+}
+
 func NewHandler(ctx context.Context, sitePath, rawURL string, client *http.Client) (http.Handler, error) {
 	if info, err := os.Stat(sitePath); err == nil && info.IsDir() {
 		files := http.FileServer(http.Dir(sitePath))
 		fresh := &refreshOnDemand{sitePath: sitePath}
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			// F5 = fresh data: refresh collectors before serving stale data.json.
+			// The UI adds refresh=1 only to the first data request after an F5.
+			// Its ordinary 60-second poll only reads the generated file.
 			if strings.HasSuffix(request.URL.Path, "/data.json") || request.URL.Path == "/data.json" {
-				fresh.maybeRefresh()
+				if explicitDataRefresh(request) {
+					fresh.maybeRefresh()
+				}
 				writer.Header().Set("Cache-Control", "no-store")
 			}
 			files.ServeHTTP(writer, request)

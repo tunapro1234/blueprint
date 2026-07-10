@@ -159,3 +159,16 @@ Agentlara giden MESAJ İÇERİĞİ göndericiye aittir (o Türkçe olabilir) —
 - Her hedef için standart msg akışı: boşsa direkt, dolu/yazılıyorsa KUYRUK (kanal id).
 - Çıktı (İngilizce): "sent: N, queued: M (channel ids)". `bp qstat` ile takip.
 - Codex oturumları da dahil (aynı send mekanizması çalışır).
+
+## v1.6 — WORKTREE DESTEĞİ (kullanıcı, 2026-07-10)
+Amaç: farklı agentların AYNI repoda çakışmadan paralel çalışması (probot-studio .worktrees
+kalıbının genelleşmesi). bp genel/açık bir agent yönetim sistemi olarak bunu birinci sınıf yapar.
+```
+bp worktree add <repo-dizin> <konu>     -> <repo>/.worktrees/<konu> olusturur (git worktree add
+                                           -B <konu>/dev), yolu basar
+bp worktree list <repo-dizin>           -> mevcut worktree'ler + hangi agent icinde (tmux eslesme)
+bp worktree rm <repo-dizin> <konu>      -> worktree'yi kaldirir (dirty ise reddeder, --force ile)
+bp open <ad> <repo-dizin> --worktree <konu>  -> worktree yoksa olusturur, agent'i ICINDE acar
+```
+- Dal adlandirma: <konu>/dev (mevcut kalipla ayni: shop/dev, builder/dev...).
+- bp tree, worktree'de calisan agentin yanina repo+dal etiketi gosterir.

@@ -3,247 +3,299 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="blueprint orchestrates a fleet of AI agents in tmux.">
+  <meta name="description" content="blueprint (bp) orchestrates a fleet of AI agents in tmux.">
   <title>blueprint (bp) — AI agent orchestration in tmux</title>
   <style>
     :root {
       color-scheme: light;
-      --ink: #172033;
-      --muted: #647087;
-      --line: #dfe5ec;
-      --soft: #f5f7fa;
+      --ink: #16213a;
+      --muted: #5b6780;
+      --faint: #8b94a8;
+      --line: #e6e9f0;
+      --soft: #f6f8fb;
       --paper: #ffffff;
-      --blue: #2459d3;
-      --blue-dark: #153f9b;
-      --code: #101827;
-      --code-ink: #e8edf5;
-      --radius: 14px;
+      --blue: #2b5cd9;
+      --blue-ink: #1d3f9e;
+      --term: #0f1626;
+      --term-line: #232f47;
+      --term-ink: #dbe3f0;
+      --term-dim: #7c8aa5;
+      --term-accent: #7ea6ff;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --radius: 12px;
     }
 
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; }
 
     html { scroll-behavior: smooth; }
 
     body {
-      margin: 0;
       background: var(--paper);
       color: var(--ink);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 16px;
-      line-height: 1.65;
+      font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       text-rendering: optimizeLegibility;
     }
 
-    a { color: var(--blue); }
+    .wrap { width: min(100% - 48px, 980px); margin: 0 auto; }
 
-    .shell {
-      width: min(100% - 40px, 1040px);
-      margin: 0 auto;
-    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
 
-    header {
-      border-bottom: 1px solid var(--line);
-      background:
-        radial-gradient(circle at 78% 12%, rgba(36, 89, 211, .09), transparent 46%),
-        linear-gradient(180deg, #fbfcff 0%, #fff 100%);
-    }
+    /* ---------- header ---------- */
+    header { border-bottom: 1px solid var(--line); background: var(--paper); }
 
     nav {
       display: flex;
-      align-items: center;
+      align-items: baseline;
       justify-content: space-between;
-      min-height: 68px;
+      padding: 20px 0;
     }
 
     .brand {
       color: var(--ink);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-weight: 750;
-      letter-spacing: -.04em;
-      text-decoration: none;
+      font: 700 17px/1 var(--mono);
+      letter-spacing: -.02em;
     }
+    .brand:hover { text-decoration: none; }
+    .brand span { color: var(--blue); }
 
-    .nav-links { display: flex; gap: 22px; }
-    .nav-links a { color: var(--muted); font-size: .9rem; text-decoration: none; }
-    .nav-links a:hover { color: var(--ink); }
+    .nav-links { display: flex; gap: 26px; }
+    .nav-links a { color: var(--muted); font-size: 14px; }
+    .nav-links a:hover { color: var(--ink); text-decoration: none; }
 
-    .hero { padding: 64px 0 72px; text-align: center; }
-    .hero .eyebrow { justify-content: center; }
-    .showcase { margin-top: 56px; }
-    .showcase h3 { margin-bottom: 14px; }
-    .showcase pre {
-      overflow-x: auto;
-      padding: 22px 26px;
-      font-size: .86rem;
-      line-height: 1.75;
-    }
-    .showcase .ps { color: #7ea6ff; font-weight: 700; margin-right: 8px; user-select: none; }
-    .showcase .cmd { color: #ffffff; font-weight: 600; }
-    .showcase .dim { color: #93a3bf; }
+    /* ---------- hero ---------- */
+    .hero { padding: 84px 0 30px; text-align: center; }
 
-    .eyebrow,
-    h2 {
+    .eyebrow {
       color: var(--blue);
-      font-size: .76rem;
-      font-weight: 800;
-      letter-spacing: .13em;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .14em;
       text-transform: uppercase;
     }
 
     h1 {
-      max-width: 900px;
-      margin: 14px auto 20px;
-      font-size: clamp(2.1rem, 4.6vw, 3.6rem);
-      font-weight: 760;
-      letter-spacing: -.05em;
-      line-height: 1.08;
+      margin: 18px auto 16px;
+      max-width: 760px;
+      font-size: clamp(34px, 4.4vw, 54px);
+      font-weight: 750;
+      letter-spacing: -.035em;
+      line-height: 1.06;
     }
-
-    h1 span { color: var(--muted); font-weight: 570; }
 
     .lede {
-      max-width: 620px;
-      margin: 0 auto 30px;
+      margin: 0 auto 34px;
+      max-width: 560px;
       color: var(--muted);
-      font-size: clamp(1.05rem, 2vw, 1.25rem);
+      font-size: 18px;
     }
 
-    .install-line {
+    .install {
       display: flex;
-      align-items: center;
-      width: min(100%, 640px);
+      align-items: stretch;
+      width: min(100%, 600px);
       margin: 0 auto;
       overflow: hidden;
-      border: 1px solid #263348;
-      border-radius: var(--radius);
-      background: var(--code);
-      box-shadow: 0 16px 40px rgba(16, 24, 39, .14);
+      border-radius: 10px;
+      background: var(--term);
+      border: 1px solid var(--term-line);
     }
 
-    .install-line code {
+    .install code {
       flex: 1;
       overflow-x: auto;
-      padding: 17px 19px;
-      color: var(--code-ink);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: .9rem;
+      padding: 15px 18px;
+      color: var(--term-ink);
+      font: 13.5px/1.4 var(--mono);
       white-space: nowrap;
+      scrollbar-width: none;
     }
+    .install code::-webkit-scrollbar { display: none; }
 
     .copy {
-      align-self: stretch;
       border: 0;
-      border-left: 1px solid #354258;
+      border-left: 1px solid var(--term-line);
       padding: 0 18px;
-      background: #192338;
-      color: #cfd8e7;
+      background: transparent;
+      color: var(--term-dim);
       cursor: pointer;
-      font: inherit;
-      font-size: .78rem;
-      font-weight: 700;
+      font: 600 12px/1 Inter, ui-sans-serif, system-ui, sans-serif;
     }
+    .copy:hover { color: #fff; }
 
-    .copy:hover { background: #23304a; color: white; }
-
-    main section { padding: 60px 0; border-bottom: 1px solid var(--line); }
-    h2 { margin: 0 0 26px; }
-
-    h3 {
-      margin: 0 0 8px;
-      font-size: 1.12rem;
-      letter-spacing: -.02em;
+    .hero-meta {
+      margin-top: 16px;
+      color: var(--faint);
+      font-size: 13px;
     }
+    .hero-meta code { font-family: var(--mono); font-size: 12.5px; }
 
-    p { margin: 0; }
+    /* ---------- terminal demo ---------- */
+    .demo { padding: 44px 0 0; }
 
-    .concepts {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 1px;
+    .term {
+      max-width: 860px;
+      margin: 0 auto;
       overflow: hidden;
-      border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: var(--line);
+      background: var(--term);
+      border: 1px solid var(--term-line);
+      box-shadow: 0 24px 60px -28px rgba(22, 33, 58, .45);
     }
 
-    .concept { min-height: 145px; padding: 25px; background: var(--paper); }
-    .concept p, .step p, .architecture p { color: var(--muted); }
+    .term-bar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 11px 16px;
+      border-bottom: 1px solid var(--term-line);
+    }
+    .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #2c3a57; }
+    .term-bar b {
+      margin-left: 10px;
+      color: var(--term-dim);
+      font: 500 12px/1 var(--mono);
+    }
 
-    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .term pre {
+      overflow-x: auto;
+      scrollbar-width: none;
+      padding: 22px 24px 26px;
+      color: var(--term-ink);
+      font: 13.5px/1.75 var(--mono);
+    }
+    .term pre::-webkit-scrollbar { display: none; }
+
+    .term .ps { color: var(--term-accent); font-weight: 700; user-select: none; }
+    .term .cmd { color: #ffffff; font-weight: 600; }
+    .term .dim { color: var(--term-dim); }
+    .term .ok { color: #7dd8a8; }
+
+    .demo-caption {
+      max-width: 640px;
+      margin: 22px auto 0;
+      color: var(--muted);
+      text-align: center;
+      font-size: 15px;
+    }
+
+    /* ---------- sections ---------- */
+    main section { padding: 84px 0 0; }
+    main { padding-bottom: 96px; }
+
+    h2 {
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      margin-bottom: 22px;
+    }
+
+    h3 { font-size: 16.5px; font-weight: 650; letter-spacing: -.01em; margin-bottom: 6px; }
+
+    section p { color: var(--muted); font-size: 15px; }
+
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 36px 44px;
+    }
+
+    .cell { border-top: 2px solid var(--line); padding-top: 16px; }
+    .cell code { font: 13px var(--mono); color: var(--blue-ink); }
+
+    /* quickstart */
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 
     .step {
-      min-width: 0;
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      padding: 24px;
       background: var(--soft);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
     }
 
-    .number {
-      display: inline-grid;
-      place-items: center;
-      width: 28px;
-      height: 28px;
-      margin-bottom: 18px;
-      border-radius: 50%;
-      background: var(--blue);
-      color: white;
-      font-size: .75rem;
-      font-weight: 800;
+    .step .num {
+      color: var(--faint);
+      font: 700 12px var(--mono);
+      margin-bottom: 12px;
     }
+    .step .num b { color: var(--blue); }
 
-    .steps pre code { white-space: pre-wrap; word-break: break-all; }
-    pre {
-      margin: 16px 0 0;
+    .step p { flex: 1; font-size: 14px; margin: 4px 0 14px; }
+    .step p code { font-size: 12.5px; font-family: var(--mono); }
+
+    .step pre {
+      border-radius: 8px;
+      background: var(--term);
+      padding: 12px 14px;
       overflow-x: auto;
-      border-radius: 9px;
-      padding: 14px;
-      background: var(--code);
-      color: var(--code-ink);
-      font: .79rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      scrollbar-width: none;
     }
+    .step pre::-webkit-scrollbar { display: none; }
+    .step pre code { color: var(--term-ink); font: 12.5px/1.5 var(--mono); white-space: pre; }
 
-    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+    /* commands table */
+    .cmds { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    .cmds table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+    .cmds td { padding: 12px 18px; border-top: 1px solid var(--line); vertical-align: top; }
+    .cmds tr:first-child td { border-top: 0; }
+    .cmds td:first-child {
+      width: 40%;
+      color: var(--blue-ink);
+      font: 13px var(--mono);
+      white-space: nowrap;
+    }
+    .cmds td:last-child { color: var(--muted); }
+    .cmds tr:nth-child(odd) td { background: #fbfcfe; }
 
-    table { width: 100%; border-collapse: collapse; font-size: .93rem; }
-    th, td { padding: 14px 18px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    tr:last-child td { border-bottom: 0; }
-    th { background: var(--soft); color: var(--muted); font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; }
-    td:first-child { width: 38%; color: var(--blue-dark); font: .86rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
-    tbody tr:hover { background: #fafbfe; }
-
-    .architecture {
+    /* architecture */
+    .arch {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 28px;
       display: grid;
-      grid-template-columns: 1fr 2fr;
-      gap: 34px;
-      align-items: start;
+      grid-template-columns: auto 1fr;
+      gap: 28px;
+      align-items: center;
     }
-
-    .architecture h3 { font-size: clamp(1.5rem, 4vw, 2.4rem); line-height: 1.15; }
+    .arch h3 { font-size: 20px; }
+    .arch p { max-width: 560px; }
 
     .flow {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      justify-content: center;
-      gap: 10px;
-      margin-top: 25px;
+      gap: 8px;
+      margin-top: 14px;
+      color: var(--faint);
+      font: 12px var(--mono);
+    }
+    .flow span.node {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      border-radius: 7px;
+      padding: 7px 10px;
       color: var(--muted);
-      font: .78rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
-    .node { border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--soft); }
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 28px 0 44px;
+      color: var(--faint);
+      font-size: 13.5px;
+    }
 
-    footer { padding: 32px 0 54px; color: var(--muted); font-size: .85rem; }
-
-    @media (max-width: 760px) {
+    @media (max-width: 820px) {
       .nav-links { display: none; }
-      .install-line code { white-space: pre-wrap; word-break: break-all; }
-      .hero { padding: 68px 0 72px; }
-      .showcase { margin-top: 40px; }
-      .concepts, .steps, .architecture { grid-template-columns: 1fr; }
-      .steps { gap: 12px; }
-      .flow { justify-content: flex-start; flex-wrap: wrap; }
-      main section { padding: 58px 0; }
+      .hero { padding: 56px 0 8px; }
+      .grid2, .steps { grid-template-columns: 1fr; }
+      .arch { grid-template-columns: 1fr; }
+      main section { padding: 64px 0 0; }
+      .install code { white-space: pre-wrap; word-break: break-all; }
+      .term pre { font-size: 12.5px; }
     }
 
     @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
@@ -251,9 +303,9 @@
 </head>
 <body>
   <header>
-    <div class="shell">
-      <nav aria-label="Primary navigation">
-        <a class="brand" href="#top">bp_</a>
+    <div class="wrap">
+      <nav aria-label="Primary">
+        <a class="brand" href="#top">bp<span>_</span></a>
         <div class="nav-links">
           <a href="#concepts">Concepts</a>
           <a href="#quickstart">Quickstart</a>
@@ -262,68 +314,26 @@
           <a href="#architecture">Architecture</a>
         </div>
       </nav>
-      <div class="hero" id="top">
-        <div class="eyebrow">Agent infrastructure CLI</div>
-        <h1>blueprint (bp) <span>— orchestrate a fleet of AI agents in tmux</span></h1>
-        <p class="lede">One small binary to connect, observe, coordinate, and supervise long-running CLI agents across a server.</p>
-        <div class="install-line" aria-label="Installation command">
-          <code id="install-command">curl -fsSL https://bp.trasumanar.ai/install.sh | bash</code>
-          <button class="copy" type="button" aria-label="Copy installation command" onclick="copyInstall(this)">Copy</button>
-        </div>
-      </div>
     </div>
   </header>
 
-  <main class="shell">
-    <section id="concepts">
-      <h2>Concepts</h2>
-      <div class="concepts">
-        <article class="concept">
-          <h3>Agent</h3>
-          <p>A CLI such as Claude or Codex living in its own named tmux session.</p>
-        </article>
-        <article class="concept">
-          <h3>Subagent</h3>
-          <p>An agent spawned inside a CLI through Task, a workflow, or <code>codex exec</code>.</p>
-        </article>
-        <article class="concept">
-          <h3>tmux is the fabric</h3>
-          <p>Sessions keep agents alive, addressable, observable, and easy to reconnect to.</p>
-        </article>
-        <article class="concept">
-          <h3>mosh makes remote sweet</h3>
-          <p>Roaming and intermittent connections are comfortable; SSH remains the automatic fallback.</p>
-        </article>
-      </div>
-    </section>
-
-    <section id="quickstart">
-      <h2>Quickstart</h2>
-      <div class="steps">
-        <article class="step">
-          <span class="number">1</span>
-          <h3>Install on the server</h3>
-          <p>From the blueprint checkout, build and link the server binary.</p>
-          <pre><code>cd /srv/blueprint
-./install.sh</code></pre>
-        </article>
-        <article class="step">
-          <span class="number">2</span>
-          <h3>Install on your laptop</h3>
-          <p>The installer downloads the native binary and asks for your <code>user@host</code>.</p>
-          <pre><code>curl -fsSL https://bp.trasumanar.ai/install.sh | bash</code></pre>
-        </article>
-        <article class="step">
-          <span class="number">3</span>
-          <h3>Connect to an agent</h3>
-          <p>Local sessions attach directly; remote sessions use mosh or SSH.</p>
-          <pre><code>bp con server-main</code></pre>
-        </article>
+  <main id="top">
+    <div class="wrap">
+      <div class="hero">
+        <div class="eyebrow">blueprint · agent infrastructure CLI</div>
+        <h1>Orchestrate a fleet of AI&nbsp;agents in tmux.</h1>
+        <p class="lede">One small binary to connect, observe, coordinate, and supervise long-running CLI agents across a server.</p>
+        <div class="install" aria-label="Installation command">
+          <code id="install-command">curl -fsSL https://bp.trasumanar.ai/install.sh | bash</code>
+          <button class="copy" type="button" aria-label="Copy installation command" onclick="copyInstall(this)">COPY</button>
+        </div>
+        <div class="hero-meta">Linux &amp; macOS · single static binary · or <code>npm i -g @tunapro/blueprint</code></div>
       </div>
 
-      <div class="showcase">
-        <h3>What a day with bp looks like</h3>
-        <pre><code><span class="ps">$</span><span class="cmd">bp tree</span>
+      <div class="demo">
+        <div class="term" role="img" aria-label="Terminal session demonstrating bp commands">
+          <div class="term-bar"><i></i><i></i><i></i><b>you@laptop — bp</b></div>
+          <pre><code><span class="ps">$</span> <span class="cmd">bp tree</span>
 server-main <span class="dim">[idle/open]</span>
  ├── server-mail <span class="dim">[idle/open]</span>
  ├── server-monitor-dash <span class="dim">[working/open]</span>
@@ -332,90 +342,132 @@ server-main <span class="dim">[idle/open]</span>
      │   └── probot-builder <span class="dim">blueprint@builder/dev</span>
      └── probot-business <span class="dim">[idle/open]</span>
 
-<span class="ps">$</span><span class="cmd">bp msg probot-studio "ship the pricing page when tests pass"</span>
-BUSY: queued (channel: q482910337). Check: bp qstat q482910337
+<span class="ps">$</span> <span class="cmd">bp msg probot-studio "ship the pricing page when tests pass"</span>
+BUSY: queued <span class="dim">(channel: q4829)</span> — check: bp qstat q4829
 
-<span class="ps">$</span><span class="cmd">bp qstat q482910337</span>
-DELIVERED: probot-studio (at 14:32)
+<span class="ps">$</span> <span class="cmd">bp qstat q4829</span>
+<span class="ok">DELIVERED</span>: probot-studio <span class="dim">(at 14:32)</span>
 
-<span class="ps">$</span><span class="cmd">bp open probot-pricing /srv/probot/studio --worktree pricing</span>
-/srv/probot/studio/.worktrees/pricing · branch pricing/dev · agent ready
+<span class="ps">$</span> <span class="cmd">bp open probot-pricing /srv/probot/studio --worktree pricing</span>
+.worktrees/pricing · branch pricing/dev · <span class="ok">agent ready</span>
 
-<span class="ps">$</span><span class="cmd">bp usage</span>
-Claude: 5h %12 · 7d %27 · Fable 7d %43   Codex: 5h %4 · 7d %14
-
-<span class="ps">$</span><span class="cmd">bp announce "deploy frozen for 1h, finish open work"</span>
-sent: 6, queued: 2 (q519, q533)</code></pre>
-        <p class="lede">One binary. A fleet of agents in tmux — opened, messaged, queued,
-        branched into worktrees, usage-governed. Nothing talks over a busy agent, ever.</p>
+<span class="ps">$</span> <span class="cmd">bp usage</span>
+Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
+        </div>
+        <p class="demo-caption">A fleet of agents in tmux — opened, messaged, queued, branched into worktrees, usage-governed. Nothing ever talks over a busy agent.</p>
       </div>
-    </section>
 
-    <section id="commands">
-      <h2>Command reference</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Command</th><th>Purpose</th></tr></thead>
-          <tbody>
-            <tr><td>bp status</td><td>Compare live tmux sessions with the agentbook.</td></tr>
-            <tr><td>bp tree</td><td>Show the agent hierarchy and live state.</td></tr>
-            <tr><td>bp open &lt;name&gt; &lt;dir&gt;</td><td>Start an agent in a new tmux session.</td></tr>
-            <tr><td>bp close &lt;name&gt;</td><td>Close an agent session while retaining its history.</td></tr>
-            <tr><td>bp msg &lt;name&gt; &lt;message&gt;</td><td>Send now or queue safely when the agent is busy.</td></tr>
-            <tr><td>bp q</td><td>List queued agent messages.</td></tr>
-            <tr><td>bp qstat &lt;channel-id&gt;</td><td>Inspect delivery status for a queued message.</td></tr>
-            <tr><td>bp peek &lt;name&gt; [n]</td><td>Read the latest non-empty lines from a session.</td></tr>
-            <tr><td>bp announce &lt;message&gt;</td><td>Broadcast down the sender's agent hierarchy.</td></tr>
-            <tr><td>bp usage</td><td>Show the latest model-usage snapshot.</td></tr>
-            <tr><td>bp policy status|override</td><td>Inspect or temporarily override usage policy.</td></tr>
-            <tr><td>bp service</td><td>Show supervised job state.</td></tr>
-            <tr><td>bp con [agent-name]</td><td>List sessions or attach locally/remotely to an agent.</td></tr>
-            <tr><td>bp img</td><td>Upload a local clipboard image over SSH and copy its server path back.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section id="integration">
-      <h2>Desktop integration</h2>
-      <div class="concepts">
-        <article class="concept">
-          <h3>Image paste over SSH (bp img)</h3>
-          <p>Copy an image on your laptop and run <code>bp img</code>. It uploads the image to the server, prints the saved path, and puts that path back on your local clipboard.</p>
-          <p>Add a one-key launcher to <code>~/.config/kitty/kitty.conf</code>:</p>
-          <pre><code>map ctrl+shift+i launch --type=background bp img</code></pre>
-        </article>
-        <article class="concept">
-          <h3>Clipboard &amp; scroll (tmux + OSC52 + mosh)</h3>
-          <p>The installer can add mouse scrolling, deep history, vi copy mode, and tmux clipboard integration after asking for permission.</p>
-          <p>OSC52 clipboard forwarding and tmux passthrough keep text copy working through mosh; no prefix-key changes are made.</p>
-        </article>
-      </div>
-    </section>
-
-    <section id="architecture">
-      <h2>Architecture</h2>
-      <div class="architecture">
-        <h3>One daemon.<br>Long-lived work.</h3>
-        <div>
-          <p>A single systemd unit, <code>blueprint.service</code>, runs the blueprint daemon. It supervises the scheduled jobs — usage tracking, policy, message queue, keepalive — while tmux remains the durable session layer for the agent fleet.</p>
-          <div class="flow" aria-label="Architecture flow">
-            <span class="node">blueprint.service</span><span>→</span><span class="node">bp daemon</span><span>→</span><span class="node">scheduled jobs</span>
+      <section id="concepts">
+        <h2>Concepts</h2>
+        <div class="grid2">
+          <div class="cell">
+            <h3>Agent</h3>
+            <p>A CLI such as Claude or Codex living in its own named tmux session.</p>
+          </div>
+          <div class="cell">
+            <h3>Subagent</h3>
+            <p>An agent spawned inside a CLI through Task, a workflow, or <code>codex exec</code>.</p>
+          </div>
+          <div class="cell">
+            <h3>tmux is the fabric</h3>
+            <p>Sessions keep agents alive, addressable, observable, and easy to reconnect to.</p>
+          </div>
+          <div class="cell">
+            <h3>mosh makes remote sweet</h3>
+            <p>Roaming and intermittent connections stay comfortable; SSH remains the automatic fallback.</p>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      <section id="quickstart">
+        <h2>Quickstart</h2>
+        <div class="steps">
+          <article class="step">
+            <div class="num"><b>01</b> · SERVER</div>
+            <h3>Install on the server</h3>
+            <p>From the blueprint checkout, build and link the server binary.</p>
+            <pre><code>cd /srv/blueprint && ./install.sh</code></pre>
+          </article>
+          <article class="step">
+            <div class="num"><b>02</b> · LAPTOP</div>
+            <h3>Install on your laptop</h3>
+            <p>The installer downloads the native binary and asks for your <code>user@host</code>.</p>
+            <pre><code>curl -fsSL bp.trasumanar.ai/install.sh | bash</code></pre>
+          </article>
+          <article class="step">
+            <div class="num"><b>03</b> · CONNECT</div>
+            <h3>Attach to any agent</h3>
+            <p>Local sessions attach directly; remote sessions go over mosh or SSH.</p>
+            <pre><code>bp con server-main</code></pre>
+          </article>
+        </div>
+      </section>
+
+      <section id="commands">
+        <h2>Command reference</h2>
+        <div class="cmds">
+          <table>
+            <tbody>
+              <tr><td>bp tree</td><td>Show the agent hierarchy with live state.</td></tr>
+              <tr><td>bp status</td><td>Compare live tmux sessions with the agentbook.</td></tr>
+              <tr><td>bp open &lt;name&gt; &lt;dir&gt; [--worktree t]</td><td>Start an agent, optionally inside a fresh git worktree.</td></tr>
+              <tr><td>bp close &lt;name&gt;</td><td>Close an agent session; its history is kept.</td></tr>
+              <tr><td>bp msg &lt;name&gt; &lt;message&gt;</td><td>Send now, or queue safely when the agent is busy.</td></tr>
+              <tr><td>bp q · bp qstat &lt;id&gt; · bp qcancel &lt;id&gt;</td><td>List, inspect, or cancel queued messages.</td></tr>
+              <tr><td>bp announce &lt;message&gt;</td><td>Broadcast down the sender's agent hierarchy.</td></tr>
+              <tr><td>bp peek &lt;name&gt; [n]</td><td>Read the latest lines from a session.</td></tr>
+              <tr><td>bp usage · bp monitor</td><td>Model-usage snapshot; full dashboard in the terminal.</td></tr>
+              <tr><td>bp policy status|override</td><td>Inspect or pause the usage policy engine.</td></tr>
+              <tr><td>bp service</td><td>Health of every supervised job.</td></tr>
+              <tr><td>bp con [name]</td><td>List sessions or attach locally / over mosh.</td></tr>
+              <tr><td>bp dash</td><td>Serve the monitoring dashboard locally.</td></tr>
+              <tr><td>bp img</td><td>Ship a clipboard image to the server; path comes back on your clipboard.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="integration">
+        <h2>Desktop integration</h2>
+        <div class="grid2">
+          <div class="cell">
+            <h3>Image paste over SSH</h3>
+            <p>Copy an image on your laptop and run <code>bp img</code>. It uploads to the server, prints the saved path, and puts that path back on your clipboard. One-key kitty launcher:</p>
+            <p style="margin-top:10px"><code>map ctrl+shift+i launch --type=background bp img</code></p>
+          </div>
+          <div class="cell">
+            <h3>Clipboard &amp; scroll</h3>
+            <p>The installer can add mouse scrolling, deep history, vi copy-mode, and OSC52 clipboard forwarding, so copying works through tmux and mosh. It asks first and never touches your prefix key.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="architecture">
+        <h2>Architecture</h2>
+        <div class="arch">
+          <h3>One daemon.<br>Long-lived work.</h3>
+          <div>
+            <p>A single systemd unit, <code>blueprint.service</code>, runs the blueprint daemon. It supervises the scheduled jobs — usage tracking, policy, the message queue, keepalive — while tmux remains the durable session layer for the fleet.</p>
+            <div class="flow" aria-label="Architecture flow">
+              <span class="node">blueprint.service</span>→<span class="node">bp daemon</span>→<span class="node">scheduled jobs</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   </main>
 
-  <footer class="shell">blueprint keeps the machinery small and the agents visible.</footer>
+  <footer>
+    <div class="wrap">blueprint keeps the machinery small and the agents visible.</div>
+  </footer>
 
   <script>
     function copyInstall(button) {
       var command = document.getElementById('install-command').textContent;
       if (!navigator.clipboard) return;
       navigator.clipboard.writeText(command).then(function () {
-        button.textContent = 'Copied';
-        window.setTimeout(function () { button.textContent = 'Copy'; }, 1400);
+        button.textContent = 'COPIED';
+        window.setTimeout(function () { button.textContent = 'COPY'; }, 1400);
       });
     }
   </script>

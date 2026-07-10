@@ -38,6 +38,7 @@ bp usage
 bp policy status|override <hours>
 bp service
 bp con [agent-name]
+bp img [recv]
 bp daemon`
 
 type app struct {
@@ -91,6 +92,8 @@ func (a *app) run(args []string) error {
 		return a.service()
 	case "con":
 		return a.connect(args[1:])
+	case "img":
+		return a.image(args[1:])
 	case "daemon":
 		return a.daemon(args[1:])
 	case "help", "-h", "--help":

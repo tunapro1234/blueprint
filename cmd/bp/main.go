@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -38,6 +39,7 @@ bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
 bp msg <name> <message...>
 bp announce <message...>
+bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run]
 bp q | bp qstat <channel-id>
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] <message...>
@@ -88,6 +90,8 @@ func (a *app) run(args []string) error {
 		return a.message(args[1:])
 	case "announce":
 		return a.announce(args[1:])
+	case "compact":
+		return a.compact(args[1:])
 	case "q":
 		return a.queueList(args[1:])
 	case "qstat":
@@ -789,6 +793,243 @@ func announcementTargets(fleet book.Fleet, states map[string]book.State, sender 
 		}
 	}
 	return targets
+}
+
+const compactStatePath = "/srv/blueprint/state/compact.json"
+
+type compactOptions struct {
+	minAge  time.Duration
+	exclude []string
+	dryRun  bool
+}
+
+type compactSkip struct {
+	Name string
+	Age  time.Duration
+}
+
+type compactPlan struct {
+	Send            []string
+	SkippedRecent   []compactSkip
+	Excluded        []string
+	UnknownExcludes []string
+}
+
+func parseCompactArgs(args []string) (compactOptions, error) {
+	opts := compactOptions{minAge: 30 * time.Minute}
+	minAgeSeen := false
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--dry-run":
+			opts.dryRun = true
+		case arg == "--min-age" || strings.HasPrefix(arg, "--min-age="):
+			value := ""
+			if arg == "--min-age" {
+				if index+1 >= len(args) {
+					return opts, fmt.Errorf("--min-age requires a value in minutes")
+				}
+				value = args[index+1]
+				index++
+			} else {
+				value = strings.TrimPrefix(arg, "--min-age=")
+			}
+			if minAgeSeen {
+				return opts, fmt.Errorf("--min-age may only be specified once")
+			}
+			minAgeSeen = true
+			minutes, err := strconv.Atoi(value)
+			if err != nil || minutes < 0 {
+				return opts, fmt.Errorf("invalid --min-age minutes: %s", value)
+			}
+			opts.minAge = time.Duration(minutes) * time.Minute
+		case arg == "--exclude" || strings.HasPrefix(arg, "--exclude="):
+			value := ""
+			if arg == "--exclude" {
+				if index+1 >= len(args) {
+					return opts, fmt.Errorf("--exclude requires a comma-separated list")
+				}
+				value = args[index+1]
+				index++
+			} else {
+				value = strings.TrimPrefix(arg, "--exclude=")
+			}
+			for _, part := range strings.Split(value, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					opts.exclude = append(opts.exclude, part)
+				}
+			}
+		default:
+			return opts, fmt.Errorf("unknown compact option: %s", arg)
+		}
+	}
+	return opts, nil
+}
+
+// selectCompactTargets computes the compact plan from the announce-style target
+// set. server-main and the sender are hard-excluded regardless of flags; user
+// --exclude names and min-age recency further trim the set.
+func selectCompactTargets(fleet book.Fleet, states map[string]book.State, sender string, exclude []string, lastCompact map[string]time.Time, minAge time.Duration, now time.Time) compactPlan {
+	excludeSet := map[string]bool{}
+	for _, name := range exclude {
+		if name = strings.TrimSpace(name); name != "" {
+			excludeSet[name] = true
+		}
+	}
+	base := announcementTargets(fleet, states, sender)
+	baseSet := map[string]bool{}
+	for _, name := range base {
+		baseSet[name] = true
+	}
+	plan := compactPlan{}
+	for _, name := range base {
+		if name == "server-main" || name == sender {
+			continue // hard safety exclusions, always applied
+		}
+		if excludeSet[name] {
+			plan.Excluded = append(plan.Excluded, name)
+			continue
+		}
+		if last, ok := lastCompact[name]; ok {
+			if age := now.Sub(last); age < minAge {
+				plan.SkippedRecent = append(plan.SkippedRecent, compactSkip{Name: name, Age: age})
+				continue
+			}
+		}
+		plan.Send = append(plan.Send, name)
+	}
+	for name := range excludeSet {
+		if !baseSet[name] {
+			plan.UnknownExcludes = append(plan.UnknownExcludes, name)
+		}
+	}
+	sort.Strings(plan.UnknownExcludes)
+	return plan
+}
+
+func formatAge(d time.Duration) string {
+	minutes := int(d.Minutes())
+	if minutes < 0 {
+		minutes = 0
+	}
+	return fmt.Sprintf("%dm", minutes)
+}
+
+func loadCompactState(path string) map[string]time.Time {
+	result := map[string]time.Time{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return result
+	}
+	raw := map[string]string{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return map[string]time.Time{}
+	}
+	for name, value := range raw {
+		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			result[name] = parsed.UTC()
+		}
+	}
+	return result
+}
+
+func saveCompactState(path string, state map[string]time.Time) error {
+	raw := make(map[string]string, len(state))
+	for name, when := range state {
+		raw[name] = when.UTC().Format(time.RFC3339)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".compact-*.json")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	encoder := json.NewEncoder(tmp)
+	encoder.SetIndent("", "  ")
+	err = encoder.Encode(raw)
+	if syncErr := tmp.Sync(); err == nil {
+		err = syncErr
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+func (a *app) compact(args []string) error {
+	opts, err := parseCompactArgs(args)
+	if err != nil {
+		return err
+	}
+	sender := a.sender()
+	fleet, states, err := a.fleet()
+	if err != nil {
+		return err
+	}
+	if _, ok := fleet.Agents[sender]; !ok && sender != "server-main" {
+		return fmt.Errorf("sender %s is not in the agentbook hierarchy", sender)
+	}
+	lastCompact := loadCompactState(compactStatePath)
+	plan := selectCompactTargets(fleet, states, sender, opts.exclude, lastCompact, opts.minAge, time.Now())
+
+	if opts.dryRun {
+		fmt.Fprintf(a.out, "[dry-run] targets: %d\n", len(plan.Send))
+		for _, name := range plan.Send {
+			fmt.Fprintf(a.out, "  send   %s\n", name)
+		}
+		for _, skip := range plan.SkippedRecent {
+			fmt.Fprintf(a.out, "  skip   %s: recent (%s ago)\n", skip.Name, formatAge(skip.Age))
+		}
+		for _, name := range plan.Excluded {
+			fmt.Fprintf(a.out, "  skip   %s: excluded\n", name)
+		}
+		if len(plan.UnknownExcludes) > 0 {
+			fmt.Fprintf(a.out, "  ignored unknown excludes: %s\n", strings.Join(plan.UnknownExcludes, ", "))
+		}
+		fmt.Fprintf(a.out, "[dry-run] would send: %d, skipped recent: %d, excluded: %d\n", len(plan.Send), len(plan.SkippedRecent), len(plan.Excluded))
+		return nil
+	}
+
+	sent := 0
+	channels := make([]string, 0)
+	var deliveryErrors []error
+	now := time.Now().UTC()
+	updated := false
+	for _, target := range plan.Send {
+		queued, channelID, deliveryErr := a.deliver(target, sender, "/compact")
+		if deliveryErr != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s: %w", target, deliveryErr))
+			continue
+		}
+		if queued {
+			channels = append(channels, channelID)
+		} else {
+			sent++
+		}
+		lastCompact[target] = now
+		updated = true
+	}
+	if updated {
+		if err := saveCompactState(compactStatePath, lastCompact); err != nil {
+			deliveryErrors = append(deliveryErrors, fmt.Errorf("save compact state: %w", err))
+		}
+	}
+
+	fmt.Fprintf(a.out, "compact sent: %d, queued: %d", sent, len(channels))
+	if len(channels) > 0 {
+		fmt.Fprintf(a.out, " (%s)", strings.Join(channels, ", "))
+	}
+	fmt.Fprintf(a.out, ", skipped recent: %d, excluded: %d\n", len(plan.SkippedRecent), len(plan.Excluded))
+	if len(plan.UnknownExcludes) > 0 {
+		fmt.Fprintf(a.out, "ignored unknown excludes: %s\n", strings.Join(plan.UnknownExcludes, ", "))
+	}
+	return errors.Join(deliveryErrors...)
 }
 
 func (a *app) queueList(args []string) error {

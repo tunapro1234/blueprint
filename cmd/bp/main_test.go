@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"blueprint/internal/book"
 	"blueprint/internal/dashboard"
@@ -49,6 +50,125 @@ func TestAnnouncementTargetsFollowHierarchy(t *testing.T) {
 	}
 	if got, want := announcementTargets(fleet, states, "server-main"), []string{"alpha", "alpha-child", "alpha-grandchild", "beta", "orphan"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("root targets=%v, want %v", got, want)
+	}
+}
+
+func compactTestFleet() (book.Fleet, map[string]book.State) {
+	fleet := book.Fleet{
+		Root:  "server-main",
+		Order: []string{"server-main", "alpha", "alpha-child", "alpha-grandchild", "beta", "orphan", "lab-scratch", "closed-agent"},
+		Agents: map[string]book.Agent{
+			"server-main":      {Name: "server-main"},
+			"alpha":            {Name: "alpha"},
+			"alpha-child":      {Name: "alpha-child"},
+			"alpha-grandchild": {Name: "alpha-grandchild"},
+			"beta":             {Name: "beta"},
+			"orphan":           {Name: "orphan"},
+			"lab-scratch":      {Name: "lab-scratch"},
+			"closed-agent":     {Name: "closed-agent"},
+		},
+		Parents: map[string]string{
+			"server-main":      "",
+			"alpha":            "server-main",
+			"alpha-child":      "alpha",
+			"alpha-grandchild": "alpha-child",
+			"beta":             "server-main",
+			"orphan":           "",
+			"lab-scratch":      "alpha",
+			"closed-agent":     "alpha",
+		},
+	}
+	states := map[string]book.State{}
+	for _, name := range fleet.Order {
+		states[name] = book.State{Alive: true}
+	}
+	delete(states, "closed-agent")
+	return fleet, states
+}
+
+func TestSelectCompactTargetsHardExclusions(t *testing.T) {
+	fleet, states := compactTestFleet()
+	now := time.Now()
+
+	// server-main sees the whole fleet but never itself.
+	plan := selectCompactTargets(fleet, states, "server-main", nil, nil, 30*time.Minute, now)
+	if want := []string{"alpha", "alpha-child", "alpha-grandchild", "beta", "orphan"}; !reflect.DeepEqual(plan.Send, want) {
+		t.Fatalf("root send=%v, want %v", plan.Send, want)
+	}
+	if len(plan.SkippedRecent) != 0 || len(plan.Excluded) != 0 {
+		t.Fatalf("expected no skips for root, got %+v", plan)
+	}
+
+	// A non-root sender only sees strict descendants (server-main is never a target here anyway).
+	plan = selectCompactTargets(fleet, states, "alpha", nil, nil, 30*time.Minute, now)
+	if want := []string{"alpha-child", "alpha-grandchild"}; !reflect.DeepEqual(plan.Send, want) {
+		t.Fatalf("alpha send=%v, want %v", plan.Send, want)
+	}
+}
+
+func TestSelectCompactTargetsUserExclude(t *testing.T) {
+	fleet, states := compactTestFleet()
+	now := time.Now()
+
+	plan := selectCompactTargets(fleet, states, "server-main", []string{"beta", "does-not-exist"}, nil, 30*time.Minute, now)
+	if want := []string{"alpha", "alpha-child", "alpha-grandchild", "orphan"}; !reflect.DeepEqual(plan.Send, want) {
+		t.Fatalf("send=%v, want %v", plan.Send, want)
+	}
+	if want := []string{"beta"}; !reflect.DeepEqual(plan.Excluded, want) {
+		t.Fatalf("excluded=%v, want %v", plan.Excluded, want)
+	}
+	if want := []string{"does-not-exist"}; !reflect.DeepEqual(plan.UnknownExcludes, want) {
+		t.Fatalf("unknown=%v, want %v", plan.UnknownExcludes, want)
+	}
+}
+
+func TestSelectCompactTargetsMinAge(t *testing.T) {
+	fleet, states := compactTestFleet()
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	lastCompact := map[string]time.Time{
+		"alpha":       now.Add(-5 * time.Minute),  // recent -> skipped
+		"alpha-child": now.Add(-40 * time.Minute), // old enough -> sent
+	}
+
+	plan := selectCompactTargets(fleet, states, "server-main", nil, lastCompact, 30*time.Minute, now)
+	if want := []string{"alpha-child", "alpha-grandchild", "beta", "orphan"}; !reflect.DeepEqual(plan.Send, want) {
+		t.Fatalf("send=%v, want %v", plan.Send, want)
+	}
+	if len(plan.SkippedRecent) != 1 || plan.SkippedRecent[0].Name != "alpha" {
+		t.Fatalf("skippedRecent=%+v, want only alpha", plan.SkippedRecent)
+	}
+	if got := formatAge(plan.SkippedRecent[0].Age); got != "5m" {
+		t.Fatalf("age=%q, want 5m", got)
+	}
+}
+
+func TestParseCompactArgs(t *testing.T) {
+	opts, err := parseCompactArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.minAge != 30*time.Minute || opts.dryRun || len(opts.exclude) != 0 {
+		t.Fatalf("defaults=%+v", opts)
+	}
+
+	opts, err = parseCompactArgs([]string{"--min-age=15", "--exclude", "a, b ,c", "--exclude=d", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.minAge != 15*time.Minute {
+		t.Fatalf("minAge=%v, want 15m", opts.minAge)
+	}
+	if !opts.dryRun {
+		t.Fatalf("expected dryRun")
+	}
+	if want := []string{"a", "b", "c", "d"}; !reflect.DeepEqual(opts.exclude, want) {
+		t.Fatalf("exclude=%v, want %v", opts.exclude, want)
+	}
+
+	for _, args := range [][]string{{"--min-age"}, {"--min-age", "-1"}, {"--min-age", "x"}, {"--min-age", "1", "--min-age", "2"}, {"--exclude"}, {"--bogus"}} {
+		if _, err := parseCompactArgs(args); err == nil {
+			t.Errorf("parseCompactArgs(%v) succeeded, want error", args)
+		}
 	}
 }
 

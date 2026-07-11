@@ -20,6 +20,14 @@ var promptLine = regexp.MustCompile("^(?:\x1b\\[[0-9;]*m|[\t ])*[❯›](?:\x1b\
 // Typing reports whether the final rendered composer line contains real text.
 // Older prompt lines are deliberately ignored.
 func Typing(pane string) bool {
+	return composerContent(pane) != ""
+}
+
+// composerContent returns the whitespace-stripped text of the final rendered
+// composer line, after the prompt marker, with dim placeholder/ghost text and
+// ANSI colour removed. NBSP counts as whitespace (unicode.IsSpace covers it),
+// so an "empty" composer padded with NBSP returns "".
+func composerContent(pane string) string {
 	var composer string
 	for _, line := range strings.Split(pane, "\n") {
 		if promptLine.MatchString(line) {
@@ -27,17 +35,20 @@ func Typing(pane string) bool {
 		}
 	}
 	if composer == "" {
-		return false
+		return ""
 	}
 	composer = StripDim(composer) // dim placeholder/ghost metni gercek yazi DEGIL (2026-07-10)
 	after := promptLine.ReplaceAllString(composer, "")
-	after = strings.Map(func(r rune) rune {
+	return stripSpace(after)
+}
+
+func stripSpace(s string) string {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
 			return -1
 		}
 		return r
-	}, after)
-	return after != ""
+	}, s)
 }
 
 var busyIndicator = regexp.MustCompile(`\(\s*\d+\s*[a-z]?\s*s?\s*[·•]|⏵`)
@@ -195,6 +206,11 @@ const (
 	composerQuietWindow  = 300 * time.Millisecond
 	composerSettleWindow = 400 * time.Millisecond
 	clientIdleWindow     = 2 * time.Second
+	// submitVerifyWindow is the pause between submitting and re-checking whether
+	// the composer actually cleared before pressing Enter again.
+	submitVerifyWindow = 300 * time.Millisecond
+	// submitRetries bounds the extra Enter keypresses after the first one.
+	submitRetries = 2
 )
 
 // readyToSend requires a stable empty composer and a short period without
@@ -267,16 +283,51 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 	// From this point onward, returning an error would leave the queue record
 	// pending and cause a duplicate paste on the next dispatch.
 	c.Sleep(composerSettleWindow)
-	pane, captureErr := c.CaptureAnsi(ctx, session)
-	activity, activityErr := c.clientActivity(ctx, session)
-	if captureErr != nil || activityErr != nil || !Typing(pane) {
-		return nil
-	}
-	if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
-		return nil
-	}
-	_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
+	c.submit(ctx, target, session, message)
 	return nil
+}
+
+// submit presses Enter to send the freshly injected message, then verifies the
+// composer actually cleared and, if not, presses Enter again (bounded). Under
+// load Claude Code's paste detector can fold the injecting text and the Enter
+// into a single PTY read and treat the trailing newline as pasted content
+// instead of a submit, leaving the message stuck in the composer. A later,
+// separately-read Enter submits it cleanly.
+//
+// The retries never re-inject the text — only the Enter keypress repeats — so
+// the operation stays at-most-once. Enter is pressed only while the live
+// composer STILL holds exactly our message and no attached client has been
+// active in the settle window, so a user who started editing is never
+// disturbed and their partial input is never submitted.
+func (c *Client) submit(ctx context.Context, target, session, message string) {
+	want := stripSpace(message)
+	for attempt := 0; attempt <= submitRetries; attempt++ {
+		pane, captureErr := c.CaptureAnsi(ctx, session)
+		activity, activityErr := c.clientActivity(ctx, session)
+		if captureErr != nil || activityErr != nil {
+			return
+		}
+		if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
+			// A user touched the attached client; leave their composer alone.
+			return
+		}
+		if attempt == 0 {
+			// The injected message is sitting in the composer; an empty
+			// composer means it already submitted (or a paste-chip replaced
+			// it, handled by the Typing check).
+			if !Typing(pane) {
+				return
+			}
+		} else if composerContent(pane) != want {
+			// Either it submitted (composer cleared) or the content no longer
+			// matches ours (user edited it). Never press Enter on foreign text.
+			return
+		}
+		_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
+		if attempt < submitRetries {
+			c.Sleep(submitVerifyWindow)
+		}
+	}
 }
 
 type OpenOptions struct {

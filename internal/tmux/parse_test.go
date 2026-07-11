@@ -108,13 +108,16 @@ func TestSendWaitsForStableEmptyComposer(t *testing.T) {
 }
 
 func TestSendSettlesLargePasteBeforeSubmitting(t *testing.T) {
+	// The trailing "❯ \n" capture/activity pair is the post-Enter verification
+	// pass added by the submit-retry logic: composer cleared, so no retry.
 	h := &sendHarness{
 		captures: []string{
 			"❯ \n",
 			"❯ \n",
 			"❯ [Pasted text #1 +2 lines]\n",
+			"❯ \n",
 		},
-		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
 	if err := testClient(h).Send(context.Background(), "target", "line one\nline two"); err != nil {
 		t.Fatal(err)
@@ -122,6 +125,102 @@ func TestSendSettlesLargePasteBeforeSubmitting(t *testing.T) {
 	if len(h.mutations) != 3 || !strings.HasPrefix(h.mutations[0], "load-buffer ") ||
 		!strings.HasPrefix(h.mutations[1], "paste-buffer ") || h.mutations[2] != "send-keys -t =target: Enter" {
 		t.Fatalf("mutations=%v", h.mutations)
+	}
+}
+
+func countEnter(mutations []string) int {
+	n := 0
+	for _, m := range mutations {
+		if m == "send-keys -t =target: Enter" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestSendRetriesEnterWhenComposerStillHoldsMessage(t *testing.T) {
+	// Paste detection ate the first Enter: "/compact" is still in the composer.
+	// A second Enter submits it; the third verification sees an empty composer.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n",         // readyToSend pass 1
+			"❯ \n",         // readyToSend pass 2
+			"❯ /compact\n", // post-inject: message present -> Enter #1
+			"❯ /compact\n", // still stuck -> Enter #2 (retry)
+			"❯ \n",         // cleared -> stop
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 2 {
+		t.Fatalf("expected 2 Enter presses, got %d: %v", got, h.mutations)
+	}
+	// Only one text injection ever — retries never re-inject.
+	inject := 0
+	for _, m := range h.mutations {
+		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
+			inject++
+		}
+	}
+	if inject != 1 {
+		t.Fatalf("message was re-injected: %v", h.mutations)
+	}
+}
+
+func TestSendRetryStopsAtBound(t *testing.T) {
+	// Composer never clears; retries are bounded to 1 initial + 2 retries.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n",
+			"❯ /compact\n", "❯ /compact\n", "❯ /compact\n",
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 3 {
+		t.Fatalf("expected 3 Enter presses (1+2 bound), got %d: %v", got, h.mutations)
+	}
+}
+
+func TestSendRetryStopsWhenUserEditsAfterInjection(t *testing.T) {
+	// After the first Enter the composer content changed to something that is
+	// not our message: the user is editing, so no further Enter is pressed.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n",
+			"❯ /compact\n",              // Enter #1
+			"❯ /compact and user text\n", // differs from ours -> stop, no Enter #2
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected 1 Enter press, got %d: %v", got, h.mutations)
+	}
+}
+
+func TestSendRetryStopsWhenClientActiveAfterInjection(t *testing.T) {
+	// A recent attached-client activity between the first and second Enter must
+	// abort the retry even though our message is still present.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n",
+			"❯ /compact\n", // Enter #1 (activity old)
+			"❯ /compact\n", // still present but activity now recent -> stop
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t1000\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected 1 Enter press, got %d: %v", got, h.mutations)
 	}
 }
 

@@ -42,6 +42,57 @@ func composerContent(pane string) string {
 	return stripSpace(after)
 }
 
+// composerTrail inspects the rendered lines between the final composer line
+// (last ❯/› prompt) and the bottom border of the composer box (a run of ─/━).
+// It reports how many trailing EMPTY lines sit there — each one is a literal
+// newline in the composer, the signature of a paste-detected Enter. A long
+// single-line message that merely WRAPS renders non-empty continuation lines;
+// any non-empty line in the gap sets foreign instead, because it may be user
+// text or wrap and must never be backspaced or submitted. found is false when
+// no border follows the prompt (unfamiliar UI); callers should then fall back
+// to the plain behavior.
+func composerTrail(pane string) (empty int, foreign, found bool) {
+	lines := strings.Split(pane, "\n")
+	last := -1
+	for i, line := range lines {
+		if promptLine.MatchString(line) {
+			last = i
+		}
+	}
+	if last < 0 {
+		return 0, false, false
+	}
+	var gap []string
+	for _, line := range lines[last+1:] {
+		s := stripSpace(StripDim(line))
+		if isComposerBorder(s) {
+			found = true
+			break
+		}
+		gap = append(gap, s)
+	}
+	if !found {
+		return 0, false, false
+	}
+	for _, s := range gap {
+		if s != "" {
+			return 0, true, true
+		}
+	}
+	return len(gap), false, true
+}
+
+func isComposerBorder(s string) bool {
+	n := 0
+	for _, r := range s {
+		if r != '─' && r != '━' {
+			return false
+		}
+		n++
+	}
+	return n >= 3
+}
+
 func stripSpace(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
@@ -211,6 +262,11 @@ const (
 	submitVerifyWindow = 300 * time.Millisecond
 	// submitRetries bounds the extra Enter keypresses after the first one.
 	submitRetries = 2
+	// submitBackspaceDelay separates the BSpace presses of a multiline recovery.
+	submitBackspaceDelay = 150 * time.Millisecond
+	// submitBackspaceMax caps how many trailing newlines a recovery will delete;
+	// more than that is not a state our own keypresses could have created.
+	submitBackspaceMax = 5
 )
 
 // readyToSend requires a stable empty composer and a short period without
@@ -288,27 +344,32 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 }
 
 // submit presses Enter to send the freshly injected message, then verifies the
-// composer actually cleared and, if not, presses Enter again (bounded). Under
-// load Claude Code's paste detector can fold the injecting text and the Enter
-// into a single PTY read and treat the trailing newline as pasted content
-// instead of a submit, leaving the message stuck in the composer. A later,
-// separately-read Enter submits it cleanly.
+// composer actually cleared. Under load Claude Code's paste detector can fold
+// the injecting text and the Enter into a single PTY read and treat the
+// trailing newline as pasted content instead of a submit, leaving the message
+// stuck in a now-MULTILINE composer ("/compact" plus a literal trailing
+// newline). On current builds a later, separately-read Enter submits that
+// state; on older long-running builds every further Enter only appends another
+// newline. submit therefore distinguishes the two verified states:
 //
-// The retries never re-inject the text — only the Enter keypress repeats — so
-// the operation stays at-most-once. Enter is pressed only while the live
-// composer STILL holds exactly our message and no attached client has been
-// active in the settle window, so a user who started editing is never
-// disturbed and their partial input is never submitted.
+//   - composer still holds exactly our message on a single line: press Enter
+//     again (bounded by submitRetries).
+//   - composer holds our message plus trailing EMPTY lines before the box
+//     border: do NOT press Enter; delete one newline per empty line with
+//     BSpace, re-verify the composer is single-line and still exactly our
+//     message, and only then press Enter once. One recovery attempt total; if
+//     the BSpaces were ignored (old-build vim insert boundary) give up
+//     silently — ambiguity resolves to delivered, as before.
+//
+// The retries never re-inject the text — only keypresses repeat — so the
+// operation stays at-most-once. No key is ever sent while the composer content
+// differs from our message or an attached client showed recent activity, so a
+// user who started editing is never disturbed and their input never mangled.
 func (c *Client) submit(ctx context.Context, target, session, message string) {
 	want := stripSpace(message)
 	for attempt := 0; attempt <= submitRetries; attempt++ {
-		pane, captureErr := c.CaptureAnsi(ctx, session)
-		activity, activityErr := c.clientActivity(ctx, session)
-		if captureErr != nil || activityErr != nil {
-			return
-		}
-		if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
-			// A user touched the attached client; leave their composer alone.
+		pane, ok := c.composerStable(ctx, session)
+		if !ok {
 			return
 		}
 		if attempt == 0 {
@@ -318,16 +379,74 @@ func (c *Client) submit(ctx context.Context, target, session, message string) {
 			if !Typing(pane) {
 				return
 			}
-		} else if composerContent(pane) != want {
-			// Either it submitted (composer cleared) or the content no longer
-			// matches ours (user edited it). Never press Enter on foreign text.
-			return
+		} else {
+			if composerContent(pane) != want {
+				// Either it submitted (composer cleared) or the content no
+				// longer matches ours (user edited it). Never press Enter on
+				// foreign text.
+				return
+			}
+			empty, foreign, found := composerTrail(pane)
+			if foreign {
+				return
+			}
+			if found && empty > 0 {
+				// Multiline-stuck: Enter would only append newlines here.
+				// One recovery attempt total, and never for a newline count
+				// our own keypresses could not have produced.
+				if empty > submitBackspaceMax {
+					return
+				}
+				if c.recoverTrailingNewlines(ctx, target, session, want, empty) {
+					// Verified single-line composer holding exactly our
+					// message: one final Enter, then stop either way.
+					_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
+				}
+				return
+			}
 		}
 		_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
 		if attempt < submitRetries {
 			c.Sleep(submitVerifyWindow)
 		}
 	}
+}
+
+// composerStable captures the pane and reports false on any error or when an
+// attached client showed keyboard activity inside the idle window — the signal
+// to abort all further keypresses and leave the composer to its user.
+func (c *Client) composerStable(ctx context.Context, session string) (string, bool) {
+	pane, captureErr := c.CaptureAnsi(ctx, session)
+	activity, activityErr := c.clientActivity(ctx, session)
+	if captureErr != nil || activityErr != nil {
+		return "", false
+	}
+	if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
+		return "", false
+	}
+	return pane, true
+}
+
+// recoverTrailingNewlines deletes count literal newlines from the end of the
+// composer with individual BSpace presses, then verifies the composer is a
+// single line again and still holds exactly want. It returns true only in that
+// fully verified state; any other outcome (BSpace ignored by an old build,
+// content changed, client activity, capture error) returns false so the caller
+// gives up without sending Enter.
+func (c *Client) recoverTrailingNewlines(ctx context.Context, target, session, want string, count int) bool {
+	for i := 0; i < count; i++ {
+		_, _ = c.run(ctx, nil, "send-keys", "-t", target, "BSpace")
+		c.Sleep(submitBackspaceDelay)
+	}
+	pane, ok := c.composerStable(ctx, session)
+	if !ok {
+		return false
+	}
+	if composerContent(pane) != want {
+		return false
+	}
+	empty, foreign, found := composerTrail(pane)
+	return found && !foreign && empty == 0
 }
 
 type OpenOptions struct {

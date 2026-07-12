@@ -90,6 +90,32 @@ func codexPasteChip(pane string) bool {
 	return codexChip.MatchString(b.String())
 }
 
+// codexBusyQueuePhrase is the dim footer affordance a BUSY Codex renders under
+// the composer: while a turn is running, Enter does NOT submit (it only expands
+// the paste chip) and the message must instead be pushed into Codex's OWN native
+// queue with Tab. The footer reads "tab to queue message".
+const codexBusyQueuePhrase = "tab to queue message"
+
+// codexBusyQueue reports whether the pane shows Codex's busy-composer queue
+// affordance, meaning submit() must press Tab (native-queue) rather than Enter.
+//
+// The phrase is matched on the RAW pane (it is dim-rendered, and StripDim would
+// delete it), then gated against false positives: the affordance is a dim footer
+// line, so it disappears under StripDim. A user message that merely contains the
+// literal words "tab to queue message" is NOT dim, survives StripDim, and is
+// therefore rejected. (Codex hides large pastes behind a chip, so such text can
+// only reach the composer as a small literal message — still guarded here.)
+// Codex-only by construction: Claude never renders this phrase, so a Claude
+// target can never be sent Tab.
+func codexBusyQueue(pane string) bool {
+	if !strings.Contains(pane, codexBusyQueuePhrase) {
+		return false
+	}
+	// Dim footer -> removed by StripDim. If it survives, it is literal composer
+	// content (a user message), not the affordance: reject.
+	return !strings.Contains(StripDim(pane), codexBusyQueuePhrase)
+}
+
 // composerHoldsMessage reports whether the composer still holds exactly our
 // unsubmitted message: either the literal text (space-collapsed match) or the
 // Codex large-paste chip that stands in for it. When true, pressing Enter again
@@ -428,6 +454,29 @@ func (c *Client) submit(ctx context.Context, target, session, message string) {
 		pane, ok := c.composerStable(ctx, session)
 		if !ok {
 			return
+		}
+		if codexBusyQueue(pane) {
+			// TOCTOU: the target went BUSY after Dispatch's idle check and our
+			// paste. On a busy Codex, Enter never submits (it only expands the
+			// chip); the message must be pushed into Codex's own native queue
+			// with Tab. This branch takes precedence over the Enter/BSpace paths
+			// so Enter is never sent while the affordance is present.
+			_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Tab")
+			c.Sleep(submitVerifyWindow)
+			next, ok := c.composerStable(ctx, session)
+			if !ok {
+				return
+			}
+			if !Typing(next) && !codexPasteChip(next) {
+				// Composer cleared: the message moved into Codex's queue.
+				// Tab-queuing is a real delivery, so returning here (Send -> nil)
+				// keeps the msgq "delivered" mark correct.
+				return
+			}
+			// Still holding our paste: retry Tab, bounded by the loop. If it
+			// never clears we give up silently at the bound WITHOUT ever
+			// falling through to Enter (ambiguity resolves to delivered).
+			continue
 		}
 		if attempt == 0 {
 			// The injected message is sitting in the composer; an empty

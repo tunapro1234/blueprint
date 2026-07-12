@@ -61,7 +61,38 @@ const (
 	expandedChip = "\x1b[1m›\x1b[0m \x1b[38;5;6m[Pasted Content 1024\x1b[39m\n  \x1b[38;5;6mchars]\x1b[39mAAAAAAAAAAAAAAAAAAAA\n  gpt-5.6-sol low · /tmp\n"
 	// Empty composer shows the dim ghost placeholder, stripped by StripDim.
 	ghostComposer = "\x1b[1m›\x1b[0m \x1b[2mExplain this codebase\x1b[22m\n  gpt-5.6-sol low · /tmp\n"
+	// A BUSY Codex holding our large paste: the "Working" spinner, the chip on
+	// the prompt line, and the DIM "tab to queue message" footer affordance.
+	// Real capture bytes (probot-builder-worker, Codex v0.144.x): the affordance
+	// is dim-styled (\x1b[2m…\x1b[0m), so StripDim removes it.
+	busyQueueChip = "\x1b[2mWorking (12s · esc to interrupt)\x1b[0m\n" +
+		"\x1b[0;1m›\x1b[0m \x1b[38;5;6m[Pasted Content 1021 chars]\x1b[39mopup'in yildizi siparis akisi.\n" +
+		"  \x1b[2mtab to queue message\x1b[0m                                      \x1b[2m30% context left\x1b[0m\n"
 )
+
+func TestCodexBusyQueueDetection(t *testing.T) {
+	// True on the real busy affordance bytes.
+	if !codexBusyQueue(busyQueueChip) {
+		t.Fatal("busy Codex queue affordance not detected")
+	}
+	// False: idle Codex chip has no footer affordance.
+	if codexBusyQueue(collapsedChip) || codexBusyQueue(expandedChip) {
+		t.Fatal("idle Codex chip reported as busy-queue affordance")
+	}
+	// False: a normal idle composer.
+	if codexBusyQueue(ghostComposer) || codexBusyQueue("output\n  ›   \t\n") {
+		t.Fatal("idle composer reported as busy-queue affordance")
+	}
+	// False: a Claude busy pane (never renders the phrase).
+	if codexBusyQueue("✻ Working… (23s · Esc to interrupt)\n❯ \n") {
+		t.Fatal("Claude busy pane reported as busy-queue affordance")
+	}
+	// False-positive guard: a message whose inline (non-dim) text contains the
+	// literal words survives StripDim and must NOT trigger.
+	if codexBusyQueue("\x1b[1m›\x1b[0m please tab to queue message for me later\n") {
+		t.Fatal("literal inline text reported as busy-queue affordance")
+	}
+}
 
 func TestCodexPasteChipDetection(t *testing.T) {
 	// Both live render regimes count as "composer still holds our paste".
@@ -261,6 +292,68 @@ func TestSendStopsAfterCodexChipSubmits(t *testing.T) {
 	}
 	if got := countEnter(h.mutations); got != 1 {
 		t.Fatalf("expected exactly 1 Enter press, got %d: %v", got, h.mutations)
+	}
+}
+
+func TestSendTabQueuesOnBusyCodex(t *testing.T) {
+	// TOCTOU: the Codex went BUSY after readyToSend and the paste. On a busy
+	// Codex, Enter never submits; submit() must press Tab exactly once to move
+	// the paste into Codex's native queue, and stop once the composer clears.
+	// No Enter may ever be sent while the affordance is present.
+	h := &sendHarness{
+		captures: []string{
+			"› \n", "› \n", // readyToSend
+			busyQueueChip, // post-inject: busy affordance -> Tab (native-queue)
+			ghostComposer, // queued, composer cleared -> stop
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "a very large pasted message"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countKey(h.mutations, "Tab"); got != 1 {
+		t.Fatalf("expected exactly 1 Tab press, got %d: %v", got, h.mutations)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("expected NO Enter while busy affordance present, got %d: %v", got, h.mutations)
+	}
+	// At-most-once: the text is injected exactly once, never re-pasted.
+	inject := 0
+	for _, m := range h.mutations {
+		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
+			inject++
+		}
+	}
+	if inject != 1 {
+		t.Fatalf("message was re-injected: %v", h.mutations)
+	}
+}
+
+func TestSendTabGivesUpWhenAffordancePersists(t *testing.T) {
+	// The affordance never clears (Tab somehow ineffective): submit() presses Tab
+	// bounded by the retry count, then gives up silently — never falling through
+	// to Enter while the busy affordance is present. Each attempt re-captures at
+	// the top and again after Tab, so 3 attempts consume 6 busy captures.
+	busy := busyQueueChip
+	h := &sendHarness{
+		captures: []string{
+			"› \n", "› \n", // readyToSend
+			busy, busy, busy, busy, busy, busy, // 3 attempts (1+2 bound), 2 captures each
+		},
+		activities: []string{
+			"target\t900\n", "target\t900\n",
+			"target\t900\n", "target\t900\n", "target\t900\n",
+			"target\t900\n", "target\t900\n", "target\t900\n",
+		},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "a very large pasted message"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("expected NO Enter ever, got %d: %v", got, h.mutations)
+	}
+	if got := countKey(h.mutations, "Tab"); got != 3 {
+		t.Fatalf("expected 3 Tab presses (1+2 bound), got %d: %v", got, h.mutations)
 	}
 }
 

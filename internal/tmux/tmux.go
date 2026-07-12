@@ -42,6 +42,63 @@ func composerContent(pane string) string {
 	return stripSpace(after)
 }
 
+var codexChip = regexp.MustCompile(`\[Pasted Content\s+\d+\s+chars\]`)
+
+// codexPasteChip reports whether Codex's large-paste placeholder chip is present
+// in the composer. Codex replaces a large (>~1024 char) bracketed paste with a
+// "[Pasted Content N chars]" chip instead of rendering the literal text, so the
+// space-collapsed composerContent can never equal the literal message and
+// submit()'s retry guard would otherwise bail without pressing Enter again. This
+// detector lets submit() recognize the composer still holds OUR own unsubmitted
+// paste so it keeps pressing Enter until the composer clears.
+//
+// Live-observed Codex mechanics (v0.144.x), which drive the shape of this
+// matcher:
+//   - A fresh large paste renders as the COLLAPSED chip "› [Pasted Content 1024
+//     chars]" on a single line (the count is capped at 1024 and is unreliable —
+//     a 1216- and a 2000-char paste both report 1024 — so it is matched only as
+//     \d+, never compared to len(message)).
+//   - The FIRST Enter does NOT submit; it EXPANDS the chip, revealing the >1024
+//     overflow tail after the label. The styled chip label then WRAPS across two
+//     rendered rows (".. Content 1024" / "chars] <overflow…>"), so the label is
+//     no longer a single line and the trailing prompt line is not the whole chip.
+//   - A FURTHER Enter submits the expanded paste and clears the composer.
+//
+// To count both the collapsed and expanded/wrapped forms as "holds our paste",
+// detection joins every rendered row from the final prompt line to the end of the
+// pane (composer + overflow + status line, never the transcript above), strips
+// dim/ANSI and the prompt marker, and matches the chip label anywhere with
+// whitespace-tolerant spacing (\s+) so a wrap splitting "1024␤chars]" still
+// matches. A message that merely contains the word "Pasted" lacks the bracketed
+// "[Pasted Content N chars]" form and does not match.
+func codexPasteChip(pane string) bool {
+	lines := strings.Split(pane, "\n")
+	last := -1
+	for i, line := range lines {
+		if promptLine.MatchString(line) {
+			last = i
+		}
+	}
+	if last < 0 {
+		return false
+	}
+	var b strings.Builder
+	for _, line := range lines[last:] {
+		b.WriteString(promptLine.ReplaceAllString(StripDim(line), ""))
+		b.WriteByte(' ') // a wrap between rows is whitespace, not a join
+	}
+	return codexChip.MatchString(b.String())
+}
+
+// composerHoldsMessage reports whether the composer still holds exactly our
+// unsubmitted message: either the literal text (space-collapsed match) or the
+// Codex large-paste chip that stands in for it. When true, pressing Enter again
+// is safe; when false the composer either cleared (submitted) or a user edited
+// it, and no key may be sent.
+func composerHoldsMessage(pane, want string) bool {
+	return composerContent(pane) == want || codexPasteChip(pane)
+}
+
 // composerTrail inspects the rendered lines between the final composer line
 // (last ❯/› prompt) and the bottom border of the composer box (a run of ─/━).
 // It reports how many trailing EMPTY lines sit there — each one is a literal
@@ -380,10 +437,11 @@ func (c *Client) submit(ctx context.Context, target, session, message string) {
 				return
 			}
 		} else {
-			if composerContent(pane) != want {
+			if !composerHoldsMessage(pane, want) {
 				// Either it submitted (composer cleared) or the content no
 				// longer matches ours (user edited it). Never press Enter on
-				// foreign text.
+				// foreign text. A Codex large-paste chip standing in for our
+				// literal message still counts as holding our message.
 				return
 			}
 			empty, foreign, found := composerTrail(pane)

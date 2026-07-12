@@ -51,6 +51,49 @@ func TestBusyRequiresLiveIndicator(t *testing.T) {
 	}
 }
 
+// Real ANSI capture bytes (Codex v0.144.x, capture-pane -e). U+203A prompt in
+// bold, chip label in colour 38;5;6, status line directly below (no composer
+// border under Codex, so composerTrail reports found=false).
+const (
+	collapsedChip = "\x1b[1m›\x1b[0m \x1b[38;5;6m[Pasted Content 1024 chars]\x1b[39m\n  gpt-5.6-sol low · /tmp\n"
+	// After the first Enter the chip expands and its label WRAPS across two rows,
+	// with the >1024 overflow tail (here "AAA") following it.
+	expandedChip = "\x1b[1m›\x1b[0m \x1b[38;5;6m[Pasted Content 1024\x1b[39m\n  \x1b[38;5;6mchars]\x1b[39mAAAAAAAAAAAAAAAAAAAA\n  gpt-5.6-sol low · /tmp\n"
+	// Empty composer shows the dim ghost placeholder, stripped by StripDim.
+	ghostComposer = "\x1b[1m›\x1b[0m \x1b[2mExplain this codebase\x1b[22m\n  gpt-5.6-sol low · /tmp\n"
+)
+
+func TestCodexPasteChipDetection(t *testing.T) {
+	// Both live render regimes count as "composer still holds our paste".
+	if !codexPasteChip(collapsedChip) {
+		t.Fatal("collapsed Codex paste chip not detected")
+	}
+	if !codexPasteChip(expandedChip) {
+		t.Fatal("expanded/wrapped Codex paste chip not detected")
+	}
+	// Varying digit counts (the reported count is capped/unreliable, so we only
+	// match \\d+, never len(message)).
+	if !codexPasteChip("› [Pasted Content 2000 chars]\n") {
+		t.Fatal("chip with different digit count not detected")
+	}
+	// Negatives.
+	if codexPasteChip(ghostComposer) {
+		t.Fatal("empty (ghost) composer reported as chip")
+	}
+	if codexPasteChip("output\n  ›   \t\n") {
+		t.Fatal("blank composer reported as chip")
+	}
+	if codexPasteChip("❯ real user text\n") {
+		t.Fatal("normal composer text reported as chip")
+	}
+	if codexPasteChip("❯ I just Pasted Content 5 chars into the box\n") {
+		t.Fatal("literal message merely containing 'Pasted' reported as chip")
+	}
+	if codexPasteChip("  gpt-5.6-sol low · /tmp\n") {
+		t.Fatal("Codex status line (no prompt) reported as chip")
+	}
+}
+
 func TestParseClientActivityUsesLatestMatchingClient(t *testing.T) {
 	got := parseClientActivity("other\t100\ntarget\t120\ntarget\t125\nbad\tnope\n", "target")
 	if got.Unix() != 125 {
@@ -166,6 +209,58 @@ func TestSendRetriesEnterWhenComposerStillHoldsMessage(t *testing.T) {
 	}
 	if inject != 1 {
 		t.Fatalf("message was re-injected: %v", h.mutations)
+	}
+}
+
+func TestSendRetriesEnterWhenCodexPasteChipHoldsMessage(t *testing.T) {
+	// A large paste renders as a chip, not literal text, so composerContent never
+	// equals the message. Live Codex mechanics: the first Enter EXPANDS the chip
+	// (label wraps, overflow tail appears) instead of submitting; a further Enter
+	// submits. The retry must recognize BOTH the collapsed and expanded forms as
+	// OUR unsubmitted paste and press Enter AGAIN rather than bailing.
+	h := &sendHarness{
+		captures: []string{
+			"› \n", "› \n", // readyToSend
+			collapsedChip, // post-inject: collapsed chip -> Enter #1 (expands)
+			expandedChip,  // expanded/wrapped chip -> Enter #2 (submits)
+			ghostComposer, // cleared -> stop
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "a very large pasted message"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 2 {
+		t.Fatalf("expected 2 Enter presses (chip retry), got %d: %v", got, h.mutations)
+	}
+	// At-most-once: the text is injected exactly once, never re-pasted.
+	inject := 0
+	for _, m := range h.mutations {
+		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
+			inject++
+		}
+	}
+	if inject != 1 {
+		t.Fatalf("message was re-injected: %v", h.mutations)
+	}
+}
+
+func TestSendStopsAfterCodexChipSubmits(t *testing.T) {
+	// Once an Enter submits the chip (composer returns to the empty ghost
+	// placeholder), no further Enter may be pressed.
+	h := &sendHarness{
+		captures: []string{
+			"› \n", "› \n", // readyToSend
+			collapsedChip, // post-inject: chip present -> Enter #1
+			ghostComposer, // submitted, composer cleared -> stop, no Enter #2
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "a very large pasted message"); err != nil {
+		t.Fatal(err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter press, got %d: %v", got, h.mutations)
 	}
 }
 

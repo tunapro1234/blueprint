@@ -716,6 +716,14 @@ func (a *app) message(args []string) error {
 	name, message := args[0], strings.Join(args[1:], " ")
 	queued, channelID, err := a.deliver(name, a.sender(), message)
 	if err != nil {
+		if errors.Is(err, bptmux.ErrNotAgent) {
+			// The pane is a shell, not an agent CLI: surface a clear error
+			// rather than dropping the message into a root prompt.
+			if cmd, cmdErr := a.tmux.PaneCommand(a.ctx, name); cmdErr == nil && cmd != "" {
+				return fmt.Errorf("target %s is not an agent CLI (%s)", name, cmd)
+			}
+			return fmt.Errorf("target %s is not an agent CLI", name)
+		}
 		return err
 	}
 	if !queued {
@@ -747,6 +755,37 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	return true, channelID, err
 }
 
+// deliveryTally accumulates per-target deliver() outcomes for the batch commands
+// (announce, compact). A non-agent target (ErrNotAgent) is recorded as a SKIP
+// with no hard error, so a single session that dropped to a shell neither fails
+// the whole batch nor has the message injected into its shell prompt.
+type deliveryTally struct {
+	sent     int
+	channels []string
+	skipped  int
+	errs     []error
+}
+
+// record buckets one deliver() result and reports whether it counted as a real
+// delivery (queued or sent), so callers can update per-target bookkeeping only
+// on success.
+func (t *deliveryTally) record(target string, queued bool, channelID string, err error) bool {
+	if err != nil {
+		if errors.Is(err, bptmux.ErrNotAgent) {
+			t.skipped++
+			return false
+		}
+		t.errs = append(t.errs, fmt.Errorf("%s: %w", target, err))
+		return false
+	}
+	if queued {
+		t.channels = append(t.channels, channelID)
+	} else {
+		t.sent++
+	}
+	return true
+}
+
 func (a *app) announce(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: bp announce <message...>")
@@ -761,27 +800,20 @@ func (a *app) announce(args []string) error {
 	}
 	targets := announcementTargets(fleet, states, sender)
 	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, strings.Join(args, " "))
-	sent := 0
-	channels := make([]string, 0)
-	var deliveryErrors []error
+	var tally deliveryTally
 	for _, target := range targets {
 		queued, channelID, deliveryErr := a.deliver(target, sender, message)
-		if deliveryErr != nil {
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s: %w", target, deliveryErr))
-			continue
-		}
-		if queued {
-			channels = append(channels, channelID)
-		} else {
-			sent++
-		}
+		tally.record(target, queued, channelID, deliveryErr)
 	}
-	fmt.Fprintf(a.out, "sent: %d, queued: %d", sent, len(channels))
-	if len(channels) > 0 {
-		fmt.Fprintf(a.out, " (%s)", strings.Join(channels, ", "))
+	fmt.Fprintf(a.out, "sent: %d, queued: %d", tally.sent, len(tally.channels))
+	if len(tally.channels) > 0 {
+		fmt.Fprintf(a.out, " (%s)", strings.Join(tally.channels, ", "))
+	}
+	if tally.skipped > 0 {
+		fmt.Fprintf(a.out, ", skipped non-agent: %d", tally.skipped)
 	}
 	fmt.Fprintln(a.out)
-	return errors.Join(deliveryErrors...)
+	return errors.Join(tally.errs...)
 }
 
 func announcementTargets(fleet book.Fleet, states map[string]book.State, sender string) []string {
@@ -999,40 +1031,35 @@ func (a *app) compact(args []string) error {
 		return nil
 	}
 
-	sent := 0
-	channels := make([]string, 0)
-	var deliveryErrors []error
+	var tally deliveryTally
 	now := time.Now().UTC()
 	updated := false
 	for _, target := range plan.Send {
 		queued, channelID, deliveryErr := a.deliver(target, sender, "/compact")
-		if deliveryErr != nil {
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("%s: %w", target, deliveryErr))
-			continue
+		if tally.record(target, queued, channelID, deliveryErr) {
+			lastCompact[target] = now
+			updated = true
 		}
-		if queued {
-			channels = append(channels, channelID)
-		} else {
-			sent++
-		}
-		lastCompact[target] = now
-		updated = true
 	}
 	if updated {
 		if err := saveCompactState(compactStatePath, lastCompact); err != nil {
-			deliveryErrors = append(deliveryErrors, fmt.Errorf("save compact state: %w", err))
+			tally.errs = append(tally.errs, fmt.Errorf("save compact state: %w", err))
 		}
 	}
 
-	fmt.Fprintf(a.out, "compact sent: %d, queued: %d", sent, len(channels))
-	if len(channels) > 0 {
-		fmt.Fprintf(a.out, " (%s)", strings.Join(channels, ", "))
+	fmt.Fprintf(a.out, "compact sent: %d, queued: %d", tally.sent, len(tally.channels))
+	if len(tally.channels) > 0 {
+		fmt.Fprintf(a.out, " (%s)", strings.Join(tally.channels, ", "))
 	}
-	fmt.Fprintf(a.out, ", skipped recent: %d, excluded: %d\n", len(plan.SkippedRecent), len(plan.Excluded))
+	fmt.Fprintf(a.out, ", skipped recent: %d, excluded: %d", len(plan.SkippedRecent), len(plan.Excluded))
+	if tally.skipped > 0 {
+		fmt.Fprintf(a.out, ", skipped non-agent: %d", tally.skipped)
+	}
+	fmt.Fprintln(a.out)
 	if len(plan.UnknownExcludes) > 0 {
 		fmt.Fprintf(a.out, "ignored unknown excludes: %s\n", strings.Join(plan.UnknownExcludes, ", "))
 	}
-	return errors.Join(deliveryErrors...)
+	return errors.Join(tally.errs...)
 }
 
 func (a *app) queueList(args []string) error {

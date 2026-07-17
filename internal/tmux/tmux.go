@@ -258,6 +258,18 @@ func (c *Client) Capture(ctx context.Context, session string) (string, error) {
 	return string(out), err
 }
 
+// PaneCommand returns the foreground command (#{pane_current_command}) of the
+// pane that keystrokes would be delivered to. It targets "=<session>:" — exactly
+// the pane Send types into — so the agent check matches the actual send target,
+// not merely the session's first pane (as Commands' list-panes does).
+func (c *Client) PaneCommand(ctx context.Context, session string) (string, error) {
+	out, err := c.run(ctx, nil, "display-message", "-p", "-t", "="+session+":", "#{pane_current_command}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (c *Client) HasSession(ctx context.Context, session string) bool {
 	_, err := c.run(ctx, nil, "has-session", "-t", "="+session)
 	return err == nil
@@ -312,6 +324,28 @@ func (c *Client) IsBusy(ctx context.Context, session string) (bool, error) {
 }
 
 var ErrTyping = errors.New("composer is not empty")
+
+// ErrNotAgent is returned by Send when the target pane is not running an agent
+// CLI (e.g. it dropped to a root shell). It signals the caller to skip delivery
+// rather than inject the message text into a shell prompt.
+var ErrNotAgent = errors.New("target pane is not an agent CLI")
+
+// IsAgentCommand reports whether cmd (a tmux pane's #{pane_current_command}) is
+// one of the agent runtimes we may safely inject keystrokes into: "claude",
+// "codex", or "bwrap" (a sandboxed Codex runs inside bubblewrap and reports
+// "bwrap"; a --yolo/no-sandbox Codex reports "codex" — both are accepted).
+// Everything else — an interactive shell ("zsh"/"bash"/"sh"/"dash"/"fish"),
+// "tmux", a bare "node", or the empty string — is NOT an agent and must never
+// receive a delivered message. The whitelist is deliberately a small, documented
+// set: only known agent runtimes are allowed.
+func IsAgentCommand(cmd string) bool {
+	switch cmd {
+	case "claude", "codex", "bwrap":
+		return true
+	default:
+		return false
+	}
+}
 
 func parseClientActivity(output, session string) time.Time {
 	var latest time.Time
@@ -393,6 +427,18 @@ var bufferSequence uint64
 // attached client during the settle window, their mixed composer is left alone
 // and Enter is deliberately not sent.
 func (c *Client) Send(ctx context.Context, session, message string) error {
+	// Guard first: never inject keystrokes into a pane that is not running an
+	// agent CLI. A session that dropped to a root shell (zsh) would otherwise
+	// receive the message text at its shell prompt. Send is the single delivery
+	// chokepoint, so checking here covers every path (deliver->Send,
+	// msgq.Dispatch->Send). The check targets the exact pane keystrokes go to.
+	cmd, err := c.PaneCommand(ctx, session)
+	if err != nil {
+		return err
+	}
+	if !IsAgentCommand(cmd) {
+		return ErrNotAgent
+	}
 	ready, err := c.readyToSend(ctx, session)
 	if err != nil {
 		return err

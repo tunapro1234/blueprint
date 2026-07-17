@@ -266,6 +266,15 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			continue
 		}
 		if err := target.Send(ctx, message.To, message.Msg); err != nil {
+			if errors.Is(err, bptmux.ErrNotAgent) {
+				// The target dropped to a shell: leave the message PENDING (never
+				// lose it, never type into the shell) and report the skip. A later
+				// pass delivers it if the target becomes an agent again.
+				if report != nil {
+					report(fmt.Sprintf("msgq: %s -> %s skipped: target not an agent", message.ID, message.To))
+				}
+				continue
+			}
 			if errors.Is(err, bptmux.ErrTyping) {
 				continue
 			}

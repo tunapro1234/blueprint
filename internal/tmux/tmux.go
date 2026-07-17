@@ -617,7 +617,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if _, err := c.run(ctx, nil, "new-session", "-d", "-s", session, "-c", dir); err != nil {
 		return err
 	}
-	command := "claude --dangerously-skip-permissions"
+	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
+	// hostname yerine agent adi gorunur).
+	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions"
 	if opts.Resume {
 		command += " -c"
 	}
@@ -717,4 +719,11 @@ func (c *Client) Commands(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return commands, nil
+}
+
+// PressEnter sends a bare Enter key to the session. Used to dismiss
+// harmless modal menus (e.g. the /remote-control "Continue" dialog).
+func (c *Client) PressEnter(ctx context.Context, session string) error {
+	_, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
+	return err
 }

@@ -1375,6 +1375,13 @@ func (a *app) remote(args []string) error {
 			skipped++
 			continue
 		}
+		// Onceki turdan asili kalmis RC menusu pane'i "mesgul" gosterir ve
+		// gonderimi kuyruga dusurur — once kapat.
+		if pane, err := a.tmux.Capture(a.ctx, name); err == nil &&
+			strings.Contains(pane, "Enter to select") && strings.Contains(pane, "Disconnect this session") {
+			_ = a.tmux.PressEnter(a.ctx, name)
+			time.Sleep(time.Second)
+		}
 		queued, channelID, err := a.deliver(name, sender, "/remote-control")
 		if err != nil {
 			fmt.Fprintf(a.out, "  hata   %-28s %v\n", name, err)
@@ -1405,6 +1412,31 @@ func (a *app) remote(args []string) error {
 					urls[p.name] = strings.TrimRight(matches[len(matches)-1], ".,)")
 				}
 			}
+		}
+		// RC zaten aktif olan oturumlarda komut bir menu acar (Disconnect/QR/Continue,
+		// imlec Continue'da) ve Enter bekler. Menu URL'den GEC render olabildigi icin
+		// kapatma ayri bir supurme: menu goren herkese Enter, kalan var mi diye tekrar.
+		// Ust uste ikinci bir submit gec de menu acabildigi icin: 2 ardisik temiz
+		// tur gorene kadar supur (en fazla ~24sn).
+		clean := 0
+		for tries := 0; tries < 12 && clean < 2; tries++ {
+			dismissed := false
+			for _, p := range sent {
+				pane, err := a.tmux.Capture(a.ctx, p.name)
+				if err != nil {
+					continue
+				}
+				if strings.Contains(pane, "Enter to select") && strings.Contains(pane, "Disconnect this session") {
+					_ = a.tmux.PressEnter(a.ctx, p.name)
+					dismissed = true
+				}
+			}
+			if dismissed {
+				clean = 0
+			} else {
+				clean++
+			}
+			time.Sleep(2 * time.Second)
 		}
 		for _, p := range sent {
 			if url := urls[p.name]; url != "" {

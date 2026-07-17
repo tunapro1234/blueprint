@@ -647,3 +647,28 @@ func (c *Client) DisplaySession(ctx context.Context) (string, error) {
 	out, err := c.run(ctx, nil, "display-message", "-p", "#S")
 	return strings.TrimSpace(string(out)), err
 }
+
+// Commands maps each session to the foreground command of its first pane
+// (e.g. "claude", "codex", "bwrap", "zsh"). Used to tell Claude sessions
+// apart from Codex ones before sending Claude-only slash commands.
+func (c *Client) Commands(ctx context.Context) (map[string]string, error) {
+	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}")
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	commands := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 || strings.TrimSpace(fields[0]) == "" {
+			continue
+		}
+		if _, seen := commands[fields[0]]; !seen {
+			commands[fields[0]] = strings.TrimSpace(fields[1])
+		}
+	}
+	return commands, nil
+}

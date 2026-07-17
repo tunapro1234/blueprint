@@ -40,6 +40,7 @@ bp close <name>
 bp msg <name> <message...>
 bp announce <message...>
 bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run]
+bp remote [<name>...]        # /remote-control ac/goster (varsayilan: tum acik claude agentlari)
 bp q | bp qstat <channel-id>
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] <message...>
@@ -92,6 +93,8 @@ func (a *app) run(args []string) error {
 		return a.announce(args[1:])
 	case "compact":
 		return a.compact(args[1:])
+	case "remote":
+		return a.remote(args[1:])
 	case "q":
 		return a.queueList(args[1:])
 	case "qstat":
@@ -1300,5 +1303,90 @@ func (a *app) daemon(args []string) error {
 	defer stop()
 	service := daemon.New(log.New(a.err, "blueprint: ", log.LstdFlags))
 	service.Run(ctx)
+	return nil
+}
+
+var remoteURLPattern = regexp.MustCompile(`https://claude\.ai/code/\S+`)
+
+// remote sends /remote-control to Claude sessions so each one gets (or re-prints)
+// its claude.ai/code URL. Idempotent: an already-connected session just reports
+// "is active" with the same URL. Codex sessions are skipped (no such command).
+func (a *app) remote(args []string) error {
+	sender := a.sender()
+	var targets []string
+	if len(args) > 0 {
+		targets = args
+	} else {
+		fleet, states, err := a.fleet()
+		if err != nil {
+			return err
+		}
+		for name := range fleet.Agents {
+			if state, ok := states[name]; ok && state.Alive {
+				targets = append(targets, name)
+			}
+		}
+		sort.Strings(targets)
+	}
+	commands, err := a.tmux.Commands(a.ctx)
+	if err != nil {
+		return err
+	}
+	type pending struct{ name string }
+	var sent []pending
+	queuedCount, skipped := 0, 0
+	for _, name := range targets {
+		if !a.tmux.HasSession(a.ctx, name) {
+			fmt.Fprintf(a.out, "  skip   %-28s oturum yok\n", name)
+			skipped++
+			continue
+		}
+		// Sadece claude panelerine gonder: codex bu komutu bilmez, shell'e (zsh/bash)
+		// yazmak root prompt'una metin dusurur.
+		if cmd := commands[name]; cmd != "claude" {
+			fmt.Fprintf(a.out, "  skip   %-28s claude oturumu degil (%s)\n", name, cmd)
+			skipped++
+			continue
+		}
+		queued, channelID, err := a.deliver(name, sender, "/remote-control")
+		if err != nil {
+			fmt.Fprintf(a.out, "  hata   %-28s %v\n", name, err)
+			skipped++
+			continue
+		}
+		if queued {
+			fmt.Fprintf(a.out, "  kuyruk %-28s mesgul, bosalinca gider (%s)\n", name, channelID)
+			queuedCount++
+			continue
+		}
+		sent = append(sent, pending{name})
+	}
+	if len(sent) > 0 {
+		urls := map[string]string{}
+		deadline := time.Now().Add(25 * time.Second) // baglanti kurulumu yavas olabiliyor
+		for time.Now().Before(deadline) && len(urls) < len(sent) {
+			time.Sleep(4 * time.Second)
+			for _, p := range sent {
+				if urls[p.name] != "" {
+					continue
+				}
+				pane, err := a.tmux.Capture(a.ctx, p.name)
+				if err != nil {
+					continue
+				}
+				if matches := remoteURLPattern.FindAllString(pane, -1); len(matches) > 0 {
+					urls[p.name] = strings.TrimRight(matches[len(matches)-1], ".,)")
+				}
+			}
+		}
+		for _, p := range sent {
+			if url := urls[p.name]; url != "" {
+				fmt.Fprintf(a.out, "  aktif  %-28s %s\n", p.name, url)
+			} else {
+				fmt.Fprintf(a.out, "  gonder %-28s URL gorunmedi (bp peek %s ile bak)\n", p.name, p.name)
+			}
+		}
+	}
+	fmt.Fprintf(a.out, "remote: %d gonderildi, %d kuyrukta, %d atlandi\n", len(sent), queuedCount, skipped)
 	return nil
 }

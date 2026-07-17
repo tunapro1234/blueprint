@@ -135,7 +135,7 @@ blueprint çatısına taşınır. Hedef yerleşim:
                               (eski resources/ yolları symlink)
   watch/                    ★ model_watch.py, reactions.py, reset_watch.py (+radar.json state)
                               (/srv/monitor/watch -> symlink)
-  dashboard/                ★ monitor.trasumanar.ai sitesi (index.html, gen.py, data.json)
+  dashboard/                ★ monitor.tunapro.xyz sitesi (index.html, gen.py, data.json)
                               nginx root buraya döner; /srv/monitor/site -> symlink
                               sahibi yine server-monitor-dash agent'ı (evi güncellenir)
   accounts/ state/

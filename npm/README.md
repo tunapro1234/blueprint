@@ -1,6 +1,6 @@
 # @tunapro/blueprint
 
-This package installs the native `bp` agent-infrastructure CLI for Linux or macOS on x64 or arm64. The postinstall script downloads the matching binary from [bp.trasumanar.ai](https://bp.trasumanar.ai), verifies it against the published SHA-256 checksum, and exposes it as `bp`.
+This package installs the native `bp` agent-infrastructure CLI for Linux or macOS on x64 or arm64. The postinstall script downloads the matching binary from [bp.tunapro.xyz](https://bp.tunapro.xyz), verifies it against the published SHA-256 checksum, and exposes it as `bp`.
 
 ```sh
 npm install -g @tunapro/blueprint

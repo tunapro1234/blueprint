@@ -98,7 +98,7 @@ install_client_binary() {
     client_platform
     install_dir="$HOME/.local/bin"
     target_binary="$install_dir/bp"
-    download_url="https://bp.trasumanar.ai/bp-$PLATFORM"
+    download_url="https://bp.tunapro.xyz/bp-$PLATFORM"
     temp_binary=$(mktemp "${TMPDIR:-/tmp}/bp.XXXXXX")
     trap 'rm -f "$temp_binary"' EXIT HUP INT TERM
 

@@ -19,10 +19,10 @@ if (!binary || !fs.existsSync(binary)) {
 
 Reinstall @tunapro/blueprint, or install it manually:
   mkdir -p ~/.local/bin
-  curl -fsSL https://bp.trasumanar.ai/${suffix} -o ~/.local/bin/bp
+  curl -fsSL https://bp.tunapro.xyz/${suffix} -o ~/.local/bin/bp
   chmod 755 ~/.local/bin/bp
 
-Verify it against https://bp.trasumanar.ai/checksums.txt and add ~/.local/bin to PATH.`);
+Verify it against https://bp.tunapro.xyz/checksums.txt and add ~/.local/bin to PATH.`);
   process.exit(1);
 }
 

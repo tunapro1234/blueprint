@@ -7,7 +7,7 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 
-const baseUrl = 'https://bp.trasumanar.ai';
+const baseUrl = 'https://bp.tunapro.xyz';
 
 function platformBinary() {
   const operatingSystems = { linux: 'linux', darwin: 'darwin' };

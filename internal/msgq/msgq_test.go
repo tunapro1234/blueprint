@@ -7,17 +7,23 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	bptmux "blueprint/internal/tmux"
 )
 
 type fakeTarget struct {
-	alive bool
-	pane  string
-	sent  []string
+	alive   bool
+	pane    string
+	sent    []string
+	sendErr error // when set, Send returns it instead of recording the delivery
 }
 
 func (f *fakeTarget) HasSession(context.Context, string) bool         { return f.alive }
 func (f *fakeTarget) Capture(context.Context, string) (string, error) { return f.pane, nil }
 func (f *fakeTarget) Send(_ context.Context, to, text string) error {
+	if f.sendErr != nil {
+		return f.sendErr
+	}
 	f.sent = append(f.sent, to+":"+text)
 	return nil
 }
@@ -101,6 +107,41 @@ func TestDispatchWaitsForTypingThenDelivers(t *testing.T) {
 	status, _ := q.Status(id)
 	if !strings.HasPrefix(status, "DELIVERED: target") {
 		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestDispatchLeavesNonAgentTargetPending(t *testing.T) {
+	// The target session exists and its composer is empty, but it dropped to a
+	// shell: Send returns ErrNotAgent. The message must stay PENDING (never lost,
+	// never typed into the shell) and a distinct skip line must be reported.
+	q := New(t.TempDir())
+	q.Now = time.Now
+	id, err := q.Enqueue("target", "sender", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: bptmux.ErrNotAgent}
+	var reports []string
+	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 0 {
+		t.Fatalf("message was sent to a non-agent target: %v", target.sent)
+	}
+	if _, err = os.Stat(filepath.Join(q.pending(), id+".json")); err != nil {
+		t.Fatalf("message did not stay pending: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); !os.IsNotExist(err) {
+		t.Fatalf("message must not be finished, stat err=%v", err)
+	}
+	found := false
+	for _, r := range reports {
+		if strings.Contains(r, "skipped: target not an agent") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a distinct non-agent skip report, got: %v", reports)
 	}
 }
 

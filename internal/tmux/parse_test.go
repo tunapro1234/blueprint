@@ -139,10 +139,20 @@ type sendHarness struct {
 	captures   []string
 	activities []string
 	mutations  []string
+	// command is what display-message reports for #{pane_current_command}. It
+	// defaults to "claude" so existing agent-path tests need not set it; set it
+	// to a shell name (e.g. "zsh") to exercise the non-agent guard.
+	command string
 }
 
 func (h *sendHarness) run(_ context.Context, _ []byte, args ...string) ([]byte, error) {
 	switch args[0] {
+	case "display-message":
+		cmd := h.command
+		if cmd == "" {
+			cmd = "claude"
+		}
+		return []byte(cmd + "\n"), nil
 	case "capture-pane":
 		value := h.captures[0]
 		h.captures = h.captures[1:]
@@ -164,6 +174,59 @@ func testClient(h *sendHarness) *Client {
 		Sleep: func(time.Duration) {},
 		Now:   func() time.Time { return time.Unix(1000, 0) },
 		exec:  h.run,
+	}
+}
+
+func TestIsAgentCommand(t *testing.T) {
+	for _, cmd := range []string{"claude", "codex", "bwrap"} {
+		if !IsAgentCommand(cmd) {
+			t.Errorf("IsAgentCommand(%q) = false, want true", cmd)
+		}
+	}
+	for _, cmd := range []string{"zsh", "bash", "sh", "dash", "fish", "tmux", "node", ""} {
+		if IsAgentCommand(cmd) {
+			t.Errorf("IsAgentCommand(%q) = true, want false", cmd)
+		}
+	}
+}
+
+func TestSendRejectsNonAgentPane(t *testing.T) {
+	// A pane that dropped to a shell must be rejected with ErrNotAgent BEFORE any
+	// paste/keystroke: no capture, no activity check, no mutation ever happens.
+	for _, cmd := range []string{"zsh", "bash", "sh", "dash", "fish", "tmux", "node"} {
+		h := &sendHarness{command: cmd}
+		err := testClient(h).Send(context.Background(), "target", "hello")
+		if !errors.Is(err, ErrNotAgent) {
+			t.Fatalf("command %q: err=%v, want ErrNotAgent", cmd, err)
+		}
+		if len(h.mutations) != 0 {
+			t.Fatalf("command %q: injected into non-agent pane: %v", cmd, h.mutations)
+		}
+	}
+}
+
+func TestSendProceedsForCodexAgentPane(t *testing.T) {
+	// A sandboxed Codex reports pane_current_command "bwrap"; the guard must let
+	// delivery proceed exactly as for "claude" — inject once, then Enter to submit.
+	h := &sendHarness{
+		command:    "bwrap",
+		captures:   []string{"› \n", "› \n", "› queued\n", "› \n"},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "queued"); err != nil {
+		t.Fatal(err)
+	}
+	inject := 0
+	for _, m := range h.mutations {
+		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
+			inject++
+		}
+	}
+	if inject != 1 {
+		t.Fatalf("expected exactly 1 injection, got: %v", h.mutations)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected 1 Enter press, got %d: %v", got, h.mutations)
 	}
 }
 

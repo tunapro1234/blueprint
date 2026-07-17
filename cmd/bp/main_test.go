@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +15,38 @@ import (
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/worktree"
 )
+
+func TestDeliveryTallyClassifiesNonAgentAsSkip(t *testing.T) {
+	var tally deliveryTally
+	// A real send (no error, not queued) counts as delivered.
+	if !tally.record("alpha", false, "", nil) {
+		t.Fatal("nil-error send should count as a delivery")
+	}
+	// A queued send records its channel and counts as delivered.
+	if !tally.record("beta", true, "q1", nil) {
+		t.Fatal("queued send should count as a delivery")
+	}
+	// A non-agent target (even when wrapped) is a SKIP, not a delivery or error.
+	if tally.record("gamma", false, "", fmt.Errorf("wrap: %w", bptmux.ErrNotAgent)) {
+		t.Fatal("ErrNotAgent must not count as a delivery")
+	}
+	// A genuine failure is a hard error.
+	if tally.record("delta", false, "", errors.New("boom")) {
+		t.Fatal("a real error must not count as a delivery")
+	}
+	if tally.sent != 1 {
+		t.Fatalf("sent=%d, want 1", tally.sent)
+	}
+	if len(tally.channels) != 1 || tally.channels[0] != "q1" {
+		t.Fatalf("channels=%v, want [q1]", tally.channels)
+	}
+	if tally.skipped != 1 {
+		t.Fatalf("skipped=%d, want 1", tally.skipped)
+	}
+	if len(tally.errs) != 1 || !strings.Contains(tally.errs[0].Error(), "delta") {
+		t.Fatalf("errs=%v, want one error mentioning delta", tally.errs)
+	}
+}
 
 func TestAnnouncementTargetsFollowHierarchy(t *testing.T) {
 	fleet := book.Fleet{

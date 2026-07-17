@@ -89,7 +89,7 @@ func (s *Service) Run(ctx context.Context) {
 			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
 		})
 	})
-	// Serve the owner's dashboard on loopback so nginx can proxy monitor.trasumanar.ai to it.
+	// Serve the owner's dashboard on loopback so nginx can proxy monitor.tunapro.xyz to it.
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

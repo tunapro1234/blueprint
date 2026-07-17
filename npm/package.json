@@ -7,7 +7,7 @@
     "type": "git",
     "url": "git+https://github.com/tunapro1234/blueprint.git"
   },
-  "homepage": "https://bp.trasumanar.ai",
+  "homepage": "https://bp.tunapro.xyz",
   "bin": {
     "bp": "bin/bp.js"
   },

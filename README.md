@@ -31,12 +31,12 @@ Removal refuses uncommitted changes unless `--force` is supplied.
 Mirror the monitor dashboard in a terminal with `bp monitor`. Detailed views
 are available as `bp monitor usage|cost|agents|projects|services|radar`. The
 CLI reads `/srv/monitor/site/data.json` when available and otherwise uses the
-configured `DASH_URL` (default `https://monitor.trasumanar.ai`).
+configured `DASH_URL` (default `https://monitor.tunapro.xyz`).
 
 Install from the product site:
 
 ```sh
-curl -fsSL https://bp.trasumanar.ai/install.sh | bash
+curl -fsSL https://bp.tunapro.xyz/install.sh | bash
 ```
 
 On the server, the installer links `/srv/blueprint/bp` into `/usr/local/bin`.

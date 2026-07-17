@@ -21,7 +21,7 @@ import (
 
 const (
 	DefaultPort     = 8787
-	DefaultURL      = "https://monitor.trasumanar.ai"
+	DefaultURL      = "https://monitor.tunapro.xyz"
 	DefaultSitePath = "/srv/monitor/site"
 	maxIndexSize    = 10 << 20
 )

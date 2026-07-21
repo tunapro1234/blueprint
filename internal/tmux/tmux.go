@@ -1,12 +1,15 @@
 package tmux
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -610,6 +613,90 @@ type OpenOptions struct {
 
 const onboarding = "Selam, sen '%s' agentisin (ismine gore calisirsin; proje detayini kullanici sonra verebilir). Bu COK-SERVISLI bir sunucu (nginx 80/443 public + Cloudflare, Docker+systemd: gitea, mail, probot, kitap...). Orchestrator=server-main, evi /srv/server-main. ONCE OKU: /srv/server-main/AGENT-ONBOARDING.md (server + PORT kurallari) ve /srv/server-main/agentbook.json (agentlar + iletisim). DIGER AGENTLARLA KONUSMA: tmux send-keys -t <hedef> -l '<mesaj>' + AYRI Enter. Model secimi + codex + subagent kurallari global CLAUDE.md'inde (otomatik yuklu) - uygula. UYARI1 ghost-text: soluk oneri gercek degil. UYARI2 vim modu: submit icin cogu zaman fazladan Enter. Okuyunca kisa 'hazirim' de."
 
+// mungeProjectPath replicates Claude Code's cwd -> project-dir encoding: every
+// byte that is not an ASCII letter or digit becomes '-' (so "/srv/probot-business"
+// -> "-srv-probot-business", and "/srv/kitap/.worktrees/x" -> "-srv-kitap--worktrees-x").
+func mungeProjectPath(dir string) string {
+	b := make([]byte, len(dir))
+	for i := 0; i < len(dir); i++ {
+		c := dir[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			b[i] = c
+		default:
+			b[i] = '-'
+		}
+	}
+	return string(b)
+}
+
+// claudeProjectsRoot is the directory where Claude Code stores per-cwd session logs.
+func claudeProjectsRoot() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".claude", "projects")
+	}
+	return "/root/.claude/projects"
+}
+
+// readCustomTitle returns the customTitle set for a Claude session file (via the
+// line-1 `{"type":"custom-title",...}` record bp writes with /rename). It reads a
+// bounded prefix so huge session logs stay cheap.
+func readCustomTitle(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for i := 0; i < 200 && scanner.Scan(); i++ {
+		line := scanner.Bytes()
+		if !bytes.Contains(line, []byte(`"custom-title"`)) {
+			continue
+		}
+		var rec struct {
+			Type        string `json:"type"`
+			CustomTitle string `json:"customTitle"`
+		}
+		if json.Unmarshal(line, &rec) == nil && rec.Type == "custom-title" {
+			return rec.CustomTitle, true
+		}
+	}
+	return "", false
+}
+
+// resumeSessionID finds the most recently modified Claude session under
+// projectsRoot for `dir` whose customTitle equals `agent`, returning that
+// session's id (the file's base name). This disambiguates agents that share a
+// working directory — which `claude -c` (continue-most-recent-in-cwd) cannot,
+// causing it to resume a co-located agent's conversation instead of ours.
+func resumeSessionID(projectsRoot, dir, agent string) (string, bool) {
+	entries, err := os.ReadDir(filepath.Join(projectsRoot, mungeProjectPath(dir)))
+	if err != nil {
+		return "", false
+	}
+	var bestID string
+	var bestMod time.Time
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		title, ok := readCustomTitle(filepath.Join(projectsRoot, mungeProjectPath(dir), e.Name()))
+		if !ok || title != agent {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if bestID == "" || info.ModTime().After(bestMod) {
+			bestID = strings.TrimSuffix(e.Name(), ".jsonl")
+			bestMod = info.ModTime()
+		}
+	}
+	return bestID, bestID != ""
+}
+
 func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions, warn func(string)) error {
 	if c.HasSession(ctx, session) {
 		return nil
@@ -620,8 +707,15 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
 	// hostname yerine agent adi gorunur).
 	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions"
-	if opts.Resume {
-		command += " -c"
+	if opts.Resume && !opts.Codex {
+		// Resume THIS agent's own conversation by id, not `claude -c` (which
+		// continues whichever conversation in the cwd is most recent and so
+		// grabs a co-located agent's session in a shared directory).
+		if id, ok := resumeSessionID(claudeProjectsRoot(), dir, session); ok {
+			command += " --resume " + id
+		} else if warn != nil {
+			warn("no prior '" + session + "' conversation found under " + dir + "; opening a fresh session")
+		}
 	}
 	if opts.Codex {
 		command = `codex -c model_reasoning_effort="high"`

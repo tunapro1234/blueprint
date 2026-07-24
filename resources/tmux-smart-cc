@@ -1,0 +1,15 @@
+#!/bin/bash
+# Root C-c: taze+gorulmemis tmux buffer varsa (Claude Code secimi) panoya bas;
+# yoksa C-c'yi pane'e aynen ilet (interrupt/iptal normal calisir).
+PANE="$1"
+STATE=/tmp/.tmux-cc-last-buffer
+read -r name created <<< "$(tmux list-buffers -F '#{buffer_name} #{buffer_created}' 2>/dev/null | sort -k2,2nr | head -1)"
+now=$(date +%s)
+last=$(cat "$STATE" 2>/dev/null)
+if [ -n "$name" ] && [ "$name" != "$last" ] && [ $(( now - ${created:-0} )) -le 90 ]; then
+    echo "$name" > "$STATE"
+    tmux save-buffer - | /usr/local/bin/tmux-osc52
+    tmux display-message -d 800 "panoya kopyalandi ✓"
+else
+    tmux send-keys -t "$PANE" C-c
+fi

@@ -1,0 +1,6 @@
+#!/bin/bash
+# stdin'i base64'leyip OSC52 olarak tmux CLIENT tty'sine yazar -> lokal terminal panosu.
+# tmux'un set-clipboard/allow-passthrough ayarlarindan bagimsiz calisir.
+data=$(base64 -w0)
+tty=$(tmux display-message -p '#{client_tty}' 2>/dev/null)
+[ -n "$tty" ] && [ -w "$tty" ] && printf '\033]52;c;%s\a' "$data" > "$tty"

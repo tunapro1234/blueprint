@@ -15,6 +15,7 @@ import (
 	"blueprint/internal/book"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/tokens"
 )
 
 type Service struct {
@@ -64,6 +65,14 @@ func (s *Service) Run(ctx context.Context) {
 	})
 	s.startLoop(ctx, "usage-watch", 2*time.Minute, 10*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "usage-watch", interval, func() error { return command(run, "/srv/server-main/bin/usage-watch") })
+	})
+	s.startLoop(ctx, "tokens-collect", 2*time.Minute, 5*time.Minute, func(run context.Context, interval time.Duration) {
+		s.tracked(run, "tokens-collect", interval, func() error {
+			config := tokens.DefaultConfig()
+			config.Log = s.log.Writer()
+			_, err := tokens.Collect(config)
+			return err
+		})
 	})
 	s.startLoop(ctx, "watch-radar-chain", 3*time.Minute, 30*time.Minute, func(run context.Context, interval time.Duration) {
 		steps := []struct {

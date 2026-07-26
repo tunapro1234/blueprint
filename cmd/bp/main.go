@@ -46,6 +46,8 @@ bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] <message...>
 bp wa read <target> [n] | bp wa chats
 bp usage
+bp tokens [--day YYYY-MM-DD | --since 7d] [--hours | --prompts] [--agent <name>] [--json]
+bp tokens collect | bp tokens gc
 bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>
 bp service
@@ -114,6 +116,8 @@ func (a *app) run(args []string) error {
 		return a.whatsapp(args[1:])
 	case "usage":
 		return a.usage()
+	case "tokens":
+		return a.tokens(args[1:])
 	case "monitor":
 		return a.monitor(args[1:])
 	case "policy":

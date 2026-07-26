@@ -1,9 +1,0 @@
-TASK (v1.6 worktree support): implement per DESIGN.md "v1.6 - WORKTREE DESTEGI" section.
-- bp worktree add/list/rm <repo-dir> [<topic>] exactly as spec'd (branch <topic>/dev, list shows
-  which tmux agent runs inside each worktree by matching pane cwd/session start dir, rm refuses
-  dirty without --force).
-- bp open ... --worktree <topic>: create-if-missing then open agent inside.
-- bp tree: annotate agents running in a worktree with "repo@branch" suffix.
-RULES: English; go build/vet/test clean (add tests for worktree path/branch derivation);
-rebuild /srv/blueprint/bp + make release (site binaries+checksums); meaningful commits on dev;
-do NOT touch /etc or run msg/open/close/daemon live. Short report.

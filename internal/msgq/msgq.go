@@ -16,8 +16,6 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
-const DefaultRoot = "/srv/server-main/msgq"
-
 type Message struct {
 	ID       string  `json:"id"`
 	To       string  `json:"to"`
@@ -35,9 +33,6 @@ type Queue struct {
 }
 
 func New(root string) *Queue {
-	if root == "" {
-		root = DefaultRoot
-	}
 	return &Queue{Root: root, Now: time.Now}
 }
 

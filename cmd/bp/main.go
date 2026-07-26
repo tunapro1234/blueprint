@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -19,8 +20,10 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/fed"
 	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
@@ -54,19 +57,26 @@ bp service
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
+bp fed status|ping|token
 bp daemon`
 
 type app struct {
-	ctx   context.Context
-	tmux  *bptmux.Client
-	queue *msgq.Queue
-	out   *os.File
-	err   *os.File
+	ctx    context.Context
+	config bpconfig.Config
+	tmux   *bptmux.Client
+	queue  *msgq.Queue
+	out    *os.File
+	err    *os.File
 }
 
 func main() {
 	ctx := context.Background()
-	a := &app{ctx: ctx, tmux: bptmux.New(), queue: msgq.New(msgq.DefaultRoot), out: os.Stdout, err: os.Stderr}
+	config, err := bpconfig.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		os.Exit(1)
+	}
+	a := &app{ctx: ctx, config: config, tmux: bptmux.New(), queue: msgq.New(config.MsgqRoot), out: os.Stdout, err: os.Stderr}
 	args := os.Args[1:]
 	if len(args) == 0 {
 		args = []string{"status"}
@@ -130,6 +140,8 @@ func (a *app) run(args []string) error {
 		return a.image(args[1:])
 	case "dash":
 		return a.dashboard(args[1:])
+	case "fed":
+		return a.federation(args[1:])
 	case "daemon":
 		return a.daemon(args[1:])
 	case "help", "-h", "--help":
@@ -275,7 +287,7 @@ func (a *app) dashboard(args []string) error {
 
 	ctx, stop := signal.NotifyContext(a.ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return dashboard.Serve(ctx, dashboard.Options{Port: port, URL: dashboardURL, Out: a.out})
+	return dashboard.Serve(ctx, dashboard.Options{Port: port, URL: dashboardURL, UsageBin: a.config.UsageBin, Out: a.out})
 }
 
 func findCommand(bin string, args ...string) (commandSpec, error) {
@@ -368,7 +380,7 @@ func (a *app) listConnections() error {
 }
 
 func (a *app) fleet() (book.Fleet, map[string]book.State, error) {
-	fleet, err := book.LoadFleet(book.Paths())
+	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
 	if err != nil {
 		return book.Fleet{}, nil, err
 	}
@@ -492,7 +504,7 @@ func (a *app) open(args []string) error {
 		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--resume] [--codex] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
-	opts := bptmux.OpenOptions{}
+	opts := bptmux.OpenOptions{Legacy: a.config.Legacy}
 	worktreeTopic := ""
 	for index := 2; index < len(args); index++ {
 		arg := args[index]
@@ -533,7 +545,7 @@ func (a *app) open(args []string) error {
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		return err
 	}
-	if err := book.SetStatus(name, "open", dir); err != nil {
+	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir); err != nil {
 		return err
 	}
 	rc := ""
@@ -700,7 +712,7 @@ func (a *app) close(args []string) error {
 	} else {
 		fmt.Fprintf(a.out, "%s is already closed\n", name)
 	}
-	return book.SetStatus(name, "closed", "")
+	return book.SetStatus(a.config.Agentbooks, name, "closed", "")
 }
 
 func (a *app) sender() string {
@@ -718,6 +730,13 @@ func (a *app) message(args []string) error {
 		return fmt.Errorf("usage: bp msg <name> <message...>")
 	}
 	name, message := args[0], strings.Join(args[1:], " ")
+	if strings.Contains(name, "@") {
+		target, peer, _, err := fed.ParseAddress(name)
+		if err != nil {
+			return err
+		}
+		return a.federatedMessage(target, peer, message)
+	}
 	queued, channelID, err := a.deliver(name, a.sender(), message)
 	if err != nil {
 		if errors.Is(err, bptmux.ErrNotAgent) {
@@ -736,6 +755,35 @@ func (a *app) message(args []string) error {
 	}
 	fmt.Fprintf(a.out, "BUSY: queued (channel: %s). Check: bp qstat %s\n", channelID, channelID)
 	return nil
+}
+
+func (a *app) federatedMessage(target, peer, message string) error {
+	if a.config.Fed == nil {
+		return fmt.Errorf("federation is not configured on this machine")
+	}
+	sender := a.sender()
+	switch a.config.Fed.Mode {
+	case "hub":
+		peers, err := fed.LoadPeers(a.config.StateDir)
+		if err != nil {
+			return err
+		}
+		id, err := fed.QueueOutbound(a.config.StateDir, peers, peer, target, sender+"@"+a.config.Fed.PeerName, message)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "queued for peer %s (channel: %s)\n", peer, id)
+		return nil
+	case "client":
+		client := fed.NewClient(a.config.Fed.Hub, a.config.Fed.Token)
+		if _, err := client.Send(a.ctx, peer, target, sender, message); err != nil {
+			return err
+		}
+		fmt.Fprintln(a.out, "sent via hub")
+		return nil
+	default:
+		return fmt.Errorf("unsupported federation mode: %s", a.config.Fed.Mode)
+	}
 }
 
 func (a *app) deliver(name, sender, message string) (queued bool, channelID string, err error) {
@@ -833,8 +881,6 @@ func announcementTargets(fleet book.Fleet, states map[string]book.State, sender 
 	}
 	return targets
 }
-
-const compactStatePath = "/srv/blueprint/state/compact.json"
 
 type compactOptions struct {
 	minAge  time.Duration
@@ -1014,6 +1060,7 @@ func (a *app) compact(args []string) error {
 	if _, ok := fleet.Agents[sender]; !ok && sender != "server-main" {
 		return fmt.Errorf("sender %s is not in the agentbook hierarchy", sender)
 	}
+	compactStatePath := filepath.Join(a.config.StateDir, "compact.json")
 	lastCompact := loadCompactState(compactStatePath)
 	plan := selectCompactTargets(fleet, states, sender, opts.exclude, lastCompact, opts.minAge, time.Now())
 
@@ -1131,6 +1178,9 @@ func (a *app) peek(args []string) error {
 }
 
 func (a *app) whatsapp(args []string) error {
+	if a.config.WAOutbox == "" {
+		return fmt.Errorf("wa is not configured on this machine")
+	}
 	if len(args) == 0 {
 		return fmt.Errorf("usage: bp wa send|read|chats ...")
 	}
@@ -1160,7 +1210,7 @@ func (a *app) whatsapp(args []string) error {
 		if text == "" {
 			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] <message...>")
 		}
-		if err := wa.Send(wa.DefaultOutbox, wa.Agent(a.ctx, a.tmux), to, reply, text); err != nil {
+		if err := wa.Send(a.config.WAOutbox, wa.Agent(a.ctx, a.tmux), to, reply, text); err != nil {
 			return err
 		}
 		destination := to
@@ -1185,7 +1235,7 @@ func (a *app) whatsapp(args []string) error {
 				return fmt.Errorf("invalid message count: %s", args[2])
 			}
 		}
-		lines, err := wa.Read(wa.DefaultStore, args[1], count)
+		lines, err := wa.Read(a.config.WAStore, args[1], count)
 		if err != nil {
 			return err
 		}
@@ -1201,7 +1251,7 @@ func (a *app) whatsapp(args []string) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp wa chats")
 		}
-		lines, err := wa.Chats(wa.DefaultStore)
+		lines, err := wa.Chats(a.config.WAStore)
 		if err != nil {
 			return err
 		}
@@ -1219,7 +1269,10 @@ func (a *app) whatsapp(args []string) error {
 }
 
 func (a *app) usage() error {
-	sample, err := usagecli.Latest(usagecli.HistoryPath)
+	if a.config.UsageHistory == "" {
+		return fmt.Errorf("usage is not configured on this machine")
+	}
+	sample, err := usagecli.Latest(a.config.UsageHistory)
 	if err != nil {
 		return err
 	}
@@ -1257,7 +1310,7 @@ func (a *app) monitor(args []string) error {
 	renderOptions := monitorcli.RenderOptions{Now: time.Now()}
 	var trailingNote string
 	if view == "services" {
-		jobs, jobsErr := monitorcli.LoadJobs(monitorcli.DefaultJobsPath)
+		jobs, jobsErr := monitorcli.LoadJobs(filepath.Join(a.config.StateDir, "jobs.json"))
 		if jobsErr == nil {
 			renderOptions.Jobs = jobs
 		} else if !os.IsNotExist(jobsErr) {
@@ -1289,7 +1342,10 @@ func (a *app) policy(args []string) error {
 	if !(len(args) == 1 && args[0] == "status") && !(len(args) == 2 && args[0] == "override") {
 		return fmt.Errorf("usage: bp policy status|override <hours>")
 	}
-	cmd := exec.CommandContext(a.ctx, "/srv/server-main/bin/usage-policy", args...)
+	if a.config.UsageBin == "" {
+		return fmt.Errorf("usage policy is not configured on this machine")
+	}
+	cmd := exec.CommandContext(a.ctx, filepath.Join(a.config.UsageBin, "usage-policy"), args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = &stdout, &stderr, os.Stdin
 	err := cmd.Run()
@@ -1310,7 +1366,7 @@ func translatePolicyOutput(output string) string {
 }
 
 func (a *app) service() error {
-	jobs, err := daemon.LoadState(daemon.StatePath)
+	jobs, err := daemon.LoadState(filepath.Join(a.config.StateDir, "jobs.json"))
 	if os.IsNotExist(err) {
 		fmt.Fprintln(a.out, "(no daemon state)")
 		return nil
@@ -1326,13 +1382,107 @@ func (a *app) service() error {
 	return nil
 }
 
+func (a *app) federation(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: bp fed status|ping|token")
+	}
+	switch args[0] {
+	case "status":
+		return a.federationStatus()
+	case "ping":
+		return a.federationPing()
+	case "token":
+		if a.config.Fed == nil || a.config.Fed.Mode != "hub" {
+			return fmt.Errorf("bp fed token is only available in hub mode")
+		}
+		token, err := fed.GenerateToken()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.out, token)
+		return nil
+	default:
+		return fmt.Errorf("usage: bp fed status|ping|token")
+	}
+}
+
+func (a *app) federationStatus() error {
+	if a.config.Fed == nil {
+		fmt.Fprintln(a.out, "mode: disabled")
+		return nil
+	}
+	fmt.Fprintf(a.out, "mode: %s\n", a.config.Fed.Mode)
+	fmt.Fprintf(a.out, "peer name: %s\n", a.config.Fed.PeerName)
+	switch a.config.Fed.Mode {
+	case "hub":
+		fmt.Fprintf(a.out, "listen: %s\n", a.config.Fed.Listen)
+		peers, err := fed.LoadPeers(a.config.StateDir)
+		if err != nil {
+			return err
+		}
+		rates, err := fed.RecentRateCounts(a.config.StateDir, time.Now())
+		if err != nil {
+			return err
+		}
+		outbox := fed.NewOutbox(a.config.StateDir)
+		names := fed.PeerNames(peers)
+		if len(names) == 0 {
+			fmt.Fprintln(a.out, "peers: (none)")
+			return nil
+		}
+		fmt.Fprintln(a.out, "peers:")
+		for _, name := range names {
+			depth, err := outbox.Depth(name)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(a.out, "  %s: outbox=%d rate=%d/%d (last hour)\n", name, depth, rates[name], fed.DefaultRate)
+		}
+	case "client":
+		fmt.Fprintf(a.out, "hub: %s\n", a.config.Fed.Hub)
+		data, err := os.ReadFile(fed.LastPollPath(a.config.StateDir))
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(a.out, "last poll: never")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "last poll: %s\n", strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func (a *app) federationPing() error {
+	if a.config.Fed == nil {
+		return fmt.Errorf("federation is not configured on this machine")
+	}
+	started := time.Now()
+	if a.config.Fed.Mode == "hub" {
+		connection, err := net.DialTimeout("tcp", a.config.Fed.Listen, 3*time.Second)
+		if err != nil {
+			return fmt.Errorf("hub listener is down: %w", err)
+		}
+		_ = connection.Close()
+		fmt.Fprintf(a.out, "hub listener is up (%s)\n", time.Since(started).Round(time.Millisecond))
+		return nil
+	}
+	client := fed.NewClient(a.config.Fed.Hub, a.config.Fed.Token)
+	peer, latency, err := client.Ping(a.ctx)
+	if err != nil {
+		return fmt.Errorf("hub ping failed: %w", err)
+	}
+	fmt.Fprintf(a.out, "hub %s is reachable (%s)\n", peer, latency.Round(time.Millisecond))
+	return nil
+}
+
 func (a *app) daemon(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: bp daemon")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	service := daemon.New(log.New(a.err, "blueprint: ", log.LstdFlags))
+	service := daemon.New(log.New(a.err, "blueprint: ", log.LstdFlags), a.config)
 	service.Run(ctx)
 	return nil
 }

@@ -3,12 +3,12 @@ package tokens
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	DefaultStoreDir  = "/srv/blueprint/state/tokens"
 	defaultBudget    = int64(2 << 30)
 	defaultHardLimit = int64(10 << 30)
 )
@@ -26,16 +26,16 @@ type Config struct {
 	Log            io.Writer
 }
 
-func DefaultConfig() Config {
+func DefaultConfig(stateDir string, agentbooks []string) Config {
+	home := os.Getenv("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
 	return Config{
-		StoreDir:   DefaultStoreDir,
-		ClaudeRoot: "/root/.claude/projects",
-		CodexRoot:  "/root/.codex/sessions",
-		Agentbooks: []string{
-			"/srv/server-main/agentbook.json",
-			"/srv/probot/.orchestration/agentbook.json",
-			"/srv/kitap/.orchestration/agentbook.json",
-		},
+		StoreDir:       filepath.Join(stateDir, "tokens"),
+		ClaudeRoot:     filepath.Join(home, ".claude", "projects"),
+		CodexRoot:      filepath.Join(home, ".codex", "sessions"),
+		Agentbooks:     append([]string(nil), agentbooks...),
 		Now:            time.Now,
 		BudgetBytes:    defaultBudget,
 		HardLimitBytes: defaultHardLimit,
@@ -44,18 +44,14 @@ func DefaultConfig() Config {
 }
 
 func (c Config) normalized() Config {
-	defaults := DefaultConfig()
-	if c.StoreDir == "" {
-		c.StoreDir = defaults.StoreDir
-	}
 	if c.Now == nil {
-		c.Now = defaults.Now
+		c.Now = time.Now
 	}
 	if c.BudgetBytes <= 0 {
-		c.BudgetBytes = defaults.BudgetBytes
+		c.BudgetBytes = defaultBudget
 	}
 	if c.HardLimitBytes <= 0 {
-		c.HardLimitBytes = defaults.HardLimitBytes
+		c.HardLimitBytes = defaultHardLimit
 	}
 	if c.Log == nil {
 		c.Log = io.Discard

@@ -31,6 +31,7 @@ type Options struct {
 	Port     int
 	SitePath string
 	URL      string
+	UsageBin string
 	Out      io.Writer
 	Client   *http.Client
 	Open     func(string)
@@ -57,7 +58,7 @@ func Serve(ctx context.Context, options Options) error {
 		options.Open = openBrowser
 	}
 
-	handler, err := NewHandler(ctx, options.SitePath, options.URL, options.Client)
+	handler, err := NewHandler(ctx, options.SitePath, options.URL, options.Client, options.UsageBin)
 	if err != nil {
 		return err
 	}
@@ -95,9 +96,10 @@ func Serve(ctx context.Context, options Options) error {
 // refreshOnDemand serializes explicit refreshes so an F5 storm cannot stampede
 // the collectors. Ordinary data.json polling must never invoke usage APIs.
 type refreshOnDemand struct {
-	mu       sync.Mutex
-	lastRun  time.Time
-	sitePath string
+	mu         sync.Mutex
+	lastRun    time.Time
+	sitePath   string
+	usagePulse string
 }
 
 const refreshCooldown = 10 * time.Second
@@ -111,8 +113,10 @@ func (r *refreshOnDemand) maybeRefresh() {
 	r.lastRun = time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	pulse := exec.CommandContext(ctx, "/srv/server-main/bin/usage-pulse")
-	_ = pulse.Run()
+	if r.usagePulse != "" {
+		pulse := exec.CommandContext(ctx, r.usagePulse)
+		_ = pulse.Run()
+	}
 	gen := exec.CommandContext(ctx, "/usr/bin/python3", filepath.Join(r.sitePath, "gen.py"))
 	gen.Dir = r.sitePath
 	_ = gen.Run()
@@ -123,10 +127,16 @@ func explicitDataRefresh(request *http.Request) bool {
 		request.URL.Query().Get("refresh") == "1"
 }
 
-func NewHandler(ctx context.Context, sitePath, rawURL string, client *http.Client) (http.Handler, error) {
+func NewHandler(ctx context.Context, sitePath, rawURL string, client *http.Client, usageBin ...string) (http.Handler, error) {
 	if info, err := os.Stat(sitePath); err == nil && info.IsDir() {
 		files := http.FileServer(http.Dir(sitePath))
 		fresh := &refreshOnDemand{sitePath: sitePath}
+		if len(usageBin) > 0 && usageBin[0] != "" {
+			path := filepath.Join(usageBin[0], "usage-pulse")
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				fresh.usagePulse = path
+			}
+		}
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			// The UI adds refresh=1 only to the first data request after an F5.
 			// Its ordinary 60-second poll only reads the generated file.

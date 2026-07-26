@@ -609,9 +609,13 @@ type OpenOptions struct {
 	Resume   bool
 	Codex    bool
 	NoPrompt bool
+	Legacy   bool
 }
 
-const onboarding = "Selam, sen '%s' agentisin (ismine gore calisirsin; proje detayini kullanici sonra verebilir). Bu COK-SERVISLI bir sunucu (nginx 80/443 public + Cloudflare, Docker+systemd: gitea, mail, probot, kitap...). Orchestrator=server-main, evi /srv/server-main. ONCE OKU: /srv/server-main/AGENT-ONBOARDING.md (server + PORT kurallari) ve /srv/server-main/agentbook.json (agentlar + iletisim). DIGER AGENTLARLA KONUSMA: tmux send-keys -t <hedef> -l '<mesaj>' + AYRI Enter. Model secimi + codex + subagent kurallari global CLAUDE.md'inde (otomatik yuklu) - uygula. UYARI1 ghost-text: soluk oneri gercek degil. UYARI2 vim modu: submit icin cogu zaman fazladan Enter. Okuyunca kisa 'hazirim' de."
+const (
+	legacyOnboarding   = "Selam, sen '%s' agentisin (ismine gore calisirsin; proje detayini kullanici sonra verebilir). Bu COK-SERVISLI bir sunucu (nginx 80/443 public + Cloudflare, Docker+systemd: gitea, mail, probot, kitap...). Orchestrator=server-main, evi /srv/server-main. ONCE OKU: /srv/server-main/AGENT-ONBOARDING.md (server + PORT kurallari) ve /srv/server-main/agentbook.json (agentlar + iletisim). DIGER AGENTLARLA KONUSMA: tmux send-keys -t <hedef> -l '<mesaj>' + AYRI Enter. Model secimi + codex + subagent kurallari global CLAUDE.md'inde (otomatik yuklu) - uygula. UYARI1 ghost-text: soluk oneri gercek degil. UYARI2 vim modu: submit icin cogu zaman fazladan Enter. Okuyunca kisa 'hazirim' de."
+	portableOnboarding = "Sen '%s' agentisin. Diger agentlarla iletisim: bp msg <ad> <mesaj>."
+)
 
 // mungeProjectPath replicates Claude Code's cwd -> project-dir encoding: every
 // byte that is not an ASCII letter or digit becomes '-' (so "/srv/probot-business"
@@ -632,10 +636,11 @@ func mungeProjectPath(dir string) string {
 
 // claudeProjectsRoot is the directory where Claude Code stores per-cwd session logs.
 func claudeProjectsRoot() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".claude", "projects")
+	home := os.Getenv("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
 	}
-	return "/root/.claude/projects"
+	return filepath.Join(home, ".claude", "projects")
 }
 
 // readCustomTitle returns the customTitle set for a Claude session file (via the
@@ -771,6 +776,10 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		c.Sleep(time.Second)
 	}
 	if !opts.NoPrompt {
+		onboarding := portableOnboarding
+		if opts.Legacy {
+			onboarding = legacyOnboarding
+		}
 		if err := c.Send(ctx, session, fmt.Sprintf(onboarding, session)); err != nil {
 			if warn != nil {
 				warn("WARNING: could not send onboarding prompt: " + err.Error())

@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-const HistoryPath = "/srv/server-main/usage/history.jsonl"
-
 // fallbackWindow bounds how far back we search for a row with usable values,
 // mirroring the dashboard generator's 48h contract.
 const fallbackWindow = 48 * time.Hour

@@ -3,6 +3,7 @@ package book
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,11 +13,6 @@ import (
 	"time"
 
 	bptmux "blueprint/internal/tmux"
-)
-
-const (
-	MainPath   = "/srv/server-main/agentbook.json"
-	ProbotPath = "/srv/probot/.orchestration/agentbook.json"
 )
 
 type Agent struct {
@@ -36,11 +32,11 @@ type File struct {
 	Agents       []Agent `json:"agents"`
 }
 
-func Paths() []string {
+func Paths(configured []string) []string {
 	if path := os.Getenv("AGENTBOOK"); path != "" {
 		return []string{path}
 	}
-	return []string{MainPath, ProbotPath}
+	return append([]string(nil), configured...)
 }
 
 func Load(path string) (File, error) {
@@ -64,16 +60,20 @@ type Fleet struct {
 
 func LoadFleet(paths []string) (Fleet, error) {
 	fleet := Fleet{Agents: map[string]Agent{}, Parents: map[string]string{}, Root: "server-main"}
-	for index, path := range paths {
+	loaded := 0
+	for _, path := range paths {
 		file, err := Load(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return Fleet{}, err
 		}
-		if index == 0 && file.Orchestrator != "" {
+		if loaded == 0 && file.Orchestrator != "" {
 			fleet.Root = file.Orchestrator
 		}
 		defaultParent := file.Parent
-		if defaultParent == "" && index > 0 {
+		if defaultParent == "" && loaded > 0 {
 			defaultParent = fleet.Root
 		}
 		for _, agent := range file.Agents {
@@ -98,6 +98,7 @@ func LoadFleet(paths []string) (Fleet, error) {
 			}
 			fleet.Parents[agent.Name] = parent
 		}
+		loaded++
 	}
 	if _, ok := fleet.Agents[fleet.Root]; !ok {
 		fleet.Agents[fleet.Root] = Agent{Name: fleet.Root}
@@ -176,8 +177,11 @@ func (f Fleet) IsDescendant(name, ancestor string) bool {
 	return false
 }
 
-func SetStatus(name, status, folder string) error {
-	paths := Paths()
+func SetStatus(paths []string, name, status, folder string) error {
+	paths = Paths(paths)
+	if len(paths) == 0 {
+		return fmt.Errorf("agentbook is not configured")
+	}
 	target := paths[0]
 	for _, path := range paths {
 		file, err := Load(path)

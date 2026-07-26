@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-const imageDropDir = "/srv/server-main/clipboard"
-
 type clipboardCommand struct {
 	name string
 	args []string
@@ -37,7 +35,10 @@ func (a *app) image(args []string) error {
 	case len(args) == 0:
 		return a.sendClipboardImage()
 	case len(args) == 1 && args[0] == "recv":
-		path, err := receiveImage(os.Stdin, imageDropDir, time.Now())
+		if a.config.ClipboardDir == "" {
+			return fmt.Errorf("clipboard drop dir not configured")
+		}
+		path, err := receiveImage(os.Stdin, a.config.ClipboardDir, time.Now())
 		if err != nil {
 			return err
 		}

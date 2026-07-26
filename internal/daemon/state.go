@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-const StatePath = "/srv/blueprint/state/jobs.json"
-
 type JobState struct {
 	LastRun  string `json:"last_run,omitempty"`
 	Status   string `json:"status"`
@@ -27,9 +25,6 @@ type State struct {
 }
 
 func NewState(path string) *State {
-	if path == "" {
-		path = StatePath
-	}
 	return &State{path: path, Jobs: map[string]JobState{}}
 }
 

@@ -13,11 +13,6 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
-const (
-	DefaultOutbox = "/srv/whatsapp/outbox"
-	DefaultStore  = "/srv/whatsapp/messages.jsonl"
-)
-
 type Outgoing struct {
 	Agent   string  `json:"agent"`
 	To      *string `json:"to"`

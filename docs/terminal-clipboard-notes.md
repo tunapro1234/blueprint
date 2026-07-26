@@ -69,3 +69,67 @@ Ek binding'ler:
 - `/model` ve `/effort` GLOBAL ~/.claude/settings.json'u da yazar → agent'larda kalıcı model için
   cwd'ye `.claude/settings.local.json` pin'i; orchestrator'lar pinlenmez (Tuna elle yönetir).
 - Aynı klasörde iki agent = resume/memory/settings çakışması → agent başına ayrı cwd ZORUNLU.
+
+## 7. Süreç kimliği: pgrep tuzakları (2026-07-25, iki gerçek olay)
+
+Aynı gün iki agent `pgrep` çıktısına güvenip yanlış süreci öldürdü/öldürecekti:
+
+1. **Başkasının süreci sanma:** codex oturumlarının komut satırları birebir aynı görünür
+   (`codex --search -c model_reasoning_effort=high`). compec-site kendi çağrısı zannedip
+   server-crash'in nöbetçi oturumunu öldürdü.
+2. **Arayanı eşleme:** `pgrep -f "node /srv/whatsapp/bridge.js"` arayan shell'in kendisini de
+   döndürür (desen kendi cmdline'ında geçer) → "duplicate instance var" yanılgısı.
+
+**Kurallar:**
+- Arka planda süreç başlatırken PID'i o anda kaydet, sadece onu öldür; stdin'i kapat
+  (`... < /dev/null`) ki beklemede kalmasın.
+- Sonucu pgrep eşleşmesiyle değil **görev çıktı dosyasından** doğrula.
+- Arama yaparken köşe-parantez numarası: `pgrep -f '[c]odex --search'`; ya da her PID için
+  `ps -o pid,ppid,lstart` ile sahipliği doğrula.
+- Başkasının süreci ise ÖLDÜRME — sahibine `bp msg` at.
+- **Boşta duran süreci "zararsız" sayma.** Sürecin ne YAPTIĞINA bak, meşgul olup olmadığına
+  değil: 12 saattir boşta duran bir süreç pekâlâ canlı bir nöbetçi olabilir (2026-07-25 olayının
+  asıl dersi; izleme 4s09dk kör kaldı).
+
+**Codex özel notu:** yeni codex sürümü çıktığında codex açılışta `npm install -g @openai/codex`
+dener; bwrap sandbox'ında `/root/.npm` salt-okunur olduğu için EROFS alıp kapanır ve tmux'ta boş
+zsh kalır. Çözüm: güncellemeyi sandbox DIŞINDA çalıştır (ada yapar), sonra agent'ı yeniden aç.
+
+## 8. "Bitti" raporu ≠ iş bitti (2026-07-25, compec-main bulgusu)
+
+Bir subagent Drive indirme işini arka planda başlattı, kendi açısından teslim tamam sayıp
+"bitti" raporu verdi ve kapandı. Kapanınca **başlattığı arka plan süreci de öldü**: zincir
+805/1138 dosyada kesilmişti, kimse fark etmedi.
+
+**İkinci yarısı (aynı gün, compec-main):** süreç AYAKTA olduğu hâlde İŞ ÜRETMEYEBİLİR — Drive
+kotası dolunca indirici çalışmaya devam etti ama sayaç 805→806'da takıldı, log baştan sona
+"Quota exceeded". Yani "süreç var mı?" ile "ilerliyor mu?" ayrı sorulardır; izleme, çıktının
+ARTTIĞINI görmeli. (Bu ders health-watch'a da uygulandı: nöbetçi hem koşuyor mu hem alarm
+sonrası incidents.log'u güncelliyor mu diye kontrol ediliyor.)
+
+**Kural:** tamamlanmayı agent'ın BEYANIYLA değil, **ölçülebilir kanıtla** doğrula —
+dosya sayısı, satır sayısı, hedef boyutu, HTTP kodu, DB kaydı. Rapor "yaptım" diyorsa
+"kaç tane?" diye sor ve say.
+
+**Uygulama:**
+- Uzun/bulk işi başlatan agent, iş bitene kadar AÇIK kalmalı; kapanacaksa işi systemd
+  servisine ya da `run_in_background` + harness takibine devret (sahipsiz arka plan süreci bırakma).
+- İndiriciler/işleyiciler **yeniden başlatılabilir** olsun: hedefte varsa boyut/hash kontrolüyle
+  atlasın, baştan başlamasın.
+- Fan-out sonrası kabul kriteri şart: "N dosyanın N'i" gibi sayılabilir bir eşik.
+
+## 9. Agent kapanınca bıraktığı DURUM sahipsiz kalır (2026-07-25, alp'in yakalaması)
+
+probot-pil kapatıldığında, incelemesi için shop'a koyduğu koruyucu SKU hold'u yerinde kalmıştı —
+kimsenin sahiplenmediği, kaldırılmayı bekleyen bir kısıt. alp fark edip kaldırdı ve bulguyu
+JSONL'e arşivledi.
+
+**Kural:** bir agent kapatılırken sadece süreçleri değil, **dış dünyada bıraktığı durumu** da
+devret veya temizle: hold/lock/rezervasyon, systemd servisi, cron kaydı, açık PR/branch,
+nginx location, geçici DNS kaydı, paylaşılan dosya kilidi.
+
+**Kapatma kontrol listesi:** (1) çalışan/arka plan işi var mı → devret ya da bitir,
+(2) dışarıda kısıt/kayıt bıraktı mı → kaldır ya da sahibi belirle, (3) bulguları kalıcı yere yaz
+(JSONL/log/doküman) ki resume gerekmeden erişilebilsin, (4) agentbook'ta status:closed.
+
+Aynı aile: Bölüm 7 (süreç sahipliği), Bölüm 8 ("bitti" ≠ bitti, canlılık ≠ ilerleme).

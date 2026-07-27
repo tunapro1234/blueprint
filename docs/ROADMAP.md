@@ -163,21 +163,41 @@ yalnızca thread adında arıyor. Yani §1'deki içerik araması hâlâ bize ait
 
 ### 6c. Bağlanma yolu — karar
 
-**Seçilen: SSH üzerinden `app-server proxy`.** Uzak makinede `codex app-server proxy --sock
-~/.codex/app-server-control/app-server-control.sock` çalıştırılır, bp onun stdin/stdout'una
-satır-sonlu JSON-RPC konuşur. Yeni port yok, relay yok, bizim tarafta daemon yok, Yiğit'in
-sisteminde kurulum yok.
+**Kritik bulgu (2026-07-27, strace ile):** unix soketi **WebSocket** konuşuyor. İstemci önce
+HTTP Upgrade yapıyor (`GET / HTTP/1.1` + `Upgrade: websocket` → `101 Switching Protocols`),
+JSON-RPC bundan sonra maskeli WS frame'leri içinde gidiyor. Yani:
 
-Elenenler: **`ws://`** (Tailscale/port açmayı gerektirir), **`remote-control` eşleştirme**
+| taşıma | tel biçimi |
+|---|---|
+| `--stdio` | düz satır-sonlu JSON |
+| `--listen unix://PATH` · `ws://IP:PORT` | **WebSocket** (üstünde aynı JSON-RPC) |
+
+Bu, kavram-gate'in "hiçbir framing yanıt vermiyor" gözlemini açıklıyor: sunucu HTTP upgrade
+bekliyor, gelmeyince bağlantıyı sessizce kapatıyor. Kendi makinemde, sokete **başka hiçbir
+client bağlı değilken** aynı 0-byte davranışını birebir ürettim — yani "kontrol soketi tek
+sahiplidir" hipotezi yanlış. `app-server proxy` ise bizde de sessiz; ihtiyaç yok.
+
+**Seçilen: SSH tüneli üzerinden soketle doğrudan WebSocket.** Uzak makinede hiçbir şey
+çalıştırmıyoruz; SSH ile unix soketine bağlanıp WS el sıkışması yapıyoruz. Yeni port yok,
+relay yok, iki tarafta da kurulum yok. Yerelde uçtan uca doğrulandı: el sıkışma → `initialize`
+→ `thread/list` gerçek thread listesini döndürüyor.
+
+Elenenler: **`app-server proxy`** (0.144/0.145'te sessiz), **`ws://` port açma**
+(Tailscale/port gerektirir; soket + SSH zaten yetiyor), **`remote-control` eşleştirme**
 (filo içi trafiğe üçüncü taraf relay sokar), **`codex exec resume`** (bugünkü yöntemimiz —
 thread'e zorla mesaj enjekte ediyor ve çalışan otonom goal'u bölebiliyor; `turn/steer` bunun
 doğrusu).
 
+**Maliyet uyarısı:** Go stdlib'de WebSocket istemcisi yok. El sıkışma + maskeleme + frame
+çözme elle yazılacak (~150 satır). Stdlib-only kuralını bozmuyor ama §6d'deki 1. maddenin
+boyutunu iki katına çıkarıyor; sadeliği korumak için yalnızca metin frame'i + ping/pong
+desteklensin, uzantı/parçalama desteklenmesin.
+
 ### 6d. Yapılacak işler (sırayla, MVP ölçüsünde)
 
-1. **`internal/codexrpc`** — küçük JSON-RPC istemcisi: bir alt süreç aç (yerelde
-   `codex app-server --stdio`, uzakta `ssh … app-server proxy`), `initialize` yap, istek/cevap
-   eşle, bildirimleri bir kanala akıt. Stdlib yeter, ~200 satır.
+1. **`internal/codexrpc`** — küçük JSON-RPC istemcisi + minimal WebSocket katmanı: yerelde
+   `codex app-server --stdio` (düz JSON, WS gerekmez), uzakta SSH üzerinden sokete WS.
+   `initialize` yap, istek/cevap eşle, bildirimleri bir kanala akıt. Stdlib yeter, ~350 satır.
 2. **Salt-okur gözlem** — `bp status` / `bp tree` içinde Codex thread'lerini ikinci bir arka uç
    olarak göster (ad, cwd, meşgul mü, context). **Yazma yok.** İlk teslim burada bitsin.
 3. **Mesaj teslimi** — `bp msg <thread>@codex`: tur çalışmıyorsa `turn/start`, çalışıyorsa
@@ -196,11 +216,18 @@ bilinçli reddettiğimiz "her şeyi yapan kokpit" yönüne kayma riski taşır. 
 **transport arayüzü**, tmux varsayılan ve tek yazma yolu olarak kalır, Codex arka ucu önce
 salt-okur girer. Arayüz iki arka ucu da temiz tutamıyorsa iş durur, zorlanmaz.
 
-**Açık doğrulama (kavram-gate'ten istendi 2026-07-27):** `app-server proxy`, Yiğit'in
-*çalışan* daemon'una bağlanıp `thread/list` döndürüyor mu? Yerelde yönetilen daemon'u
-kuramadığımız için (standalone kurulum yok) bu yalnızca uzakta sınanabilir. **Cevap olumsuzsa
-6c'deki taşıma kararı yeniden açılır** — o durumda geriye kalan makul seçenek Tailscale
-üzerinden `ws://`.
+**Doğrulama TAMAM (kavram-gate, 2026-07-27):** Yiğit'in *çalışan* daemon'una (0.144.0) karşı
+uçtan uca çalıştı — `101 Switching Protocols`, `initialize` yanıtı
+(`Codex Desktop/0.144.0 … aarch64`), ardından gerçek `thread/list` çıktısı. Yani bp, onun canlı
+filosunu tmux olmadan, proxy olmadan görebiliyor. `features.code_mode_host=true` ve
+`codex-code-mode-host` alt süreci ikinci istemciyi engellemiyor; soket tek sahipli değil.
+Sürüm farkı (0.144.0 ↔ 0.145.0) protokolü etkilemedi.
+
+**Yazma tarafı hâlâ kapalı:** `turn/start`, `turn/steer`, `thread/compact/start` gibi iş bölen
+metotlar filo kararı ve aktif goal thread koruması olmadan çalıştırılmayacak. §6d'nin 3. maddesi
+ancak o koruma tasarlandıktan sonra açılır: yazmadan önce `thread/status/changed` ile turun
+durumu okunmalı, koşan otonom goal varsa `turn/start` yerine `turn/steer`, o da uygun değilse
+mesaj kuyrukta beklemeli — bugünkü "meşgul agent'ı bölme" kuralının app-server karşılığı.
 
 ---
 

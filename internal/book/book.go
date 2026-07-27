@@ -177,7 +177,7 @@ func (f Fleet) IsDescendant(name, ancestor string) bool {
 	return false
 }
 
-func SetStatus(paths []string, name, status, folder string) error {
+func SetStatus(paths []string, name, status, folder, parent string) error {
 	paths = Paths(paths)
 	if len(paths) == 0 {
 		return fmt.Errorf("agentbook is not configured")
@@ -222,13 +222,22 @@ func SetStatus(paths []string, name, status, folder string) error {
 	for _, value := range agents {
 		agent, ok := value.(map[string]any)
 		if ok && agent["name"] == name {
+			currentStatus, _ := agent["status"].(string)
+			currentFolder, _ := agent["folder"].(string)
+			if currentStatus == status && currentFolder == folder {
+				return nil
+			}
 			agent["status"] = status
 			found = true
 			break
 		}
 	}
 	if !found {
-		agents = append(agents, map[string]any{"name": name, "folder": folder, "class": "other", "role": "(new - add role)", "status": status})
+		agent := map[string]any{"name": name, "folder": folder, "class": "other", "role": "(new - add role)", "status": status}
+		if parent != "" {
+			agent["parent"] = parent
+		}
+		agents = append(agents, agent)
 	}
 	raw["agents"] = agents
 	raw["updated"] = time.Now().Format("2006-01-02")

@@ -51,7 +51,7 @@ func TestResumeSessionIDPicksNewestMatchingAgent(t *testing.T) {
 	writeSession(t, projectDir, "bbbb-mine-old", "worker-1", base.Add(1*time.Hour))
 	writeSession(t, projectDir, "cccc-mine-new", "worker-1", base.Add(90*time.Minute))
 
-	id, ok := resumeSessionID(root, dir, "worker-1")
+	id, ok := ResumeSessionID(root, dir, "worker-1")
 	if !ok {
 		t.Fatal("expected a match for worker-1")
 	}
@@ -69,11 +69,11 @@ func TestResumeSessionIDNoMatchFallsThrough(t *testing.T) {
 	}
 	writeSession(t, projectDir, "zzzz-someone-else", "different-agent", time.Now())
 
-	if _, ok := resumeSessionID(root, dir, "worker-1"); ok {
+	if _, ok := ResumeSessionID(root, dir, "worker-1"); ok {
 		t.Fatal("expected no match when no session carries our customTitle")
 	}
 	// Missing project dir entirely must also report no match, not error.
-	if _, ok := resumeSessionID(root, "/srv/does-not-exist", "worker-1"); ok {
+	if _, ok := ResumeSessionID(root, "/srv/does-not-exist", "worker-1"); ok {
 		t.Fatal("expected no match for a cwd with no project dir")
 	}
 }
@@ -86,7 +86,7 @@ func TestReadCustomTitle(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	title, ok := readCustomTitle(path)
+	title, ok := ReadCustomTitle(path)
 	if !ok || title != "probot-business" {
 		t.Fatalf("readCustomTitle = (%q, %v), want (probot-business, true)", title, ok)
 	}
@@ -96,7 +96,7 @@ func TestReadCustomTitle(t *testing.T) {
 	if err := os.WriteFile(plain, []byte(`{"type":"user","message":"hi"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := readCustomTitle(plain); ok {
+	if _, ok := ReadCustomTitle(plain); ok {
 		t.Fatal("expected no title for a file without a custom-title record")
 	}
 }

@@ -20,12 +20,14 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	bpcache "blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/fed"
 	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
+	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
 	"blueprint/internal/wa"
@@ -42,7 +44,7 @@ bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
 bp msg <name> <message...>
 bp announce <message...>
-bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run]
+bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run] [--policy]
 bp remote [<name>...]        # /remote-control ac/goster (varsayilan: tum acik claude agentlari)
 bp q | bp qstat <channel-id>
 bp peek <name> [n]
@@ -67,6 +69,11 @@ type app struct {
 	queue  *msgq.Queue
 	out    *os.File
 	err    *os.File
+
+	loadFleet      func() (book.Fleet, map[string]book.State, error)
+	deliverMessage func(string, string, string) (bool, string, error)
+	sessionExists  func(string) bool
+	loadCache      func(map[string]string) map[string]bpcache.State
 }
 
 func main() {
@@ -383,6 +390,9 @@ func (a *app) listConnections() error {
 }
 
 func (a *app) fleet() (book.Fleet, map[string]book.State, error) {
+	if a.loadFleet != nil {
+		return a.loadFleet()
+	}
 	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
 	if err != nil {
 		return book.Fleet{}, nil, err
@@ -396,7 +406,8 @@ func (a *app) status() error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.out, "%-24s %-10s %s\n", "AGENT", "TMUX", "AGENTBOOK")
+	cacheStates := a.cacheStates(fleet)
+	fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK")
 	for _, name := range fleet.SortedNames() {
 		state, alive := states[name]
 		tmuxState := "closed"
@@ -416,9 +427,43 @@ func (a *app) status() error {
 		if alive && bookState == "closed" {
 			flag = "  <-- tmux is open but book:closed"
 		}
-		fmt.Fprintf(a.out, "%-24s %-10s %-10s%s\n", name, tmuxState, bookState, flag)
+		cacheText, talkText := "-", "-"
+		if state, ok := cacheStates[name]; ok {
+			if state.Known {
+				temperature := "cold"
+				if state.Age < time.Hour {
+					temperature = "warm"
+				}
+				cacheText = fmt.Sprintf("%s %s %s", temperature, shortAge(state.Age), humanTokens(state.CtxTokens))
+			}
+			if state.LastHumanAge >= 0 {
+				talkText = shortAge(state.LastHumanAge)
+			}
+		}
+		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", name, tmuxState, cacheText, talkText, bookState, flag)
 	}
 	return nil
+}
+
+func (a *app) cacheStates(fleet book.Fleet) map[string]bpcache.State {
+	folders := make(map[string]string, len(fleet.Agents))
+	for name, agent := range fleet.Agents {
+		folders[name] = agent.Folder
+	}
+	done := make(chan map[string]bpcache.State, 1)
+	go func() {
+		if a.loadCache != nil {
+			done <- a.loadCache(folders)
+			return
+		}
+		done <- bpcache.Fleet(bptmux.ClaudeProjectsRoot(), folders)
+	}()
+	select {
+	case states := <-done:
+		return states
+	case <-time.After(time.Second):
+		return nil
+	}
 }
 
 func (a *app) tree() error {
@@ -548,7 +593,7 @@ func (a *app) open(args []string) error {
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		return err
 	}
-	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir); err != nil {
+	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, a.sender()); err != nil {
 		return err
 	}
 	rc := ""
@@ -557,6 +602,9 @@ func (a *app) open(args []string) error {
 		if len(matches) > 0 {
 			rc = "  rc:https://" + matches[len(matches)-1]
 		}
+	}
+	if err := a.flushPending(name); err != nil {
+		fmt.Fprintf(a.err, "WARNING: pending messages for %s were not delivered: %v\n", name, err)
 	}
 	fmt.Fprintf(a.out, "%s opened%s\n", name, rc)
 	return nil
@@ -715,7 +763,7 @@ func (a *app) close(args []string) error {
 	} else {
 		fmt.Fprintf(a.out, "%s is already closed\n", name)
 	}
-	return book.SetStatus(a.config.Agentbooks, name, "closed", "")
+	return book.SetStatus(a.config.Agentbooks, name, "closed", "", a.sender())
 }
 
 func (a *app) sender() string {
@@ -726,6 +774,87 @@ func (a *app) sender() string {
 		return value
 	}
 	return "server-main"
+}
+
+func (a *app) hasSession(name string) bool {
+	if a.sessionExists != nil {
+		return a.sessionExists(name)
+	}
+	return a.tmux.HasSession(a.ctx, name)
+}
+
+func (a *app) readCache(folders map[string]string) map[string]bpcache.State {
+	if a.loadCache != nil {
+		return a.loadCache(folders)
+	}
+	return bpcache.Fleet(bptmux.ClaudeProjectsRoot(), folders)
+}
+
+func (a *app) flushPending(name string) error {
+	entries, dropped, err := pending.Load(a.config.StateDir, name)
+	if err != nil || len(entries) == 0 {
+		return err
+	}
+	if err := a.tmux.Send(a.ctx, name, formatDigest(entries, dropped)); err != nil {
+		return err
+	}
+	return pending.Clear(a.config.StateDir, name)
+}
+
+var istanbul = time.FixedZone("Europe/Istanbul", 3*60*60)
+
+var turkishMonths = [...]string{"", "Oca", "Sub", "Mar", "Nis", "May", "Haz", "Tem", "Agu", "Eyl", "Eki", "Kas", "Ara"}
+
+func formatDigest(entries []pending.Entry, dropped int) string {
+	first := time.Unix(entries[0].TS, 0).In(istanbul)
+	last := time.Unix(entries[len(entries)-1].TS, 0).In(istanbul)
+	rangeText := fmt.Sprintf("%d %s", first.Day(), turkishMonths[first.Month()])
+	if first.YearDay() != last.YearDay() || first.Year() != last.Year() {
+		if first.Month() == last.Month() && first.Year() == last.Year() {
+			rangeText = fmt.Sprintf("%d-%d %s", first.Day(), last.Day(), turkishMonths[first.Month()])
+		} else {
+			rangeText = fmt.Sprintf("%d %s-%d %s", first.Day(), turkishMonths[first.Month()], last.Day(), turkishMonths[last.Month()])
+		}
+	}
+	var digest strings.Builder
+	fmt.Fprintf(&digest, "[%d birikmis duyuru — %s]", len(entries), rangeText)
+	for index, entry := range entries {
+		when := time.Unix(entry.TS, 0).In(istanbul)
+		fmt.Fprintf(&digest, "\n%d) (%d %s %s", index+1, when.Day(), turkishMonths[when.Month()], when.Format("15:04"))
+		if entry.Kind == "msg" {
+			fmt.Fprintf(&digest, ", %s", entry.From)
+		}
+		fmt.Fprintf(&digest, ") %s", entry.Text)
+	}
+	if dropped > 0 {
+		fmt.Fprintf(&digest, "\n(+%d eski duyuru dusuldu)", dropped)
+	}
+	return digest.String()
+}
+
+func humanTokens(value int) string {
+	switch {
+	case value >= 1_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(value)/1_000_000), ".0") + "M"
+	case value >= 1_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(value)/1_000), ".0") + "k"
+	default:
+		return strconv.Itoa(value)
+	}
+}
+
+func shortAge(value time.Duration) string {
+	if value < 0 {
+		value = 0
+	}
+	switch {
+	case value < 90*time.Minute:
+		return fmt.Sprintf("%dm", int(value.Minutes()))
+	case value < 48*time.Hour:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", value.Hours()), ".0") + "h"
+	default:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", value.Hours()/24), ".0") + "d"
+	}
 }
 
 func (a *app) message(args []string) error {
@@ -740,7 +869,22 @@ func (a *app) message(args []string) error {
 		}
 		return a.federatedMessage(target, peer, message)
 	}
-	queued, channelID, err := a.deliver(name, a.sender(), message)
+	sender := a.sender()
+	if !a.hasSession(name) {
+		if err := pending.Append(a.config.StateDir, name, pending.Entry{TS: time.Now().Unix(), From: sender, Kind: "msg", Text: message}); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "queued for %s (offline; delivered when it opens)\n", name)
+		return nil
+	}
+	entries, dropped, err := pending.Load(a.config.StateDir, name)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		message = formatDigest(entries, dropped) + "\n\n" + message
+	}
+	queued, channelID, err := a.deliver(name, sender, message)
 	if err != nil {
 		if errors.Is(err, bptmux.ErrNotAgent) {
 			// The pane is a shell, not an agent CLI: surface a clear error
@@ -751,6 +895,11 @@ func (a *app) message(args []string) error {
 			return fmt.Errorf("target %s is not an agent CLI", name)
 		}
 		return err
+	}
+	if len(entries) > 0 {
+		if err := pending.Clear(a.config.StateDir, name); err != nil {
+			return err
+		}
 	}
 	if !queued {
 		fmt.Fprintln(a.out, "sent")
@@ -790,6 +939,9 @@ func (a *app) federatedMessage(target, peer, message string) error {
 }
 
 func (a *app) deliver(name, sender, message string) (queued bool, channelID string, err error) {
+	if a.deliverMessage != nil {
+		return a.deliverMessage(name, sender, message)
+	}
 	if !a.tmux.HasSession(a.ctx, name) {
 		return false, "", fmt.Errorf("no open session named %s", name)
 	}
@@ -842,7 +994,16 @@ func (t *deliveryTally) record(target string, queued bool, channelID string, err
 }
 
 func (a *app) announce(args []string) error {
-	if len(args) == 0 {
+	dryRun := false
+	words := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--dry-run" {
+			dryRun = true
+		} else {
+			words = append(words, arg)
+		}
+	}
+	if len(words) == 0 {
 		return fmt.Errorf("usage: bp announce <message...>")
 	}
 	sender := a.sender()
@@ -853,22 +1014,56 @@ func (a *app) announce(args []string) error {
 	if _, ok := fleet.Agents[sender]; !ok && sender != "server-main" {
 		return fmt.Errorf("sender %s is not in the agentbook hierarchy", sender)
 	}
-	targets := announcementTargets(fleet, states, sender)
-	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, strings.Join(args, " "))
-	var tally deliveryTally
+	targets := announcementCandidates(fleet, sender)
+	folders := make(map[string]string, len(targets))
 	for _, target := range targets {
+		folders[target] = fleet.Agents[target].Folder
+	}
+	cacheStates := a.readCache(folders)
+	messageText := strings.Join(words, " ")
+	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, messageText)
+	var tally deliveryTally
+	deferred, coldCost, warm := 0, 0, 0
+	for _, target := range targets {
+		cacheState := cacheStates[target]
+		live := states[target].Alive
+		if !live || !cacheState.Known || cacheState.Age >= time.Hour {
+			deferred++
+			coldCost += cacheState.CtxTokens
+			if !dryRun {
+				if appendErr := pending.Append(a.config.StateDir, target, pending.Entry{TS: time.Now().Unix(), From: sender, Kind: "announce", Text: messageText}); appendErr != nil {
+					tally.errs = append(tally.errs, fmt.Errorf("%s: %w", target, appendErr))
+				}
+			}
+			continue
+		}
+		warm++
+		if dryRun {
+			continue
+		}
 		queued, channelID, deliveryErr := a.deliver(target, sender, message)
 		tally.record(target, queued, channelID, deliveryErr)
 	}
-	fmt.Fprintf(a.out, "sent: %d, queued: %d", tally.sent, len(tally.channels))
-	if len(tally.channels) > 0 {
-		fmt.Fprintf(a.out, " (%s)", strings.Join(tally.channels, ", "))
+	if dryRun {
+		fmt.Fprintf(a.out, "would send: %d, would defer: %d\n", warm, deferred)
+		fmt.Fprintf(a.out, "cold reread cost: ~%s tokens (%d targets: %d warm, %d cold)\n", humanTokens(coldCost), len(targets), warm, deferred)
+		return nil
 	}
-	if tally.skipped > 0 {
-		fmt.Fprintf(a.out, ", skipped non-agent: %d", tally.skipped)
-	}
-	fmt.Fprintln(a.out)
+	fmt.Fprintf(a.out, "sent: %d, deferred: %d\n", tally.sent+len(tally.channels), deferred)
 	return errors.Join(tally.errs...)
+}
+
+func announcementCandidates(fleet book.Fleet, sender string) []string {
+	targets := make([]string, 0)
+	for _, name := range fleet.Order {
+		if name == sender || strings.HasPrefix(name, "lab-") {
+			continue
+		}
+		if sender == "server-main" || sender == fleet.Root || fleet.IsDescendant(name, sender) {
+			targets = append(targets, name)
+		}
+	}
+	return targets
 }
 
 func announcementTargets(fleet book.Fleet, states map[string]book.State, sender string) []string {
@@ -889,6 +1084,7 @@ type compactOptions struct {
 	minAge  time.Duration
 	exclude []string
 	dryRun  bool
+	policy  bool
 }
 
 type compactSkip struct {
@@ -911,6 +1107,8 @@ func parseCompactArgs(args []string) (compactOptions, error) {
 		switch {
 		case arg == "--dry-run":
 			opts.dryRun = true
+		case arg == "--policy":
+			opts.policy = true
 		case arg == "--min-age" || strings.HasPrefix(arg, "--min-age="):
 			value := ""
 			if arg == "--min-age" {
@@ -995,6 +1193,20 @@ func selectCompactTargets(fleet book.Fleet, states map[string]book.State, sender
 	return plan
 }
 
+func selectPolicyTargets(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, commands map[string]string, typing map[string]bool) []string {
+	var targets []string
+	for _, name := range fleet.Order {
+		state := cacheStates[name]
+		if name == "server-main" || !states[name].Alive || states[name].Busy || typing[name] || commands[name] != "claude" {
+			continue
+		}
+		if state.Known && state.LastHumanAge > 24*time.Hour && state.CtxTokens > 200_000 {
+			targets = append(targets, name)
+		}
+	}
+	return targets
+}
+
 func formatAge(d time.Duration) string {
 	minutes := int(d.Minutes())
 	if minutes < 0 {
@@ -1065,7 +1277,30 @@ func (a *app) compact(args []string) error {
 	}
 	compactStatePath := filepath.Join(a.config.StateDir, "compact.json")
 	lastCompact := loadCompactState(compactStatePath)
-	plan := selectCompactTargets(fleet, states, sender, opts.exclude, lastCompact, opts.minAge, time.Now())
+	var plan compactPlan
+	if opts.policy {
+		commands, err := a.tmux.Commands(a.ctx)
+		if err != nil {
+			return err
+		}
+		folders := make(map[string]string, len(fleet.Agents))
+		for name, agent := range fleet.Agents {
+			folders[name] = agent.Folder
+		}
+		cacheStates := a.readCache(folders)
+		typing := map[string]bool{}
+		for name, state := range cacheStates {
+			if name == "server-main" || commands[name] != "claude" || !states[name].Alive || states[name].Busy ||
+				!state.Known || state.LastHumanAge <= 24*time.Hour || state.CtxTokens <= 200_000 {
+				continue
+			}
+			pane, captureErr := a.tmux.CaptureAnsi(a.ctx, name)
+			typing[name] = captureErr != nil || bptmux.Typing(pane)
+		}
+		plan.Send = selectPolicyTargets(fleet, states, cacheStates, commands, typing)
+	} else {
+		plan = selectCompactTargets(fleet, states, sender, opts.exclude, lastCompact, opts.minAge, time.Now())
+	}
 
 	if opts.dryRun {
 		fmt.Fprintf(a.out, "[dry-run] targets: %d\n", len(plan.Send))
@@ -1126,14 +1361,21 @@ func (a *app) queueList(args []string) error {
 	}
 	if len(rows) == 0 {
 		fmt.Fprintln(a.out, "(queue empty)")
-		return nil
-	}
-	for _, row := range rows {
-		text := []rune(row.Msg)
-		if len(text) > 60 {
-			text = text[:60]
+	} else {
+		for _, row := range rows {
+			text := []rune(row.Msg)
+			if len(text) > 60 {
+				text = text[:60]
+			}
+			fmt.Fprintf(a.out, "%s %s -> %s : %s\n", row.ID, row.From, row.To, string(text))
 		}
-		fmt.Fprintf(a.out, "%s %s -> %s : %s\n", row.ID, row.From, row.To, string(text))
+	}
+	agents, items, err := pending.Counts(a.config.StateDir)
+	if err != nil {
+		return err
+	}
+	if items > 0 {
+		fmt.Fprintf(a.out, "pending: %d agents, %d items\n", agents, items)
 	}
 	return nil
 }

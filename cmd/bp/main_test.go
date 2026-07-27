@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	bpcache "blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/msgq"
+	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/worktree"
 )
@@ -94,6 +97,172 @@ func TestAnnouncementTargetsFollowHierarchy(t *testing.T) {
 	if got, want := announcementTargets(fleet, states, "server-main"), []string{"alpha", "alpha-child", "alpha-grandchild", "beta", "orphan"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("root targets=%v, want %v", got, want)
 	}
+}
+
+func TestFormatDigest(t *testing.T) {
+	entries := []pending.Entry{
+		{TS: time.Date(2026, 7, 26, 11, 2, 0, 0, time.UTC).Unix(), From: "ada", Kind: "announce", Text: "ilk"},
+		{TS: time.Date(2026, 7, 27, 15, 40, 0, 0, time.UTC).Unix(), From: "alp", Kind: "msg", Text: "ikinci"},
+	}
+	want := "[2 birikmis duyuru — 26-27 Tem]\n" +
+		"1) (26 Tem 14:02) ilk\n" +
+		"2) (27 Tem 18:40, alp) ikinci\n" +
+		"(+1 eski duyuru dusuldu)"
+	if got := formatDigest(entries, 1); got != want {
+		t.Fatalf("digest:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestAnnounceDefersColdAndSendsWarm(t *testing.T) {
+	t.Setenv("AGENT", "server-main")
+	stateDir := t.TempDir()
+	out := testOutput(t)
+	fleet := book.Fleet{
+		Root:  "server-main",
+		Order: []string{"server-main", "warm", "cold"},
+		Agents: map[string]book.Agent{
+			"server-main": {Name: "server-main"},
+			"warm":        {Name: "warm", Folder: "/srv/warm"},
+			"cold":        {Name: "cold", Folder: "/srv/cold"},
+		},
+		Parents: map[string]string{"server-main": "", "warm": "server-main", "cold": "server-main"},
+	}
+	states := map[string]book.State{"warm": {Alive: true}, "cold": {Alive: true}}
+	var sent []string
+	a := &app{
+		config: bpconfig.Config{StateDir: stateDir},
+		out:    out,
+		loadFleet: func() (book.Fleet, map[string]book.State, error) {
+			return fleet, states, nil
+		},
+		loadCache: func(map[string]string) map[string]bpcache.State {
+			return map[string]bpcache.State{
+				"warm": {Known: true, Age: 10 * time.Minute, CtxTokens: 100_000},
+				"cold": {Known: true, Age: 2 * time.Hour, CtxTokens: 300_000},
+			}
+		},
+		deliverMessage: func(name, from, message string) (bool, string, error) {
+			sent = append(sent, name+":"+message)
+			return false, "", nil
+		},
+	}
+	if err := a.announce([]string{"hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 1 || !strings.HasPrefix(sent[0], "warm:") {
+		t.Fatalf("sent=%v, want only warm", sent)
+	}
+	entries, _, err := pending.Load(stateDir, "cold")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Text != "hello" || entries[0].Kind != "announce" {
+		t.Fatalf("cold pending=%+v", entries)
+	}
+	if got := readTestOutput(t, out); got != "sent: 1, deferred: 1\n" {
+		t.Fatalf("output=%q", got)
+	}
+}
+
+func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
+	t.Setenv("AGENT", "ada")
+	t.Run("offline", func(t *testing.T) {
+		stateDir := t.TempDir()
+		out := testOutput(t)
+		a := &app{
+			config:        bpconfig.Config{StateDir: stateDir},
+			out:           out,
+			sessionExists: func(string) bool { return false },
+		}
+		if err := a.message([]string{"alp", "hello"}); err != nil {
+			t.Fatal(err)
+		}
+		entries, _, err := pending.Load(stateDir, "alp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Kind != "msg" || entries[0].From != "ada" {
+			t.Fatalf("pending=%+v", entries)
+		}
+		if got := readTestOutput(t, out); got != "queued for alp (offline; delivered when it opens)\n" {
+			t.Fatalf("output=%q", got)
+		}
+	})
+
+	t.Run("digest and clear", func(t *testing.T) {
+		stateDir := t.TempDir()
+		if err := pending.Append(stateDir, "alp", pending.Entry{TS: time.Now().Unix(), From: "ada", Kind: "announce", Text: "news"}); err != nil {
+			t.Fatal(err)
+		}
+		out := testOutput(t)
+		calls := 0
+		var delivered string
+		a := &app{
+			config:        bpconfig.Config{StateDir: stateDir},
+			queue:         msgq.New(filepath.Join(stateDir, "msgq")),
+			out:           out,
+			sessionExists: func(string) bool { return true },
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				calls++
+				delivered = message
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "direct"}); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 || !strings.Contains(delivered, "birikmis duyuru") || !strings.HasSuffix(delivered, "\n\ndirect") {
+			t.Fatalf("calls=%d delivered=%q", calls, delivered)
+		}
+		entries, _, err := pending.Load(stateDir, "alp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("pending was not cleared: %+v", entries)
+		}
+	})
+}
+
+func TestSelectPolicyTargetsThresholds(t *testing.T) {
+	fleet, states := compactTestFleet()
+	commands := map[string]string{}
+	cacheStates := map[string]bpcache.State{}
+	for _, name := range fleet.Order {
+		commands[name] = "claude"
+		cacheStates[name] = bpcache.State{Known: true, LastHumanAge: 25 * time.Hour, CtxTokens: 200_001}
+	}
+	cacheStates["alpha"] = bpcache.State{Known: true, LastHumanAge: 24 * time.Hour, CtxTokens: 900_000}
+	cacheStates["beta"] = bpcache.State{Known: true, LastHumanAge: 48 * time.Hour, CtxTokens: 200_000}
+	commands["orphan"] = "codex"
+	states["alpha-grandchild"] = book.State{Alive: true, Busy: true}
+	typing := map[string]bool{"lab-scratch": true}
+	got := selectPolicyTargets(fleet, states, cacheStates, commands, typing)
+	if want := []string{"alpha-child"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("targets=%v, want %v", got, want)
+	}
+}
+
+func testOutput(t *testing.T) *os.File {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	return file
+}
+
+func readTestOutput(t *testing.T, file *os.File) string {
+	t.Helper()
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func compactTestFleet() (book.Fleet, map[string]book.State) {

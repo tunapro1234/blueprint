@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -635,7 +636,7 @@ func mungeProjectPath(dir string) string {
 }
 
 // claudeProjectsRoot is the directory where Claude Code stores per-cwd session logs.
-func claudeProjectsRoot() string {
+func ClaudeProjectsRoot() string {
 	home := os.Getenv("HOME")
 	if home == "" {
 		home, _ = os.UserHomeDir()
@@ -646,7 +647,7 @@ func claudeProjectsRoot() string {
 // readCustomTitle returns the customTitle set for a Claude session file (via the
 // line-1 `{"type":"custom-title",...}` record bp writes with /rename). It reads a
 // bounded prefix so huge session logs stay cheap.
-func readCustomTitle(path string) (string, bool) {
+func ReadCustomTitle(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
@@ -655,17 +656,50 @@ func readCustomTitle(path string) (string, bool) {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for i := 0; i < 200 && scanner.Scan(); i++ {
-		line := scanner.Bytes()
-		if !bytes.Contains(line, []byte(`"custom-title"`)) {
-			continue
+		if title, ok := customTitleLine(scanner.Bytes()); ok {
+			return title, true
 		}
-		var rec struct {
-			Type        string `json:"type"`
-			CustomTitle string `json:"customTitle"`
+	}
+	// A session titled (or renamed) after its first 200 lines would otherwise
+	// look untitled, so fall back to the tail — /rename rewrites the record, and
+	// the newest one wins.
+	info, err := f.Stat()
+	if err != nil {
+		return "", false
+	}
+	start := info.Size() - titleTailBytes
+	if start <= 0 {
+		return "", false
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return "", false
+	}
+	tail := bufio.NewScanner(f)
+	tail.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	tail.Scan() // discard the partial line the offset landed in
+	title, found := "", false
+	for tail.Scan() {
+		if value, ok := customTitleLine(tail.Bytes()); ok {
+			title, found = value, true
 		}
-		if json.Unmarshal(line, &rec) == nil && rec.Type == "custom-title" {
-			return rec.CustomTitle, true
-		}
+	}
+	return title, found
+}
+
+// titleTailBytes bounds the fallback scan so `bp status` stays cheap on the
+// large session files (100 MB+) this runs against.
+const titleTailBytes = 512 * 1024
+
+func customTitleLine(line []byte) (string, bool) {
+	if !bytes.Contains(line, []byte(`"custom-title"`)) {
+		return "", false
+	}
+	var rec struct {
+		Type        string `json:"type"`
+		CustomTitle string `json:"customTitle"`
+	}
+	if json.Unmarshal(line, &rec) == nil && rec.Type == "custom-title" && rec.CustomTitle != "" {
+		return rec.CustomTitle, true
 	}
 	return "", false
 }
@@ -675,18 +709,18 @@ func readCustomTitle(path string) (string, bool) {
 // session's id (the file's base name). This disambiguates agents that share a
 // working directory — which `claude -c` (continue-most-recent-in-cwd) cannot,
 // causing it to resume a co-located agent's conversation instead of ours.
-func resumeSessionID(projectsRoot, dir, agent string) (string, bool) {
+func ResumeSessionPath(projectsRoot, dir, agent string) (string, bool) {
 	entries, err := os.ReadDir(filepath.Join(projectsRoot, mungeProjectPath(dir)))
 	if err != nil {
 		return "", false
 	}
-	var bestID string
+	var bestPath string
 	var bestMod time.Time
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
-		title, ok := readCustomTitle(filepath.Join(projectsRoot, mungeProjectPath(dir), e.Name()))
+		title, ok := ReadCustomTitle(filepath.Join(projectsRoot, mungeProjectPath(dir), e.Name()))
 		if !ok || title != agent {
 			continue
 		}
@@ -694,12 +728,20 @@ func resumeSessionID(projectsRoot, dir, agent string) (string, bool) {
 		if err != nil {
 			continue
 		}
-		if bestID == "" || info.ModTime().After(bestMod) {
-			bestID = strings.TrimSuffix(e.Name(), ".jsonl")
+		if bestPath == "" || info.ModTime().After(bestMod) {
+			bestPath = filepath.Join(projectsRoot, mungeProjectPath(dir), e.Name())
 			bestMod = info.ModTime()
 		}
 	}
-	return bestID, bestID != ""
+	return bestPath, bestPath != ""
+}
+
+func ResumeSessionID(projectsRoot, dir, agent string) (string, bool) {
+	path, ok := ResumeSessionPath(projectsRoot, dir, agent)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSuffix(filepath.Base(path), ".jsonl"), true
 }
 
 func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions, warn func(string)) error {
@@ -716,7 +758,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		// Resume THIS agent's own conversation by id, not `claude -c` (which
 		// continues whichever conversation in the cwd is most recent and so
 		// grabs a co-located agent's session in a shared directory).
-		if id, ok := resumeSessionID(claudeProjectsRoot(), dir, session); ok {
+		if id, ok := ResumeSessionID(ClaudeProjectsRoot(), dir, session); ok {
 			command += " --resume " + id
 		} else if warn != nil {
 			warn("no prior '" + session + "' conversation found under " + dir + "; opening a fresh session")

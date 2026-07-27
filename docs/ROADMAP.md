@@ -74,6 +74,40 @@ Metateam'in P2P yaklaşımı daha zarif ama işletmesi zor.
 - **Opus review + sadeleştirme turu** — gpt'nin yazdığı federation/pending/cache kodunun
   MVP ölçüsüne çekilmesi. Tuna'nın açık isteği.
 
+## 5. Kuyruktaki hata: `bp open` yeni kayıtta parent/class çıkarımı
+
+ada 2026-07-27'de ikinci kez elle düzeltmek zorunda kaldı. Aciliyet düşük, sıradaki işi bölmüyor.
+
+**Belirti:** `bp open kavram-launch /srv/kavram/launch` →
+`{"class":"other","parent":"server-main"}`. Beklenen `{"class":"kavram","parent":"kavram-main"}`,
+çünkü book'ta `kavram-main` folder=`/srv/kavram` ve aynı kalıptaki `kavram-gate`/`kavram-yc`
+zaten `kavram-main` altında.
+
+**Sebep:** `bp open` parent olarak çağıran agent'ı geçiriyor (`cmd/bp/main.go` → `a.sender()`),
+`book.SetStatus` ise yeni kayıtta `class`'ı sabit `"other"` yazıyor. Yol bilgisi hiç kullanılmıyor.
+
+**Karar (ada'nın önerisi, özel-durum kodu yok):** yeni kayıtta folder yolunu mevcut agent'ların
+folder'larıyla karşılaştır, **en uzun eşleşen üst-yol** kimse `parent` o olsun, `class` da onun
+class'ı. Eşleşme yoksa bugünkü davranış (`server-main` / `other`) kalsın. Böylece
+`/srv/probot/...` → `probot-main`, `/srv/kitap/...` → `kitap-main` kendiliğinden bağlanır.
+
+Uygulama notları:
+- Karşılaştırma **yol sınırında** olmalı: `/srv/kavram` `/srv/kavram-old`'u eşleştirmemeli.
+- Book folder'ı açıklama taşıyabiliyor (`"/srv (home: /srv/server-main)"`) — `cmd/bp/bar.go`
+  içindeki `firstPath` bunu zaten temizliyor, ortak bir yere taşınmalı.
+- `server-main` folder=`/srv` her şeyi eşleştirir; en-uzun kuralı doğal olarak derini seçer,
+  yani fallback kendiliğinden doğru çalışır.
+- **Doğru book'a yazılmalı:** eşleşme hangi book'ta bulunduysa kayıt da oraya gitsin
+  (`/srv/probot` altı ProbotPath, diğerleri MainPath). `SetStatus` şu an ad eşleşmesi yoksa
+  `paths[0]`'a yazıyor.
+- Sadeleştirme fırsatı: `book.AddLive` aynı çıkarımı **ada göre** (`kavram-` öneki) yapıyor.
+  İkisi tek fonksiyonda birleşmeli — önce yol, sonra ad; iki ayrı kural bakımı zorlaştırıyor.
+
+**Ayrı ve KAPALI olan madde:** ada'nın daha önce bildirdiği "`bp open` mevcut kayıtların
+parent/role alanlarını eziyor" hatası `909f20f` ile düzeldi (`SetStatus` artık var olan kayıtta
+yalnızca `status` yazıyor, değişiklik yoksa dosyaya hiç dokunmuyor). Asıl sebep `bp open` değil,
+daemon keepalive'inin 30 saniyede bir tüm dosyayı yeniden yazmasıydı.
+
 ---
 
 ## Reddedilenler (tekrar tartışılmasın diye)

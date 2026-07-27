@@ -148,6 +148,14 @@ func (a *app) run(args []string) error {
 		return a.connect(args[1:])
 	case "img":
 		return a.image(args[1:])
+	case "bar":
+		return a.bar(args[1:])
+	case "name":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: bp name <agent>")
+		}
+		fmt.Fprintln(a.out, a.barName(args[1]))
+		return nil
 	case "dash":
 		return a.dashboard(args[1:])
 	case "fed":

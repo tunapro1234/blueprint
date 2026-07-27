@@ -23,6 +23,7 @@ type Agent struct {
 	Role     string `json:"role,omitempty"`
 	Status   string `json:"status,omitempty"`
 	Nickname string `json:"nickname,omitempty"`
+	Color    string `json:"color,omitempty"`
 }
 
 type File struct {
@@ -127,6 +128,9 @@ func merge(old, next Agent) Agent {
 	if next.Nickname != "" {
 		old.Nickname = next.Nickname
 	}
+	if next.Color != "" {
+		old.Color = next.Color
+	}
 	return old
 }
 
@@ -175,6 +179,112 @@ func (f Fleet) IsDescendant(name, ancestor string) bool {
 		}
 	}
 	return false
+}
+
+// SetColor records an agent's accent colour. Unlike SetStatus it never creates
+// an entry: a colour is decoration, not a reason to register an agent.
+func SetColor(paths []string, name, colour string) error {
+	return mutate(paths, name, func(agent map[string]any) bool {
+		if current, _ := agent["color"].(string); current == colour {
+			return false
+		}
+		agent["color"] = colour
+		return true
+	})
+}
+
+// mutate applies change to the named agent in whichever book holds it, under
+// the same lock and atomic rewrite SetStatus uses. change reports whether it
+// altered anything; when it did not, the file is left untouched so a concurrent
+// hand edit cannot be lost to a no-op write.
+func mutate(paths []string, name string, change func(map[string]any) bool) error {
+	paths = Paths(paths)
+	if len(paths) == 0 {
+		return fmt.Errorf("agentbook is not configured")
+	}
+	target := ""
+	for _, path := range paths {
+		file, err := Load(path)
+		if err != nil {
+			continue
+		}
+		for _, agent := range file.Agents {
+			if agent.Name == name {
+				target = path
+				break
+			}
+		}
+		if target != "" {
+			break
+		}
+	}
+	if target == "" {
+		return nil
+	}
+	lock, err := os.OpenFile(target+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	var raw map[string]any
+	if err = json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	agents, _ := raw["agents"].([]any)
+	changed := false
+	for _, value := range agents {
+		agent, ok := value.(map[string]any)
+		if ok && agent["name"] == name {
+			changed = change(agent)
+			break
+		}
+	}
+	if !changed {
+		return nil
+	}
+	raw["updated"] = time.Now().Format("2006-01-02")
+	return writeBook(target, raw, info.Mode().Perm())
+}
+
+func writeBook(target string, raw map[string]any, mode os.FileMode) error {
+	encoded, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".agentbook-*.json")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err = tmp.Write(encoded); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmpName, target)
 }
 
 func SetStatus(paths []string, name, status, folder, parent string) error {

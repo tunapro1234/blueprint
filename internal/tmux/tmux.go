@@ -274,6 +274,21 @@ func (c *Client) PaneCommand(ctx context.Context, session string) (string, error
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Option reads one session option, empty when tmux has no value set for it.
+func (c *Client) Option(ctx context.Context, session, name string) (string, error) {
+	out, err := c.run(ctx, nil, "show-options", "-t", session, "-v", name)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// SetOption sets one session option.
+func (c *Client) SetOption(ctx context.Context, session, name, value string) error {
+	_, err := c.run(ctx, nil, "set-option", "-t", session, name, value)
+	return err
+}
+
 func (c *Client) HasSession(ctx context.Context, session string) bool {
 	_, err := c.run(ctx, nil, "has-session", "-t", "="+session)
 	return err == nil

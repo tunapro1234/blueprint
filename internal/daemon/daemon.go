@@ -79,7 +79,7 @@ func (s *Service) Run(ctx context.Context) {
 	}
 	s.startLoop(ctx, "tokens-collect", 2*time.Minute, 5*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "tokens-collect", interval, func() error {
-			config := tokens.DefaultConfig(s.config.StateDir, s.config.Agentbooks)
+			config := tokens.DefaultConfig(s.config.StateDir, s.config.TokenAgentbooks)
 			config.Log = s.log.Writer()
 			_, err := tokens.Collect(config)
 			return err
@@ -167,6 +167,12 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) startFederation(ctx context.Context) {
+	if s.config.InvalidConfig != "" {
+		err := fmt.Errorf("federation disabled because config.json is invalid: %s", s.config.InvalidConfig)
+		s.setState("fed-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: err.Error()})
+		s.log.Printf("fed-server: %v", err)
+		return
+	}
 	if s.config.Fed == nil {
 		return
 	}
@@ -178,6 +184,8 @@ func (s *Service) startFederation(ctx context.Context) {
 			s.log.Printf("fed-server: %v", err)
 			return
 		}
+		hub.Log = s.log.Writer()
+		hub.Outbox.Log = s.log.Writer()
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -192,6 +200,7 @@ func (s *Service) startFederation(ctx context.Context) {
 		}()
 	case "client":
 		client := fed.NewClient(s.config.Fed.Hub, s.config.Fed.Token)
+		client.Log = s.log.Writer()
 		failures := 0
 		reported := false
 		s.startLoop(ctx, "fed-poll", 5*time.Second, 5*time.Second, func(run context.Context, interval time.Duration) {

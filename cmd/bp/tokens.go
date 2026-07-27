@@ -27,7 +27,7 @@ type tokenOptions struct {
 }
 
 func (a *app) tokens(args []string) error {
-	config := tokens.DefaultConfig(a.config.StateDir, a.config.Agentbooks)
+	config := tokens.DefaultConfig(a.config.StateDir, a.config.TokenAgentbooks)
 	if len(args) > 0 && (args[0] == "collect" || args[0] == "gc") {
 		action := args[0]
 		jsonOutput := false

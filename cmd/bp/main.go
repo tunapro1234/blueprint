@@ -88,6 +88,9 @@ func main() {
 }
 
 func (a *app) run(args []string) error {
+	if len(args) > 0 && args[0] == "fed" && a.config.InvalidConfig != "" {
+		return fmt.Errorf("federation disabled because config.json is invalid: %s", a.config.InvalidConfig)
+	}
 	switch args[0] {
 	case "status":
 		return a.status()

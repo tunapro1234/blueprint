@@ -11,10 +11,19 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	bpconfig "blueprint/internal/config"
 	"blueprint/internal/dashboard"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/worktree"
 )
+
+func TestFedCommandRejectsInvalidConfigFallback(t *testing.T) {
+	a := &app{config: bpconfig.Config{InvalidConfig: "parse config.json: unexpected EOF"}}
+	err := a.run([]string{"fed", "status"})
+	if err == nil || !strings.Contains(err.Error(), "federation disabled because config.json is invalid") {
+		t.Fatalf("error=%v", err)
+	}
+}
 
 func TestDeliveryTallyClassifiesNonAgentAsSkip(t *testing.T) {
 	var tally deliveryTally

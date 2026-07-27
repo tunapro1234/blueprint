@@ -12,15 +12,24 @@ import (
 // RecentRateCounts reconstructs visible one-hour send counts from the audit
 // trail for the CLI. The authoritative limiter remains in daemon memory.
 func RecentRateCounts(stateDir string, now time.Time) (map[string]int, error) {
-	file, err := os.Open(filepath.Join(stateDir, "fed", "log.jsonl"))
+	counts := map[string]int{}
+	for _, name := range []string{"log.jsonl.1", "log.jsonl"} {
+		if err := addRecentRateCounts(filepath.Join(stateDir, "fed", name), now, counts); err != nil {
+			return nil, err
+		}
+	}
+	return counts, nil
+}
+
+func addRecentRateCounts(path string, now time.Time, counts map[string]int) error {
+	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return map[string]int{}, nil
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer file.Close()
-	counts := map[string]int{}
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 1024*1024)
@@ -35,5 +44,5 @@ func RecentRateCounts(stateDir string, now time.Time) (map[string]int, error) {
 			counts[entry.Peer]++
 		}
 	}
-	return counts, scanner.Err()
+	return scanner.Err()
 }

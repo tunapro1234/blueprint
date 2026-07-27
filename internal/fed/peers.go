@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,10 @@ func PeersPath(stateDir string) string {
 }
 
 func LoadPeers(stateDir string) (map[string]Peer, error) {
+	return loadPeers(stateDir, os.Stderr)
+}
+
+func loadPeers(stateDir string, log io.Writer) (map[string]Peer, error) {
 	path := PeersPath(stateDir)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -25,9 +30,23 @@ func LoadPeers(stateDir string) (map[string]Peer, error) {
 	if err := json.Unmarshal(data, &peers); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	loaded := make(map[string]Peer, len(peers))
+	tokenOwners := make(map[string]string, len(peers))
 	for name, peer := range peers {
 		if err := validateName(name); err != nil {
-			return nil, fmt.Errorf("parse %s: invalid peer %q: %w", path, name, err)
+			logPeerSkip(log, name, err)
+			continue
+		}
+		validExpose := true
+		for _, exposedName := range peer.Expose {
+			if err := validateName(exposedName); err != nil {
+				logPeerSkip(log, name, fmt.Errorf("invalid expose entry %q: %w", exposedName, err))
+				validExpose = false
+				break
+			}
+		}
+		if !validExpose {
+			continue
 		}
 		if len(peer.Token) != 64 {
 			return nil, fmt.Errorf("parse %s: peer %q token must be 64 hexadecimal characters", path, name)
@@ -35,8 +54,20 @@ func LoadPeers(stateDir string) (map[string]Peer, error) {
 		if _, err := hex.DecodeString(peer.Token); err != nil {
 			return nil, fmt.Errorf("parse %s: peer %q token must be 64 hexadecimal characters", path, name)
 		}
+		normalized := strings.ToLower(peer.Token)
+		if owner, exists := tokenOwners[normalized]; exists {
+			return nil, fmt.Errorf("parse %s: duplicate token for peers %q and %q", path, owner, name)
+		}
+		tokenOwners[normalized] = name
+		loaded[name] = peer
 	}
-	return peers, nil
+	return loaded, nil
+}
+
+func logPeerSkip(log io.Writer, name string, err error) {
+	if log != nil {
+		fmt.Fprintf(log, "fed: skipping peer %q: %v\n", name, err)
+	}
 }
 
 func PeerNames(peers map[string]Peer) []string {
@@ -58,7 +89,7 @@ func GenerateToken() (string, error) {
 
 func exposed(peer Peer, target string) bool {
 	for _, name := range peer.Expose {
-		if name == "*" || name == target {
+		if name == target {
 			return true
 		}
 	}

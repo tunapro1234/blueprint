@@ -108,6 +108,100 @@ parent/role alanlarını eziyor" hatası `909f20f` ile düzeldi (`SetStatus` art
 yalnızca `status` yazıyor, değişiklik yoksa dosyaya hiç dokunmuyor). Asıl sebep `bp open` değil,
 daemon keepalive'inin 30 saniyede bir tüm dosyayı yeniden yazmasıydı.
 
+## 6. Codex app-server desteği (Yiğit'in filosuna bağlanmak)
+
+kavram-launch'ın 2026-07-27 görevi. Yiğit'in agentları tmux'ta değil: tek uzun ömürlü
+**`codex app-server`** daemon'u altında "thread" olarak yaşıyorlar. Federation mesajı taşır ama
+onların filosunu **göremiyoruz**. Bu bölüm o boşluğu kapatıyor.
+
+### 6a. Mimari — ne olduğu (yerelde doğrulandı, codex-cli 0.145.0)
+
+`codex app-server`, **JSON-RPC 2.0** konuşan uzun ömürlü bir daemon. Çerçeveleme satır-sonlu
+düz JSON (Content-Length yok). Taşıma: `--listen stdio:// | unix://PATH | ws://IP:PORT`.
+Yerelde `--stdio` ile el sıkışıp `initialize` + `thread/list` + `model/list` +
+`account/rateLimits/read` çağrılarını gerçekten çalıştırdım; protokol **89 istemci metodu**,
+**70 sunucu bildirimi** içeriyor.
+
+Kardeş komutlar ve ne oldukları:
+- **`app-server daemon start|stop|restart|version`** — yönetilen (managed) daemon.
+  `~/.codex/app-server-control/app-server-control.sock` kontrol soketini o yaratır.
+  ⚠️ **standalone kurulum şart** (`~/.codex/packages/standalone/current/codex`); bizim npm/node
+  kurulumumuzda çalışmıyor ("managed standalone Codex install not found"). Yiğit'te var.
+- **`app-server proxy --sock <path>`** — stdio baytlarını çalışan daemon'un kontrol soketine
+  köprüler. **Uzaktan bağlanmanın SSH-dostu kapısı budur.**
+- **`codex --remote ws://|wss://|unix://PATH`** — TUI'yi uzak bir app-server'a bağlar.
+- **`remote-control start|stop|pair`** — aynı daemon + uzaktan kontrol; `pair` kısa ömürlü
+  eşleştirme kodu basar. Yiğit telefondan böyle bağlanıyor. Araya OpenAI tarafında bir relay
+  girdiği anlaşılıyor (doğrulanmadı).
+- **`mcp-server`** — Codex'i MCP sunucusu yapar (stdio). Bu **başka bir yüzey**: bir LLM'in
+  Codex'i araç olarak çağırması içindir, filo yönetimi için değil. Karıştırılmamalı.
+- **`exec-server`** — ws:// dinleyen bağımsız exec servisi; `--remote` ile kendini "remote
+  environment" olarak kaydedebiliyor. Codex Cloud tarafına ait, bizim senaryomuzla ilgisiz.
+
+### 6b. Neden bizi ilgilendiriyor — protokol bp'nin yaptığı her şeyi zaten içeriyor
+
+| bp bugün (tmux'ta) | app-server'da yerel karşılığı |
+|---|---|
+| `bp tree` / `status` — kim var | `thread/list` (`cwd`, `searchTerm`, `cursor`, `limit`) |
+| meşgul mü? — `capture-pane` çıktısı okunarak | `thread/status/changed`, `turn/started`, `turn/completed` (**push**) |
+| `bp msg` (boştaki agent'a) | `turn/start` |
+| çalışan tura mesaj — **bizde yasak** | `turn/steer` — birinci sınıf, işi bölmeden |
+| işi kesme | `turn/interrupt` |
+| teslim anında compact (§4) | `thread/compact/start` |
+| context boyutu — jsonl kuyruğu okunarak | `thread/tokenUsage/updated` (**push**) |
+| `bp usage` / `bp tokens` | `account/rateLimits/read`, `account/usage/read` |
+| agent adı (customTitle kaydı) | `thread/name/set` |
+| — (bizde yok) | `thread/goal/set|get|clear` — otonom hedef motoru |
+
+**Dürüst sonuç:** Codex tarafında bp'nin tmux pane'i kazıyarak tahmin ettiği her şeyi daemon
+zaten *kesin* veriyor. Yani bp'nin oradaki değeri daha iyi bir taşıma katmanı olmak değil;
+**iki filonun üstündeki ortak katman** olmak: isim/hiyerarşi, kuyruk, bildirim, federation.
+Bu ayrım roadmap'in geri kalanının çerçevesi — bp bir Codex arayüzüne dönüşmemeli.
+
+**Not:** `thread/list` içindeki `searchTerm` ile "blueprint" araması boş döndü; büyük olasılıkla
+yalnızca thread adında arıyor. Yani §1'deki içerik araması hâlâ bize ait bir iş.
+
+### 6c. Bağlanma yolu — karar
+
+**Seçilen: SSH üzerinden `app-server proxy`.** Uzak makinede `codex app-server proxy --sock
+~/.codex/app-server-control/app-server-control.sock` çalıştırılır, bp onun stdin/stdout'una
+satır-sonlu JSON-RPC konuşur. Yeni port yok, relay yok, bizim tarafta daemon yok, Yiğit'in
+sisteminde kurulum yok.
+
+Elenenler: **`ws://`** (Tailscale/port açmayı gerektirir), **`remote-control` eşleştirme**
+(filo içi trafiğe üçüncü taraf relay sokar), **`codex exec resume`** (bugünkü yöntemimiz —
+thread'e zorla mesaj enjekte ediyor ve çalışan otonom goal'u bölebiliyor; `turn/steer` bunun
+doğrusu).
+
+### 6d. Yapılacak işler (sırayla, MVP ölçüsünde)
+
+1. **`internal/codexrpc`** — küçük JSON-RPC istemcisi: bir alt süreç aç (yerelde
+   `codex app-server --stdio`, uzakta `ssh … app-server proxy`), `initialize` yap, istek/cevap
+   eşle, bildirimleri bir kanala akıt. Stdlib yeter, ~200 satır.
+2. **Salt-okur gözlem** — `bp status` / `bp tree` içinde Codex thread'lerini ikinci bir arka uç
+   olarak göster (ad, cwd, meşgul mü, context). **Yazma yok.** İlk teslim burada bitsin.
+3. **Mesaj teslimi** — `bp msg <thread>@codex`: tur çalışmıyorsa `turn/start`, çalışıyorsa
+   `turn/steer`. Federation adreslemesiyle (`ad@peer`) aynı sözdizimi.
+4. **(Belki)** context/limit ölçümünü `account/rateLimits/read` ve `thread/tokenUsage/updated`
+   ile besleyip `bp usage`'a Codex sütunu eklemek.
+
+**Kapsam dışı (şimdilik):** thread başlatma/silme, goal yönetimi, onay akışları (`turn/steer`
+dışındaki her yazma). Bunlar bp'yi Codex kokpitine çevirir — §"Reddedilenler"deki gerekçeyle
+tutarsız olur.
+
+### 6e. Mimari risk ve tek açık doğrulama
+
+**Risk:** bp bugün "agent = tmux oturumu" varsayımı üstüne kurulu. İkinci bir arka uç eklemek,
+bilinçli reddettiğimiz "her şeyi yapan kokpit" yönüne kayma riski taşır. Koruma: ince bir
+**transport arayüzü**, tmux varsayılan ve tek yazma yolu olarak kalır, Codex arka ucu önce
+salt-okur girer. Arayüz iki arka ucu da temiz tutamıyorsa iş durur, zorlanmaz.
+
+**Açık doğrulama (kavram-gate'ten istendi 2026-07-27):** `app-server proxy`, Yiğit'in
+*çalışan* daemon'una bağlanıp `thread/list` döndürüyor mu? Yerelde yönetilen daemon'u
+kuramadığımız için (standalone kurulum yok) bu yalnızca uzakta sınanabilir. **Cevap olumsuzsa
+6c'deki taşıma kararı yeniden açılır** — o durumda geriye kalan makul seçenek Tailscale
+üzerinden `ws://`.
+
 ---
 
 ## Reddedilenler (tekrar tartışılmasın diye)

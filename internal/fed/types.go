@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 const (
@@ -49,16 +48,19 @@ func validateName(value string) error {
 	if value == "" {
 		return fmt.Errorf("name cannot be empty")
 	}
-	if !utf8.ValidString(value) {
-		return fmt.Errorf("name must be valid UTF-8")
-	}
-	if utf8.RuneCountInString(value) > MaxNameRunes {
+	if len(value) > MaxNameRunes {
 		return fmt.Errorf("name exceeds %d characters", MaxNameRunes)
 	}
-	for _, char := range value {
-		if unicode.IsControl(char) || char == '/' || char == '\\' {
+	for _, char := range []byte(value) {
+		if !((char >= 'a' && char <= 'z') ||
+			(char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') ||
+			char == '.' || char == '_' || char == '-') {
 			return fmt.Errorf("name contains an invalid character")
 		}
+	}
+	if value == "." || value == ".." {
+		return fmt.Errorf("name cannot be %q", value)
 	}
 	return nil
 }

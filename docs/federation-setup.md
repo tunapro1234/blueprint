@@ -19,13 +19,15 @@ Gelen mesaj hedef agent'ın tmux pane'ine `[oz@yigit] selam` olarak düşer — 
 ## Hub tarafı (bu sunucu — kurulu)
 
 - `/srv/blueprint/config.json` → `{"fed":{"mode":"hub","listen":"127.0.0.1:7877","peerName":"tuna"}}`
-- `/srv/blueprint/state/fed/peers.json` → `{"yigit":{"token":"<64 hex>","expose":["*"]}}`
-  - `expose`: bu peer'in mesaj gönderebileceği yerel agent adları. `["*"]` = hepsi.
-    Kısıtlamak için: `["ada","blueprint"]`. Değişiklik daemon restart ister.
+- `/srv/blueprint/state/fed/peers.json` → `{"yigit":{"token":"<64 hex>","expose":["ada","blueprint"]}}`
+  - `expose`: bu peer'in mesaj gönderebileceği yerel agent adlarıdır; hedefler açıkça
+    listelenir. Peer ve agent adları yalnız `A-Z`, `a-z`, `0-9`, `.`, `_`, `-` içerebilir.
+    Değişiklik daemon restart ister.
 - Yeni peer eklemek: `bp fed token` ile token üret, peers.json'a ekle,
   `systemctl restart blueprint.service`, token'ı karşı tarafa güvenli kanaldan ver.
-- Denetim: her istek `state/fed/log.jsonl`'a yazılır. Limitler: mesaj ≤16KB,
-  peer başına 300 mesaj/saat.
+- Denetim: kimliği doğrulanmış istekler `state/fed/log.jsonl`'a yazılır. Başarısız
+  kimlik doğrulama ve bilinmeyen yollar bellekte sayılıp dakikalık özetlenir; log 8MB'ta
+  tek yedekle döndürülür. Limitler: mesaj ≤16KB, peer başına 300 mesaj/saat.
 
 ## Client kurulumu (Yiğit'in makinesi)
 
@@ -46,6 +48,8 @@ Gelen mesaj hedef agent'ın tmux pane'ine `[oz@yigit] selam` olarak düşer — 
    ```
    tmux new-session -d -s bp-daemon 'bp daemon'
    ```
+   Yeni client, yerel kuyruğa yazılan poll sonuçlarını `/v1/ack` ile onaylar. Eski
+   client'lar desteklenir; onaylanmayan mesajlar beş dakika sonra yeniden teslim edilir.
 4. Agent'lar tmux'ta, oturum adı = agent adı olmalı (mesajlar o oturuma teslim edilir).
    tmux kullanmıyorsan `.zshrc`'ye alias yeterli:
    ```

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,7 +67,7 @@ func hubRequest(t *testing.T, handler http.Handler, method, endpoint, token stri
 }
 
 func TestHubRejectsUnknownToken(t *testing.T) {
-	hub, _ := testHub(t, []string{"*"})
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
 	response := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/ping", otherTestToken, nil)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s, want 401", response.Code, response.Body.String())
@@ -91,7 +92,7 @@ func TestHubEnforcesExpose(t *testing.T) {
 }
 
 func TestHubEnforcesMessageLimit(t *testing.T) {
-	hub, _ := testHub(t, []string{"*"})
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
 	response := hubRequest(t, hub.Handler(), http.MethodPost, "/v1/send", testToken, map[string]string{
 		"to": "ada", "from": "oz", "msg": strings.Repeat("x", MaxMessageBytes+1),
 	})
@@ -101,7 +102,7 @@ func TestHubEnforcesMessageLimit(t *testing.T) {
 }
 
 func TestHubEnforcesPeerRateLimit(t *testing.T) {
-	hub, _ := testHub(t, []string{"*"})
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
 	hub.Rate = NewRateLimiter(1)
 	body := map[string]string{"to": "ada", "from": "oz", "msg": "hello"}
 	first := hubRequest(t, hub.Handler(), http.MethodPost, "/v1/send", testToken, body)
@@ -115,7 +116,7 @@ func TestHubEnforcesPeerRateLimit(t *testing.T) {
 }
 
 func TestHubSendEnqueuesLocalMessage(t *testing.T) {
-	hub, queue := testHub(t, []string{"*"})
+	hub, queue := testHub(t, []string{"ada", "deniz", "oz"})
 	response := hubRequest(t, hub.Handler(), http.MethodPost, "/v1/send", testToken, map[string]string{
 		"to": "ada", "from": "oz", "msg": "line\tone\r\nline two",
 	})
@@ -134,8 +135,35 @@ func TestHubSendEnqueuesLocalMessage(t *testing.T) {
 	}
 }
 
+func TestHubRejectsUnsafeToAndFromNames(t *testing.T) {
+	hub, queue := testHub(t, []string{"ada"})
+	for _, test := range []struct {
+		to   string
+		from string
+	}{
+		{to: "ada", from: "a@b"},
+		{to: "ada", from: "x] [y"},
+		{to: "ada", from: "a\tb"},
+		{to: "bad target", from: "oz"},
+	} {
+		response := hubRequest(t, hub.Handler(), http.MethodPost, "/v1/send", testToken, map[string]string{
+			"to": test.to, "from": test.from, "msg": "hello",
+		})
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("to=%q from=%q status=%d body=%s", test.to, test.from, response.Code, response.Body.String())
+		}
+	}
+	messages, err := queue.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("unsafe names queued messages: %+v", messages)
+	}
+}
+
 func TestHubPollEmptyAndDeletesReturnedMessages(t *testing.T) {
-	hub, _ := testHub(t, []string{"*"})
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
 	empty := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/poll", testToken, nil)
 	if empty.Code != http.StatusOK || strings.TrimSpace(empty.Body.String()) != `{"messages":[]}` {
 		t.Fatalf("empty response=%d %s", empty.Code, empty.Body.String())
@@ -197,7 +225,7 @@ func TestParseAddress(t *testing.T) {
 }
 
 func TestClientPollEnqueuesAndRecordsLastPoll(t *testing.T) {
-	hub, _ := testHub(t, []string{"*"})
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
 	if _, err := hub.Outbox.Enqueue("yigit", "oz", "ada@tuna", "reply"); err != nil {
 		t.Fatal(err)
 	}
@@ -222,5 +250,272 @@ func TestClientPollEnqueuesAndRecordsLastPoll(t *testing.T) {
 	}
 	if _, err := os.Stat(LastPollPath(stateDir)); err != nil {
 		t.Fatalf("last poll file: %v", err)
+	}
+}
+
+func TestValidateNameStrictAlphabet(t *testing.T) {
+	for _, value := range []string{"a@b", "x] [y", "has space", "..", "*", strings.Repeat("a", 65)} {
+		if err := validateName(value); err == nil {
+			t.Errorf("validateName(%q) succeeded, want error", value)
+		}
+	}
+	for _, value := range []string{"kavram-gate", "a_b.c"} {
+		if err := validateName(value); err != nil {
+			t.Errorf("validateName(%q)=%v", value, err)
+		}
+	}
+}
+
+func TestUnauthenticatedAuditIsSummarizedOncePerMinute(t *testing.T) {
+	hub, _ := testHub(t, []string{"ada"})
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	hub.Now = func() time.Time { return now }
+
+	if got := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/ping", "", nil).Code; got != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d", got)
+	}
+	if got := hubRequest(t, hub.Handler(), http.MethodGet, "/wp-login.php", "", nil).Code; got != http.StatusNotFound {
+		t.Fatalf("unknown path status=%d", got)
+	}
+	logPath := filepath.Join(hub.StateDir, "fed", "log.jsonl")
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("unauthenticated requests wrote audit log: %v", err)
+	}
+
+	now = now.Add(time.Minute)
+	hubRequest(t, hub.Handler(), http.MethodGet, "/v1/ping", "", nil)
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("audit lines=%d, want 1: %s", len(lines), data)
+	}
+	var entry auditEntry
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatal(err)
+	}
+	if entry.Endpoint != "(unauthenticated)" || entry.Count != 2 || entry.Result != http.StatusUnauthorized || entry.Peer != "" {
+		t.Fatalf("summary=%+v", entry)
+	}
+	hubRequest(t, hub.Handler(), http.MethodGet, "/missing", "", nil)
+	again, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, again) {
+		t.Fatalf("second summary was written in same minute: before=%s after=%s", data, again)
+	}
+}
+
+func TestUnauthenticatedGlobalRateLimit(t *testing.T) {
+	hub, _ := testHub(t, []string{"ada"})
+	for index := 0; index < unauthenticatedRate; index++ {
+		if got := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/ping", "", nil).Code; got != http.StatusUnauthorized {
+			t.Fatalf("request %d status=%d", index, got)
+		}
+	}
+	if got := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/ping", "", nil).Code; got != http.StatusTooManyRequests {
+		t.Fatalf("over-limit status=%d, want 429", got)
+	}
+}
+
+func TestAuditRotatesAtEightMiB(t *testing.T) {
+	hub, _ := testHub(t, []string{"ada"})
+	dir := filepath.Join(hub.StateDir, "fed")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "log.jsonl")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), maxAuditBytes), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := hubauditForTest(hub); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.Stat(path + ".1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup.Size() != maxAuditBytes {
+		t.Fatalf("backup size=%d, want %d", backup.Size(), maxAuditBytes)
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Size() <= 0 || current.Size() >= maxAuditBytes {
+		t.Fatalf("current audit size=%d", current.Size())
+	}
+}
+
+func hubauditForTest(hub *Hub) error {
+	return hub.audit(auditEntry{
+		TS:       time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		Peer:     "yigit",
+		Endpoint: "/v1/ping",
+		Result:   http.StatusOK,
+	})
+}
+
+func TestPollAckAndInflightRedelivery(t *testing.T) {
+	hub, _ := testHub(t, []string{"ada"})
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	hub.Outbox.Now = func() time.Time { return now }
+
+	id, err := hub.Outbox.Enqueue("yigit", "oz", "ada@tuna", "acked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/poll", testToken, nil)
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), id) {
+		t.Fatalf("poll=%d %s", first.Code, first.Body.String())
+	}
+	ack := hubRequest(t, hub.Handler(), http.MethodPost, "/v1/ack", testToken, map[string]any{"ids": []string{id}})
+	if ack.Code != http.StatusOK || !strings.Contains(ack.Body.String(), `"acked":1`) {
+		t.Fatalf("ack=%d %s", ack.Code, ack.Body.String())
+	}
+	inflight := filepath.Join(hub.StateDir, "fed", "inflight", "yigit", id+".json")
+	if _, err := os.Stat(inflight); !os.IsNotExist(err) {
+		t.Fatalf("acked file still exists: %v", err)
+	}
+
+	redeliverID, err := hub.Outbox.Enqueue("yigit", "oz", "ada@tuna", "redeliver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hubRequest(t, hub.Handler(), http.MethodGet, "/v1/poll", testToken, nil)
+	now = now.Add(InflightTimeout - time.Second)
+	early := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/poll", testToken, nil)
+	if strings.Contains(early.Body.String(), redeliverID) {
+		t.Fatalf("message redelivered before timeout: %s", early.Body.String())
+	}
+	now = now.Add(2 * time.Second)
+	late := hubRequest(t, hub.Handler(), http.MethodGet, "/v1/poll", testToken, nil)
+	if !strings.Contains(late.Body.String(), redeliverID) {
+		t.Fatalf("message was not redelivered: %s", late.Body.String())
+	}
+}
+
+func TestClientPollIdempotency(t *testing.T) {
+	message := Message{ID: "q0000000000000000001-000000", To: "ada", From: "oz@tuna", Msg: "once", TS: 1}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/poll":
+			writeJSON(writer, http.StatusOK, map[string]any{"messages": []Message{message}})
+		case "/v1/ack":
+			writeJSON(writer, http.StatusOK, map[string]int{"acked": 1})
+		default:
+			writeError(writer, http.StatusNotFound, "not found")
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, testToken)
+	queue := msgq.New(filepath.Join(t.TempDir(), "msgq"))
+	stateDir := filepath.Join(t.TempDir(), "state")
+	for iteration := 0; iteration < 2; iteration++ {
+		if _, err := client.PollAndEnqueue(context.Background(), stateDir, queue); err != nil {
+			t.Fatal(err)
+		}
+	}
+	messages, err := queue.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("queued messages=%d, want 1", len(messages))
+	}
+}
+
+func TestOutboxQuotaDropsOldestWithWarning(t *testing.T) {
+	var warning bytes.Buffer
+	outbox := NewOutbox(t.TempDir())
+	outbox.Log = &warning
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	outbox.Now = func() time.Time {
+		now = now.Add(time.Nanosecond)
+		return now
+	}
+	var firstID string
+	for index := 0; index <= MaxPeerMessages; index++ {
+		id, err := outbox.Enqueue("yigit", "ada", "oz@tuna", fmt.Sprintf("message-%d", index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			firstID = id
+		}
+	}
+	depth, err := outbox.Depth("yigit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if depth != MaxPeerMessages {
+		t.Fatalf("depth=%d, want %d", depth, MaxPeerMessages)
+	}
+	if !strings.Contains(warning.String(), "fed: dropped 1 oldest messages for peer yigit (quota)") {
+		t.Fatalf("warning=%q", warning.String())
+	}
+	if _, err := os.Stat(filepath.Join(outbox.StateDir, "fed", "out", "yigit", firstID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("oldest message was not dropped: %v", err)
+	}
+}
+
+func TestLoadPeersRejectsDuplicateToken(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(PeersPath(stateDir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]Peer{
+		"first":  {Token: testToken, Expose: []string{"ada"}},
+		"second": {Token: strings.ToUpper(testToken), Expose: []string{"ada"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(PeersPath(stateDir), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPeers(stateDir); err == nil || !strings.Contains(err.Error(), "duplicate token") {
+		t.Fatalf("LoadPeers error=%v, want duplicate token", err)
+	}
+}
+
+func TestLoadPeersSkipsInvalidNamesAndExposeEntries(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(PeersPath(stateDir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]Peer{
+		"good":     {Token: testToken, Expose: []string{"ada"}},
+		"../bad":   {Token: otherTestToken, Expose: []string{"ada"}},
+		"bad-star": {Token: strings.Repeat("1", 64), Expose: []string{"*"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(PeersPath(stateDir), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warning bytes.Buffer
+	peers, err := loadPeers(stateDir, &warning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 || peers["good"].Token != testToken {
+		t.Fatalf("loaded peers=%v", PeerNames(peers))
+	}
+	if !strings.Contains(warning.String(), `skipping peer "../bad"`) || !strings.Contains(warning.String(), `skipping peer "bad-star"`) {
+		t.Fatalf("warnings=%q", warning.String())
+	}
+}
+
+func TestClientRejectsPlaintextNonLoopbackHub(t *testing.T) {
+	if err := CheckHubURL("http://example.com"); err == nil || !strings.Contains(err.Error(), "refusing to send bearer token over plaintext HTTP") {
+		t.Fatalf("non-loopback error=%v", err)
+	}
+	if err := CheckHubURL("http://127.0.0.1:7877"); err != nil {
+		t.Fatalf("loopback rejected: %v", err)
 	}
 }

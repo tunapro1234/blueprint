@@ -3,6 +3,7 @@ package tmux
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,5 +99,55 @@ func TestReadCustomTitle(t *testing.T) {
 	}
 	if _, ok := ReadCustomTitle(plain); ok {
 		t.Fatal("expected no title for a file without a custom-title record")
+	}
+}
+
+// A /rename appends a second custom-title record instead of rewriting the first,
+// so the newest one is the agent's real name. Reading the older record left a
+// renamed agent showing "-" in bp status and made `bp open --resume` miss its
+// own conversation.
+func TestReadCustomTitleTakesTheNewestRecord(t *testing.T) {
+	title := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "s.jsonl")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, ok := ReadCustomTitle(path)
+		if !ok {
+			t.Fatal("expected a title")
+		}
+		return got
+	}
+	record := func(name string) string {
+		return `{"type":"custom-title","customTitle":"` + name + `","sessionId":"s"}` + "\n"
+	}
+
+	// Both records sit in the head scan, in a file small enough to read whole.
+	if got := title(t, record("probot-business-outreach")+`{"type":"user"}`+"\n"+record("probot-outreach")); got != "probot-outreach" {
+		t.Fatalf("small file: got %q, want the renamed title probot-outreach", got)
+	}
+
+	// The rename lands past the head scan in a file large enough to need the
+	// tail scan — the case that actually bit us on a long-running session.
+	var big strings.Builder
+	big.WriteString(record("probot-business-outreach"))
+	for big.Len() < 3*titleTailBytes {
+		big.WriteString(`{"type":"user","message":"padding padding padding padding"}` + "\n")
+	}
+	big.WriteString(record("probot-outreach"))
+	if got := title(t, big.String()); got != "probot-outreach" {
+		t.Fatalf("large file: got %q, want the renamed title probot-outreach", got)
+	}
+
+	// A large file whose only record is in the head must still resolve, since
+	// the tail scan finds nothing to prefer.
+	var headOnly strings.Builder
+	headOnly.WriteString(record("probot-outreach"))
+	for headOnly.Len() < 3*titleTailBytes {
+		headOnly.WriteString(`{"type":"user","message":"padding padding padding padding"}` + "\n")
+	}
+	if got := title(t, headOnly.String()); got != "probot-outreach" {
+		t.Fatalf("head-only large file: got %q, want probot-outreach", got)
 	}
 }

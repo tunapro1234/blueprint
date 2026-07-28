@@ -660,41 +660,58 @@ func ClaudeProjectsRoot() string {
 }
 
 // readCustomTitle returns the customTitle set for a Claude session file (via the
-// line-1 `{"type":"custom-title",...}` record bp writes with /rename). It reads a
-// bounded prefix so huge session logs stay cheap.
+// `{"type":"custom-title",...}` records bp writes with /rename).
+//
+// A session can be renamed more than once, and each /rename APPENDS a fresh
+// record rather than rewriting the first one, so the newest record is the
+// session's real name. Reading whichever record comes first would report the
+// name the agent used to have — which is exactly what made a renamed agent show
+// "-" in bp status and made `bp open --resume` miss its own conversation.
+//
+// So: never stop at the first hit. Small files are read whole; large ones get a
+// bounded head scan (the common case: titled on line 1 and never renamed) plus a
+// bounded tail scan, and the tail wins whenever it holds a record, because a
+// later rename can only have landed at the end.
 func ReadCustomTitle(path string) (string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", false
 	}
 	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for i := 0; i < 200 && scanner.Scan(); i++ {
-		if title, ok := customTitleLine(scanner.Bytes()); ok {
-			return title, true
-		}
-	}
-	// A session titled (or renamed) after its first 200 lines would otherwise
-	// look untitled, so fall back to the tail — /rename rewrites the record, and
-	// the newest one wins.
 	info, err := f.Stat()
 	if err != nil {
 		return "", false
 	}
-	start := info.Size() - titleTailBytes
-	if start <= 0 {
-		return "", false
+
+	if info.Size() <= titleTailBytes {
+		return lastCustomTitle(f, -1)
 	}
-	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return "", false
+
+	head, headOK := lastCustomTitle(f, 200)
+	if _, err := f.Seek(info.Size()-titleTailBytes, io.SeekStart); err != nil {
+		return head, headOK
 	}
 	tail := bufio.NewScanner(f)
 	tail.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	tail.Scan() // discard the partial line the offset landed in
+	if title, ok := scanCustomTitles(tail, -1); ok {
+		return title, true
+	}
+	return head, headOK
+}
+
+// lastCustomTitle reads up to limit lines from the reader's current position
+// (limit < 0 means to the end) and returns the last custom-title record seen.
+func lastCustomTitle(r io.Reader, limit int) (string, bool) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	return scanCustomTitles(scanner, limit)
+}
+
+func scanCustomTitles(scanner *bufio.Scanner, limit int) (string, bool) {
 	title, found := "", false
-	for tail.Scan() {
-		if value, ok := customTitleLine(tail.Bytes()); ok {
+	for i := 0; (limit < 0 || i < limit) && scanner.Scan(); i++ {
+		if value, ok := customTitleLine(scanner.Bytes()); ok {
 			title, found = value, true
 		}
 	}

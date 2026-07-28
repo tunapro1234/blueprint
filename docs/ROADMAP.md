@@ -229,6 +229,37 @@ ancak o koruma tasarlandıktan sonra açılır: yazmadan önce `thread/status/ch
 durumu okunmalı, koşan otonom goal varsa `turn/start` yerine `turn/steer`, o da uygun değilse
 mesaj kuyrukta beklemeli — bugünkü "meşgul agent'ı bölme" kuralının app-server karşılığı.
 
+## 7. `bp rename <eski-ad> <yeni-ad>`
+
+ada 2026-07-28'de `probot-business-outreach` → `probot-outreach` yeniden adlandırmasını elle
+yaptı: **yedi ayrı yere** dokunmak gerekti. Tek komut olmalı.
+
+Adımlar:
+1. `tmux rename-session`.
+2. **Agentbook:** `agent.name`, çocukların `parent` alanı, ve `role` metnindeki geçişler.
+   Hangi book'ta bulunduysa oraya yazılır (§5'teki kuralla aynı).
+3. `usage/fleet-models.json` + `usage/policy-state.json`.
+4. **Agent klasöründeki kod/hook referansları** — örn. `/srv/probot/outreach/hooks/common.py`
+   içindeki `TARGET_AGENT`. Genel çözüm yok; en azından eski adı klasörde arayıp
+   **bulduklarını rapor et** (sessizce düzenleme yapma, kullanıcı görsün).
+5. Transcript `customTitle` — agent pane'inde `/rename <yeni-ad>`.
+
+### Bilinmesi gereken tuzaklar
+
+- **`ReadCustomTitle` hatası (DÜZELTİLDİ, aşağıya bak)** — `/rename` kaydı **sona ekliyor**,
+  ilkini okuyan kod eski adı döndürüyordu.
+- **Dosyayı elle yamamak mtime'ı bozar.** ada geçici çözüm olarak jsonl'deki kaydı aynı bayt
+  uzunluğunda (JSON içine boşluk pad ederek, in-place, inode değiştirmeden) yamadı; eski **arşiv**
+  oturumunu da yamayınca mtime güncellendi ve `ResumeSessionPath` yanlış (eski) oturumu seçti —
+  mtime'ı geri `touch`'lamak gerekti. `bp rename` **jsonl dosyalarına hiç dokunmamalı**; ad
+  değişikliği yalnızca pane'de `/rename` ile yapılmalı.
+- `ResumeSessionPath` aynı başlığı taşıyan birden çok oturum arasında **mtime ile** seçiyor.
+  Yani iki oturum aynı ada sahipse en son yazılan kazanır; yeniden adlandırma sonrası bu
+  kasten böyle.
+
+**Sıra:** düşük-orta. Elle yapılabiliyor ama yedi adımın biri unutulunca `bp status` ve
+`bp open --resume` sessizce yanlış çalışıyor — asıl bedel bu.
+
 ---
 
 ## Reddedilenler (tekrar tartışılmasın diye)

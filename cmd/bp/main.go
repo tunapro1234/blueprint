@@ -42,6 +42,7 @@ bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
+bp rename <old-name> <new-name> [--dry-run]
 bp msg <name> <message...>
 bp announce <message...>
 bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run] [--policy]
@@ -109,6 +110,8 @@ func (a *app) run(args []string) error {
 		return a.worktree(args[1:])
 	case "close":
 		return a.close(args[1:])
+	case "rename":
+		return a.rename(args[1:])
 	case "msg":
 		return a.message(args[1:])
 	case "announce":

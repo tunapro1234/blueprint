@@ -868,6 +868,13 @@ func (c *Client) Close(ctx context.Context, session string) error {
 	return err
 }
 
+// RenameSession renames a live tmux session. The `=` prefix forces an exact
+// match so a rename cannot land on a session that merely shares a prefix.
+func (c *Client) RenameSession(ctx context.Context, session, name string) error {
+	_, err := c.run(ctx, nil, "rename-session", "-t", "="+session, name)
+	return err
+}
+
 func (c *Client) DisplaySession(ctx context.Context) (string, error) {
 	out, err := c.run(ctx, nil, "display-message", "-p", "#S")
 	return strings.TrimSpace(string(out)), err

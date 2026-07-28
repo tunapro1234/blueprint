@@ -193,6 +193,140 @@ func SetColor(paths []string, name, colour string) error {
 	})
 }
 
+// Rename renames an agent across every configured book: its own entry, the
+// `parent` of any agent below it, and mentions of the old name in role text.
+// Those three can live in different books (a child under /srv/probot is written
+// to the probot book while its parent sits in the main one), so every book is
+// visited rather than only the one holding the entry.
+//
+// It returns one human-readable line per change, so `bp rename` can show what it
+// touched instead of asking the reader to trust it.
+func Rename(paths []string, old, name string) ([]string, error) {
+	var changes []string
+	for _, path := range Paths(paths) {
+		if _, err := os.Stat(path); err != nil {
+			continue // not every machine has every book
+		}
+		applied, err := editBook(path, func(raw map[string]any) []string {
+			return renameInBook(raw, old, name, path)
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return changes, err
+		}
+		changes = append(changes, applied...)
+	}
+	return changes, nil
+}
+
+// PreviewRename reports what Rename would change in an already-parsed book. The
+// caller owns raw (it parsed its own copy), so mutating it here is harmless and
+// keeps preview and apply on exactly the same code path — a preview that drifts
+// from the real thing is worse than none.
+func PreviewRename(raw map[string]any, old, name, path string) []string {
+	return renameInBook(raw, old, name, path)
+}
+
+func renameInBook(raw map[string]any, old, name, path string) []string {
+	var changes []string
+	label := filepath.Base(path)
+	if current, _ := raw["orchestrator"].(string); current == old {
+		raw["orchestrator"] = name
+		changes = append(changes, label+": orchestrator -> "+name)
+	}
+	if current, _ := raw["parent"].(string); current == old {
+		raw["parent"] = name
+		changes = append(changes, label+": parent -> "+name)
+	}
+	agents, _ := raw["agents"].([]any)
+	for _, value := range agents {
+		agent, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		who, _ := agent["name"].(string)
+		if who == old {
+			agent["name"] = name
+			who = name
+			changes = append(changes, label+": name "+old+" -> "+name)
+		}
+		if parent, _ := agent["parent"].(string); parent == old {
+			agent["parent"] = name
+			changes = append(changes, label+": "+who+".parent -> "+name)
+		}
+		// Role text is prose, so only whole-word mentions are rewritten; a
+		// substring rule would corrupt a longer name that contains the old one.
+		if role, _ := agent["role"].(string); role != "" {
+			if replaced := replaceWord(role, old, name); replaced != role {
+				agent["role"] = replaced
+				changes = append(changes, label+": "+who+".role mentions updated")
+			}
+		}
+	}
+	return changes
+}
+
+// replaceWord swaps whole-word occurrences of old, treating the agent-name
+// characters [A-Za-z0-9._-] as word constituents so "probot-outreach-gpt" is
+// never mangled while renaming "probot-outreach".
+func replaceWord(text, old, name string) string {
+	var out strings.Builder
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], old) && !nameChar(byteAt(text, i-1)) && !nameChar(byteAt(text, i+len(old))) {
+			out.WriteString(name)
+			i += len(old)
+			continue
+		}
+		out.WriteByte(text[i])
+		i++
+	}
+	return out.String()
+}
+
+func byteAt(text string, i int) byte {
+	if i < 0 || i >= len(text) {
+		return 0
+	}
+	return text[i]
+}
+
+func nameChar(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '.' || b == '_' || b == '-'
+}
+
+// editBook applies change to one book under an exclusive lock, rewriting it
+// atomically only when change reports something. Returning no changes leaves the
+// file untouched, so a concurrent hand edit cannot be lost to a no-op write.
+func editBook(path string, change func(map[string]any) []string) ([]string, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]any
+	if err = json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	changes := change(raw)
+	if len(changes) == 0 {
+		return nil, nil
+	}
+	raw["updated"] = time.Now().Format("2006-01-02")
+	return changes, writeBook(path, raw, info.Mode().Perm())
+}
+
 // mutate applies change to the named agent in whichever book holds it, under
 // the same lock and atomic rewrite SetStatus uses. change reports whether it
 // altered anything; when it did not, the file is left untouched so a concurrent

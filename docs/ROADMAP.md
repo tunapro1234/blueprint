@@ -108,6 +108,21 @@ parent/role alanlarını eziyor" hatası `909f20f` ile düzeldi (`SetStatus` art
 yalnızca `status` yazıyor, değişiklik yoksa dosyaya hiç dokunmuyor). Asıl sebep `bp open` değil,
 daemon keepalive'inin 30 saniyede bir tüm dosyayı yeniden yazmasıydı.
 
+**Bir de KAPANAN madde: `bp open --resume` yanlış oturumu açıyor.** 2026-07-28'de canlı veriyle
+doğrulandı; klasör paylaşan her grup artık doğru ayrışıyor. Örnek: `/srv` altında `server-main`
+ve `bilal-tunnel` ayrı oturumlara çözülüyor; `/srv/probot/outreach` altında yeni oturum
+`probot-outreach`, eski oturum ise hâlâ `probot-business-outreach` başlığını taşıdığı için
+karışmıyor. Çözümü iki parça sağladı: customTitle ile eşleme (`eb93a4b`) ve son kaydı okuma
+(`fb96984`).
+
+**Kalan (ayrı, daha küçük) durum:** hiç başlık almamış oturum çözülemiyor, `--resume` boş dönüp
+yeni oturum açıyor — yanlış oturum değil, oturumsuzluk. `probot-shop-worker`/`worker2` bugün
+bu durumda.
+
+**Yan bulgu (ada'ya):** agentbook'ta **yinelenen kayıtlar** var — `probot-main`, `probot-pil` ve
+`probot-mufredat` ikişer kez geçiyor. `LoadFleet` bunları merge ettiği için görünür bir arıza
+yok, ama `bp rename` gibi kayıt sayan işler yanıltıcı çıktı verebilir. Temizlenmeli.
+
 ## 6. Codex app-server desteği (Yiğit'in filosuna bağlanmak)
 
 kavram-launch'ın 2026-07-27 görevi. Yiğit'in agentları tmux'ta değil: tek uzun ömürlü
@@ -228,37 +243,6 @@ metotlar filo kararı ve aktif goal thread koruması olmadan çalıştırılmaya
 ancak o koruma tasarlandıktan sonra açılır: yazmadan önce `thread/status/changed` ile turun
 durumu okunmalı, koşan otonom goal varsa `turn/start` yerine `turn/steer`, o da uygun değilse
 mesaj kuyrukta beklemeli — bugünkü "meşgul agent'ı bölme" kuralının app-server karşılığı.
-
-## 7. `bp rename <eski-ad> <yeni-ad>`
-
-ada 2026-07-28'de `probot-business-outreach` → `probot-outreach` yeniden adlandırmasını elle
-yaptı: **yedi ayrı yere** dokunmak gerekti. Tek komut olmalı.
-
-Adımlar:
-1. `tmux rename-session`.
-2. **Agentbook:** `agent.name`, çocukların `parent` alanı, ve `role` metnindeki geçişler.
-   Hangi book'ta bulunduysa oraya yazılır (§5'teki kuralla aynı).
-3. `usage/fleet-models.json` + `usage/policy-state.json`.
-4. **Agent klasöründeki kod/hook referansları** — örn. `/srv/probot/outreach/hooks/common.py`
-   içindeki `TARGET_AGENT`. Genel çözüm yok; en azından eski adı klasörde arayıp
-   **bulduklarını rapor et** (sessizce düzenleme yapma, kullanıcı görsün).
-5. Transcript `customTitle` — agent pane'inde `/rename <yeni-ad>`.
-
-### Bilinmesi gereken tuzaklar
-
-- **`ReadCustomTitle` hatası (DÜZELTİLDİ, aşağıya bak)** — `/rename` kaydı **sona ekliyor**,
-  ilkini okuyan kod eski adı döndürüyordu.
-- **Dosyayı elle yamamak mtime'ı bozar.** ada geçici çözüm olarak jsonl'deki kaydı aynı bayt
-  uzunluğunda (JSON içine boşluk pad ederek, in-place, inode değiştirmeden) yamadı; eski **arşiv**
-  oturumunu da yamayınca mtime güncellendi ve `ResumeSessionPath` yanlış (eski) oturumu seçti —
-  mtime'ı geri `touch`'lamak gerekti. `bp rename` **jsonl dosyalarına hiç dokunmamalı**; ad
-  değişikliği yalnızca pane'de `/rename` ile yapılmalı.
-- `ResumeSessionPath` aynı başlığı taşıyan birden çok oturum arasında **mtime ile** seçiyor.
-  Yani iki oturum aynı ada sahipse en son yazılan kazanır; yeniden adlandırma sonrası bu
-  kasten böyle.
-
-**Sıra:** düşük-orta. Elle yapılabiliyor ama yedi adımın biri unutulunca `bp status` ve
-`bp open --resume` sessizce yanlış çalışıyor — asıl bedel bu.
 
 ---
 

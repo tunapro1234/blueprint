@@ -222,6 +222,12 @@ type Location struct {
 	StartDir   string
 }
 
+// PaneProcess identifies the active process in a session's target pane.
+type PaneProcess struct {
+	Command string
+	PID     int
+}
+
 func New() *Client {
 	return &Client{Bin: "tmux", Sleep: time.Sleep, Now: time.Now}
 }
@@ -272,6 +278,36 @@ func (c *Client) PaneCommand(ctx context.Context, session string) (string, error
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// PaneProcess returns the command and PID of the active pane in a session.
+func (c *Client) PaneProcess(ctx context.Context, session string) (PaneProcess, error) {
+	out, err := c.run(ctx, nil, "list-panes", "-t", "="+session+":", "-F", "#{pane_active}\t#{pane_current_command}\t#{pane_pid}")
+	if err != nil {
+		return PaneProcess{}, err
+	}
+	var fallback PaneProcess
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(fields[2]))
+		if err != nil {
+			continue
+		}
+		process := PaneProcess{Command: strings.TrimSpace(fields[1]), PID: pid}
+		if fallback.PID == 0 {
+			fallback = process
+		}
+		if strings.TrimSpace(fields[0]) == "1" {
+			return process, nil
+		}
+	}
+	if fallback.PID != 0 {
+		return fallback, nil
+	}
+	return PaneProcess{}, fmt.Errorf("tmux pane process not found for %s", session)
 }
 
 // Option reads one session option, empty when tmux has no value set for it.

@@ -163,8 +163,17 @@ func (c *Client) PollAndEnqueue(ctx context.Context, stateDir string, queue *msg
 				continue
 			}
 		}
-		if _, err := queue.Enqueue(message.To, message.From, "["+message.From+"] "+message.Msg); err != nil {
+		// The hub sanitizes on its side, but this machine may be polling a
+		// REMOTE hub: strip control bytes here too, or a malicious message
+		// could carry Ctrl-C, ESC sequences, or the bracketed-paste terminator
+		// and turn its content back into keystrokes at the pane.
+		from := sanitize(message.From)
+		text := sanitize(message.Msg)
+		if _, err := queue.Enqueue(message.To, from, "["+from+"] "+text); err != nil {
 			return 0, err
+		}
+		if err := Journal(stateDir, "in", message.ID, from, message.To, text); err != nil && c.Log != nil {
+			fmt.Fprintf(c.Log, "fed: journal failed: %v\n", err)
 		}
 		enqueued++
 		if message.ID != "" {

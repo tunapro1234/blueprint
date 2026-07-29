@@ -286,6 +286,9 @@ func (h *Hub) handleSend(writer http.ResponseWriter, request *http.Request, peer
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return http.StatusInternalServerError
 	}
+	if err := Journal(h.StateDir, "in", id, from, input.To, input.Msg); err != nil {
+		h.logAuditError(err)
+	}
 	writeJSON(writer, http.StatusOK, map[string]string{"id": id})
 	return http.StatusOK
 }

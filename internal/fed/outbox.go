@@ -356,7 +356,11 @@ func QueueOutbound(stateDir string, peers map[string]Peer, peer, to, from, text 
 		return "", fmt.Errorf("invalid sender: %w", err)
 	}
 	text = sanitize(text)
-	return NewOutbox(stateDir).Enqueue(peer, to, from, text)
+	id, err := NewOutbox(stateDir).Enqueue(peer, to, from, text)
+	if err == nil {
+		_ = Journal(stateDir, "out", id, from, to+"@"+peer, text)
+	}
+	return id, err
 }
 
 func validateMessageFrom(from string) error {

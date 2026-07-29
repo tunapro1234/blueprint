@@ -62,7 +62,7 @@ bp service
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
-bp fed status|ping|token
+bp fed status|ping|token|log [n]
 bp daemon`
 
 type app struct {
@@ -1080,9 +1080,11 @@ func (a *app) federatedMessage(target, peer, message string) error {
 		return nil
 	case "client":
 		client := fed.NewClient(a.config.Fed.Hub, a.config.Fed.Token)
-		if _, err := client.Send(a.ctx, peer, target, sender, message); err != nil {
+		id, err := client.Send(a.ctx, peer, target, sender, message)
+		if err != nil {
 			return err
 		}
+		_ = fed.Journal(a.config.StateDir, "out", id, sender+"@"+a.config.Fed.PeerName, target+"@"+peer, message)
 		fmt.Fprintln(a.out, "sent via hub")
 		return nil
 	default:
@@ -1785,14 +1787,16 @@ func (a *app) service() error {
 }
 
 func (a *app) federation(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: bp fed status|ping|token")
+	if len(args) == 0 || len(args) > 2 || (len(args) == 2 && args[0] != "log") {
+		return fmt.Errorf("usage: bp fed status|ping|token|log [n]")
 	}
 	switch args[0] {
 	case "status":
 		return a.federationStatus()
 	case "ping":
 		return a.federationPing()
+	case "log":
+		return a.federationLog(args[1:])
 	case "token":
 		if a.config.Fed == nil || a.config.Fed.Mode != "hub" {
 			return fmt.Errorf("bp fed token is only available in hub mode")
@@ -1804,8 +1808,43 @@ func (a *app) federation(args []string) error {
 		fmt.Fprintln(a.out, token)
 		return nil
 	default:
-		return fmt.Errorf("usage: bp fed status|ping|token")
+		return fmt.Errorf("usage: bp fed status|ping|token|log [n]")
 	}
+}
+
+// federationLog prints the message journal: every federation message that
+// crossed this machine, content included, for after-the-fact inspection.
+// Both fleets run bp, so each side can read its own traffic the same way.
+func (a *app) federationLog(args []string) error {
+	limit := 20
+	if len(args) == 1 {
+		parsed, err := strconv.Atoi(args[0])
+		if err != nil || parsed < 1 {
+			return fmt.Errorf("usage: bp fed log [n]")
+		}
+		limit = parsed
+	}
+	entries, err := fed.ReadJournal(a.config.StateDir, limit)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(a.out, "no federation messages recorded")
+		return nil
+	}
+	for _, entry := range entries {
+		arrow := "->"
+		if entry.Dir == "in" {
+			arrow = "<-"
+		}
+		ts := entry.TS
+		if parsed, err := time.Parse(time.RFC3339Nano, entry.TS); err == nil {
+			ts = parsed.In(istanbul).Format("02 Jan 15:04")
+		}
+		fmt.Fprintf(a.out, "%s %s %s %s %s: %s\n", ts, entry.Dir, entry.From, arrow, entry.To, entry.Msg)
+	}
+	fmt.Fprintf(a.out, "\nfull journal: %s\n", fed.JournalPath(a.config.StateDir))
+	return nil
 }
 
 func (a *app) federationStatus() error {

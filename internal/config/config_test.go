@@ -50,6 +50,7 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 		"waOutbox":"", "waStore":"/wa.jsonl", "usageBin":"/bin",
 		"usageHistory":"/history.jsonl", "clipboardDir":"/clips",
 		"waBridge":false,
+		"bar":{"widgets":["clock","queue","unknown"]},
 		"ntfy":{"url":"https://ntfy.example","topic":"alerts","token":"secret"},
 		"codex":{"sockets":["/run/codex.sock"]},
 		"fed":{"mode":"client","hub":"https://hub.example","peerName":"portable",
@@ -86,6 +87,9 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 	if config.Codex == nil || !reflect.DeepEqual(config.Codex.Sockets, []string{"/run/codex.sock"}) {
 		t.Fatalf("codex = %#v", config.Codex)
 	}
+	if !reflect.DeepEqual(config.Bar.Widgets, []string{"clock", "queue", "unknown"}) {
+		t.Fatalf("bar widgets=%q", config.Bar.Widgets)
+	}
 	if !reflect.DeepEqual(config.TokenAgentbooks, []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json", "/srv/kitap/.orchestration/agentbook.json"}) {
 		t.Fatalf("legacy tokenAgentbooks=%q", config.TokenAgentbooks)
 	}
@@ -121,6 +125,14 @@ func TestNonLegacyDefaults(t *testing.T) {
 	}
 	if config.Codex != nil {
 		t.Fatalf("codex should be disabled: %#v", config.Codex)
+	}
+	wantWidgets := []string{"ctx", "temp", "queue", "model", "quota"}
+	if !reflect.DeepEqual(config.Bar.Widgets, wantWidgets) {
+		t.Fatalf("bar widgets=%q, want %q", config.Bar.Widgets, wantWidgets)
+	}
+	if strings.Contains(strings.Join(config.Bar.Widgets, ","), "talk") ||
+		strings.Contains(strings.Join(config.Bar.Widgets, ","), "clock") {
+		t.Fatalf("default bar widgets unexpectedly contain talk or clock: %q", config.Bar.Widgets)
 	}
 }
 

@@ -34,7 +34,13 @@ type Config struct {
 	Ntfy            *ntfy.Config `json:"ntfy,omitempty"`
 	Fed             *FedConfig   `json:"fed,omitempty"`
 	Codex           *CodexConfig `json:"codex,omitempty"`
+	Bar             BarConfig    `json:"bar"`
 	InvalidConfig   string       `json:"-"`
+}
+
+// BarConfig controls which metrics appear in the tmux status bar and their order.
+type BarConfig struct {
+	Widgets []string `json:"widgets"`
 }
 
 // CodexConfig enables the read-only Codex app-server backend.
@@ -53,19 +59,24 @@ type FedConfig struct {
 }
 
 type overrides struct {
-	MsgqRoot        *string      `json:"msgqRoot"`
-	Agentbooks      *[]string    `json:"agentbooks"`
-	TokenAgentbooks *[]string    `json:"tokenAgentbooks"`
-	StateDir        *string      `json:"stateDir"`
-	WAOutbox        *string      `json:"waOutbox"`
-	WAStore         *string      `json:"waStore"`
-	UsageBin        *string      `json:"usageBin"`
-	UsageHistory    *string      `json:"usageHistory"`
-	ClipboardDir    *string      `json:"clipboardDir"`
-	WABridge        *bool        `json:"waBridge"`
-	Ntfy            *ntfy.Config `json:"ntfy"`
-	Fed             *FedConfig   `json:"fed"`
-	Codex           *CodexConfig `json:"codex"`
+	MsgqRoot        *string       `json:"msgqRoot"`
+	Agentbooks      *[]string     `json:"agentbooks"`
+	TokenAgentbooks *[]string     `json:"tokenAgentbooks"`
+	StateDir        *string       `json:"stateDir"`
+	WAOutbox        *string       `json:"waOutbox"`
+	WAStore         *string       `json:"waStore"`
+	UsageBin        *string       `json:"usageBin"`
+	UsageHistory    *string       `json:"usageHistory"`
+	ClipboardDir    *string       `json:"clipboardDir"`
+	WABridge        *bool         `json:"waBridge"`
+	Ntfy            *ntfy.Config  `json:"ntfy"`
+	Fed             *FedConfig    `json:"fed"`
+	Codex           *CodexConfig  `json:"codex"`
+	Bar             *barOverrides `json:"bar"`
+}
+
+type barOverrides struct {
+	Widgets *[]string `json:"widgets"`
 }
 
 // Load resolves BP_HOME and reads its optional config.json.
@@ -119,6 +130,7 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 }
 
 func defaults(home string, legacy bool) Config {
+	bar := BarConfig{Widgets: []string{"ctx", "temp", "queue", "model", "quota"}}
 	if legacy {
 		return Config{
 			Home:            home,
@@ -133,6 +145,7 @@ func defaults(home string, legacy bool) Config {
 			UsageHistory:    "/srv/server-main/usage/history.jsonl",
 			ClipboardDir:    "/srv/server-main/clipboard",
 			WABridge:        true,
+			Bar:             bar,
 		}
 	}
 	return Config{
@@ -141,6 +154,7 @@ func defaults(home string, legacy bool) Config {
 		Agentbooks:      []string{filepath.Join(home, "agentbook.json")},
 		TokenAgentbooks: []string{filepath.Join(home, "agentbook.json")},
 		StateDir:        filepath.Join(home, "state"),
+		Bar:             bar,
 	}
 }
 
@@ -190,6 +204,9 @@ func apply(result *Config, values overrides) {
 		value := *values.Codex
 		value.Sockets = append([]string(nil), value.Sockets...)
 		result.Codex = &value
+	}
+	if values.Bar != nil && values.Bar.Widgets != nil {
+		result.Bar.Widgets = append([]string(nil), (*values.Bar.Widgets)...)
 	}
 }
 

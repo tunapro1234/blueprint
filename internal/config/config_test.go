@@ -50,6 +50,7 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 		"waOutbox":"", "waStore":"/wa.jsonl", "usageBin":"/bin",
 		"usageHistory":"/history.jsonl", "clipboardDir":"/clips",
 		"waBridge":false,
+		"codex":{"sockets":["/run/codex.sock"]},
 		"fed":{"mode":"client","hub":"https://hub.example","peerName":"portable",
 		       "token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
 	}`)
@@ -77,6 +78,9 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config.Agentbooks, []string{"/a.json"}) || config.Fed == nil || config.Fed.Mode != "client" || config.Fed.PeerName != "portable" {
 		t.Fatalf("agentbooks/fed = %q / %#v", config.Agentbooks, config.Fed)
+	}
+	if config.Codex == nil || !reflect.DeepEqual(config.Codex.Sockets, []string{"/run/codex.sock"}) {
+		t.Fatalf("codex = %#v", config.Codex)
 	}
 	if !reflect.DeepEqual(config.TokenAgentbooks, []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json", "/srv/kitap/.orchestration/agentbook.json"}) {
 		t.Fatalf("legacy tokenAgentbooks=%q", config.TokenAgentbooks)
@@ -107,6 +111,9 @@ func TestNonLegacyDefaults(t *testing.T) {
 	}
 	if config.Fed != nil {
 		t.Fatalf("federation should be disabled: %#v", config.Fed)
+	}
+	if config.Codex != nil {
+		t.Fatalf("codex should be disabled: %#v", config.Codex)
 	}
 }
 

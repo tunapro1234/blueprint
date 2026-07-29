@@ -21,6 +21,7 @@ import (
 
 	"blueprint/internal/book"
 	bpcache "blueprint/internal/cache"
+	"blueprint/internal/codexrpc"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
@@ -72,6 +73,7 @@ type app struct {
 	err    *os.File
 
 	loadFleet      func() (book.Fleet, map[string]book.State, error)
+	loadCodex      func() []codexrpc.Thread
 	deliverMessage func(string, string, string) (bool, string, error)
 	sessionExists  func(string) bool
 	loadCache      func(map[string]string) map[string]bpcache.State
@@ -453,6 +455,7 @@ func (a *app) status() error {
 		}
 		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", name, tmuxState, cacheText, talkText, bookState, flag)
 	}
+	a.renderCodexStatus(a.codexThreads())
 	return nil
 }
 
@@ -555,7 +558,144 @@ func (a *app) tree() error {
 			walk(name, " ", true)
 		}
 	}
+	a.renderCodexTree(a.codexThreads())
 	return nil
+}
+
+func (a *app) codexThreads() []codexrpc.Thread {
+	if a.config.Codex == nil || len(a.config.Codex.Sockets) == 0 {
+		return nil
+	}
+	if a.loadCodex != nil {
+		return a.loadCodex()
+	}
+	base := a.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	var threads []codexrpc.Thread
+	seen := map[string]bool{}
+	for _, socket := range a.config.Codex.Sockets {
+		if socket == "" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(base, 2*time.Second)
+		client, err := codexrpc.DialUnix(ctx, socket)
+		if err == nil {
+			listed, listErr := client.ThreadList(ctx)
+			_ = client.Close()
+			if listErr == nil {
+				for _, thread := range listed {
+					if thread.ID != "" && seen[thread.ID] {
+						continue
+					}
+					seen[thread.ID] = true
+					threads = append(threads, thread)
+				}
+			}
+		}
+		cancel()
+	}
+	return threads
+}
+
+// liveCodexThreads splits threads into the ones worth listing (loaded into the
+// daemon) and a count of unloaded history, which would otherwise drown the
+// fleet view: a long-lived app-server accumulates every past session.
+func liveCodexThreads(threads []codexrpc.Thread) ([]codexrpc.Thread, int) {
+	var live []codexrpc.Thread
+	for _, thread := range threads {
+		if thread.Status.Type != "notLoaded" {
+			live = append(live, thread)
+		}
+	}
+	return live, len(threads) - len(live)
+}
+
+func (a *app) renderCodexStatus(threads []codexrpc.Thread) {
+	live, unloaded := liveCodexThreads(threads)
+	if len(live) == 0 && unloaded == 0 {
+		return
+	}
+	fmt.Fprintln(a.out, "\nCODEX THREADS")
+	if len(live) > 0 {
+		fmt.Fprintf(a.out, "%-28s %-10s %-16s %s\n", "THREAD", "STATE", "CONTEXT", "CWD")
+	}
+	for _, thread := range live {
+		fmt.Fprintf(a.out, "%-28s %-10s %-16s %s\n", codexName(thread), codexState(thread.Status), codexContext(thread.TokenUsage), thread.CWD)
+	}
+	if unloaded > 0 {
+		fmt.Fprintf(a.out, "+ %d unloaded thread(s)\n", unloaded)
+	}
+}
+
+func (a *app) renderCodexTree(threads []codexrpc.Thread) {
+	threads, unloaded := liveCodexThreads(threads)
+	if len(threads) == 0 {
+		if unloaded > 0 {
+			fmt.Fprintf(a.out, "\nCodex: %d unloaded thread(s)\n", unloaded)
+		}
+		return
+	}
+	fmt.Fprintln(a.out, "\nCodex")
+	for i, thread := range threads {
+		branch := "├── "
+		if i == len(threads)-1 {
+			branch = "└── "
+		}
+		contextText := ""
+		if usage := codexContext(thread.TokenUsage); usage != "-" {
+			contextText = " (ctx " + usage + ")"
+		}
+		fmt.Fprintf(a.out, " %s%s [%s] %s%s\n", branch, codexName(thread), codexState(thread.Status), thread.CWD, contextText)
+	}
+	if unloaded > 0 {
+		fmt.Fprintf(a.out, " + %d unloaded thread(s)\n", unloaded)
+	}
+}
+
+func codexName(thread codexrpc.Thread) string {
+	if thread.Name != "" {
+		return thread.Name
+	}
+	if thread.AgentNickname != "" {
+		return thread.AgentNickname
+	}
+	if thread.ID != "" {
+		return thread.ID
+	}
+	return "unnamed"
+}
+
+func codexState(status codexrpc.ThreadStatus) string {
+	switch status.Type {
+	case "active":
+		return "working"
+	case "idle":
+		return "idle"
+	case "notLoaded":
+		return "unloaded"
+	case "systemError":
+		return "error"
+	case "":
+		return "unknown"
+	default:
+		return status.Type
+	}
+}
+
+func codexContext(usage *codexrpc.ThreadTokenUsage) string {
+	if usage == nil {
+		return "-"
+	}
+	used := usage.Last.TotalTokens
+	if used == 0 {
+		used = usage.Total.TotalTokens
+	}
+	if usage.ModelContextWindow != nil && *usage.ModelContextWindow > 0 {
+		return humanTokens(int(used)) + "/" + humanTokens(int(*usage.ModelContextWindow))
+	}
+	return humanTokens(int(used))
 }
 
 func (a *app) open(args []string) error {

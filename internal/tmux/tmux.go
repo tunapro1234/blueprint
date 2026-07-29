@@ -466,22 +466,22 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 		return ErrTyping
 	}
 	target := "=" + session + ":"
-	if strings.Contains(message, "\n") {
-		buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
-		if _, err = c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
-			return err
-		}
-		_, err = c.run(ctx, nil, "paste-buffer", "-b", buffer, "-d", "-t", target)
-		if err != nil {
-			// A failed paste may leave the uniquely named buffer behind.
-			_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
-			return err
-		}
-	} else {
-		_, err = c.run(ctx, nil, "send-keys", "-t", target, "-l", message)
-		if err != nil {
-			return err
-		}
+	// Always inject via a bracketed paste, never send-keys -l. Every agent on
+	// this fleet runs Claude Code with editorMode "vim": literal keystrokes into
+	// a NORMAL-mode composer are interpreted as vim commands and silently eaten
+	// until an i/a/s happens to appear in the text — exactly how single-line
+	// federation messages arrived mangled. A paste is inserted as text in any
+	// mode, and it is also what keeps external message content data rather than
+	// keys.
+	buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
+	if _, err = c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
+		return err
+	}
+	_, err = c.run(ctx, nil, "paste-buffer", "-b", buffer, "-d", "-t", target)
+	if err != nil {
+		// A failed paste may leave the uniquely named buffer behind.
+		_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
+		return err
 	}
 
 	// From this point onward, returning an error would leave the queue record

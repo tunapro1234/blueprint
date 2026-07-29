@@ -201,6 +201,7 @@ func (s *Service) startFederation(ctx context.Context) {
 	case "client":
 		client := fed.NewClient(s.config.Fed.Hub, s.config.Fed.Token)
 		client.Log = s.log.Writer()
+		client.Expose = s.config.Fed.Expose
 		failures := 0
 		reported := false
 		s.startLoop(ctx, "fed-poll", 5*time.Second, 5*time.Second, func(run context.Context, interval time.Duration) {

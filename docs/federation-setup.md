@@ -40,10 +40,15 @@ Gelen mesaj hedef agent'ın tmux pane'ine `[oz@yigit] selam` olarak düşer — 
    ```
    mkdir -p ~/.blueprint
    cat > ~/.blueprint/config.json <<'EOF'
-   {"fed":{"mode":"client","hub":"https://bp-tunnel.tunapro.xyz","peerName":"yigit","token":"<TOKEN>"}}
+   {"fed":{"mode":"client","hub":"https://bp-tunnel.tunapro.xyz","peerName":"yigit","token":"<TOKEN>",
+    "expose":["oz","kavram-dev"]}}
    EOF
    bp fed ping        # "hub tuna is reachable (..ms)" gormelisin
    ```
+   `expose` (önerilir): federasyondan mesaj ALABİLECEK yerel agent adları. Boş bırakılırsa
+   her agent'a mesaj düşebilir; listelenirse liste dışına gelen mesaj teslim edilmez,
+   `bp fed log`'da `drop` olarak kaydedilir. Kendi hiyerarşin varsa dış mesajların hangi
+   kapıdan gireceğine böyle karar verirsin.
 3. Daemon'ı çalıştır (poll + teslimat bunu ister):
    ```
    tmux new-session -d -s bp-daemon 'bp daemon'

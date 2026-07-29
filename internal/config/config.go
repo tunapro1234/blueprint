@@ -56,6 +56,11 @@ type FedConfig struct {
 	Hub      string `json:"hub,omitempty"`
 	PeerName string `json:"peerName"`
 	Token    string `json:"token,omitempty"`
+	// Expose (client mode) lists the local agents that may RECEIVE federated
+	// messages; anything else is dropped and journalled. Empty means no limit,
+	// which keeps existing setups working — the hub side has its own per-peer
+	// expose list, this is the mirror for the polling side.
+	Expose []string `json:"expose,omitempty"`
 }
 
 type overrides struct {
@@ -251,6 +256,11 @@ func validateFed(value *FedConfig) error {
 		for _, char := range value.Token {
 			if !strings.ContainsRune("0123456789abcdefABCDEF", char) {
 				return fmt.Errorf("token must be 64 hexadecimal characters")
+			}
+		}
+		for _, name := range value.Expose {
+			if !validFederationName(name) {
+				return fmt.Errorf("expose contains invalid agent name %q", name)
 			}
 		}
 	default:

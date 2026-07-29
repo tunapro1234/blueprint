@@ -20,6 +20,10 @@ type State struct {
 	CtxTokens    int
 	LastHumanAge time.Duration
 	Known        bool
+	// Model is what the session actually ran last, read from the assistant
+	// records. Settings files only hold the configured default: /model changes
+	// a live session without touching them, so they cannot be trusted for this.
+	Model string
 }
 
 func Read(projectsRoot, folder, agent string) State {
@@ -55,6 +59,7 @@ func Read(projectsRoot, folder, agent string) State {
 
 	var usageTime, humanTime time.Time
 	ctxTokens := 0
+	model := ""
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
@@ -71,6 +76,7 @@ func Read(projectsRoot, folder, agent string) State {
 		}
 		var message struct {
 			Role    string          `json:"role"`
+			Model   string          `json:"model"`
 			Content json.RawMessage `json:"content"`
 			Usage   *struct {
 				CacheRead     int `json:"cache_read_input_tokens"`
@@ -78,6 +84,10 @@ func Read(projectsRoot, folder, agent string) State {
 			} `json:"usage"`
 		}
 		_ = json.Unmarshal(record.Message, &message)
+		// "<synthetic>" marks interrupt/error placeholders, not a real turn.
+		if message.Model != "" && message.Model != "<synthetic>" {
+			model = message.Model
+		}
 		if message.Usage != nil {
 			if timestamp, ok := parseTime(record.Timestamp); ok {
 				usageTime = timestamp
@@ -100,7 +110,7 @@ func Read(projectsRoot, folder, agent string) State {
 		}
 	}
 
-	result := State{CtxTokens: ctxTokens, LastHumanAge: -1}
+	result := State{CtxTokens: ctxTokens, LastHumanAge: -1, Model: model}
 	now := time.Now()
 	if !usageTime.IsZero() {
 		result.Known = true

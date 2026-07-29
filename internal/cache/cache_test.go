@@ -25,11 +25,15 @@ func TestCacheAgeAndLastHuman(t *testing.T) {
 		user(now.Add(-90*time.Minute), "[usage-policy] automated"),
 		user(now.Add(-80*time.Minute), "[3 birikmis duyuru — 26-27 Tem]\nautomated"),
 		usage(now.Add(-59*time.Minute), 150_000, 70_000),
+		synthetic(now.Add(-58 * time.Minute)),
 	}
 	writeJSONL(t, path, lines)
 	state := Read(root, folder, agent)
 	if !state.Known || state.Age < 58*time.Minute || state.Age >= 60*time.Minute {
 		t.Fatalf("warm state=%+v", state)
+	}
+	if state.Model != "claude-opus-5" {
+		t.Fatalf("model=%q, want claude-opus-5 (synthetic placeholder must not win)", state.Model)
 	}
 	if state.CtxTokens != 220_000 {
 		t.Fatalf("ctx=%d, want 220000", state.CtxTokens)
@@ -63,8 +67,17 @@ func usage(timestamp time.Time, read, creation int) any {
 		"timestamp": timestamp.Format(time.RFC3339Nano),
 		"message": map[string]any{
 			"role":  "assistant",
+			"model": "claude-opus-5",
 			"usage": map[string]any{"cache_read_input_tokens": read, "cache_creation_input_tokens": creation},
 		},
+	}
+}
+
+func synthetic(timestamp time.Time) any {
+	return map[string]any{
+		"type":      "assistant",
+		"timestamp": timestamp.Format(time.RFC3339Nano),
+		"message":   map[string]any{"role": "assistant", "model": "<synthetic>"},
 	}
 }
 

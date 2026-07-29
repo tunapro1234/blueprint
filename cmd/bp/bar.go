@@ -191,7 +191,7 @@ func (a *app) barLine(agent string) string {
 				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(len(items))))
 			}
 		case "model":
-			if model := a.barModel(agent, readFolder()); model != "" {
+			if model := a.barModel(agent, readFolder(), readState); model != "" {
 				segments = append(segments, style(barQuiet, model))
 			}
 		case "quota":
@@ -207,7 +207,7 @@ func (a *app) barLine(agent string) string {
 	return gap + strings.Join(segments, gap) + gap + "#[default]"
 }
 
-func (a *app) barModel(agent, folder string) string {
+func (a *app) barModel(agent, folder string, state func() cache.State) string {
 	if a.tmux == nil {
 		return ""
 	}
@@ -220,6 +220,12 @@ func (a *app) barModel(agent, folder string) string {
 	switch process.Command {
 	case "claude":
 		model, effort = readClaudeModel(folder, home)
+		// The session record beats every settings file: /model switches a live
+		// agent without touching its pin, and writes the GLOBAL default, so the
+		// settings answer can be wrong in both directions at once.
+		if live := state().Model; live != "" {
+			model = live
+		}
 	case "codex", "bwrap":
 		codexHome := processEnv(process.PID, "CODEX_HOME")
 		if codexHome == "" && home != "" {

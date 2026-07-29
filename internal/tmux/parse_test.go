@@ -216,13 +216,7 @@ func TestSendProceedsForCodexAgentPane(t *testing.T) {
 	if err := testClient(h).Send(context.Background(), "target", "queued"); err != nil {
 		t.Fatal(err)
 	}
-	inject := 0
-	for _, m := range h.mutations {
-		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
-			inject++
-		}
-	}
-	if inject != 1 {
+	if countInjections(h.mutations) != 1 {
 		t.Fatalf("expected exactly 1 injection, got: %v", h.mutations)
 	}
 	if got := countEnter(h.mutations); got != 1 {
@@ -265,6 +259,19 @@ func TestSendSettlesLargePasteBeforeSubmitting(t *testing.T) {
 	}
 }
 
+// countInjections counts text injections. Injection is always a bracketed
+// paste (load-buffer + paste-buffer); only paste-buffer is counted so a
+// load/paste pair is one injection.
+func countInjections(mutations []string) int {
+	n := 0
+	for _, m := range mutations {
+		if strings.HasPrefix(m, "paste-buffer ") {
+			n++
+		}
+	}
+	return n
+}
+
 func countEnter(mutations []string) int {
 	n := 0
 	for _, m := range mutations {
@@ -295,13 +302,7 @@ func TestSendRetriesEnterWhenComposerStillHoldsMessage(t *testing.T) {
 		t.Fatalf("expected 2 Enter presses, got %d: %v", got, h.mutations)
 	}
 	// Only one text injection ever — retries never re-inject.
-	inject := 0
-	for _, m := range h.mutations {
-		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
-			inject++
-		}
-	}
-	if inject != 1 {
+	if countInjections(h.mutations) != 1 {
 		t.Fatalf("message was re-injected: %v", h.mutations)
 	}
 }
@@ -328,13 +329,7 @@ func TestSendRetriesEnterWhenCodexPasteChipHoldsMessage(t *testing.T) {
 		t.Fatalf("expected 2 Enter presses (chip retry), got %d: %v", got, h.mutations)
 	}
 	// At-most-once: the text is injected exactly once, never re-pasted.
-	inject := 0
-	for _, m := range h.mutations {
-		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
-			inject++
-		}
-	}
-	if inject != 1 {
+	if countInjections(h.mutations) != 1 {
 		t.Fatalf("message was re-injected: %v", h.mutations)
 	}
 }
@@ -381,13 +376,7 @@ func TestSendTabQueuesOnBusyCodex(t *testing.T) {
 		t.Fatalf("expected NO Enter while busy affordance present, got %d: %v", got, h.mutations)
 	}
 	// At-most-once: the text is injected exactly once, never re-pasted.
-	inject := 0
-	for _, m := range h.mutations {
-		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
-			inject++
-		}
-	}
-	if inject != 1 {
+	if countInjections(h.mutations) != 1 {
 		t.Fatalf("message was re-injected: %v", h.mutations)
 	}
 }
@@ -548,23 +537,17 @@ func TestSendRecoversMultilineStuckComposerWithBackspace(t *testing.T) {
 	if got := countEnter(h.mutations); got != 2 {
 		t.Fatalf("expected 2 Enter presses, got %d: %v", got, h.mutations)
 	}
-	inject := 0
-	for _, m := range h.mutations {
-		if strings.HasPrefix(m, "send-keys -t =target: -l ") {
-			inject++
-		}
-	}
-	if inject != 1 {
+	if countInjections(h.mutations) != 1 {
 		t.Fatalf("message was re-injected: %v", h.mutations)
 	}
-	// Order: inject, Enter, BSpace, Enter.
+	// Order: inject (load+paste), Enter, BSpace, Enter.
+	keys := h.mutations[2:]
 	want := []string{
-		"send-keys -t =target: -l /compact",
 		"send-keys -t =target: Enter",
 		"send-keys -t =target: BSpace",
 		"send-keys -t =target: Enter",
 	}
-	if strings.Join(h.mutations, "|") != strings.Join(want, "|") {
+	if strings.Join(keys, "|") != strings.Join(want, "|") {
 		t.Fatalf("mutations=%v", h.mutations)
 	}
 }
@@ -620,7 +603,8 @@ func TestSendDoesNotSubmitIfUserTypesAfterInjection(t *testing.T) {
 	if err := testClient(h).Send(context.Background(), "target", "queued"); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.mutations) != 1 || !strings.HasPrefix(h.mutations[0], "send-keys -t =target: -l queued") {
+	if len(h.mutations) != 2 || !strings.HasPrefix(h.mutations[0], "load-buffer ") ||
+		!strings.HasPrefix(h.mutations[1], "paste-buffer ") {
 		t.Fatalf("user text was submitted or message was retried: %v", h.mutations)
 	}
 }

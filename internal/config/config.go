@@ -17,20 +17,26 @@ const LegacyHome = "/srv/blueprint"
 
 // Config contains all paths and feature switches that vary by machine.
 type Config struct {
-	Home            string     `json:"-"`
-	Legacy          bool       `json:"-"`
-	MsgqRoot        string     `json:"msgqRoot"`
-	Agentbooks      []string   `json:"agentbooks"`
-	TokenAgentbooks []string   `json:"tokenAgentbooks"`
-	StateDir        string     `json:"stateDir"`
-	WAOutbox        string     `json:"waOutbox"`
-	WAStore         string     `json:"waStore"`
-	UsageBin        string     `json:"usageBin"`
-	UsageHistory    string     `json:"usageHistory"`
-	ClipboardDir    string     `json:"clipboardDir"`
-	WABridge        bool       `json:"waBridge"`
-	Fed             *FedConfig `json:"fed,omitempty"`
-	InvalidConfig   string     `json:"-"`
+	Home            string       `json:"-"`
+	Legacy          bool         `json:"-"`
+	MsgqRoot        string       `json:"msgqRoot"`
+	Agentbooks      []string     `json:"agentbooks"`
+	TokenAgentbooks []string     `json:"tokenAgentbooks"`
+	StateDir        string       `json:"stateDir"`
+	WAOutbox        string       `json:"waOutbox"`
+	WAStore         string       `json:"waStore"`
+	UsageBin        string       `json:"usageBin"`
+	UsageHistory    string       `json:"usageHistory"`
+	ClipboardDir    string       `json:"clipboardDir"`
+	WABridge        bool         `json:"waBridge"`
+	Fed             *FedConfig   `json:"fed,omitempty"`
+	Codex           *CodexConfig `json:"codex,omitempty"`
+	InvalidConfig   string       `json:"-"`
+}
+
+// CodexConfig enables the read-only Codex app-server backend.
+type CodexConfig struct {
+	Sockets []string `json:"sockets"`
 }
 
 // FedConfig enables one side of blueprint federation. A nil value leaves
@@ -44,17 +50,18 @@ type FedConfig struct {
 }
 
 type overrides struct {
-	MsgqRoot        *string    `json:"msgqRoot"`
-	Agentbooks      *[]string  `json:"agentbooks"`
-	TokenAgentbooks *[]string  `json:"tokenAgentbooks"`
-	StateDir        *string    `json:"stateDir"`
-	WAOutbox        *string    `json:"waOutbox"`
-	WAStore         *string    `json:"waStore"`
-	UsageBin        *string    `json:"usageBin"`
-	UsageHistory    *string    `json:"usageHistory"`
-	ClipboardDir    *string    `json:"clipboardDir"`
-	WABridge        *bool      `json:"waBridge"`
-	Fed             *FedConfig `json:"fed"`
+	MsgqRoot        *string      `json:"msgqRoot"`
+	Agentbooks      *[]string    `json:"agentbooks"`
+	TokenAgentbooks *[]string    `json:"tokenAgentbooks"`
+	StateDir        *string      `json:"stateDir"`
+	WAOutbox        *string      `json:"waOutbox"`
+	WAStore         *string      `json:"waStore"`
+	UsageBin        *string      `json:"usageBin"`
+	UsageHistory    *string      `json:"usageHistory"`
+	ClipboardDir    *string      `json:"clipboardDir"`
+	WABridge        *bool        `json:"waBridge"`
+	Fed             *FedConfig   `json:"fed"`
+	Codex           *CodexConfig `json:"codex"`
 }
 
 // Load resolves BP_HOME and reads its optional config.json.
@@ -170,6 +177,11 @@ func apply(result *Config, values overrides) {
 	if values.Fed != nil {
 		value := *values.Fed
 		result.Fed = &value
+	}
+	if values.Codex != nil {
+		value := *values.Codex
+		value.Sockets = append([]string(nil), value.Sockets...)
+		result.Codex = &value
 	}
 }
 

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +19,7 @@ import (
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/msgq"
+	"blueprint/internal/ntfy"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/worktree"
@@ -25,6 +30,45 @@ func TestFedCommandRejectsInvalidConfigFallback(t *testing.T) {
 	err := a.run([]string{"fed", "status"})
 	if err == nil || !strings.Contains(err.Error(), "federation disabled because config.json is invalid") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWhatsAppSendIgnoresNtfyFailure(t *testing.T) {
+	t.Setenv("AGENT", "agent")
+	var body string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		data, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = string(data)
+		http.Error(writer, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	outbox := t.TempDir()
+	output, errOutput := testOutput(t), testOutput(t)
+	a := &app{
+		ctx:    context.Background(),
+		config: bpconfig.Config{WAOutbox: outbox, Ntfy: &ntfy.Config{URL: server.URL, Topic: "alerts"}},
+		out:    output,
+		err:    errOutput,
+	}
+	if err := a.whatsapp([]string{"send", "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if body != "[agent] hello" {
+		t.Fatalf("ntfy body=%q, want %q", body, "[agent] hello")
+	}
+	entries, err := os.ReadDir(outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("WhatsApp outbox entries=%d, want 1", len(entries))
+	}
+	if warning := readTestOutput(t, errOutput); !strings.Contains(warning, "WARNING: ntfy notification failed") {
+		t.Fatalf("stderr=%q", warning)
 	}
 }
 

@@ -11,26 +11,29 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"blueprint/internal/ntfy"
 )
 
 const LegacyHome = "/srv/blueprint"
 
 // Config contains all paths and feature switches that vary by machine.
 type Config struct {
-	Home            string     `json:"-"`
-	Legacy          bool       `json:"-"`
-	MsgqRoot        string     `json:"msgqRoot"`
-	Agentbooks      []string   `json:"agentbooks"`
-	TokenAgentbooks []string   `json:"tokenAgentbooks"`
-	StateDir        string     `json:"stateDir"`
-	WAOutbox        string     `json:"waOutbox"`
-	WAStore         string     `json:"waStore"`
-	UsageBin        string     `json:"usageBin"`
-	UsageHistory    string     `json:"usageHistory"`
-	ClipboardDir    string     `json:"clipboardDir"`
-	WABridge        bool       `json:"waBridge"`
-	Fed             *FedConfig `json:"fed,omitempty"`
-	InvalidConfig   string     `json:"-"`
+	Home            string       `json:"-"`
+	Legacy          bool         `json:"-"`
+	MsgqRoot        string       `json:"msgqRoot"`
+	Agentbooks      []string     `json:"agentbooks"`
+	TokenAgentbooks []string     `json:"tokenAgentbooks"`
+	StateDir        string       `json:"stateDir"`
+	WAOutbox        string       `json:"waOutbox"`
+	WAStore         string       `json:"waStore"`
+	UsageBin        string       `json:"usageBin"`
+	UsageHistory    string       `json:"usageHistory"`
+	ClipboardDir    string       `json:"clipboardDir"`
+	WABridge        bool         `json:"waBridge"`
+	Ntfy            *ntfy.Config `json:"ntfy,omitempty"`
+	Fed             *FedConfig   `json:"fed,omitempty"`
+	InvalidConfig   string       `json:"-"`
 }
 
 // FedConfig enables one side of blueprint federation. A nil value leaves
@@ -44,17 +47,18 @@ type FedConfig struct {
 }
 
 type overrides struct {
-	MsgqRoot        *string    `json:"msgqRoot"`
-	Agentbooks      *[]string  `json:"agentbooks"`
-	TokenAgentbooks *[]string  `json:"tokenAgentbooks"`
-	StateDir        *string    `json:"stateDir"`
-	WAOutbox        *string    `json:"waOutbox"`
-	WAStore         *string    `json:"waStore"`
-	UsageBin        *string    `json:"usageBin"`
-	UsageHistory    *string    `json:"usageHistory"`
-	ClipboardDir    *string    `json:"clipboardDir"`
-	WABridge        *bool      `json:"waBridge"`
-	Fed             *FedConfig `json:"fed"`
+	MsgqRoot        *string      `json:"msgqRoot"`
+	Agentbooks      *[]string    `json:"agentbooks"`
+	TokenAgentbooks *[]string    `json:"tokenAgentbooks"`
+	StateDir        *string      `json:"stateDir"`
+	WAOutbox        *string      `json:"waOutbox"`
+	WAStore         *string      `json:"waStore"`
+	UsageBin        *string      `json:"usageBin"`
+	UsageHistory    *string      `json:"usageHistory"`
+	ClipboardDir    *string      `json:"clipboardDir"`
+	WABridge        *bool        `json:"waBridge"`
+	Ntfy            *ntfy.Config `json:"ntfy"`
+	Fed             *FedConfig   `json:"fed"`
 }
 
 // Load resolves BP_HOME and reads its optional config.json.
@@ -166,6 +170,10 @@ func apply(result *Config, values overrides) {
 	}
 	if values.WABridge != nil {
 		result.WABridge = *values.WABridge
+	}
+	if values.Ntfy != nil {
+		value := *values.Ntfy
+		result.Ntfy = &value
 	}
 	if values.Fed != nil {
 		value := *values.Fed

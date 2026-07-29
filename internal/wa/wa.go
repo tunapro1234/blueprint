@@ -31,9 +31,7 @@ func Agent(ctx context.Context, client *bptmux.Client) string {
 }
 
 func Send(outbox, agent, to, reply, text string) error {
-	if !strings.HasPrefix(text, "["+agent+"]") {
-		text = "[" + agent + "] " + text
-	}
+	text = Format(agent, text)
 	if err := os.MkdirAll(outbox, 0755); err != nil {
 		return err
 	}
@@ -67,6 +65,13 @@ func Send(outbox, agent, to, reply, text string) error {
 	}
 	target := filepath.Join(outbox, fmt.Sprintf("%d.json", time.Now().UnixNano()))
 	return os.Rename(name, target)
+}
+
+func Format(agent, text string) string {
+	if !strings.HasPrefix(text, "["+agent+"]") {
+		text = "[" + agent + "] " + text
+	}
+	return text
 }
 
 type Incoming struct {

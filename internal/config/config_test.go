@@ -50,6 +50,7 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 		"waOutbox":"", "waStore":"/wa.jsonl", "usageBin":"/bin",
 		"usageHistory":"/history.jsonl", "clipboardDir":"/clips",
 		"waBridge":false,
+		"ntfy":{"url":"https://ntfy.example","topic":"alerts","token":"secret"},
 		"fed":{"mode":"client","hub":"https://hub.example","peerName":"portable",
 		       "token":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
 	}`)
@@ -77,6 +78,9 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(config.Agentbooks, []string{"/a.json"}) || config.Fed == nil || config.Fed.Mode != "client" || config.Fed.PeerName != "portable" {
 		t.Fatalf("agentbooks/fed = %q / %#v", config.Agentbooks, config.Fed)
+	}
+	if config.Ntfy == nil || config.Ntfy.URL != "https://ntfy.example" || config.Ntfy.Topic != "alerts" || config.Ntfy.Token != "secret" {
+		t.Fatalf("ntfy = %#v", config.Ntfy)
 	}
 	if !reflect.DeepEqual(config.TokenAgentbooks, []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json", "/srv/kitap/.orchestration/agentbook.json"}) {
 		t.Fatalf("legacy tokenAgentbooks=%q", config.TokenAgentbooks)
@@ -107,6 +111,9 @@ func TestNonLegacyDefaults(t *testing.T) {
 	}
 	if config.Fed != nil {
 		t.Fatalf("federation should be disabled: %#v", config.Fed)
+	}
+	if config.Ntfy != nil {
+		t.Fatalf("ntfy should be disabled: %#v", config.Ntfy)
 	}
 }
 

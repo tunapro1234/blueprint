@@ -27,6 +27,7 @@ import (
 	"blueprint/internal/fed"
 	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
+	"blueprint/internal/ntfy"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
@@ -1466,8 +1467,13 @@ func (a *app) whatsapp(args []string) error {
 		if text == "" {
 			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] <message...>")
 		}
-		if err := wa.Send(a.config.WAOutbox, wa.Agent(a.ctx, a.tmux), to, reply, text); err != nil {
-			return err
+		agent := wa.Agent(a.ctx, a.tmux)
+		waErr := wa.Send(a.config.WAOutbox, agent, to, reply, text)
+		if err := ntfy.Send(a.ctx, a.config.Ntfy, wa.Format(agent, text)); err != nil {
+			fmt.Fprintf(a.err, "WARNING: ntfy notification failed: %v\n", err)
+		}
+		if waErr != nil {
+			return waErr
 		}
 		destination := to
 		if destination == "" {

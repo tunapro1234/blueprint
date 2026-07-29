@@ -251,6 +251,55 @@ func TestClientPollEnqueuesAndRecordsLastPoll(t *testing.T) {
 	if _, err := os.Stat(LastPollPath(stateDir)); err != nil {
 		t.Fatalf("last poll file: %v", err)
 	}
+	journal, err := ReadJournal(stateDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal) != 1 || journal[0].Dir != "in" || journal[0].Msg != "reply" || journal[0].From != "ada@tuna" {
+		t.Fatalf("journal=%+v", journal)
+	}
+}
+
+// A remote hub cannot be trusted to have sanitized: the polling side must
+// strip control bytes itself, or a message could smuggle Ctrl-C, ESC
+// sequences, or the bracketed-paste terminator into the pane as keystrokes.
+func TestClientPollStripsControlBytes(t *testing.T) {
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
+	hostile := "hi\x03 there\x1b[201~rm -rf\rx"
+	if _, err := hub.Outbox.Enqueue("yigit", "oz", "ada@tuna", hostile); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+	client := NewClient(server.URL, testToken)
+	queue := msgq.New(filepath.Join(t.TempDir(), "msgq"))
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if _, err := client.PollAndEnqueue(context.Background(), stateDir, queue); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := queue.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[ada@tuna] hi there[201~rm -rfx"
+	if len(messages) != 1 || messages[0].Msg != want {
+		t.Fatalf("messages=%+v, want msg %q", messages, want)
+	}
+}
+
+func TestJournalRecordsOutboundQueue(t *testing.T) {
+	stateDir := t.TempDir()
+	peers := map[string]Peer{"yigit": {Token: testToken}}
+	if _, err := QueueOutbound(stateDir, peers, "yigit", "oz", "ada@tuna", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := ReadJournal(stateDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal) != 1 || journal[0].Dir != "out" || journal[0].To != "oz@yigit" || journal[0].Msg != "hello" {
+		t.Fatalf("journal=%+v", journal)
+	}
 }
 
 func TestValidateNameStrictAlphabet(t *testing.T) {

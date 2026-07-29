@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"blueprint/internal/book"
 )
 
 type agentEntry struct {
@@ -46,7 +48,7 @@ func loadResolver(paths []string) resolver {
 			}
 		}
 		for _, entry := range entries {
-			folder := firstPath(entry.Folder)
+			folder := book.FirstPath(entry.Folder)
 			if entry.Name == "" || folder == "" {
 				continue
 			}
@@ -67,17 +69,6 @@ func loadResolver(paths []string) resolver {
 		return len(r.agents[i]) > len(r.agents[j])
 	})
 	return r
-}
-
-func firstPath(folder string) string {
-	folder = strings.TrimSpace(folder)
-	if !strings.HasPrefix(folder, "/") {
-		return ""
-	}
-	if index := strings.IndexAny(folder, " \t\r\n"); index >= 0 {
-		folder = folder[:index]
-	}
-	return folder
 }
 
 func mungedPath(path string) string {

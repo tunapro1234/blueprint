@@ -32,15 +32,10 @@ prompt geçmişini (90 gün) tutuyor, `bp tokens --prompts` onu okuyor.
 **Not:** Gas Town'daki "Seance" fikri (kapanmış bir oturuma tam transcript'i yüklemeden tek soru
 sorma) bunun üzerine kurulabilir; önce düz arama.
 
-## 2. Bildirim kanallarını çoğaltma
-
-**Ne:** WhatsApp'a ek olarak en az bir push kanalı (**ntfy** ilk aday: self-hosted, hesap
-gerektirmiyor, ~20 satır). Kanal seçimi config'ten; mevcut `bp wa` davranışı değişmez.
-
-**Neden:** Agent Deck'te Telegram/Slack/Discord/ntfy var; bizde tek kanal ve o da kişisel
-WhatsApp'a bağlı. Bir kanal düşerse bildirim tamamen kesiliyor.
-
 ## 3. Federation'ı derinleştirme
+
+**BEKLEMEDE (Tuna, 2026-07-29):** dış hat işleri (3a-3e, güvenlik dahil) birlikte planlanana
+kadar ertelendi; kendiliğinden başlanmayacak.
 
 Şu an çalışan: hub (`bp-tunnel.tunapro.xyz`) + Bearer token + expose allowlist + poll/ack.
 Araştırma (A2A 1.0, ANP, AGNTCY, OWASP AI Agent Security Cheat Sheet) sonrası kararlaştırılanlar:
@@ -66,68 +61,32 @@ yazmak kolaylaşır.
 **3e. P2P değil hub:** karşı taraf NAT arkasında; hub tek sabit uç, her iki filo dışarı bağlanır.
 Metateam'in P2P yaklaşımı daha zarif ama işletmesi zor.
 
-## 4. Devam eden (yazılmış, deploy bekliyor / yarım)
+## 4. Devam eden / yarım
 
 - **Teslim anında compact** — soğuk + >200k agent'a mesaj gitmeden önce `/compact`;
-  daemon kuyruğunu bloklamayan durum makinesi. (codex turu tamamlandı, review bekliyor)
+  daemon kuyruğunu bloklamayan durum makinesi. (Düzeltme 2026-07-29: codex turu 0 bayt
+  çıktıyla ölmüştü — bu iş HİÇ yazılmadı, spec scratchpad'de; sıfırdan yapılacak.)
 - **Context eşiği uyarısı** — >300k'da `!` işareti ve log; "sıcak ama devasa" vakası için.
 - **Opus review + sadeleştirme turu** — gpt'nin yazdığı federation/pending/cache kodunun
   MVP ölçüsüne çekilmesi. Tuna'nın açık isteği.
 
-## 5. Kuyruktaki hata: `bp open` yeni kayıtta parent/class çıkarımı
+## 5. `bp open --resume` — kalan küçük durum
 
-ada 2026-07-27'de ikinci kez elle düzeltmek zorunda kaldı. Aciliyet düşük, sıradaki işi bölmüyor.
+Hiç başlık almamış oturum çözülemiyor, `--resume` boş dönüp yeni oturum açıyor — yanlış oturum
+değil, oturumsuzluk (2026-07-28'de `probot-shop-worker`/`worker2` bu durumdaydı). Karar verilmiş
+bir iş yok; acırsa ele alınır. (Parent/class çıkarımı, yinelenen kayıt temizliği ve --resume
+yanlış-oturum hatası 2026-07-29'da kapandı — git geçmişi.)
 
-**Belirti:** `bp open kavram-launch /srv/kavram/launch` →
-`{"class":"other","parent":"server-main"}`. Beklenen `{"class":"kavram","parent":"kavram-main"}`,
-çünkü book'ta `kavram-main` folder=`/srv/kavram` ve aynı kalıptaki `kavram-gate`/`kavram-yc`
-zaten `kavram-main` altında.
+## 6. Codex app-server desteği
 
-**Sebep:** `bp open` parent olarak çağıran agent'ı geçiriyor (`cmd/bp/main.go` → `a.sender()`),
-`book.SetStatus` ise yeni kayıtta `class`'ı sabit `"other"` yazıyor. Yol bilgisi hiç kullanılmıyor.
+**Önem yükseldi (Tuna, 2026-07-29): bp'yi codex kullanan insanlar da kullanabilmeli** — yalnızca
+Yiğit'in filosunu görmek değil, genel bir özellik. Yiğit'in agentları tmux'ta değil: tek uzun
+ömürlü **`codex app-server`** daemon'u altında "thread" olarak yaşıyorlar.
 
-**Karar (ada'nın önerisi, özel-durum kodu yok):** yeni kayıtta folder yolunu mevcut agent'ların
-folder'larıyla karşılaştır, **en uzun eşleşen üst-yol** kimse `parent` o olsun, `class` da onun
-class'ı. Eşleşme yoksa bugünkü davranış (`server-main` / `other`) kalsın. Böylece
-`/srv/probot/...` → `probot-main`, `/srv/kitap/...` → `kitap-main` kendiliğinden bağlanır.
-
-Uygulama notları:
-- Karşılaştırma **yol sınırında** olmalı: `/srv/kavram` `/srv/kavram-old`'u eşleştirmemeli.
-- Book folder'ı açıklama taşıyabiliyor (`"/srv (home: /srv/server-main)"`) — `cmd/bp/bar.go`
-  içindeki `firstPath` bunu zaten temizliyor, ortak bir yere taşınmalı.
-- `server-main` folder=`/srv` her şeyi eşleştirir; en-uzun kuralı doğal olarak derini seçer,
-  yani fallback kendiliğinden doğru çalışır.
-- **Doğru book'a yazılmalı:** eşleşme hangi book'ta bulunduysa kayıt da oraya gitsin
-  (`/srv/probot` altı ProbotPath, diğerleri MainPath). `SetStatus` şu an ad eşleşmesi yoksa
-  `paths[0]`'a yazıyor.
-- Sadeleştirme fırsatı: `book.AddLive` aynı çıkarımı **ada göre** (`kavram-` öneki) yapıyor.
-  İkisi tek fonksiyonda birleşmeli — önce yol, sonra ad; iki ayrı kural bakımı zorlaştırıyor.
-
-**Ayrı ve KAPALI olan madde:** ada'nın daha önce bildirdiği "`bp open` mevcut kayıtların
-parent/role alanlarını eziyor" hatası `909f20f` ile düzeldi (`SetStatus` artık var olan kayıtta
-yalnızca `status` yazıyor, değişiklik yoksa dosyaya hiç dokunmuyor). Asıl sebep `bp open` değil,
-daemon keepalive'inin 30 saniyede bir tüm dosyayı yeniden yazmasıydı.
-
-**Bir de KAPANAN madde: `bp open --resume` yanlış oturumu açıyor.** 2026-07-28'de canlı veriyle
-doğrulandı; klasör paylaşan her grup artık doğru ayrışıyor. Örnek: `/srv` altında `server-main`
-ve `bilal-tunnel` ayrı oturumlara çözülüyor; `/srv/probot/outreach` altında yeni oturum
-`probot-outreach`, eski oturum ise hâlâ `probot-business-outreach` başlığını taşıdığı için
-karışmıyor. Çözümü iki parça sağladı: customTitle ile eşleme (`eb93a4b`) ve son kaydı okuma
-(`fb96984`).
-
-**Kalan (ayrı, daha küçük) durum:** hiç başlık almamış oturum çözülemiyor, `--resume` boş dönüp
-yeni oturum açıyor — yanlış oturum değil, oturumsuzluk. `probot-shop-worker`/`worker2` bugün
-bu durumda.
-
-**Yan bulgu (ada'ya):** agentbook'ta **yinelenen kayıtlar** var — `probot-main`, `probot-pil` ve
-`probot-mufredat` ikişer kez geçiyor. `LoadFleet` bunları merge ettiği için görünür bir arıza
-yok, ama `bp rename` gibi kayıt sayan işler yanıltıcı çıktı verebilir. Temizlenmeli.
-
-## 6. Codex app-server desteği (Yiğit'in filosuna bağlanmak)
-
-kavram-launch'ın 2026-07-27 görevi. Yiğit'in agentları tmux'ta değil: tek uzun ömürlü
-**`codex app-server`** daemon'u altında "thread" olarak yaşıyorlar. Federation mesajı taşır ama
-onların filosunu **göremiyoruz**. Bu bölüm o boşluğu kapatıyor.
+**Durum 2026-07-29: 6d/1-2 YAZILDI ve deploy edildi** (`internal/codexrpc` + config `codex.sockets`
++ `bp status`/`tree` salt-okur Codex bölümü). Gerçek tel iki sürpriz verdi, testlere gömüldü:
+app-server yanıtlarında `jsonrpc` alanı hiç yok; sunucudan-istemciye istekler (string id) öldürücü
+değil, yok sayılır. Kalan işler 6d/3-4 + SSH üzerinden uzak soket bağlama (şimdilik yerel soket).
 
 ### 6a. Mimari — ne olduğu (yerelde doğrulandı, codex-cli 0.145.0)
 
@@ -210,14 +169,17 @@ desteklensin, uzantı/parçalama desteklenmesin.
 
 ### 6d. Yapılacak işler (sırayla, MVP ölçüsünde)
 
-1. **`internal/codexrpc`** — küçük JSON-RPC istemcisi + minimal WebSocket katmanı: yerelde
-   `codex app-server --stdio` (düz JSON, WS gerekmez), uzakta SSH üzerinden sokete WS.
-   `initialize` yap, istek/cevap eşle, bildirimleri bir kanala akıt. Stdlib yeter, ~350 satır.
-2. **Salt-okur gözlem** — `bp status` / `bp tree` içinde Codex thread'lerini ikinci bir arka uç
-   olarak göster (ad, cwd, meşgul mü, context). **Yazma yok.** İlk teslim burada bitsin.
-3. **Mesaj teslimi** — `bp msg <thread>@codex`: tur çalışmıyorsa `turn/start`, çalışıyorsa
-   `turn/steer`. Federation adreslemesiyle (`ad@peer`) aynı sözdizimi.
-4. **(Belki)** context/limit ölçümünü `account/rateLimits/read` ve `thread/tokenUsage/updated`
+1. ~~**`internal/codexrpc`**~~ **YAZILDI 2026-07-29** (`200b353`): JSON-RPC istemcisi +
+   minimal WS katmanı (unix soket) + stdio taşıma. Bildirimler kanala akıyor.
+2. ~~**Salt-okur gözlem**~~ **YAZILDI 2026-07-29**: `bp status`/`tree`, config'te
+   `codex.sockets` varsa Codex thread'lerini gösteriyor (ad, durum, context, cwd); yüklenmemiş
+   tarih tek özet satıra katlanıyor. Yazma yok.
+3. **Uzak soket** — SSH tüneli üzerinden Yiğit'in soketine bağlanma (şimdilik yalnız yerel
+   soket destekli); config'te `ssh:host:/path` benzeri bir adres biçimi gerekir.
+4. **Mesaj teslimi** — `bp msg <thread>@codex`: tur çalışmıyorsa `turn/start`, çalışıyorsa
+   `turn/steer`. Federation adreslemesiyle (`ad@peer`) aynı sözdizimi. §6e'deki koruma
+   tasarlanmadan açılmaz.
+5. **(Belki)** context/limit ölçümünü `account/rateLimits/read` ve `thread/tokenUsage/updated`
    ile besleyip `bp usage`'a Codex sütunu eklemek.
 
 **Kapsam dışı (şimdilik):** thread başlatma/silme, goal yönetimi, onay akışları (`turn/steer`

@@ -33,7 +33,13 @@ type Config struct {
 	WABridge        bool         `json:"waBridge"`
 	Ntfy            *ntfy.Config `json:"ntfy,omitempty"`
 	Fed             *FedConfig   `json:"fed,omitempty"`
+	Codex           *CodexConfig `json:"codex,omitempty"`
 	InvalidConfig   string       `json:"-"`
+}
+
+// CodexConfig enables the read-only Codex app-server backend.
+type CodexConfig struct {
+	Sockets []string `json:"sockets"`
 }
 
 // FedConfig enables one side of blueprint federation. A nil value leaves
@@ -59,6 +65,7 @@ type overrides struct {
 	WABridge        *bool        `json:"waBridge"`
 	Ntfy            *ntfy.Config `json:"ntfy"`
 	Fed             *FedConfig   `json:"fed"`
+	Codex           *CodexConfig `json:"codex"`
 }
 
 // Load resolves BP_HOME and reads its optional config.json.
@@ -178,6 +185,11 @@ func apply(result *Config, values overrides) {
 	if values.Fed != nil {
 		value := *values.Fed
 		result.Fed = &value
+	}
+	if values.Codex != nil {
+		value := *values.Codex
+		value.Sockets = append([]string(nil), value.Sockets...)
+		result.Codex = &value
 	}
 }
 

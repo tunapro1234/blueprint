@@ -16,6 +16,7 @@ import (
 
 	"blueprint/internal/book"
 	bpcache "blueprint/internal/cache"
+	"blueprint/internal/codexrpc"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/msgq"
@@ -69,6 +70,107 @@ func TestWhatsAppSendIgnoresNtfyFailure(t *testing.T) {
 	}
 	if warning := readTestOutput(t, errOutput); !strings.Contains(warning, "WARNING: ntfy notification failed") {
 		t.Fatalf("stderr=%q", warning)
+	}
+}
+
+func TestStatusIsUnchangedWithoutCodexConfig(t *testing.T) {
+	out := testOutput(t)
+	fleet := book.Fleet{
+		Root:  "root",
+		Order: []string{"root"},
+		Agents: map[string]book.Agent{
+			"root": {Name: "root", Status: "open"},
+		},
+		Parents: map[string]string{"root": ""},
+	}
+	a := &app{
+		out: out,
+		loadFleet: func() (book.Fleet, map[string]book.State, error) {
+			return fleet, map[string]book.State{"root": {Alive: true}}, nil
+		},
+		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+		loadCodex: func() []codexrpc.Thread {
+			t.Fatal("Codex loader called without config")
+			return nil
+		},
+	}
+	if err := a.status(); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK") +
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s\n", "root", "idle", "-", "-", "open")
+	if got := readTestOutput(t, out); got != want {
+		t.Fatalf("output=%q, want %q", got, want)
+	}
+}
+
+func TestStatusIgnoresDeadCodexSocket(t *testing.T) {
+	out := testOutput(t)
+	fleet := book.Fleet{
+		Root:    "root",
+		Order:   []string{"root"},
+		Agents:  map[string]book.Agent{"root": {Name: "root", Status: "open"}},
+		Parents: map[string]string{"root": ""},
+	}
+	a := &app{
+		ctx:    context.Background(),
+		config: bpconfig.Config{Codex: &bpconfig.CodexConfig{Sockets: []string{filepath.Join(t.TempDir(), "missing.sock")}}},
+		out:    out,
+		loadFleet: func() (book.Fleet, map[string]book.State, error) {
+			return fleet, map[string]book.State{"root": {Alive: true}}, nil
+		},
+		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+	}
+	if err := a.status(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestOutput(t, out); strings.Contains(got, "CODEX") || !strings.Contains(got, "root") {
+		t.Fatalf("output=%q", got)
+	}
+}
+
+func TestCodexRenderersShowReadOnlyThreadState(t *testing.T) {
+	out := testOutput(t)
+	window := int64(200_000)
+	threads := []codexrpc.Thread{
+		{
+			ID:     "thread-1",
+			Name:   "builder",
+			CWD:    "/srv/project",
+			Status: codexrpc.ThreadStatus{Type: "active"},
+			TokenUsage: &codexrpc.ThreadTokenUsage{
+				Last:               codexrpc.TokenUsage{TotalTokens: 12_300},
+				ModelContextWindow: &window,
+			},
+		},
+		{ID: "thread-2", AgentNickname: "reader", CWD: "/srv/docs", Status: codexrpc.ThreadStatus{Type: "idle"}},
+	}
+	a := &app{
+		config:    bpconfig.Config{Codex: &bpconfig.CodexConfig{Sockets: []string{"/run/codex.sock"}}},
+		out:       out,
+		loadCodex: func() []codexrpc.Thread { return threads },
+	}
+	gotThreads := a.codexThreads()
+	if !reflect.DeepEqual(gotThreads, threads) {
+		t.Fatalf("threads=%+v", gotThreads)
+	}
+	a.renderCodexStatus(gotThreads)
+	a.renderCodexTree(gotThreads)
+	got := readTestOutput(t, out)
+	for _, want := range []string{
+		"CODEX THREADS",
+		"builder",
+		"working",
+		"12.3k/200k",
+		"/srv/project",
+		"reader",
+		"idle",
+		"Codex\n",
+		"└── reader [idle] /srv/docs",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output does not contain %q:\n%s", want, got)
+		}
 	}
 }
 

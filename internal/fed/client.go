@@ -24,6 +24,10 @@ type Client struct {
 	HTTPClient *http.Client
 	Now        func() time.Time
 	Log        io.Writer
+	// Expose limits which local agents may receive polled messages. Empty
+	// means every agent — the hub decides what IT accepts, but only this list
+	// can stop a remote hub from addressing arbitrary local sessions.
+	Expose []string
 }
 
 func NewClient(hub, token string) *Client {
@@ -169,13 +173,24 @@ func (c *Client) PollAndEnqueue(ctx context.Context, stateDir string, queue *msg
 		// and turn its content back into keystrokes at the pane.
 		from := sanitize(message.From)
 		text := sanitize(message.Msg)
-		if _, err := queue.Enqueue(message.To, from, "["+from+"] "+text); err != nil {
-			return 0, err
+		if c.allowed(message.To) {
+			if _, err := queue.Enqueue(message.To, from, "["+from+"] "+text); err != nil {
+				return 0, err
+			}
+			if err := Journal(stateDir, "in", message.ID, from, message.To, text); err != nil && c.Log != nil {
+				fmt.Fprintf(c.Log, "fed: journal failed: %v\n", err)
+			}
+			enqueued++
+		} else {
+			// Still acked and marked seen below: the hub must stop resending,
+			// but the journal keeps the evidence that someone tried.
+			if err := Journal(stateDir, "drop", message.ID, from, message.To, text); err != nil && c.Log != nil {
+				fmt.Fprintf(c.Log, "fed: journal failed: %v\n", err)
+			}
+			if c.Log != nil {
+				fmt.Fprintf(c.Log, "fed: dropped message for unexposed agent %s (from %s)\n", message.To, from)
+			}
 		}
-		if err := Journal(stateDir, "in", message.ID, from, message.To, text); err != nil && c.Log != nil {
-			fmt.Fprintf(c.Log, "fed: journal failed: %v\n", err)
-		}
-		enqueued++
 		if message.ID != "" {
 			known[message.ID] = true
 			seen.IDs = append(seen.IDs, message.ID)
@@ -199,6 +214,18 @@ func (c *Client) PollAndEnqueue(ctx context.Context, stateDir string, queue *msg
 		return enqueued, err
 	}
 	return enqueued, nil
+}
+
+func (c *Client) allowed(target string) bool {
+	if len(c.Expose) == 0 {
+		return true
+	}
+	for _, name := range c.Expose {
+		if name == target {
+			return true
+		}
+	}
+	return false
 }
 
 type seenState struct {

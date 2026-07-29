@@ -287,6 +287,57 @@ func TestClientPollStripsControlBytes(t *testing.T) {
 	}
 }
 
+func TestClientPollDropsUnexposedTarget(t *testing.T) {
+	hub, _ := testHub(t, []string{"ada", "deniz", "oz"})
+	if _, err := hub.Outbox.Enqueue("yigit", "oz", "ada@tuna", "for oz"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Outbox.Enqueue("yigit", "gizli-agent", "ada@tuna", "sneak"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+	client := NewClient(server.URL, testToken)
+	client.Expose = []string{"oz"}
+	queue := msgq.New(filepath.Join(t.TempDir(), "msgq"))
+	stateDir := filepath.Join(t.TempDir(), "state")
+	count, err := client.PollAndEnqueue(context.Background(), stateDir, queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("enqueued=%d, want 1", count)
+	}
+	messages, err := queue.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].To != "oz" {
+		t.Fatalf("messages=%+v, want only oz", messages)
+	}
+	journal, err := ReadJournal(stateDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dropped *JournalEntry
+	for index := range journal {
+		if journal[index].Dir == "drop" {
+			dropped = &journal[index]
+		}
+	}
+	if dropped == nil || dropped.To != "gizli-agent" || dropped.Msg != "sneak" {
+		t.Fatalf("journal=%+v, want a drop entry for gizli-agent", journal)
+	}
+	// The drop must still be acked: a second poll may not resurface it.
+	queue2 := msgq.New(filepath.Join(t.TempDir(), "msgq2"))
+	if _, err := client.PollAndEnqueue(context.Background(), stateDir, queue2); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := queue2.List(); err != nil || len(again) != 0 {
+		t.Fatalf("second poll re-delivered: %+v (err=%v)", again, err)
+	}
+}
+
 func TestJournalRecordsOutboundQueue(t *testing.T) {
 	stateDir := t.TempDir()
 	peers := map[string]Peer{"yigit": {Token: testToken}}

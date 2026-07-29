@@ -140,11 +140,30 @@ func (a *app) barLine(agent string) string {
 		}
 		return folder
 	}
+	var process bptmux.PaneProcess
+	processRead := false
+	readProcess := func() bptmux.PaneProcess {
+		if !processRead {
+			if a.tmux != nil {
+				if value, err := a.tmux.PaneProcess(a.ctx, agent); err == nil {
+					process = value
+				}
+			}
+			processRead = true
+		}
+		return process
+	}
 	var state cache.State
 	stateRead := false
 	readState := func() cache.State {
 		if !stateRead {
-			state = cache.Read(bptmux.ClaudeProjectsRoot(), readFolder(), agent)
+			// A codex pane has no Claude projects entry: its live session is
+			// the freshest rollout under CODEX_HOME started in this folder.
+			if p := readProcess(); p.Command == "codex" || p.Command == "bwrap" {
+				state = cache.ReadCodex(codexHome(p.PID), readFolder())
+			} else {
+				state = cache.Read(bptmux.ClaudeProjectsRoot(), readFolder(), agent)
+			}
 			stateRead = true
 		}
 		return state
@@ -158,11 +177,18 @@ func (a *app) barLine(agent string) string {
 			}
 			text := humanTokens(state.CtxTokens)
 			colour := barQuiet
+			// Claude never reports its window, so those keep the absolute
+			// thresholds; a session that does report one is judged by how
+			// full it actually is.
+			limitWarn, limitAlert := 200_000, 300_000
+			if state.Window > 0 {
+				limitWarn, limitAlert = state.Window*3/4, state.Window*9/10
+			}
 			switch {
-			case state.CtxTokens > 300_000:
+			case state.CtxTokens > limitAlert:
 				colour = barAlert
 				text += " !"
-			case state.CtxTokens > 200_000:
+			case state.CtxTokens > limitWarn:
 				colour = barWarn
 			}
 			segments = append(segments, style(colour, text))
@@ -191,7 +217,7 @@ func (a *app) barLine(agent string) string {
 				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(len(items))))
 			}
 		case "model":
-			if model := a.barModel(agent, readFolder(), readState); model != "" {
+			if model := a.barModel(readProcess(), readFolder(), readState); model != "" {
 				segments = append(segments, style(barQuiet, model))
 			}
 		case "quota":
@@ -207,14 +233,7 @@ func (a *app) barLine(agent string) string {
 	return gap + strings.Join(segments, gap) + gap + "#[default]"
 }
 
-func (a *app) barModel(agent, folder string, state func() cache.State) string {
-	if a.tmux == nil {
-		return ""
-	}
-	process, err := a.tmux.PaneProcess(a.ctx, agent)
-	if err != nil {
-		return ""
-	}
+func (a *app) barModel(process bptmux.PaneProcess, folder string, state func() cache.State) string {
 	home, _ := os.UserHomeDir()
 	var model, effort string
 	switch process.Command {
@@ -227,18 +246,27 @@ func (a *app) barModel(agent, folder string, state func() cache.State) string {
 			model = live
 		}
 	case "codex", "bwrap":
-		codexHome := processEnv(process.PID, "CODEX_HOME")
-		if codexHome == "" && home != "" {
-			codexHome = filepath.Join(home, ".codex")
-		}
-		if codexHome == "" {
+		root := codexHome(process.PID)
+		if root == "" {
 			return ""
 		}
-		model, effort = readCodexModel(filepath.Join(codexHome, "config.toml"))
+		model, effort = readCodexModel(filepath.Join(root, "config.toml"))
 	default:
 		return ""
 	}
 	return modelLabel(model, effort)
+}
+
+// codexHome resolves the CODEX_HOME the pane's process actually runs with,
+// falling back to the default ~/.codex.
+func codexHome(pid int) string {
+	if home := processEnv(pid, "CODEX_HOME"); home != "" {
+		return home
+	}
+	if user, _ := os.UserHomeDir(); user != "" {
+		return filepath.Join(user, ".codex")
+	}
+	return ""
 }
 
 func readClaudeModel(folder, home string) (string, string) {

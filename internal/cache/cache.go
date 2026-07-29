@@ -24,6 +24,10 @@ type State struct {
 	// records. Settings files only hold the configured default: /model changes
 	// a live session without touching them, so they cannot be trusted for this.
 	Model string
+	// Window is the model's context window when the session reports one
+	// (codex does, claude does not). Zero means unknown: absolute thresholds
+	// apply instead of percentages.
+	Window int
 }
 
 func Read(projectsRoot, folder, agent string) State {

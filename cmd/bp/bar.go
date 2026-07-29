@@ -218,7 +218,7 @@ func (a *app) barFolder(agent string) string {
 	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
 	if err == nil {
 		if entry, ok := fleet.Agents[agent]; ok && entry.Folder != "" {
-			return firstPath(entry.Folder)
+			return book.FirstPath(entry.Folder)
 		}
 	}
 	locations, err := a.tmux.Locations(a.ctx)
@@ -231,19 +231,6 @@ func (a *app) barFolder(agent string) string {
 		}
 	}
 	return ""
-}
-
-// firstPath strips the annotation an agentbook folder may carry, e.g.
-// "/srv (home: /srv/server-main)".
-func firstPath(folder string) string {
-	folder = strings.TrimSpace(folder)
-	if !strings.HasPrefix(folder, "/") {
-		return ""
-	}
-	if index := strings.IndexAny(folder, " \t\r\n"); index >= 0 {
-		folder = folder[:index]
-	}
-	return folder
 }
 
 // style fills one metric chip with its own colour, picking text that stays

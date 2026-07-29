@@ -289,7 +289,7 @@ func (a *app) reportCodeReferences(fleet book.Fleet, old, name string) {
 	if !ok || entry.Folder == "" {
 		return
 	}
-	folder := firstPath(entry.Folder)
+	folder := book.FirstPath(entry.Folder)
 	if folder == "" {
 		return
 	}

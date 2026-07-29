@@ -139,24 +139,59 @@ func invalidName(name string) bool {
 }
 
 func (f *Fleet) AddLive(names []string) {
-	known := append([]string(nil), f.Order...)
+	known := make([]Agent, 0, len(f.Order))
+	for _, name := range f.Order {
+		known = append(known, f.Agents[name])
+	}
 	for _, name := range names {
 		if _, ok := f.Agents[name]; ok {
 			continue
 		}
-		parent, longest := f.Root, 0
-		for _, candidate := range known {
-			a := f.Agents[candidate]
-			for _, prefix := range []string{candidate, a.Nickname} {
-				if prefix != "" && strings.HasPrefix(name, prefix+"-") && len(prefix) > longest {
-					parent, longest = candidate, len(prefix)
-				}
-			}
+		parent, class := f.Root, ""
+		if index := infer(known, name, ""); index >= 0 {
+			candidate := known[index]
+			parent, class = candidate.Name, candidate.Class
 		}
-		f.Agents[name] = Agent{Name: name, Status: "unregistered"}
+		f.Agents[name] = Agent{Name: name, Class: class, Status: "unregistered"}
 		f.Parents[name] = parent
 		f.Order = append(f.Order, name)
 	}
+}
+
+// FirstPath strips the annotation an agentbook folder may carry, e.g.
+// "/srv (home: /srv/server-main)".
+func FirstPath(folder string) string {
+	fields := strings.Fields(folder)
+	if len(fields) > 0 && strings.HasPrefix(fields[0], "/") {
+		return fields[0]
+	}
+	return ""
+}
+
+func infer(agents []Agent, name, folder string) int {
+	folder = filepath.Clean(FirstPath(folder))
+	best, longest := -1, 0
+	for i, agent := range agents {
+		candidate := filepath.Clean(FirstPath(agent.Folder))
+		if folder != "." && candidate != "." && (folder == candidate ||
+			candidate == string(filepath.Separator) ||
+			strings.HasPrefix(folder, candidate+string(filepath.Separator))) &&
+			len(candidate) > longest {
+			best, longest = i, len(candidate)
+		}
+	}
+	if best >= 0 {
+		return best
+	}
+	longest = 0
+	for i, agent := range agents {
+		for _, prefix := range []string{agent.Name, agent.Nickname} {
+			if prefix != "" && strings.HasPrefix(name, prefix+"-") && len(prefix) > longest {
+				best, longest = i, len(prefix)
+			}
+		}
+	}
+	return best
 }
 
 func (f Fleet) SortedNames() []string {
@@ -427,16 +462,31 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 		return fmt.Errorf("agentbook is not configured")
 	}
 	target := paths[0]
+	var candidates []Agent
+	var owners []string
+	foundName := false
 	for _, path := range paths {
 		file, err := Load(path)
 		if err != nil {
 			continue
 		}
 		for _, agent := range file.Agents {
+			candidates = append(candidates, agent)
+			owners = append(owners, path)
 			if agent.Name == name {
 				target = path
-				break
+				foundName = true
 			}
+		}
+	}
+	class := "other"
+	if index := infer(candidates, name, folder); !foundName && index >= 0 {
+		candidate := candidates[index]
+		target, parent = owners[index], candidate.Name
+		// A book may omit class entirely (the probot book does); inheriting
+		// "" would write an empty class into the new entry.
+		if candidate.Class != "" {
+			class = candidate.Class
 		}
 	}
 	lock, err := os.OpenFile(target+".lock", os.O_CREATE|os.O_RDWR, 0600)
@@ -477,7 +527,7 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 		}
 	}
 	if !found {
-		agent := map[string]any{"name": name, "folder": folder, "class": "other", "role": "(new - add role)", "status": status}
+		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": "(new - add role)", "status": status}
 		if parent != "" {
 			agent["parent"] = parent
 		}
@@ -485,31 +535,7 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 	}
 	raw["agents"] = agents
 	raw["updated"] = time.Now().Format("2006-01-02")
-	encoded, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return err
-	}
-	encoded = append(encoded, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".agentbook-*.json")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err = tmp.Chmod(info.Mode().Perm()); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err = tmp.Write(encoded); err == nil {
-		err = tmp.Sync()
-	}
-	if closeErr := tmp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(tmpName, target)
+	return writeBook(target, raw, info.Mode().Perm())
 }
 
 type State struct {

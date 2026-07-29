@@ -190,6 +190,23 @@ func TestIsAgentCommand(t *testing.T) {
 	}
 }
 
+func TestPaneProcessSelectsActivePane(t *testing.T) {
+	client := New()
+	client.exec = func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+		if got := strings.Join(args, " "); !strings.Contains(got, "list-panes -t =agent: -F") {
+			t.Fatalf("tmux args=%q", got)
+		}
+		return []byte("0\tzsh\t100\n1\tbwrap\t234\n"), nil
+	}
+	got, err := client.PaneProcess(context.Background(), "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Command != "bwrap" || got.PID != 234 {
+		t.Fatalf("pane process=%+v", got)
+	}
+}
+
 func TestSendRejectsNonAgentPane(t *testing.T) {
 	// A pane that dropped to a shell must be rejected with ErrNotAgent BEFORE any
 	// paste/keystroke: no capture, no activity check, no mutation ever happens.

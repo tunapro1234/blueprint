@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,46 +131,216 @@ func (a *app) paneAccent(agent string) (string, bool) {
 func (a *app) barLine(agent string) string {
 	var segments []string
 
-	folder := a.barFolder(agent)
-	state := cache.Read(bptmux.ClaudeProjectsRoot(), folder, agent)
-	if state.Known {
-		ctx := humanTokens(state.CtxTokens)
-		colour := barQuiet
-		switch {
-		case state.CtxTokens > 300_000:
-			colour = barAlert
-			ctx += " !"
-		case state.CtxTokens > 200_000:
-			colour = barWarn
+	var folder string
+	folderRead := false
+	readFolder := func() string {
+		if !folderRead {
+			folder = a.barFolder(agent)
+			folderRead = true
 		}
-		segments = append(segments, style(colour, ctx))
-
-		temperature, colour := "cold", barQuiet
-		if state.Age < time.Hour {
-			temperature, colour = "warm", barCalm
+		return folder
+	}
+	var state cache.State
+	stateRead := false
+	readState := func() cache.State {
+		if !stateRead {
+			state = cache.Read(bptmux.ClaudeProjectsRoot(), readFolder(), agent)
+			stateRead = true
 		}
-		segments = append(segments, style(colour, temperature+" "+formatAge(state.Age)))
-
-		if state.LastHumanAge >= 0 {
+		return state
+	}
+	for _, widget := range a.config.Bar.Widgets {
+		switch widget {
+		case "ctx":
+			state := readState()
+			if !state.Known {
+				continue
+			}
+			text := humanTokens(state.CtxTokens)
+			colour := barQuiet
+			switch {
+			case state.CtxTokens > 300_000:
+				colour = barAlert
+				text += " !"
+			case state.CtxTokens > 200_000:
+				colour = barWarn
+			}
+			segments = append(segments, style(colour, text))
+		case "temp":
+			state := readState()
+			if !state.Known {
+				continue
+			}
+			temperature, colour := "cold", barQuiet
+			if state.Age < time.Hour {
+				temperature, colour = "warm", barCalm
+			}
+			segments = append(segments, style(colour, temperature+" "+formatAge(state.Age)))
+		case "talk":
+			state := readState()
+			if state.LastHumanAge < 0 {
+				continue
+			}
 			colour := barQuiet
 			if state.LastHumanAge > 24*time.Hour {
 				colour = barWarn
 			}
 			segments = append(segments, style(colour, "talk "+formatAge(state.LastHumanAge)))
+		case "queue":
+			if items, _, err := pending.Load(filepath.Join(a.config.StateDir, "pending"), agent); err == nil && len(items) > 0 {
+				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(len(items))))
+			}
+		case "model":
+			if model := a.barModel(agent, readFolder()); model != "" {
+				segments = append(segments, style(barQuiet, model))
+			}
+		case "quota":
+			if quota := a.barQuota(); quota != "" {
+				segments = append(segments, quota)
+			}
+		case "clock":
+			segments = append(segments, style(barQuiet, time.Now().Format("15:04")))
 		}
 	}
 
-	if items, _, err := pending.Load(filepath.Join(a.config.StateDir, "pending"), agent); err == nil && len(items) > 0 {
-		segments = append(segments, style(barCalm, "queue "+strconv.Itoa(len(items))))
-	}
-
-	if quota := a.barQuota(); quota != "" {
-		segments = append(segments, quota)
-	}
-
-	segments = append(segments, style(barQuiet, time.Now().Format("15:04")))
 	gap := "#[bg=" + barGap + "] "
 	return gap + strings.Join(segments, gap) + gap + "#[default]"
+}
+
+func (a *app) barModel(agent, folder string) string {
+	if a.tmux == nil {
+		return ""
+	}
+	process, err := a.tmux.PaneProcess(a.ctx, agent)
+	if err != nil {
+		return ""
+	}
+	home, _ := os.UserHomeDir()
+	var model, effort string
+	switch process.Command {
+	case "claude":
+		model, effort = readClaudeModel(folder, home)
+	case "codex", "bwrap":
+		codexHome := processEnv(process.PID, "CODEX_HOME")
+		if codexHome == "" && home != "" {
+			codexHome = filepath.Join(home, ".codex")
+		}
+		if codexHome == "" {
+			return ""
+		}
+		model, effort = readCodexModel(filepath.Join(codexHome, "config.toml"))
+	default:
+		return ""
+	}
+	return modelLabel(model, effort)
+}
+
+func readClaudeModel(folder, home string) (string, string) {
+	if folder != "" {
+		local := filepath.Join(folder, ".claude", "settings.local.json")
+		data, err := os.ReadFile(local)
+		if err == nil {
+			// A settings.local.json often carries only a permissions allowlist,
+			// no model pin - that agent runs the global default, so fall through.
+			if model, effort := parseClaudeModel(data); model != "" || effort != "" {
+				return model, effort
+			}
+		} else if !os.IsNotExist(err) {
+			return "", ""
+		}
+	}
+	if home == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+	if err != nil {
+		return "", ""
+	}
+	return parseClaudeModel(data)
+}
+
+func parseClaudeModel(data []byte) (string, string) {
+	var settings struct {
+		Model       string `json:"model"`
+		EffortLevel string `json:"effortLevel"`
+	}
+	if json.Unmarshal(data, &settings) != nil {
+		return "", ""
+	}
+	return settings.Model, settings.EffortLevel
+}
+
+func readCodexModel(path string) (string, string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	var model, effort string
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			break
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		unquoted, err := strconv.Unquote(value)
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "model":
+			model = unquoted
+		case "model_reasoning_effort":
+			effort = unquoted
+		}
+	}
+	return model, effort
+}
+
+func processEnv(pid int, key string) string {
+	if pid <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "environ"))
+	if err != nil {
+		return ""
+	}
+	prefix := key + "="
+	for _, entry := range strings.Split(string(data), "\x00") {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
+}
+
+func modelLabel(model, effort string) string {
+	lower := strings.ToLower(model)
+	for _, name := range []string{"opus", "fable", "sonnet", "haiku", "sol", "terra", "luna"} {
+		if strings.Contains(lower, name) {
+			model = name
+			break
+		}
+	}
+	runes := []rune(model)
+	if len(runes) > 10 {
+		model = string(runes[:10])
+	}
+	switch strings.ToLower(effort) {
+	case "medium":
+		effort = "med"
+	case "low", "high", "xhigh", "max":
+		effort = strings.ToLower(effort)
+	default:
+		effort = ""
+	}
+	return strings.TrimSpace(model + " " + effort)
 }
 
 // barQuota renders the fleet-wide budget: the shared Claude 7-day window is

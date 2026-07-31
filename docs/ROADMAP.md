@@ -206,6 +206,31 @@ ancak o koruma tasarlandıktan sonra açılır: yazmadan önce `thread/status/ch
 durumu okunmalı, koşan otonom goal varsa `turn/start` yerine `turn/steer`, o da uygun değilse
 mesaj kuyrukta beklemeli — bugünkü "meşgul agent'ı bölme" kuralının app-server karşılığı.
 
+## 7. Goal sistemi — hiyerarşik hedef atama
+
+**Karar (Tuna, 2026-07-31):** hiyerarşide üstte olan, altındaki agent'lara goal verebilmeli.
+Henüz tasarım/implementasyon yok; bu bölüm kararı ve sınırları tutar.
+
+**Ne:** `bp goal set <agent> "<hedef>"` / `show` / `clear` benzeri bir yüzey. Goal bir mesaj
+değil **kalıcı durum**: state'te saklanır, agent'a teslim edilir ve tamamlanana/temizlenene
+kadar geçerli kalır.
+
+**Yetki kuralı (işin özü):** announce ile aynı — `fleet.IsDescendant`: bir agent yalnızca
+**kendi altındakilere** goal verebilir (server-main/root her yere). Alt üste veremez, eş
+seviyeler birbirine veremez. Federation üzerinden goal atama **yok**: dış mesaj taleptir,
+emir değil (§3c ile tutarlı) — karşı tarafta hiyerarşi varsa onun kurallarını da biz çiğnemeyiz.
+
+**Eldeki parçalar:**
+- Claude tarafında `/goal` Stop-hook kalıbı zaten kullanılıyor (agent hedef bitmeden duramıyor) —
+  teslim biçimi için doğal aday.
+- Codex app-server'da birebir karşılığı hazır: `thread/goal/set|get|clear` (§6b tablosu).
+  İleride aynı komutun codex arka ucu olabilir; §6e yazma guardrail'leri aynen geçerli.
+
+**Açık sorular (tasarımda karara bağlanacak):** goal'u kim kapatır (agent "bitti" diyebilir mi,
+yoksa yalnız veren mi); üst üste goal'lar (üstün üstü daha genel bir goal verirse ne olur);
+teslim ve görünürlük (bar'da chip? `bp status`'ta satır?); agent kapanıp `--resume` ile
+açıldığında goal'un taşınması.
+
 ---
 
 ## Reddedilenler (tekrar tartışılmasın diye)

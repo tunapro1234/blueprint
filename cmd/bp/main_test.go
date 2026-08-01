@@ -36,6 +36,7 @@ func TestFedCommandRejectsInvalidConfigFallback(t *testing.T) {
 
 func TestWhatsAppSendIgnoresNtfyFailure(t *testing.T) {
 	t.Setenv("AGENT", "agent")
+	t.Setenv("TMUX", "")
 	var body string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		data, err := io.ReadAll(request.Body)
@@ -261,6 +262,7 @@ func TestFormatDigest(t *testing.T) {
 
 func TestAnnounceDefersColdAndSendsWarm(t *testing.T) {
 	t.Setenv("AGENT", "server-main")
+	t.Setenv("TMUX", "")
 	stateDir := t.TempDir()
 	out := testOutput(t)
 	fleet := book.Fleet{
@@ -312,6 +314,7 @@ func TestAnnounceDefersColdAndSendsWarm(t *testing.T) {
 
 func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 	t.Setenv("AGENT", "ada")
+	t.Setenv("TMUX", "")
 	t.Run("offline", func(t *testing.T) {
 		stateDir := t.TempDir()
 		out := testOutput(t)
@@ -388,12 +391,29 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		}
 	})
 
-	t.Run("slash command stays bare", func(t *testing.T) {
+	// ada is above alp, oz is a sibling of alp: only ada (and root) may drive
+	// alp's CLI with bare slash commands.
+	slashFleet := func() (book.Fleet, map[string]book.State, error) {
+		return book.Fleet{
+			Root:  "server-main",
+			Order: []string{"server-main", "ada", "alp", "oz"},
+			Agents: map[string]book.Agent{
+				"server-main": {Name: "server-main"},
+				"ada":         {Name: "ada"},
+				"alp":         {Name: "alp"},
+				"oz":          {Name: "oz"},
+			},
+			Parents: map[string]string{"server-main": "", "ada": "server-main", "alp": "ada", "oz": "ada"},
+		}, nil, nil
+	}
+
+	t.Run("slash command stays bare downward", func(t *testing.T) {
 		var delivered string
 		a := &app{
 			config:        bpconfig.Config{StateDir: t.TempDir()},
 			out:           testOutput(t),
 			sessionExists: func(string) bool { return true },
+			loadFleet:     slashFleet,
 			deliverMessage: func(name, from, message string) (bool, string, error) {
 				delivered = message
 				return false, "", nil
@@ -404,6 +424,28 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		}
 		if delivered != "/compact" {
 			t.Fatalf("delivered=%q, want %q", delivered, "/compact")
+		}
+	})
+
+	t.Run("slash command refused sideways", func(t *testing.T) {
+		t.Setenv("AGENT", "oz")
+		delivered := false
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			loadFleet:     slashFleet,
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				delivered = true
+				return false, "", nil
+			},
+		}
+		err := a.message([]string{"alp", "/compact"})
+		if err == nil || !strings.Contains(err.Error(), "hierarchy") {
+			t.Fatalf("err=%v, want hierarchy refusal", err)
+		}
+		if delivered {
+			t.Fatal("refused slash command was still delivered")
 		}
 	})
 }

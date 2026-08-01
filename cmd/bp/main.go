@@ -931,10 +931,17 @@ func (a *app) close(args []string) error {
 }
 
 func (a *app) sender() string {
-	if value := os.Getenv("AGENT"); value != "" {
-		return value
+	// Inside tmux the pane's own session is the caller's identity, and it is
+	// authoritative: it comes from the tmux server, not from anything the
+	// caller can export. AGENT is honored only outside tmux (daemon, systemd,
+	// plain shells) — checking it first would let any agent sign its messages
+	// as someone else with a one-line export.
+	if os.Getenv("TMUX") != "" {
+		if value, err := a.tmux.DisplaySession(a.ctx); err == nil && value != "" {
+			return value
+		}
 	}
-	if value, err := a.tmux.DisplaySession(a.ctx); err == nil && value != "" {
+	if value := os.Getenv("AGENT"); value != "" {
 		return value
 	}
 	return "server-main"
@@ -1025,7 +1032,10 @@ func (a *app) message(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: bp msg <name> <message...>")
 	}
-	name, message := args[0], strings.Join(args[1:], " ")
+	name, message := args[0], strings.TrimSpace(strings.Join(args[1:], " "))
+	if message == "" {
+		return fmt.Errorf("empty message")
+	}
 	if strings.Contains(name, "@") {
 		target, peer, _, err := fed.ParseAddress(name)
 		if err != nil {
@@ -1034,6 +1044,24 @@ func (a *app) message(args []string) error {
 		return a.federatedMessage(target, peer, message)
 	}
 	sender := a.sender()
+	if strings.HasPrefix(message, "/") {
+		// A bare slash command executes in the target CLI with no envelope and
+		// no visible origin (a prefix would break the command). The only
+		// authority for that is the hierarchy: root and ancestors may drive
+		// their own agents' CLIs — nobody else, and never sideways. The same
+		// gate will guard bp goal (roadmap §7).
+		fleet, _, err := a.fleet()
+		if err != nil {
+			return err
+		}
+		root := fleet.Root
+		if root == "" {
+			root = "server-main"
+		}
+		if sender != root && !fleet.IsDescendant(name, sender) {
+			return fmt.Errorf("slash command refused: %s is not above %s in the hierarchy", sender, name)
+		}
+	}
 	if !a.hasSession(name) {
 		if err := pending.Append(a.config.StateDir, name, pending.Entry{TS: time.Now().Unix(), From: sender, Kind: "msg", Text: message}); err != nil {
 			return err

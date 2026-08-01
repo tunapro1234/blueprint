@@ -231,6 +231,14 @@ yoksa yalnız veren mi); üst üste goal'lar (üstün üstü daha genel bir goal
 teslim ve görünürlük (bar'da chip? `bp status`'ta satır?); agent kapanıp `--resume` ile
 açıldığında goal'un taşınması.
 
+**Ek karar — kimlik ve komut yetkisi (Tuna, 2026-08-01):** mesaj zarfı zorunlu ve bp üretir;
+kimse elle "[tuna]" yazarak kimlik iddia edemez (elle yazılan, gerçek zarfın İÇİNDE görünür).
+Kimlik tmux oturumundan türetilir; AGENT env yalnız tmux dışında (daemon/systemd) geçerli.
+`/goal` gibi slash komutları zarf TAŞIYAMAZ (önek komutu bozar) — kaynak gösterilemediği için
+yetki bp katmanında denetlenir: slash komut yalnız hiyerarşide üstten alta gider (bp msg'de
+uygulandı; `bp goal` aynı kapıyı kullanacak). Teslim sırası da karara bağlı: goal önce konur,
+iş mesajı sonra gider — goal'suz iş mesajı sürüklenmesin.
+
 ---
 
 ## Reddedilenler (tekrar tartışılmasın diye)

@@ -427,6 +427,68 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		}
 	})
 
+	t.Run("goal carries the sender inside the payload", func(t *testing.T) {
+		var delivered string
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			loadFleet:     slashFleet,
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				delivered = message
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "/goal", "finish", "report"}); err != nil {
+			t.Fatal(err)
+		}
+		if want := "/goal [ada] finish report"; delivered != want {
+			t.Fatalf("delivered=%q, want %q", delivered, want)
+		}
+	})
+
+	t.Run("bare goal stays bare", func(t *testing.T) {
+		var delivered string
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			loadFleet:     slashFleet,
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				delivered = message
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "/goal"}); err != nil {
+			t.Fatal(err)
+		}
+		if delivered != "/goal" {
+			t.Fatalf("delivered=%q, want %q", delivered, "/goal")
+		}
+	})
+
+	t.Run("goal refused sideways", func(t *testing.T) {
+		t.Setenv("AGENT", "oz")
+		delivered := false
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			loadFleet:     slashFleet,
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				delivered = true
+				return false, "", nil
+			},
+		}
+		err := a.message([]string{"alp", "/goal", "finish", "report"})
+		if err == nil || !strings.Contains(err.Error(), "hierarchy") {
+			t.Fatalf("err=%v, want hierarchy refusal", err)
+		}
+		if delivered {
+			t.Fatal("refused goal was still delivered")
+		}
+	})
+
 	t.Run("slash command refused sideways", func(t *testing.T) {
 		t.Setenv("AGENT", "oz")
 		delivered := false

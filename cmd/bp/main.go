@@ -1061,6 +1061,14 @@ func (a *app) message(args []string) error {
 		if sender != root && !fleet.IsDescendant(name, sender) {
 			return fmt.Errorf("slash command refused: %s is not above %s in the hierarchy", sender, name)
 		}
+		if rest, ok := strings.CutPrefix(message, "/goal"); ok {
+			// The identity rides inside the payload so the target records who
+			// set the goal. A bare /goal queries or clears it UI-side, so it is
+			// left alone: an envelope there would become the goal text.
+			if payload := strings.TrimSpace(rest); payload != "" && payload != rest {
+				message = "/goal [" + sender + "] " + payload
+			}
+		}
 	}
 	if !a.hasSession(name) {
 		if err := pending.Append(a.config.StateDir, name, pending.Entry{TS: time.Now().Unix(), From: sender, Kind: "msg", Text: message}); err != nil {

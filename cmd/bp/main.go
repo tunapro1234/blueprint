@@ -425,7 +425,9 @@ func (a *app) status() error {
 	for _, name := range fleet.SortedNames() {
 		state, alive := states[name]
 		tmuxState := "closed"
-		if alive && state.Busy {
+		if alive && state.Dead {
+			tmuxState = "dead"
+		} else if alive && state.Busy {
 			tmuxState = "working"
 		} else if alive {
 			tmuxState = "idle"
@@ -519,9 +521,12 @@ func (a *app) tree() error {
 		agent := fleet.Agents[name]
 		live := "closed"
 		if state, ok := states[name]; ok {
-			if state.Busy {
+			switch {
+			case state.Dead:
+				live = "dead"
+			case state.Busy:
 				live = "working"
-			} else {
+			default:
 				live = "idle"
 			}
 		}
@@ -729,8 +734,15 @@ func (a *app) open(args []string) error {
 		}
 	}
 	if a.tmux.HasSession(a.ctx, name) {
-		fmt.Fprintf(a.out, "%s is already open\n", name)
-		return nil
+		// "Session exists" is not "agent running": a crashed CLI leaves the
+		// tmux session up as a bare shell. Only a live agent pane counts as
+		// already open; a dead shell falls through to Open, which relaunches
+		// the agent in place (or errors if the pane runs something else).
+		process, perr := a.tmux.PaneProcess(a.ctx, name)
+		if perr != nil || bptmux.IsAgentCommand(process.Command) {
+			fmt.Fprintf(a.out, "%s is already open\n", name)
+			return nil
+		}
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return fmt.Errorf("directory does not exist: %s", dir)
@@ -1972,8 +1984,7 @@ func (a *app) remote(args []string) error {
 		}
 		// Onceki turdan asili kalmis RC menusu pane'i "mesgul" gosterir ve
 		// gonderimi kuyruga dusurur — once kapat.
-		if pane, err := a.tmux.Capture(a.ctx, name); err == nil &&
-			strings.Contains(pane, "Enter to select") && strings.Contains(pane, "Disconnect this session") {
+		if pane, err := a.tmux.Capture(a.ctx, name); err == nil && bptmux.RemoteControlMenu(pane) {
 			_ = a.tmux.PressEnter(a.ctx, name)
 			time.Sleep(time.Second)
 		}
@@ -2021,7 +2032,7 @@ func (a *app) remote(args []string) error {
 				if err != nil {
 					continue
 				}
-				if strings.Contains(pane, "Enter to select") && strings.Contains(pane, "Disconnect this session") {
+				if bptmux.RemoteControlMenu(pane) {
 					_ = a.tmux.PressEnter(a.ctx, p.name)
 					dismissed = true
 				}

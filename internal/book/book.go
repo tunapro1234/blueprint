@@ -541,6 +541,9 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 type State struct {
 	Alive bool
 	Busy  bool
+	// Dead: the tmux session is up but its pane no longer runs an agent —
+	// the CLI exited and left a bare shell behind. Not the same as idle.
+	Dead bool
 }
 
 func LiveStates(ctx context.Context, client *bptmux.Client, fleet *Fleet) (map[string]State, error) {
@@ -549,10 +552,18 @@ func LiveStates(ctx context.Context, client *bptmux.Client, fleet *Fleet) (map[s
 		return nil, err
 	}
 	fleet.AddLive(sessions)
+	commands, err := client.Commands(ctx)
+	if err != nil {
+		commands = nil // degrade to Dead=false rather than failing status
+	}
 	states := make(map[string]State, len(sessions))
 	for _, name := range sessions {
 		pane, captureErr := client.Capture(ctx, name)
-		states[name] = State{Alive: true, Busy: captureErr == nil && bptmux.Busy(pane)}
+		states[name] = State{
+			Alive: true,
+			Busy:  captureErr == nil && bptmux.Busy(pane),
+			Dead:  commands != nil && !bptmux.IsAgentCommand(commands[name]),
+		}
 	}
 	return states, nil
 }

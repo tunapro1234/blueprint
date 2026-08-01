@@ -70,6 +70,18 @@ Metateam'in P2P yaklaşımı daha zarif ama işletmesi zor.
 - **Opus review + sadeleştirme turu** — gpt'nin yazdığı federation/pending/cache kodunun
   MVP ölçüsüne çekilmesi. Tuna'nın açık isteği.
 
+**qm'den notlar (kod incelemesi, 2026-08-01)** — yc-software/qm 235k satır TS; kulvarı farklı
+(şirket-içi çalışan asistanı platformu, tmux/federation YOK) ama üç tekniği bize uyar:
+- **İki eşikli compaction:** %90 dolulukta tur öncesi bloklayarak, %70'te tur BİTTİKTEN sonra
+  arka planda compact — kullanıcı olağan durumda bedel ödemiyor. Teslim-anında-compact (§4)
+  tasarlanırken eşik ikilisi böyle kurulmalı.
+- **Yetim sinyal tekrarı:** meşgul agent'a gönderilen mesaj, hedef tur mesaj tüketilmeden
+  ölürse kaybolmasın — sinyal, orijinal isteği taşır ve tur bitiminde/süpürücüde yeniden
+  teslim edilir. Bizim msgq "meşgulken kuyruğa, boşalınca teslim" yolundaki aynı yarış için
+  drain tarafına denk bir güvence düşünülebilir.
+- **Codex'i headless sürme teyidi:** qm codex'i `codex app-server` + satır-sonlu JSON-RPC
+  (stdio) ile sürüyor — bizim §6d yolunun aynısı, bağımsız doğrulama.
+
 ## 5. `bp open --resume` — kalan küçük durum
 
 Hiç başlık almamış oturum çözülemiyor, `--resume` boş dönüp yeni oturum açıyor — yanlış oturum

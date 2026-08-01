@@ -1045,8 +1045,12 @@ func (a *app) message(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(entries) > 0 {
-		message = formatDigest(entries, dropped) + "\n\n" + message
+	attachPending := !strings.HasPrefix(message, "/")
+	if attachPending {
+		message = "[" + sender + "] " + message
+		if len(entries) > 0 {
+			message = formatDigest(entries, dropped) + "\n\n" + message
+		}
 	}
 	queued, channelID, err := a.deliver(name, sender, message)
 	if err != nil {
@@ -1060,7 +1064,7 @@ func (a *app) message(args []string) error {
 		}
 		return err
 	}
-	if len(entries) > 0 {
+	if attachPending && len(entries) > 0 {
 		if err := pending.Clear(a.config.StateDir, name); err != nil {
 			return err
 		}

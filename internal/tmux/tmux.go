@@ -402,6 +402,35 @@ func IsAgentCommand(cmd string) bool {
 	}
 }
 
+// isShellCommand reports whether cmd is an interactive shell — the pane state
+// left behind when an agent exits or crashes. Only such a pane may be reused
+// to relaunch an agent; anything else (vim, htop, ...) is someone's live work.
+func isShellCommand(cmd string) bool {
+	switch cmd {
+	case "zsh", "bash", "sh", "dash", "fish":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// RemoteControlMenu reports whether the pane shows the Remote Control modal
+// (Continue / Disconnect / QR, cursor on Continue). It appears at startup when
+// a resumed session reconnects remote control, and after /remote-control when
+// RC is already active. While it is up the composer is blocked: delivered text
+// falls into the menu instead of the prompt, so it must be dismissed (Enter =
+// Continue) before anything is sent.
+func RemoteControlMenu(pane string) bool {
+	if !strings.Contains(pane, "Enter to select") {
+		return false
+	}
+	return strings.Contains(pane, "Disconnect this session") || strings.Contains(pane, "Remote Control")
+}
+
 func parseClientActivity(output, session string) time.Time {
 	var latest time.Time
 	for _, line := range strings.Split(output, "\n") {
@@ -814,9 +843,29 @@ func ResumeSessionID(projectsRoot, dir, agent string) (string, bool) {
 
 func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions, warn func(string)) error {
 	if c.HasSession(ctx, session) {
-		return nil
-	}
-	if _, err := c.run(ctx, nil, "new-session", "-d", "-s", session, "-c", dir); err != nil {
+		process, err := c.PaneProcess(ctx, session)
+		if err != nil {
+			return nil // unreadable pane: assume open rather than double-launch
+		}
+		if IsAgentCommand(process.Command) {
+			return nil
+		}
+		if !isShellCommand(process.Command) {
+			return fmt.Errorf("session %s exists but its pane runs %q (not an agent, not a shell); bp close %s first", session, process.Command, session)
+		}
+		// The agent exited and left a bare shell: relaunch in place. Clear
+		// anything half-typed at the prompt, and cd because the shell may have
+		// wandered since the session was created.
+		if warn != nil {
+			warn(session + ": dead shell in existing session; relaunching agent in place")
+		}
+		if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "C-u"); err != nil {
+			return err
+		}
+		if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "cd "+shellQuote(dir), "Enter"); err != nil {
+			return err
+		}
+	} else if _, err := c.run(ctx, nil, "new-session", "-d", "-s", session, "-c", dir); err != nil {
 		return err
 	}
 	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
@@ -859,6 +908,11 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 					break
 				}
 			} else {
+				if RemoteControlMenu(pane) {
+					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
+					c.Sleep(2 * time.Second)
+					continue
+				}
 				if !picked && (strings.Contains(lower, "resume from summary") || strings.Contains(lower, "resume full session")) {
 					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Down")
 					c.Sleep(500 * time.Millisecond)
@@ -883,7 +937,21 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		_ = c.Send(ctx, session, "/rename "+session)
 		c.Sleep(time.Second)
 		_ = c.Send(ctx, session, "/remote-control")
-		c.Sleep(time.Second)
+		// When RC is already active (a resumed session reconnects on its own)
+		// the command opens the Continue/Disconnect menu instead of just
+		// printing the URL, and the menu can render seconds late. Sweep until
+		// two consecutive clean captures so the onboarding prompt below lands
+		// in the composer, not the menu.
+		clean := 0
+		for tries := 0; tries < 10 && clean < 2; tries++ {
+			c.Sleep(time.Second)
+			if pane, err := c.Capture(ctx, session); err == nil && RemoteControlMenu(pane) {
+				_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
+				clean = 0
+				continue
+			}
+			clean++
+		}
 	}
 	if !opts.NoPrompt {
 		onboarding := portableOnboarding
@@ -920,7 +988,7 @@ func (c *Client) DisplaySession(ctx context.Context) (string, error) {
 // (e.g. "claude", "codex", "bwrap", "zsh"). Used to tell Claude sessions
 // apart from Codex ones before sending Claude-only slash commands.
 func (c *Client) Commands(ctx context.Context) (map[string]string, error) {
-	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}")
+	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{pane_active}\t#{pane_current_command}")
 	if err != nil {
 		lower := strings.ToLower(err.Error())
 		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
@@ -929,13 +997,16 @@ func (c *Client) Commands(ctx context.Context) (map[string]string, error) {
 		return nil, err
 	}
 	commands := map[string]string{}
+	active := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.SplitN(line, "\t", 2)
-		if len(fields) != 2 || strings.TrimSpace(fields[0]) == "" {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 || strings.TrimSpace(fields[0]) == "" {
 			continue
 		}
-		if _, seen := commands[fields[0]]; !seen {
-			commands[fields[0]] = strings.TrimSpace(fields[1])
+		session, isActive := fields[0], fields[1] == "1"
+		if _, seen := commands[session]; !seen || (isActive && !active[session]) {
+			commands[session] = strings.TrimSpace(fields[2])
+			active[session] = isActive
 		}
 	}
 	return commands, nil

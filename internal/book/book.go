@@ -168,15 +168,58 @@ func FirstPath(folder string) string {
 	return ""
 }
 
+// under reports whether folder sits at or below root, comparing whole path
+// components so /srv/kavram-old is not read as living under /srv/kavram. Both
+// arguments must already be cleaned; "." means "no path".
+func under(folder, root string) bool {
+	if folder == "." || root == "." {
+		return false
+	}
+	return folder == root ||
+		root == string(filepath.Separator) ||
+		strings.HasPrefix(folder, root+string(filepath.Separator))
+}
+
+// FolderHint returns the one line `bp open` prints when an agent's folder does
+// not sit under its parent's. The fleet wants the hierarchy visible on disk,
+// but the rule is advice, never a refusal: the caller prints this and carries
+// on. An empty result means "say nothing", which covers every case where the
+// layout is either unknown or legitimately flat:
+//   - no parent, or the parent is the fleet root (everything is below it);
+//   - either folder unknown;
+//   - the same folder as the parent — worker agents share their parent's repo;
+//   - a git worktree path, which lives under whichever repo it was cut from;
+//   - a folder already at or under the parent's.
+func FolderHint(name, folder, parent, parentFolder, root string) string {
+	if parent == "" || parent == root {
+		return ""
+	}
+	child := filepath.Clean(FirstPath(folder))
+	above := filepath.Clean(FirstPath(parentFolder))
+	if child == "." || above == "." || child == above || isWorktree(child) || under(child, above) {
+		return ""
+	}
+	return fmt.Sprintf("oneri: %s klasoru ebeveyni %s altinda degil (%s vs %s) — hiyerarsi klasor yapisinda da gorunsun",
+		name, parent, child, above)
+}
+
+// isWorktree reports whether path holds a ".worktrees" component, the layout
+// `bp worktree` creates at <repo>/.worktrees/<topic>.
+func isWorktree(path string) bool {
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
+		if part == ".worktrees" {
+			return true
+		}
+	}
+	return false
+}
+
 func infer(agents []Agent, name, folder string) int {
 	folder = filepath.Clean(FirstPath(folder))
 	best, longest := -1, 0
 	for i, agent := range agents {
 		candidate := filepath.Clean(FirstPath(agent.Folder))
-		if folder != "." && candidate != "." && (folder == candidate ||
-			candidate == string(filepath.Separator) ||
-			strings.HasPrefix(folder, candidate+string(filepath.Separator))) &&
-			len(candidate) > longest {
+		if under(folder, candidate) && len(candidate) > longest {
 			best, longest = i, len(candidate)
 		}
 	}
@@ -456,12 +499,22 @@ func writeBook(target string, raw map[string]any, mode os.FileMode) error {
 	return os.Rename(tmpName, target)
 }
 
-func SetStatus(paths []string, name, status, folder, parent string) error {
+// Registration carries what a caller knows about an agent it is registering.
+// Sender is only a fallback parent; Parent and Role are explicit pins (bp open
+// --parent / --role) and, when set, beat anything inference would produce.
+type Registration struct {
+	Sender string
+	Parent string
+	Role   string
+}
+
+func SetStatus(paths []string, name, status, folder string, reg Registration) error {
 	paths = Paths(paths)
 	if len(paths) == 0 {
 		return fmt.Errorf("agentbook is not configured")
 	}
 	target := paths[0]
+	parent := reg.Sender
 	var candidates []Agent
 	var owners []string
 	foundName := false
@@ -480,14 +533,23 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 		}
 	}
 	class := "other"
-	if index := infer(candidates, name, folder); !foundName && index >= 0 {
-		candidate := candidates[index]
-		target, parent = owners[index], candidate.Name
-		// A book may omit class entirely (the probot book does); inheriting
-		// "" would write an empty class into the new entry.
-		if candidate.Class != "" {
-			class = candidate.Class
+	if !foundName {
+		if index := infer(candidates, name, folder); index >= 0 {
+			candidate := candidates[index]
+			target, parent = owners[index], candidate.Name
+			// A book may omit class entirely (the probot book does); inheriting
+			// "" would write an empty class into the new entry.
+			if candidate.Class != "" {
+				class = candidate.Class
+			}
 		}
+		if reg.Parent != "" {
+			parent = reg.Parent
+		}
+	}
+	role := reg.Role
+	if role == "" {
+		role = "(new - add role)"
 	}
 	lock, err := os.OpenFile(target+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -518,7 +580,18 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 		if ok && agent["name"] == name {
 			currentStatus, _ := agent["status"].(string)
 			currentFolder, _ := agent["folder"].(string)
-			if currentStatus == status && currentFolder == folder {
+			// Explicit pins correct an existing entry in place — in its own
+			// book, never as a second entry elsewhere.
+			pinned := false
+			if current, _ := agent["parent"].(string); reg.Parent != "" && current != reg.Parent {
+				agent["parent"] = reg.Parent
+				pinned = true
+			}
+			if current, _ := agent["role"].(string); reg.Role != "" && current != reg.Role {
+				agent["role"] = reg.Role
+				pinned = true
+			}
+			if currentStatus == status && currentFolder == folder && !pinned {
 				return nil
 			}
 			agent["status"] = status
@@ -527,7 +600,7 @@ func SetStatus(paths []string, name, status, folder, parent string) error {
 		}
 	}
 	if !found {
-		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": "(new - add role)", "status": status}
+		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": role, "status": status}
 		if parent != "" {
 			agent["parent"] = parent
 		}

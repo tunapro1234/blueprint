@@ -34,13 +34,12 @@ func TestLegacyModeSelection(t *testing.T) {
 	if config.MsgqRoot != "/srv/server-main/msgq" || config.StateDir != "/srv/blueprint/state" || !config.WABridge {
 		t.Fatalf("legacy defaults = %#v", config)
 	}
-	wantBooks := []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json"}
+	wantBooks := []string{"/srv/server-main/agentbook.json"}
 	if !reflect.DeepEqual(config.Agentbooks, wantBooks) {
 		t.Fatalf("agentbooks=%q, want %q", config.Agentbooks, wantBooks)
 	}
-	wantTokenBooks := []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json", "/srv/kitap/.orchestration/agentbook.json"}
-	if !reflect.DeepEqual(config.TokenAgentbooks, wantTokenBooks) {
-		t.Fatalf("tokenAgentbooks=%q, want %q", config.TokenAgentbooks, wantTokenBooks)
+	if !reflect.DeepEqual(config.TokenAgentbooks, wantBooks) {
+		t.Fatalf("tokenAgentbooks=%q, want %q", config.TokenAgentbooks, wantBooks)
 	}
 }
 
@@ -90,7 +89,7 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 	if !reflect.DeepEqual(config.Bar.Widgets, []string{"clock", "queue", "unknown"}) {
 		t.Fatalf("bar widgets=%q", config.Bar.Widgets)
 	}
-	if !reflect.DeepEqual(config.TokenAgentbooks, []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json", "/srv/kitap/.orchestration/agentbook.json"}) {
+	if !reflect.DeepEqual(config.TokenAgentbooks, []string{"/srv/server-main/agentbook.json"}) {
 		t.Fatalf("legacy tokenAgentbooks=%q", config.TokenAgentbooks)
 	}
 }

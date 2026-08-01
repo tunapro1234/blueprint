@@ -138,11 +138,13 @@ func defaults(home string, legacy bool) Config {
 	bar := BarConfig{Widgets: []string{"ctx", "temp", "queue", "model", "quota"}}
 	if legacy {
 		return Config{
-			Home:            home,
-			Legacy:          true,
-			MsgqRoot:        "/srv/server-main/msgq",
-			Agentbooks:      []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json"},
-			TokenAgentbooks: []string{"/srv/server-main/agentbook.json", "/srv/probot/.orchestration/agentbook.json", "/srv/kitap/.orchestration/agentbook.json"},
+			Home:     home,
+			Legacy:   true,
+			MsgqRoot: "/srv/server-main/msgq",
+			// One book for the whole fleet. Several books still work when
+			// config.json lists them; the default no longer assumes any.
+			Agentbooks:      []string{"/srv/server-main/agentbook.json"},
+			TokenAgentbooks: []string{"/srv/server-main/agentbook.json"},
 			StateDir:        "/srv/blueprint/state",
 			WAOutbox:        "/srv/whatsapp/outbox",
 			WAStore:         "/srv/whatsapp/messages.jsonl",

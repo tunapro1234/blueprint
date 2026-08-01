@@ -14,7 +14,7 @@ func TestSetStatusNoopAndPreservesFields(t *testing.T) {
 	if err := os.WriteFile(path, original, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetStatus([]string{path}, "ada", "open", "/srv/ada", "ignored"); err != nil {
+	if err := SetStatus([]string{path}, "ada", "open", "/srv/ada", Registration{Sender: "ignored"}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)
@@ -25,7 +25,7 @@ func TestSetStatusNoopAndPreservesFields(t *testing.T) {
 		t.Fatalf("no-op changed file bytes:\n%s", after)
 	}
 
-	if err := SetStatus([]string{path}, "ada", "closed", "", "ignored"); err != nil {
+	if err := SetStatus([]string{path}, "ada", "closed", "", Registration{Sender: "ignored"}); err != nil {
 		t.Fatal(err)
 	}
 	var raw struct {
@@ -49,7 +49,7 @@ func TestSetStatusNewRecordGetsParent(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{\"agents\":[]}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetStatus([]string{path}, "new-agent", "open", "/srv/new", "ada"); err != nil {
+	if err := SetStatus([]string{path}, "new-agent", "open", "/srv/new", Registration{Sender: "ada"}); err != nil {
 		t.Fatal(err)
 	}
 	file, err := Load(path)
@@ -72,7 +72,7 @@ func TestSetStatusInfersFromLongestFolderAndWritesMatchingBook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := SetStatus([]string{mainPath, projectPath}, "probot-outreach", "open", "/srv/probot/outreach", "caller"); err != nil {
+	if err := SetStatus([]string{mainPath, projectPath}, "probot-outreach", "open", "/srv/probot/outreach", Registration{Sender: "caller"}); err != nil {
 		t.Fatal(err)
 	}
 	main, err := Load(mainPath)
@@ -101,7 +101,7 @@ func TestSetStatusFolderMatchStopsAtPathBoundary(t *testing.T) {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetStatus([]string{path}, "unrelated", "open", "/srv/kavram-old/work", "caller"); err != nil {
+	if err := SetStatus([]string{path}, "unrelated", "open", "/srv/kavram-old/work", Registration{Sender: "caller"}); err != nil {
 		t.Fatal(err)
 	}
 	file, err := Load(path)
@@ -127,5 +127,186 @@ func TestAddLiveUsesNameInference(t *testing.T) {
 	fleet.AddLive([]string{"kavram-worker"})
 	if fleet.Parents["kavram-worker"] != "kavram-main" || fleet.Agents["kavram-worker"].Class != "kavram" {
 		t.Fatalf("agent=%+v parent=%q", fleet.Agents["kavram-worker"], fleet.Parents["kavram-worker"])
+	}
+}
+
+// setupBooks lays out the real fleet's shape inside a temp tree: a main book at
+// <root>/server-main/agentbook.json and a project book at
+// <root>/probot/.orchestration/agentbook.json that both list probot-main.
+func setupBooks(t *testing.T) (root, mainPath, probotPath string) {
+	t.Helper()
+	root = t.TempDir()
+	mainPath = filepath.Join(root, "server-main", "agentbook.json")
+	probotPath = filepath.Join(root, "probot", ".orchestration", "agentbook.json")
+	for _, path := range []string{mainPath, probotPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeBookFile(t, mainPath, map[string]any{"agents": []any{
+		map[string]any{"name": "server-main", "folder": root, "class": "server"},
+		map[string]any{"name": "probot-main", "folder": filepath.Join(root, "probot"), "class": "probot"},
+	}})
+	writeBookFile(t, probotPath, map[string]any{"agents": []any{
+		map[string]any{"name": "probot-main", "folder": filepath.Join(root, "probot"), "class": "probot"},
+		map[string]any{"name": "probot-business", "folder": filepath.Join(root, "probot", "business"), "class": "probot"},
+	}})
+	return root, mainPath, probotPath
+}
+
+func agentNames(t *testing.T, path string) []string {
+	t.Helper()
+	file, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(file.Agents))
+	for _, agent := range file.Agents {
+		names = append(names, agent.Name)
+	}
+	return names
+}
+
+func findAgent(t *testing.T, path, name string) Agent {
+	t.Helper()
+	file, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range file.Agents {
+		if agent.Name == name {
+			return agent
+		}
+	}
+	t.Fatalf("%s holds no entry for %s (has %v)", path, name, agentNames(t, path))
+	return Agent{}
+}
+
+// The true parent is not a path ancestor of the new folder, so only an explicit
+// flag can express it: the pin beats the folder-inferred parent, while class and
+// book placement still come from inference.
+func TestSetStatusExplicitParentAndRole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentbook.json")
+	writeBookFile(t, path, map[string]any{"agents": []any{
+		map[string]any{"name": "server-main", "folder": "/srv", "class": "server"},
+		map[string]any{"name": "probot-main", "folder": "/srv/probot", "class": "probot"},
+		map[string]any{"name": "probot-business", "folder": "/srv/probot/business", "class": "probot"},
+	}})
+	reg := Registration{Sender: "server-main", Parent: "probot-business", Role: "fon ekibi"}
+
+	if err := SetStatus([]string{path}, "probot-fon", "open", "/srv/probot/fon", reg); err != nil {
+		t.Fatal(err)
+	}
+	got := findAgent(t, path, "probot-fon")
+	if got.Parent != "probot-business" || got.Role != "fon ekibi" || got.Class != "probot" {
+		t.Fatalf("new agent=%+v, want pinned parent/role and inherited class", got)
+	}
+}
+
+// An agent already registered in one book is updated there, never copied into
+// another configured book — pins included.
+func TestSetStatusExistingAgentStaysInItsOwnBook(t *testing.T) {
+	root, mainPath, probotPath := setupBooks(t)
+	folder := filepath.Join(root, "probot", "fon")
+	writeBookFile(t, mainPath, map[string]any{"agents": []any{
+		map[string]any{"name": "server-main", "folder": root, "class": "server"},
+		map[string]any{"name": "probot-fon", "folder": folder, "class": "probot", "parent": "probot-main", "role": "eski rol", "status": "closed"},
+	}})
+
+	if err := SetStatus([]string{mainPath, probotPath}, "probot-fon", "open", folder, Registration{Sender: "server-main"}); err != nil {
+		t.Fatal(err)
+	}
+	if names := agentNames(t, probotPath); len(names) != 2 {
+		t.Fatalf("project book agents=%v, want no duplicate entry", names)
+	}
+	if got := findAgent(t, mainPath, "probot-fon"); got.Status != "open" || got.Parent != "probot-main" {
+		t.Fatalf("existing agent=%+v, want status open in its own book", got)
+	}
+
+	// Pins correct that same entry in place rather than creating a second one.
+	reg := Registration{Sender: "server-main", Parent: "probot-business", Role: "yeni rol"}
+	if err := SetStatus([]string{mainPath, probotPath}, "probot-fon", "open", folder, reg); err != nil {
+		t.Fatal(err)
+	}
+	if names := agentNames(t, probotPath); len(names) != 2 {
+		t.Fatalf("project book agents=%v, want no duplicate entry", names)
+	}
+	got := findAgent(t, mainPath, "probot-fon")
+	if got.Parent != "probot-business" || got.Role != "yeni rol" {
+		t.Fatalf("existing agent=%+v, want pinned parent/role applied in place", got)
+	}
+}
+
+func TestFolderHint(t *testing.T) {
+	const root = "server-main"
+	cases := []struct {
+		what         string
+		name         string
+		folder       string
+		parent       string
+		parentFolder string
+		want         string
+	}{
+		{
+			what: "folder outside the parent's tree",
+			name: "probot-fon", folder: "/srv/kitap/fon",
+			parent: "probot-main", parentFolder: "/srv/probot",
+			want: "oneri: probot-fon klasoru ebeveyni probot-main altinda degil (/srv/kitap/fon vs /srv/probot) — hiyerarsi klasor yapisinda da gorunsun",
+		},
+		{
+			// A sibling name is not a path component: /srv/probot-old is not
+			// inside /srv/probot, so this is a real violation.
+			what: "sibling directory sharing a name prefix",
+			name: "probot-fon", folder: "/srv/probot-old",
+			parent: "probot-main", parentFolder: "/srv/probot",
+			want: "oneri: probot-fon klasoru ebeveyni probot-main altinda degil (/srv/probot-old vs /srv/probot) — hiyerarsi klasor yapisinda da gorunsun",
+		},
+		{
+			what: "annotated parent folder still resolves",
+			name: "probot-fon", folder: "/srv/kitap/fon",
+			parent: "probot-main", parentFolder: "/srv/probot (home: /srv/probot/main)",
+			want: "oneri: probot-fon klasoru ebeveyni probot-main altinda degil (/srv/kitap/fon vs /srv/probot) — hiyerarsi klasor yapisinda da gorunsun",
+		},
+		{
+			what: "folder under the parent's",
+			name: "probot-fon", folder: "/srv/probot/fon",
+			parent: "probot-main", parentFolder: "/srv/probot",
+		},
+		{
+			what: "same folder as the parent (worker sharing the repo)",
+			name: "blueprint-worker", folder: "/srv/blueprint",
+			parent: "blueprint-main", parentFolder: "/srv/blueprint",
+		},
+		{
+			what: "git worktree of another repo",
+			name: "probot-blog", folder: "/srv/kitap/.worktrees/blog",
+			parent: "probot-main", parentFolder: "/srv/probot",
+		},
+		{
+			what: "unknown agent folder",
+			name: "probot-fon", folder: "",
+			parent: "probot-main", parentFolder: "/srv/probot",
+		},
+		{
+			what: "unknown parent folder",
+			name: "probot-fon", folder: "/srv/kitap/fon",
+			parent: "probot-main", parentFolder: "",
+		},
+		{
+			what: "parent is the fleet root",
+			name: "probot-fon", folder: "/srv/kitap/fon",
+			parent: root, parentFolder: "/srv/server-main",
+		},
+		{
+			what: "no parent at all",
+			name: "probot-fon", folder: "/srv/kitap/fon",
+			parent: "", parentFolder: "/srv/probot",
+		},
+	}
+	for _, tc := range cases {
+		got := FolderHint(tc.name, tc.folder, tc.parent, tc.parentFolder, root)
+		if got != tc.want {
+			t.Errorf("%s: FolderHint = %q, want %q", tc.what, got, tc.want)
+		}
 	}
 }

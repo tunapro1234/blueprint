@@ -327,7 +327,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(entries) != 1 || entries[0].Kind != "msg" || entries[0].From != "ada" {
+		if len(entries) != 1 || entries[0].Kind != "msg" || entries[0].From != "ada" || entries[0].Text != "hello" {
 			t.Fatalf("pending=%+v", entries)
 		}
 		if got := readTestOutput(t, out); got != "queued for alp (offline; delivered when it opens)\n" {
@@ -357,7 +357,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		if err := a.message([]string{"alp", "direct"}); err != nil {
 			t.Fatal(err)
 		}
-		if calls != 1 || !strings.Contains(delivered, "birikmis duyuru") || !strings.HasSuffix(delivered, "\n\ndirect") {
+		if calls != 1 || !strings.Contains(delivered, "birikmis duyuru") || !strings.HasSuffix(delivered, "\n\n[ada] direct") {
 			t.Fatalf("calls=%d delivered=%q", calls, delivered)
 		}
 		entries, _, err := pending.Load(stateDir, "alp")
@@ -366,6 +366,44 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		}
 		if len(entries) != 0 {
 			t.Fatalf("pending was not cleared: %+v", entries)
+		}
+	})
+
+	t.Run("online envelope", func(t *testing.T) {
+		var delivered string
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				delivered = message
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "hello"}); err != nil {
+			t.Fatal(err)
+		}
+		if delivered != "[ada] hello" {
+			t.Fatalf("delivered=%q, want %q", delivered, "[ada] hello")
+		}
+	})
+
+	t.Run("slash command stays bare", func(t *testing.T) {
+		var delivered string
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				delivered = message
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "/compact"}); err != nil {
+			t.Fatal(err)
+		}
+		if delivered != "/compact" {
+			t.Fatalf("delivered=%q, want %q", delivered, "/compact")
 		}
 	})
 }

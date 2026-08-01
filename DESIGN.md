@@ -59,8 +59,9 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
   hazır bekleme ('bypass permissions|-- INSERT --'); /rename, /remote-control, onboarding prompt;
   agentbook güncelle. --codex: codex -c model_reasoning_effort="high" + trust prompt Enter.
 - close: kill-session + agentbook status=closed.
-- Agentbook'lar: /srv/server-main/agentbook.json + /srv/probot/.orchestration/agentbook.json
-  (+AGENTBOOK env override). tree görünümünde parent alanı kullanılır.
+- Agentbook: TEK kitap — /srv/server-main/agentbook.json (+AGENTBOOK env override).
+  config.json birden fazla kitap listelerse hepsi okunur, ama varsayılan tektir.
+  tree görünümünde parent alanı kullanılır.
 
 ### Yapı
 ```
@@ -130,7 +131,7 @@ blueprint çatısına taşınır. Hedef yerleşim:
   bp                        binary
   book/agentbook.json       ★ agentbook (canonical; eski yollar symlink):
                               /srv/server-main/agentbook.json -> buraya
-                              probot book AYRI kalır (alp'in) ama bp tree ikisini birleşik okur
+                              filo tek kitapta birleşti; alt kitaplar okunmuyor
   knowledge/                ★ model-ansiklopedisi.md, gpt56-kilavuz.md, model-prices.json
                               (eski resources/ yolları symlink)
   watch/                    ★ model_watch.py, reactions.py, reset_watch.py (+radar.json state)

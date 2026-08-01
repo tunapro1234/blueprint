@@ -349,7 +349,7 @@ func (s *Service) keepalive(ctx context.Context) error {
 	if err := s.tmux.Open(ctx, "server-main", dir, bptmux.OpenOptions{Resume: true, NoPrompt: true, Legacy: s.config.Legacy}, func(message string) { s.log.Print(message) }); err != nil {
 		return err
 	}
-	return book.SetStatus(s.config.Agentbooks, "server-main", "open", dir, "")
+	return book.SetStatus(s.config.Agentbooks, "server-main", "open", dir, book.Registration{})
 }
 
 func (s *Service) superviseWA(ctx context.Context, bridgePath string) {

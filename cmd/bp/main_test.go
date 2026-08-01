@@ -844,3 +844,63 @@ func TestAgentsByWorktreeMatchesPaneAndSessionDirectories(t *testing.T) {
 		t.Fatalf("builder agents=%v, want %v", got[entries[1].Path], want)
 	}
 }
+
+// A typo'd --parent would bury the new agent under a name nobody reads, so it
+// must fail before a tmux session is started or the agentbook is written.
+func TestOpenRejectsUnknownParentBeforeAnythingHappens(t *testing.T) {
+	t.Setenv("AGENTBOOK", "")
+	dir := t.TempDir()
+	bookPath := filepath.Join(dir, "agentbook.json")
+	original := "{\"agents\":[{\"name\":\"root\",\"folder\":\"" + dir + "\"}]}\n"
+	if err := os.WriteFile(bookPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fleet := book.Fleet{
+		Root:    "root",
+		Order:   []string{"root"},
+		Agents:  map[string]book.Agent{"root": {Name: "root"}},
+		Parents: map[string]string{"root": ""},
+	}
+	out := testOutput(t)
+	a := &app{
+		ctx:    context.Background(),
+		config: bpconfig.Config{Agentbooks: []string{bookPath}},
+		// Deliberately unusable: reaching tmux at all would be the bug.
+		tmux:      &bptmux.Client{Bin: filepath.Join(dir, "no-such-tmux")},
+		out:       out,
+		err:       testOutput(t),
+		loadFleet: func() (book.Fleet, map[string]book.State, error) { return fleet, nil, nil },
+	}
+
+	err := a.open([]string{"ghost", dir, "--parent", "nobody"})
+	if err == nil || !strings.Contains(err.Error(), "unknown parent: nobody") {
+		t.Fatalf("error=%v, want unknown parent", err)
+	}
+	after, readErr := os.ReadFile(bookPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != original {
+		t.Fatalf("agentbook was written:\n%s", after)
+	}
+	if got := readTestOutput(t, out); got != "" {
+		t.Fatalf("output=%q, want nothing", got)
+	}
+}
+
+func TestOpenFlagsRequireValues(t *testing.T) {
+	a := &app{ctx: context.Background()}
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"ghost", "/tmp", "--parent"}, "--parent requires an agent name"},
+		{[]string{"ghost", "/tmp", "--role"}, "--role requires a role text"},
+		{[]string{"ghost", "/tmp", "--nope"}, "unknown open option: --nope"},
+	}
+	for _, tc := range cases {
+		if err := a.open(tc.args); err == nil || err.Error() != tc.want {
+			t.Errorf("open(%v) error=%v, want %q", tc.args, err, tc.want)
+		}
+	}
+}

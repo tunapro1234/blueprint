@@ -39,7 +39,7 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp status | bp tree
-bp open <name> <directory> [--worktree <topic>] [--resume] [--codex] [--no-prompt]
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--no-prompt]
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -706,11 +706,12 @@ func codexContext(usage *codexrpc.ThreadTokenUsage) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--resume] [--codex] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
 	opts := bptmux.OpenOptions{Legacy: a.config.Legacy}
 	worktreeTopic := ""
+	reg := book.Registration{}
 	for index := 2; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
@@ -729,8 +730,33 @@ func (a *app) open(args []string) error {
 			}
 			worktreeTopic = args[index+1]
 			index++
+		case "--parent":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--parent requires an agent name")
+			}
+			reg.Parent = args[index+1]
+			index++
+		case "--role":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--role requires a role text")
+			}
+			reg.Role = args[index+1]
+			index++
 		default:
 			return fmt.Errorf("unknown open option: %s", arg)
+		}
+	}
+	// The fleet answers two questions below: is --parent a real agent, and does
+	// this folder sit under the parent's. Only the first is worth failing over
+	// — a typo'd parent would register the agent under a name nobody reads, so
+	// it is checked before any session is started or any book written.
+	fleet, _, fleetErr := a.fleet()
+	if reg.Parent != "" {
+		if fleetErr != nil {
+			return fleetErr
+		}
+		if _, ok := fleet.Agents[reg.Parent]; !ok {
+			return fmt.Errorf("unknown parent: %s", reg.Parent)
 		}
 	}
 	if a.tmux.HasSession(a.ctx, name) {
@@ -740,6 +766,16 @@ func (a *app) open(args []string) error {
 		// the agent in place (or errors if the pane runs something else).
 		process, perr := a.tmux.PaneProcess(a.ctx, name)
 		if perr != nil || bptmux.IsAgentCommand(process.Command) {
+			// Nothing to launch — but explicit --parent/--role is a correction
+			// of the agentbook entry, so it still applies to a running agent.
+			if reg.Parent != "" || reg.Role != "" {
+				reg.Sender = a.sender()
+				if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
+					return err
+				}
+				fmt.Fprintf(a.out, "%s is already open (agentbook updated)\n", name)
+				return nil
+			}
 			fmt.Fprintf(a.out, "%s is already open\n", name)
 			return nil
 		}
@@ -754,10 +790,22 @@ func (a *app) open(args []string) error {
 		}
 		dir = entry.Path
 	}
+	// The owner wants the hierarchy visible on disk. This is a nudge, not a
+	// gate: it prints at most one line and never changes what happens next.
+	if fleetErr == nil {
+		parent := reg.Parent
+		if parent == "" {
+			parent = fleet.Parents[name]
+		}
+		if hint := book.FolderHint(name, dir, parent, fleet.Agents[parent].Folder, fleet.Root); hint != "" {
+			fmt.Fprintln(a.out, hint)
+		}
+	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		return err
 	}
-	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, a.sender()); err != nil {
+	reg.Sender = a.sender()
+	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
 		return err
 	}
 	rc := ""
@@ -927,7 +975,7 @@ func (a *app) close(args []string) error {
 	} else {
 		fmt.Fprintf(a.out, "%s is already closed\n", name)
 	}
-	return book.SetStatus(a.config.Agentbooks, name, "closed", "", a.sender())
+	return book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{Sender: a.sender()})
 }
 
 func (a *app) sender() string {

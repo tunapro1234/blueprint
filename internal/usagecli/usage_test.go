@@ -57,6 +57,56 @@ func TestResolveFreshRowHasNoNote(t *testing.T) {
 	}
 }
 
+// The collector maps the API's primary window to codex_5h whatever its real
+// length, so a plan without a secondary window (prolite, current) must not be
+// rendered with a window label or an empty second field.
+func TestLinesRenderCodexWithoutWindowLabelWhenSecondaryIsNull(t *testing.T) {
+	r := resolve([]Sample{sample("2026-08-03T18:22:09Z", 12.0, 39.0, 52.0, nil)})
+	line := Lines(r)[2]
+	want := "Codex:  %52 (reset x5-2026-08-03T18:22:09Z)"
+	if line != want {
+		t.Fatalf("codex line = %q, want %q", line, want)
+	}
+}
+
+func TestLinesRenderBothCodexWindowsWhenSecondaryExists(t *testing.T) {
+	r := resolve([]Sample{sample("2026-07-11T06:00:00Z", 12.0, 39.0, 52.0, 44.0)})
+	line := Lines(r)[2]
+	want := "Codex:  5h %52 (reset x5-2026-07-11T06:00:00Z), 7d %44 (reset x7-2026-07-11T06:00:00Z)"
+	if line != want {
+		t.Fatalf("codex line = %q, want %q", line, want)
+	}
+}
+
+// Claude genuinely has two windows; the codex fix must not touch its line.
+func TestLinesKeepClaudeWindowsUnchanged(t *testing.T) {
+	r := resolve([]Sample{{
+		TS:           "2026-08-03T18:22:09Z",
+		Claude5:      12.0,
+		Claude7:      39.0,
+		ClaudeFable7: 36.0,
+		ClaudeResets: Resets{Five: "c5", Week: "c7"},
+		Codex5:       52.0,
+		CodexResets:  Resets{Five: "x5"},
+	}})
+	line := Lines(r)[1]
+	want := "Claude: 5h %12 (reset c5), 7d %39 (reset c7), Fable 7d %36"
+	if line != want {
+		t.Fatalf("claude line = %q, want %q", line, want)
+	}
+}
+
+func TestResolveFallsBackWhenOnlyCodexPrimaryIsPresent(t *testing.T) {
+	rows := []Sample{
+		sample("2026-08-03T17:00:00Z", 12.0, 39.0, 52.0, nil),
+		sample("2026-08-03T18:00:00Z", 12.0, 39.0, nil, nil),
+	}
+	r := resolve(rows)
+	if r.Codex.TS != "2026-08-03T17:00:00Z" || r.Codex.Codex5 != 52.0 {
+		t.Fatalf("codex fallback ignored a row without a secondary window: %+v", r.Codex)
+	}
+}
+
 func TestResolveRespects48hWindow(t *testing.T) {
 	rows := []Sample{
 		sample("2026-07-01T00:00:00Z", 90.0, 80.0, 70.0, 60.0),

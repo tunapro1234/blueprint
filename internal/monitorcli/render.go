@@ -24,7 +24,12 @@ var meterSpecs = []struct {
 	{"claude_5h", "Claude 5h", func(s UsageSample) Number { return s.Claude5H }, "claude_5h"},
 	{"claude_7d", "Claude 7d", func(s UsageSample) Number { return s.Claude7D }, "claude_7d"},
 	{"claude_fable_7d", "Claude Fable 7d", func(s UsageSample) Number { return s.ClaudeFable7D }, "claude_7d"},
-	{"codex_5h", "Codex 5h", func(s UsageSample) Number { return s.Codex5H }, "codex_5h"},
+	// The codex meter carries no window label: the collector maps the API's
+	// primary window to `codex_5h` whatever its length, and on the current
+	// plan (prolite since 2026-07-13) that primary window is 7 days while the
+	// secondary is absent. Rows with an invalid value are skipped, so the
+	// secondary meter renders only on plans that actually report one.
+	{"codex_5h", "Codex", func(s UsageSample) Number { return s.Codex5H }, "codex_5h"},
 	{"codex_7d", "Codex 7d", func(s UsageSample) Number { return s.Codex7D }, "codex_7d"},
 }
 

@@ -18,10 +18,10 @@ servis hedefi sağlanır; v2'de istenirse iş mantığı Go'ya taşınır.
 
 ### CLI komutları (v1 — bash `agent`+`wa` paritesi şart)
 ```
-bp status | bp tree            filo (tmux+agentbook'lar birleşik, TREE görünüm, parent'lı)
-bp open <ad> <dizin> [--resume] [--codex] [--no-prompt]
+bp status | bp tree            filo (tmux+agentbook birleşik, TREE görünüm, parent'lı)
+bp open <ad> <dizin> [--parent <ad>] [--role <metin>] [--resume] [--codex] [--no-prompt]
 bp close <ad>
-bp msg <ad> <mesaj...>         typing/busy guard; doluysa kuyruk + kanal id + qstat talimatı basar
+bp msg <ad> <mesaj...>         [gönderen] zarfı; typing/busy guard; doluysa kuyruk + kanal id + qstat talimatı basar
 bp q | bp qstat <kanal-id>
 bp peek <ad> [n]
 bp wa send [--to <hedef>] [--reply <msgId>] <mesaj...>   (outbox json'a yazar; prefix [agent])
@@ -55,13 +55,40 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
 - busy(): pane'de 'esc to interrupt'.
 - send: literal send-keys (-l) / çok satırda load-buffer+paste-buffer; 0.4s; Enter; 1.2s;
   submit doğrulama (son 40 char pane'de ve busy değilse ekstra Enter).
+- msg: yerel teslimde mesajın başına "[gönderen] " zarfı konur. Kimlik tmux oturum adından
+  gelir (yetkili kaynak); AGENT env yalnız tmux DIŞINDA (daemon/systemd/düz kabuk) okunur.
+  Agent kendi eliyle "[isim]" yazmaz — yazarsa gerçek zarfın içinde iç içe görünür.
+- slash komut (/compact, /goal ...): zarfsız gider (önek komutu bozar), bunun yerine hiyerarşi
+  kapısı — yalnız filo kökü ya da hedefin bir üst-atası gönderebilir, yan/yukarı reddedilir.
+  '/goal <metin>' → '/goal [gönderen] <metin>' (hedefi kimin koyduğu kayda geçsin); çıplak
+  /goal (sorgu/temizleme) dokunulmadan geçer.
 - open: claude --dangerously-skip-permissions [-c]; resume picker'da Down+Enter (FULL, summary'ye HAYIR);
   hazır bekleme ('bypass permissions|-- INSERT --'); /rename, /remote-control, onboarding prompt;
   agentbook güncelle. --codex: codex -c model_reasoning_effort="high" + trust prompt Enter.
+  --parent/--role kitaba yazılacak ebeveyni/rolü açıkça verir (yol-önekinden çıkarım yerine);
+  --parent açılıştan ÖNCE filoya karşı doğrulanır, bilinmeyen adda hiçbir şey açılmaz/yazılmaz.
+  Zaten açık agentta iki bayrak yalnız kitap kaydını düzeltir.
+  Oturum var ama pane'de agent yok, kabuk kalmışsa: agent YERİNDE yeniden başlatılır (C-u, cd,
+  komut). Pane başka bir program çalıştırıyorsa açık hata — önce bp close.
+  Agent klasörü ebeveyninin klasörü altında değilse tek satır ÖNERİ basılır (asla ret);
+  worktree yolları, ebeveyniyle aynı klasör ve kökün çocukları muaf.
 - close: kill-session + agentbook status=closed.
+- status/tree durumları: closed / idle / working / dead — dead = oturum ayakta ama pane'de agent
+  yok (CLI çıkmış, kabuk kalmış); idle ile karıştırılmaz.
 - Agentbook: TEK kitap — /srv/server-main/agentbook.json (+AGENTBOOK env override).
   config.json birden fazla kitap listelerse hepsi okunur, ama varsayılan tektir.
   tree görünümünde parent alanı kullanılır.
+
+### bar (`bp bar <ad>` — pane'in tmux status-right'ı)
+- Widget listesi config'ten: `bar.widgets` (varsayılan ctx, temp, queue, model, quota; talk ve
+  clock kapalı). Her tick'te çağrıldığı için 45s'lik kısa ömürlü cache dosyası araya girer.
+- Claude pane'inde model chip'i CANLI oturum kaydından (session jsonl'ındaki son assistant
+  turu) okunur; settings/pin dosyaları yalnız effort ve fallback için — /model global
+  varsayılanı değiştirip pin'e dokunmadığı için ayar dosyası iki yönde de yanılabiliyor.
+- Codex pane'inde ctx ve yaş CODEX_HOME/sessions rollout kayıtlarından gelir (session_meta'daki
+  cwd agent klasörüne eşlenir, mtime'a göre en taze rollout canlı olandır); model chip'i codex
+  config.toml'dan. Rollout pencere bildiriyorsa ctx rengi doluluk oranına, bildirmiyorsa
+  mutlak eşiklere göre.
 
 ### Yapı
 ```

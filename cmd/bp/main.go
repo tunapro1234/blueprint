@@ -45,11 +45,12 @@ bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
 bp rename <old-name> <new-name> [--dry-run]
-bp msg <name> <message...>
-bp announce <message...>
+bp msg <name> <message...>   # bp stamps a [sender] envelope; never write your own
+                             # a /slash command goes bare, and only down the hierarchy
+bp announce <message...> [--dry-run]
 bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run] [--policy]
-bp remote [<name>...]        # /remote-control ac/goster (varsayilan: tum acik claude agentlari)
-bp q | bp qstat <channel-id>
+bp remote [<name>...]        # print or open /remote-control (default: every live claude agent)
+bp q | bp qstat <channel-id> | bp qcancel <channel-id>
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] <message...>
 bp wa read <target> [n] | bp wa chats

@@ -15,6 +15,33 @@ The binary is written to `/srv/blueprint/bp`.
 Run `bp help` for a command summary. `blueprint.service` is at the repository
 root; it is not installed or enabled under `/etc` until cutover.
 
+## Talking to agents
+
+`bp msg <name> <message>` delivers to the agent's tmux session. A target that is
+working or has half-typed input is never interrupted: the message is queued and
+the printed channel id follows it with `bp qstat`. An agent that is not open at
+all keeps its messages until it opens. Read what an agent says with `bp peek
+<name>`, and see the fleet with `bp status` or `bp tree` (`closed` / `idle` /
+`working` / `dead` — `dead` means the session is up but its pane no longer runs
+an agent).
+
+`bp` stamps every message with `[<sender>] `, taken from the tmux session the
+command runs in; `AGENT` is honoured only outside tmux. Never write your own
+`[name]` prefix — a hand-written one just shows up nested inside the real
+envelope.
+
+Slash commands (`/compact`, `/goal`, ...) are delivered bare, since a prefix
+would break the command, so authority is checked instead: only the fleet root or
+an ancestor of the target may send one, and sideways or upward is refused.
+`/goal <text>` is rewritten to `/goal [<sender>] <text>` so the target records
+who set the goal; a bare `/goal` passes through untouched.
+
+The fleet lives in one agentbook, `/srv/server-main/agentbook.json` (override
+with `AGENTBOOK`). `bp open` takes `--parent <name>` and `--role <text>` to
+write that entry correctly instead of guessing from the folder path; the parent
+is validated before anything is opened, and both flags also correct an
+already-open agent's entry.
+
 Use managed Git worktrees when agents need isolated branches in the same
 repository:
 

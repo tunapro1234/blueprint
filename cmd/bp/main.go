@@ -38,7 +38,7 @@ import (
 
 const usage = `blueprint (bp) — agent infrastructure CLI
 
-bp status | bp tree
+bp status [--json] | bp tree
 bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--no-prompt]
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
@@ -48,7 +48,9 @@ bp rename <old-name> <new-name> [--dry-run]
 bp msg <name> <message...>   # bp stamps a [sender] envelope; never write your own
                              # a /slash command goes bare, and only down the hierarchy
 bp announce <message...> [--dry-run]
-bp compact [--min-age <minutes>] [--exclude <name,...>] [--dry-run] [--policy]
+bp compact [--idle-hours N] [--min-ctx N] [--apply]   # policy: idle+full claude agents
+bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]
+                             # lists by default; nothing is sent without --apply
 bp remote [<name>...]        # print or open /remote-control (default: every live claude agent)
 bp q | bp qstat <channel-id> | bp qcancel <channel-id>
 bp peek <name> [n]
@@ -79,6 +81,8 @@ type app struct {
 	deliverMessage func(string, string, string) (bool, string, error)
 	sessionExists  func(string) bool
 	loadCache      func(map[string]string) map[string]bpcache.State
+	loadCommands   func() (map[string]string, error)
+	capturePane    func(string) (string, error)
 }
 
 func main() {
@@ -99,15 +103,57 @@ func main() {
 	}
 }
 
+// helpRequested reports whether -h/--help appears among a subcommand's own
+// flags. Commands that carry free-form text (msg, announce, wa) only honour it
+// before the first non-flag argument, so "bp msg agent --help" still delivers
+// the literal word instead of printing usage at the sender.
+func helpRequested(args []string) bool {
+	rest := args[1:]
+	switch args[0] {
+	case "msg", "announce", "wa":
+		for index, arg := range rest {
+			if !strings.HasPrefix(arg, "-") {
+				rest = rest[:index]
+				break
+			}
+		}
+	}
+	for _, arg := range rest {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectFlag guards commands whose first positional argument is an agent name.
+// Without it a typo'd flag is taken for a session name — "bp status --help"
+// once registered "--help" into the agentbook.
+func rejectFlag(command, arg string) error {
+	if strings.HasPrefix(arg, "-") {
+		return fmt.Errorf("unknown %s option: %s", command, arg)
+	}
+	return nil
+}
+
 func (a *app) run(args []string) error {
-	if len(args) > 0 && args[0] == "fed" && a.config.InvalidConfig != "" {
+	if len(args) == 0 {
+		args = []string{"status"}
+	}
+	// Help is answered before any command logic so no subcommand can mistake
+	// -h/--help for one of its own arguments.
+	if helpRequested(args) {
+		fmt.Fprintln(a.out, usage)
+		return nil
+	}
+	if args[0] == "fed" && a.config.InvalidConfig != "" {
 		return fmt.Errorf("federation disabled because config.json is invalid: %s", a.config.InvalidConfig)
 	}
 	switch args[0] {
 	case "status":
-		return a.status()
+		return a.status(args[1:])
 	case "tree":
-		return a.tree()
+		return a.tree(args[1:])
 	case "open":
 		return a.open(args[1:])
 	case "worktree":
@@ -416,23 +462,44 @@ func (a *app) fleet() (book.Fleet, map[string]book.State, error) {
 	return fleet, states, err
 }
 
-func (a *app) status() error {
+// tmuxStateLabel names what tmux shows for an agent: the same four words the
+// human table and the JSON output both report.
+func tmuxStateLabel(state book.State, alive bool) string {
+	switch {
+	case !alive:
+		return "closed"
+	case state.Dead:
+		return "dead"
+	case state.Busy:
+		return "working"
+	default:
+		return "idle"
+	}
+}
+
+func (a *app) status(args []string) error {
+	asJSON := false
+	for _, arg := range args {
+		if arg != "--json" {
+			return fmt.Errorf("unknown status option: %s", arg)
+		}
+		if asJSON {
+			return fmt.Errorf("--json may only be specified once")
+		}
+		asJSON = true
+	}
 	fleet, states, err := a.fleet()
 	if err != nil {
 		return err
 	}
 	cacheStates := a.cacheStates(fleet)
+	if asJSON {
+		return a.statusJSON(fleet, states, cacheStates)
+	}
 	fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK")
 	for _, name := range fleet.SortedNames() {
 		state, alive := states[name]
-		tmuxState := "closed"
-		if alive && state.Dead {
-			tmuxState = "dead"
-		} else if alive && state.Busy {
-			tmuxState = "working"
-		} else if alive {
-			tmuxState = "idle"
-		}
+		tmuxState := tmuxStateLabel(state, alive)
 		bookState := fleet.Agents[name].Status
 		if bookState == "" {
 			bookState = "?"
@@ -463,6 +530,83 @@ func (a *app) status() error {
 	return nil
 }
 
+// statusReport is the machine-readable shape of bp status. Numbers that are
+// merely unknown are omitted rather than sent as zeros: a zero token count or a
+// zero age would read as a measured fact.
+type statusReport struct {
+	Agents        []statusAgent  `json:"agents"`
+	Codex         []statusThread `json:"codex,omitempty"`
+	CodexUnloaded int            `json:"codex_unloaded,omitempty"`
+}
+
+type statusAgent struct {
+	Name                string `json:"name"`
+	Tmux                string `json:"tmux"`
+	Status              string `json:"status,omitempty"`
+	Folder              string `json:"folder,omitempty"`
+	Parent              string `json:"parent,omitempty"`
+	CtxTokens           *int   `json:"ctx_tokens,omitempty"`
+	CacheAgeSeconds     *int64 `json:"cache_age_seconds,omitempty"`
+	LastHumanAgeSeconds *int64 `json:"last_human_age_seconds,omitempty"`
+	Model               string `json:"model,omitempty"`
+}
+
+type statusThread struct {
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	CWD       string `json:"cwd,omitempty"`
+	CtxTokens *int64 `json:"ctx_tokens,omitempty"`
+	Window    *int64 `json:"context_window,omitempty"`
+}
+
+func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State) error {
+	report := statusReport{Agents: make([]statusAgent, 0, len(fleet.Agents))}
+	for _, name := range fleet.SortedNames() {
+		state, alive := states[name]
+		agent := fleet.Agents[name]
+		row := statusAgent{
+			Name:   name,
+			Tmux:   tmuxStateLabel(state, alive),
+			Status: agent.Status,
+			Folder: agent.Folder,
+			Parent: fleet.Parents[name],
+		}
+		if cacheState, ok := cacheStates[name]; ok {
+			if cacheState.Known {
+				tokens := cacheState.CtxTokens
+				age := int64(cacheState.Age / time.Second)
+				row.CtxTokens, row.CacheAgeSeconds = &tokens, &age
+			}
+			if cacheState.LastHumanAge >= 0 {
+				lastHuman := int64(cacheState.LastHumanAge / time.Second)
+				row.LastHumanAgeSeconds = &lastHuman
+			}
+			row.Model = cacheState.Model
+		}
+		report.Agents = append(report.Agents, row)
+	}
+	live, unloaded := liveCodexThreads(a.codexThreads())
+	report.CodexUnloaded = unloaded
+	for _, thread := range live {
+		row := statusThread{Name: codexName(thread), State: codexState(thread.Status), CWD: thread.CWD}
+		if usage := thread.TokenUsage; usage != nil {
+			used := usage.Last.TotalTokens
+			if used == 0 {
+				used = usage.Total.TotalTokens
+			}
+			row.CtxTokens = &used
+			if usage.ModelContextWindow != nil && *usage.ModelContextWindow > 0 {
+				window := *usage.ModelContextWindow
+				row.Window = &window
+			}
+		}
+		report.Codex = append(report.Codex, row)
+	}
+	encoder := json.NewEncoder(a.out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
+}
+
 func (a *app) cacheStates(fleet book.Fleet) map[string]bpcache.State {
 	folders := make(map[string]string, len(fleet.Agents))
 	for name, agent := range fleet.Agents {
@@ -484,7 +628,13 @@ func (a *app) cacheStates(fleet book.Fleet) map[string]bpcache.State {
 	}
 }
 
-func (a *app) tree() error {
+func (a *app) tree(args []string) error {
+	if len(args) > 0 {
+		if err := rejectFlag("tree", args[0]); err != nil {
+			return err
+		}
+		return fmt.Errorf("usage: bp tree")
+	}
 	fleet, states, err := a.fleet()
 	if err != nil {
 		return err
@@ -710,6 +860,11 @@ func (a *app) open(args []string) error {
 		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
+	for _, positional := range []string{name, dir} {
+		if err := rejectFlag("open", positional); err != nil {
+			return err
+		}
+	}
 	opts := bptmux.OpenOptions{Legacy: a.config.Legacy}
 	worktreeTopic := ""
 	reg := book.Registration{}
@@ -968,6 +1123,9 @@ func (a *app) close(args []string) error {
 		return fmt.Errorf("usage: bp close <name>")
 	}
 	name := args[0]
+	if err := rejectFlag("close", name); err != nil {
+		return err
+	}
 	if a.tmux.HasSession(a.ctx, name) {
 		if err := a.tmux.Close(a.ctx, name); err != nil {
 			return err
@@ -1082,6 +1240,9 @@ func (a *app) message(args []string) error {
 		return fmt.Errorf("usage: bp msg <name> <message...>")
 	}
 	name, message := args[0], strings.TrimSpace(strings.Join(args[1:], " "))
+	if err := rejectFlag("msg", name); err != nil {
+		return err
+	}
 	if message == "" {
 		return fmt.Errorf("empty message")
 	}
@@ -1338,8 +1499,18 @@ func announcementTargets(fleet book.Fleet, states map[string]book.State, sender 
 type compactOptions struct {
 	minAge  time.Duration
 	exclude []string
-	dryRun  bool
-	policy  bool
+	// apply sends. Listing is the default so a mistyped compact can never
+	// interrupt an agent; --dry-run is kept as a no-op synonym of the default.
+	apply bool
+	// all selects every descendant of the sender instead of the policy set.
+	// The policy selection is the default; --policy is a no-op synonym of it.
+	all    bool
+	idle   time.Duration
+	minCtx int
+}
+
+func defaultCompactOptions() compactOptions {
+	return compactOptions{minAge: 30 * time.Minute, idle: 24 * time.Hour, minCtx: 200_000}
 }
 
 type compactSkip struct {
@@ -1354,47 +1525,93 @@ type compactPlan struct {
 	UnknownExcludes []string
 }
 
+// compactValue reads the value of a "--flag value" or "--flag=value" pair and
+// reports the index of the last argument it consumed.
+func compactValue(args []string, index int, name, want string) (string, int, error) {
+	if args[index] == name {
+		if index+1 >= len(args) {
+			return "", index, fmt.Errorf("%s requires %s", name, want)
+		}
+		return args[index+1], index + 1, nil
+	}
+	return strings.TrimPrefix(args[index], name+"="), index, nil
+}
+
 func parseCompactArgs(args []string) (compactOptions, error) {
-	opts := compactOptions{minAge: 30 * time.Minute}
-	minAgeSeen := false
+	opts := defaultCompactOptions()
+	seen := map[string]bool{}
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
-		switch {
-		case arg == "--dry-run":
-			opts.dryRun = true
-		case arg == "--policy":
-			opts.policy = true
-		case arg == "--min-age" || strings.HasPrefix(arg, "--min-age="):
-			value := ""
-			if arg == "--min-age" {
-				if index+1 >= len(args) {
-					return opts, fmt.Errorf("--min-age requires a value in minutes")
-				}
-				value = args[index+1]
-				index++
-			} else {
-				value = strings.TrimPrefix(arg, "--min-age=")
+		name, _, hasValue := strings.Cut(arg, "=")
+		once := func() error {
+			if seen[name] {
+				return fmt.Errorf("%s may only be specified once", name)
 			}
-			if minAgeSeen {
-				return opts, fmt.Errorf("--min-age may only be specified once")
+			seen[name] = true
+			return nil
+		}
+		if hasValue {
+			switch name {
+			case "--apply", "--all", "--dry-run", "--policy":
+				return opts, fmt.Errorf("%s takes no value", name)
 			}
-			minAgeSeen = true
+		}
+		switch name {
+		case "--apply":
+			opts.apply = true
+		case "--all":
+			opts.all = true
+		case "--dry-run", "--policy":
+			// Back-compat no-ops: listing is the default (--dry-run) and the
+			// policy selection is the default selector (--policy).
+		case "--min-age":
+			value, next, err := compactValue(args, index, name, "a value in minutes")
+			if err != nil {
+				return opts, err
+			}
+			index = next
+			if err := once(); err != nil {
+				return opts, err
+			}
 			minutes, err := strconv.Atoi(value)
 			if err != nil || minutes < 0 {
 				return opts, fmt.Errorf("invalid --min-age minutes: %s", value)
 			}
 			opts.minAge = time.Duration(minutes) * time.Minute
-		case arg == "--exclude" || strings.HasPrefix(arg, "--exclude="):
-			value := ""
-			if arg == "--exclude" {
-				if index+1 >= len(args) {
-					return opts, fmt.Errorf("--exclude requires a comma-separated list")
-				}
-				value = args[index+1]
-				index++
-			} else {
-				value = strings.TrimPrefix(arg, "--exclude=")
+		case "--idle-hours":
+			value, next, err := compactValue(args, index, name, "a value in hours")
+			if err != nil {
+				return opts, err
 			}
+			index = next
+			if err := once(); err != nil {
+				return opts, err
+			}
+			hours, err := strconv.Atoi(value)
+			if err != nil || hours < 0 {
+				return opts, fmt.Errorf("invalid --idle-hours: %s", value)
+			}
+			opts.idle = time.Duration(hours) * time.Hour
+		case "--min-ctx":
+			value, next, err := compactValue(args, index, name, "a token count")
+			if err != nil {
+				return opts, err
+			}
+			index = next
+			if err := once(); err != nil {
+				return opts, err
+			}
+			tokens, err := strconv.Atoi(value)
+			if err != nil || tokens < 0 {
+				return opts, fmt.Errorf("invalid --min-ctx tokens: %s", value)
+			}
+			opts.minCtx = tokens
+		case "--exclude":
+			value, next, err := compactValue(args, index, name, "a comma-separated list")
+			if err != nil {
+				return opts, err
+			}
+			index = next
 			for _, part := range strings.Split(value, ",") {
 				if part = strings.TrimSpace(part); part != "" {
 					opts.exclude = append(opts.exclude, part)
@@ -1448,18 +1665,128 @@ func selectCompactTargets(fleet book.Fleet, states map[string]book.State, sender
 	return plan
 }
 
-func selectPolicyTargets(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, commands map[string]string, typing map[string]bool) []string {
-	var targets []string
-	for _, name := range fleet.Order {
-		state := cacheStates[name]
-		if name == "server-main" || !states[name].Alive || states[name].Busy || typing[name] || commands[name] != "claude" {
-			continue
-		}
-		if state.Known && state.LastHumanAge > 24*time.Hour && state.CtxTokens > 200_000 {
-			targets = append(targets, name)
-		}
+// Decision reasons, in the Turkish-without-diacritics style of the rest of the
+// compact/announce output.
+const (
+	compactPending  = "gonderilecek"
+	compactSent     = "gonderildi"
+	compactBusy     = "MESGUL, atlandi"
+	compactClosed   = "kapali"
+	compactSmallCtx = "context kucuk"
+	compactExcluded = "haric tutuldu"
+	compactNoCache  = "transcript okunamadi"
+	compactNotAgent = "agent CLI degil, atlandi"
+)
+
+// compactDecision is one row of the decision table: what bp measured about an
+// agent and what it did — or would do — about it.
+type compactDecision struct {
+	Name string
+	// Age of the last real human turn; negative when unknown.
+	Age time.Duration
+	// Context tokens; negative when unknown.
+	Tokens int
+	// Send marks a row that passed every filter, i.e. a target.
+	Send   bool
+	Reason string
+}
+
+func decisionRow(name string, state bpcache.State) compactDecision {
+	row := compactDecision{Name: name, Age: -1, Tokens: -1}
+	if state.LastHumanAge >= 0 {
+		row.Age = state.LastHumanAge
 	}
-	return targets
+	if state.Known {
+		row.Tokens = state.CtxTokens
+	}
+	return row
+}
+
+// policyDecisions is the standing compaction policy: a live claude agent whose
+// last human turn is older than --idle-hours and whose context is above
+// --min-ctx gets /compact. server-main is never a target, and an agent compacted
+// inside the --min-age window is left alone so a repeated run cannot double-send
+// while the transcript still reports the pre-compact token count.
+func policyDecisions(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, commands map[string]string, lastCompact map[string]time.Time, opts compactOptions, now time.Time) []compactDecision {
+	rows := make([]compactDecision, 0, len(fleet.Order))
+	for _, name := range fleet.Order {
+		if name == "server-main" {
+			continue // hard safety exclusion, always applied
+		}
+		state := cacheStates[name]
+		row := decisionRow(name, state)
+		switch {
+		case !states[name].Alive:
+			row.Reason = compactClosed
+		case states[name].Busy:
+			row.Reason = compactBusy
+		case commands[name] != "claude":
+			command := commands[name]
+			if command == "" {
+				command = "?"
+			}
+			row.Reason = fmt.Sprintf("claude degil (%s)", command)
+		case !state.Known:
+			row.Reason = compactNoCache
+		case state.LastHumanAge <= opts.idle:
+			row.Reason = fmt.Sprintf("taze konusma (<%dsa)", int(opts.idle.Hours()))
+		case state.CtxTokens <= opts.minCtx:
+			row.Reason = compactSmallCtx
+		default:
+			if last, ok := lastCompact[name]; ok && now.Sub(last) < opts.minAge {
+				row.Reason = fmt.Sprintf("yakinda compact edildi (%s once)", formatAge(now.Sub(last)))
+				break
+			}
+			row.Send = true
+			row.Reason = compactPending
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// allDecisions renders the --all sweep (every descendant of the sender) as the
+// same table. The selection itself stays in selectCompactTargets so --all keeps
+// behaving exactly as it did before listing became the default.
+func allDecisions(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, plan compactPlan, sender string) []compactDecision {
+	send := map[string]bool{}
+	for _, name := range plan.Send {
+		send[name] = true
+	}
+	recent := map[string]time.Duration{}
+	for _, skip := range plan.SkippedRecent {
+		recent[skip.Name] = skip.Age
+	}
+	excluded := map[string]bool{}
+	for _, name := range plan.Excluded {
+		excluded[name] = true
+	}
+	candidates := announcementCandidates(fleet, sender)
+	rows := make([]compactDecision, 0, len(candidates))
+	for _, name := range candidates {
+		if name == "server-main" {
+			continue // hard safety exclusion, always applied
+		}
+		row := decisionRow(name, cacheStates[name])
+		switch {
+		case send[name]:
+			row.Send, row.Reason = true, compactPending
+		case excluded[name]:
+			row.Reason = compactExcluded
+		default:
+			if age, ok := recent[name]; ok {
+				row.Reason = fmt.Sprintf("yakinda compact edildi (%s once)", formatAge(age))
+				break
+			}
+			if !states[name].Alive {
+				row.Reason = compactClosed
+				break
+			}
+			row.Reason = "atlandi"
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func formatAge(d time.Duration) string {
@@ -1517,6 +1844,45 @@ func saveCompactState(path string, state map[string]time.Time) error {
 	return os.Rename(name, path)
 }
 
+// paneBusy reports whether an agent is mid-turn or has someone typing into its
+// composer. A capture failure counts as busy: a pane bp cannot see is never
+// interrupted.
+func (a *app) paneBusy(name string) bool {
+	pane, err := a.capture(name)
+	if err != nil {
+		return true
+	}
+	return bptmux.Typing(pane) || bptmux.Busy(pane)
+}
+
+func (a *app) capture(name string) (string, error) {
+	if a.capturePane != nil {
+		return a.capturePane(name)
+	}
+	return a.tmux.CaptureAnsi(a.ctx, name)
+}
+
+func (a *app) paneCommands() (map[string]string, error) {
+	if a.loadCommands != nil {
+		return a.loadCommands()
+	}
+	return a.tmux.Commands(a.ctx)
+}
+
+func (a *app) printCompactTable(rows []compactDecision) {
+	fmt.Fprintf(a.out, "%-24s %-10s %-10s %s\n", "AGENT", "KONUSMA", "CONTEXT", "KARAR")
+	for _, row := range rows {
+		age, tokens := "-", "-"
+		if row.Age >= 0 {
+			age = shortAge(row.Age)
+		}
+		if row.Tokens >= 0 {
+			tokens = humanTokens(row.Tokens)
+		}
+		fmt.Fprintf(a.out, "%-24s %-10s %-10s %s\n", row.Name, age, tokens, row.Reason)
+	}
+}
+
 func (a *app) compact(args []string) error {
 	opts, err := parseCompactArgs(args)
 	if err != nil {
@@ -1532,58 +1898,80 @@ func (a *app) compact(args []string) error {
 	}
 	compactStatePath := filepath.Join(a.config.StateDir, "compact.json")
 	lastCompact := loadCompactState(compactStatePath)
-	var plan compactPlan
-	if opts.policy {
-		commands, err := a.tmux.Commands(a.ctx)
+	folders := make(map[string]string, len(fleet.Agents))
+	for name, agent := range fleet.Agents {
+		folders[name] = agent.Folder
+	}
+	cacheStates := a.readCache(folders)
+
+	var rows []compactDecision
+	var unknownExcludes []string
+	if opts.all {
+		plan := selectCompactTargets(fleet, states, sender, opts.exclude, lastCompact, opts.minAge, time.Now())
+		rows = allDecisions(fleet, states, cacheStates, plan, sender)
+		unknownExcludes = plan.UnknownExcludes
+	} else {
+		commands, err := a.paneCommands()
 		if err != nil {
 			return err
 		}
-		folders := make(map[string]string, len(fleet.Agents))
-		for name, agent := range fleet.Agents {
-			folders[name] = agent.Folder
+		rows = policyDecisions(fleet, states, cacheStates, commands, lastCompact, opts, time.Now())
+	}
+	// The pane is the last word on "is this agent working": book state is a
+	// snapshot taken before the fleet was walked, and someone may be typing.
+	for index := range rows {
+		if rows[index].Send && a.paneBusy(rows[index].Name) {
+			rows[index].Send, rows[index].Reason = false, compactBusy
 		}
-		cacheStates := a.readCache(folders)
-		typing := map[string]bool{}
-		for name, state := range cacheStates {
-			if name == "server-main" || commands[name] != "claude" || !states[name].Alive || states[name].Busy ||
-				!state.Known || state.LastHumanAge <= 24*time.Hour || state.CtxTokens <= 200_000 {
-				continue
-			}
-			pane, captureErr := a.tmux.CaptureAnsi(a.ctx, name)
-			typing[name] = captureErr != nil || bptmux.Typing(pane)
-		}
-		plan.Send = selectPolicyTargets(fleet, states, cacheStates, commands, typing)
-	} else {
-		plan = selectCompactTargets(fleet, states, sender, opts.exclude, lastCompact, opts.minAge, time.Now())
 	}
 
-	if opts.dryRun {
-		fmt.Fprintf(a.out, "[dry-run] targets: %d\n", len(plan.Send))
-		for _, name := range plan.Send {
-			fmt.Fprintf(a.out, "  send   %s\n", name)
+	if !opts.apply {
+		pending := 0
+		for _, row := range rows {
+			if row.Send {
+				pending++
+			}
 		}
-		for _, skip := range plan.SkippedRecent {
-			fmt.Fprintf(a.out, "  skip   %s: recent (%s ago)\n", skip.Name, formatAge(skip.Age))
+		a.printCompactTable(rows)
+		if len(unknownExcludes) > 0 {
+			fmt.Fprintf(a.out, "bilinmeyen exclude: %s\n", strings.Join(unknownExcludes, ", "))
 		}
-		for _, name := range plan.Excluded {
-			fmt.Fprintf(a.out, "  skip   %s: excluded\n", name)
-		}
-		if len(plan.UnknownExcludes) > 0 {
-			fmt.Fprintf(a.out, "  ignored unknown excludes: %s\n", strings.Join(plan.UnknownExcludes, ", "))
-		}
-		fmt.Fprintf(a.out, "[dry-run] would send: %d, skipped recent: %d, excluded: %d\n", len(plan.Send), len(plan.SkippedRecent), len(plan.Excluded))
+		fmt.Fprintf(a.out, "gonderilecek: %d, atlanan: %d (gondermek icin: bp compact --apply)\n", pending, len(rows)-pending)
 		return nil
 	}
 
 	var tally deliveryTally
 	now := time.Now().UTC()
 	updated := false
-	for _, target := range plan.Send {
+	for index := range rows {
+		if !rows[index].Send {
+			continue
+		}
+		target := rows[index].Name
+		// Re-checked immediately before the send, not only during selection:
+		// an agent that started working in between must not be interrupted,
+		// and a busy target is skipped rather than queued — a /compact that
+		// lands after the next turn compacts the wrong conversation.
+		if a.paneBusy(target) {
+			rows[index].Send, rows[index].Reason = false, compactBusy
+			continue
+		}
 		queued, channelID, deliveryErr := a.deliver(target, sender, "/compact")
 		if tally.record(target, queued, channelID, deliveryErr) {
 			lastCompact[target] = now
 			updated = true
+			rows[index].Reason = compactSent
+			if queued {
+				rows[index].Reason = fmt.Sprintf("%s (kuyruk: %s)", compactSent, channelID)
+			}
+			continue
 		}
+		rows[index].Send = false
+		if deliveryErr != nil && errors.Is(deliveryErr, bptmux.ErrNotAgent) {
+			rows[index].Reason = compactNotAgent
+			continue
+		}
+		rows[index].Reason = fmt.Sprintf("gonderilemedi: %v", deliveryErr)
 	}
 	if updated {
 		if err := saveCompactState(compactStatePath, lastCompact); err != nil {
@@ -1591,18 +1979,12 @@ func (a *app) compact(args []string) error {
 		}
 	}
 
-	fmt.Fprintf(a.out, "compact sent: %d, queued: %d", tally.sent, len(tally.channels))
-	if len(tally.channels) > 0 {
-		fmt.Fprintf(a.out, " (%s)", strings.Join(tally.channels, ", "))
+	sent := tally.sent + len(tally.channels)
+	a.printCompactTable(rows)
+	if len(unknownExcludes) > 0 {
+		fmt.Fprintf(a.out, "bilinmeyen exclude: %s\n", strings.Join(unknownExcludes, ", "))
 	}
-	fmt.Fprintf(a.out, ", skipped recent: %d, excluded: %d", len(plan.SkippedRecent), len(plan.Excluded))
-	if tally.skipped > 0 {
-		fmt.Fprintf(a.out, ", skipped non-agent: %d", tally.skipped)
-	}
-	fmt.Fprintln(a.out)
-	if len(plan.UnknownExcludes) > 0 {
-		fmt.Fprintf(a.out, "ignored unknown excludes: %s\n", strings.Join(plan.UnknownExcludes, ", "))
-	}
+	fmt.Fprintf(a.out, "gonderildi: %d, atlanan: %d\n", sent, len(rows)-sent)
 	return errors.Join(tally.errs...)
 }
 
@@ -1649,6 +2031,9 @@ func (a *app) queueStatus(args []string) error {
 func (a *app) peek(args []string) error {
 	if len(args) < 1 || len(args) > 2 {
 		return fmt.Errorf("usage: bp peek <name> [n]")
+	}
+	if err := rejectFlag("peek", args[0]); err != nil {
+		return err
 	}
 	count := 8
 	var err error

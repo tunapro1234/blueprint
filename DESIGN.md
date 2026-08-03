@@ -18,10 +18,12 @@ servis hedefi sağlanır; v2'de istenirse iş mantığı Go'ya taşınır.
 
 ### CLI komutları (v1 — bash `agent`+`wa` paritesi şart)
 ```
-bp status | bp tree            filo (tmux+agentbook birleşik, TREE görünüm, parent'lı)
+bp status [--json] | bp tree    filo (tmux+agentbook birleşik, TREE görünüm, parent'lı)
 bp open <ad> <dizin> [--parent <ad>] [--role <metin>] [--resume] [--codex] [--no-prompt]
 bp close <ad>
 bp msg <ad> <mesaj...>         [gönderen] zarfı; typing/busy guard; doluysa kuyruk + kanal id + qstat talimatı basar
+bp compact [--idle-hours S] [--min-ctx N] [--apply]      politika seçimi; bayraksız hali LİSTELER
+bp compact --all [--min-age <dk>] [--exclude <ad,...>] [--apply]   gönderenin tüm alt ağacı
 bp q | bp qstat <kanal-id>
 bp peek <ad> [n]
 bp wa send [--to <hedef>] [--reply <msgId>] <mesaj...>   (outbox json'a yazar; prefix [agent])
@@ -62,6 +64,16 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
   kapısı — yalnız filo kökü ya da hedefin bir üst-atası gönderebilir, yan/yukarı reddedilir.
   '/goal <metin>' → '/goal [gönderen] <metin>' (hedefi kimin koyduğu kayda geçsin); çıplak
   /goal (sorgu/temizleme) dokunulmadan geçer.
+- compact: varsayılan seçici POLİTİKA — pane'i claude olan, açık, meşgul olmayan, son gerçek
+  insan turu --idle-hours'tan (24sa) eski ve context'i --min-ctx'ten (200k) büyük agentlar;
+  server-main asla hedef değil. Bayraksız çalıştırma yalnız karar tablosu basar
+  (AGENT/KONUSMA/CONTEXT/KARAR) ve hiçbir şey göndermez; göndermek için --apply.
+  --dry-run ve --policy varsayılanın eşanlamlısı (uyumluluk; yardım metninde geçmez);
+  çelişkili çiftler ayrıştırmada reddedilir: --apply+--dry-run ve --all+--policy.
+  --all = eşiklere bakmayan kaba süpürme: gönderenin tüm alt ağacı (--exclude, --min-age).
+  state/compact.json bastırma penceresi (--min-age, varsayılan 30dk) her iki seçicide de geçerli.
+  --apply her gönderimden hemen önce pane'i yeniden okur; meşgul hedef KUYRUĞA ALINMADAN atlanır
+  (geç düşen /compact yanlış konuşmayı sıkıştırır). Okunamayan pane meşgul sayılır.
 - open: claude --dangerously-skip-permissions [-c]; resume picker'da Down+Enter (FULL, summary'ye HAYIR);
   hazır bekleme ('bypass permissions|-- INSERT --'); /rename, /remote-control, onboarding prompt;
   agentbook güncelle. --codex: codex -c model_reasoning_effort="high" + trust prompt Enter.
@@ -75,6 +87,11 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
 - close: kill-session + agentbook status=closed.
 - status/tree durumları: closed / idle / working / dead — dead = oturum ayakta ama pane'de agent
   yok (CLI çıkmış, kabuk kalmış); idle ile karıştırılmaz.
+- status --json: tek JSON nesnesi — her agent için name, tmux, status, folder, parent; bilindiğinde
+  ctx_tokens, cache_age_seconds, last_human_age_seconds, model (bilinmeyen sayı sıfır değil, yok).
+- -h/--help komut mantığından ÖNCE yanıtlanır; msg/announce/wa'da yalnız baştaki bayraklar taranır,
+  serbest metindeki --help mesaj olarak gider. status/tree/open/close/msg/peek '-' ile başlayan
+  argümanı agent adı sanmaz, hata verir.
 - Agentbook: TEK kitap — /srv/server-main/agentbook.json (+AGENTBOOK env override).
   config.json birden fazla kitap listelerse hepsi okunur, ama varsayılan tektir.
   tree görünümünde parent alanı kullanılır.

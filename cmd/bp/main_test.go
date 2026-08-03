@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -95,7 +96,7 @@ func TestStatusIsUnchangedWithoutCodexConfig(t *testing.T) {
 			return nil
 		},
 	}
-	if err := a.status(); err != nil {
+	if err := a.status(nil); err != nil {
 		t.Fatal(err)
 	}
 	want := fmt.Sprintf("%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK") +
@@ -122,7 +123,7 @@ func TestStatusIgnoresDeadCodexSocket(t *testing.T) {
 		},
 		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
 	}
-	if err := a.status(); err != nil {
+	if err := a.status(nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := readTestOutput(t, out); strings.Contains(got, "CODEX") || !strings.Contains(got, "root") {
@@ -512,7 +513,10 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 	})
 }
 
-func TestSelectPolicyTargetsThresholds(t *testing.T) {
+// policyTestInputs builds a fleet where exactly one agent (alpha-child) clears
+// the standing 24h/200k policy, with every other rejection reason represented.
+func policyTestInputs(t *testing.T) (book.Fleet, map[string]book.State, map[string]bpcache.State, map[string]string) {
+	t.Helper()
 	fleet, states := compactTestFleet()
 	commands := map[string]string{}
 	cacheStates := map[string]bpcache.State{}
@@ -522,12 +526,64 @@ func TestSelectPolicyTargetsThresholds(t *testing.T) {
 	}
 	cacheStates["alpha"] = bpcache.State{Known: true, LastHumanAge: 24 * time.Hour, CtxTokens: 900_000}
 	cacheStates["beta"] = bpcache.State{Known: true, LastHumanAge: 48 * time.Hour, CtxTokens: 200_000}
+	cacheStates["lab-scratch"] = bpcache.State{LastHumanAge: -1}
 	commands["orphan"] = "codex"
 	states["alpha-grandchild"] = book.State{Alive: true, Busy: true}
-	typing := map[string]bool{"lab-scratch": true}
-	got := selectPolicyTargets(fleet, states, cacheStates, commands, typing)
-	if want := []string{"alpha-child"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("targets=%v, want %v", got, want)
+	return fleet, states, cacheStates, commands
+}
+
+func policyTargetNames(rows []compactDecision) []string {
+	var names []string
+	for _, row := range rows {
+		if row.Send {
+			names = append(names, row.Name)
+		}
+	}
+	return names
+}
+
+func TestPolicyDecisionsThresholds(t *testing.T) {
+	fleet, states, cacheStates, commands := policyTestInputs(t)
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+
+	rows := policyDecisions(fleet, states, cacheStates, commands, nil, defaultCompactOptions(), now)
+	if want := []string{"alpha-child"}; !reflect.DeepEqual(policyTargetNames(rows), want) {
+		t.Fatalf("targets=%v, want %v", policyTargetNames(rows), want)
+	}
+	want := []compactDecision{
+		{Name: "alpha", Age: 24 * time.Hour, Tokens: 900_000, Reason: "taze konusma (<24sa)"},
+		{Name: "alpha-child", Age: 25 * time.Hour, Tokens: 200_001, Send: true, Reason: "gonderilecek"},
+		{Name: "alpha-grandchild", Age: 25 * time.Hour, Tokens: 200_001, Reason: "MESGUL, atlandi"},
+		{Name: "beta", Age: 48 * time.Hour, Tokens: 200_000, Reason: "context kucuk"},
+		{Name: "orphan", Age: 25 * time.Hour, Tokens: 200_001, Reason: "claude degil (codex)"},
+		{Name: "lab-scratch", Age: -1, Tokens: -1, Reason: "transcript okunamadi"},
+		{Name: "closed-agent", Age: 25 * time.Hour, Tokens: 200_001, Reason: "kapali"},
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("rows=%+v\nwant=%+v", rows, want)
+	}
+
+	// A target compacted inside the --min-age window is left alone.
+	lastCompact := map[string]time.Time{"alpha-child": now.Add(-5 * time.Minute)}
+	rows = policyDecisions(fleet, states, cacheStates, commands, lastCompact, defaultCompactOptions(), now)
+	if names := policyTargetNames(rows); len(names) != 0 {
+		t.Fatalf("targets=%v, want none", names)
+	}
+	if got := rows[1].Reason; got != "yakinda compact edildi (5m once)" {
+		t.Fatalf("alpha-child reason=%q", got)
+	}
+
+	// Lower thresholds widen the selection; the reason text follows --idle-hours.
+	opts := defaultCompactOptions()
+	opts.idle, opts.minCtx = 12*time.Hour, 100_000
+	rows = policyDecisions(fleet, states, cacheStates, commands, nil, opts, now)
+	if want := []string{"alpha", "alpha-child", "beta"}; !reflect.DeepEqual(policyTargetNames(rows), want) {
+		t.Fatalf("targets=%v, want %v", policyTargetNames(rows), want)
+	}
+	opts.idle = 48 * time.Hour
+	rows = policyDecisions(fleet, states, cacheStates, commands, nil, opts, now)
+	if got := rows[0].Reason; got != "taze konusma (<48sa)" {
+		t.Fatalf("alpha reason=%q", got)
 	}
 }
 
@@ -647,27 +703,364 @@ func TestParseCompactArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.minAge != 30*time.Minute || opts.dryRun || len(opts.exclude) != 0 {
-		t.Fatalf("defaults=%+v", opts)
+	// The owner's standing policy: 24h idle, 200k context. Listing, not sending.
+	if !reflect.DeepEqual(opts, defaultCompactOptions()) {
+		t.Fatalf("defaults=%+v, want %+v", opts, defaultCompactOptions())
 	}
 
-	opts, err = parseCompactArgs([]string{"--min-age=15", "--exclude", "a, b ,c", "--exclude=d", "--dry-run"})
+	// --dry-run and --policy survive as no-op synonyms of the new defaults.
+	opts, err = parseCompactArgs([]string{"--dry-run", "--policy"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.minAge != 15*time.Minute {
-		t.Fatalf("minAge=%v, want 15m", opts.minAge)
+	if !reflect.DeepEqual(opts, defaultCompactOptions()) {
+		t.Fatalf("synonyms changed behaviour: %+v", opts)
 	}
-	if !opts.dryRun {
-		t.Fatalf("expected dryRun")
+
+	opts, err = parseCompactArgs([]string{"--all", "--apply", "--min-age=15", "--exclude", "a, b ,c", "--exclude=d", "--idle-hours", "6", "--min-ctx=50000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.minAge != 15*time.Minute || opts.idle != 6*time.Hour || opts.minCtx != 50_000 {
+		t.Fatalf("thresholds=%+v", opts)
+	}
+	if !opts.apply || !opts.all {
+		t.Fatalf("apply=%v all=%v, want both true", opts.apply, opts.all)
 	}
 	if want := []string{"a", "b", "c", "d"}; !reflect.DeepEqual(opts.exclude, want) {
 		t.Fatalf("exclude=%v, want %v", opts.exclude, want)
 	}
 
-	for _, args := range [][]string{{"--min-age"}, {"--min-age", "-1"}, {"--min-age", "x"}, {"--min-age", "1", "--min-age", "2"}, {"--exclude"}, {"--bogus"}} {
+	for _, args := range [][]string{
+		{"--min-age"}, {"--min-age", "-1"}, {"--min-age", "x"}, {"--min-age", "1", "--min-age", "2"},
+		{"--idle-hours"}, {"--idle-hours", "-1"}, {"--idle-hours", "x"}, {"--idle-hours", "1", "--idle-hours=2"},
+		{"--min-ctx"}, {"--min-ctx", "-1"}, {"--min-ctx", "x"}, {"--min-ctx=1", "--min-ctx", "2"},
+		{"--exclude"}, {"--apply=yes"}, {"--all=1"}, {"--bogus"},
+	} {
 		if _, err := parseCompactArgs(args); err == nil {
 			t.Errorf("parseCompactArgs(%v) succeeded, want error", args)
+		}
+	}
+}
+
+// compactApp wires a fleet with two policy-eligible agents (alpha-child and
+// lab-scratch) to in-memory hooks, so no test can reach tmux.
+func compactApp(t *testing.T, sent *[]string, panes map[string]string) *app {
+	t.Helper()
+	t.Setenv("AGENT", "server-main")
+	t.Setenv("TMUX", "")
+	fleet, states, cacheStates, commands := policyTestInputs(t)
+	return &app{
+		config: bpconfig.Config{StateDir: t.TempDir()},
+		out:    testOutput(t),
+		loadFleet: func() (book.Fleet, map[string]book.State, error) {
+			return fleet, states, nil
+		},
+		loadCache:    func(map[string]string) map[string]bpcache.State { return cacheStates },
+		loadCommands: func() (map[string]string, error) { return commands, nil },
+		capturePane: func(name string) (string, error) {
+			if pane, ok := panes[name]; ok {
+				return pane, nil
+			}
+			return idlePane, nil
+		},
+		deliverMessage: func(name, from, message string) (bool, string, error) {
+			if sent == nil {
+				t.Fatalf("compact delivered %s to %s without --apply", message, name)
+			}
+			*sent = append(*sent, name+":"+message)
+			return false, "", nil
+		},
+	}
+}
+
+const (
+	idlePane  = "❯ \n  ready\n"
+	busyPane  = "✻ Working… (23s · Esc to interrupt)\n❯ \n"
+	typedPane = "❯ half-written question\n"
+)
+
+func TestCompactListsWithoutSendingByDefault(t *testing.T) {
+	a := compactApp(t, nil, nil)
+	if err := a.compact(nil); err != nil {
+		t.Fatal(err)
+	}
+	got := readTestOutput(t, a.out)
+	want := fmt.Sprintf("%-24s %-10s %-10s %s\n", "AGENT", "KONUSMA", "CONTEXT", "KARAR") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha", "24h", "900k", "taze konusma (<24sa)") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "gonderilecek") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-grandchild", "25h", "200k", "MESGUL, atlandi") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "beta", "2d", "200k", "context kucuk") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "orphan", "25h", "200k", "claude degil (codex)") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "lab-scratch", "-", "-", "transcript okunamadi") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "closed-agent", "25h", "200k", "kapali") +
+		"gonderilecek: 1, atlanan: 6 (gondermek icin: bp compact --apply)\n"
+	if got != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(a.config.StateDir, "compact.json")); !os.IsNotExist(err) {
+		t.Fatalf("listing touched compact.json: %v", err)
+	}
+}
+
+// --dry-run and --policy are synonyms of the default, so they must print the
+// same table and still send nothing.
+func TestCompactSynonymsMatchDefault(t *testing.T) {
+	first := compactApp(t, nil, nil)
+	if err := first.compact(nil); err != nil {
+		t.Fatal(err)
+	}
+	second := compactApp(t, nil, nil)
+	if err := second.compact([]string{"--policy", "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readTestOutput(t, second.out), readTestOutput(t, first.out); got != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCompactApplySendsAndRecordsState(t *testing.T) {
+	var sent []string
+	a := compactApp(t, &sent, nil)
+	if err := a.compact([]string{"--apply"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"alpha-child:/compact"}; !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent=%v, want %v", sent, want)
+	}
+	got := readTestOutput(t, a.out)
+	if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "gonderildi")) {
+		t.Fatalf("table does not report the send:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "gonderildi: 1, atlanan: 6\n") {
+		t.Fatalf("summary missing:\n%s", got)
+	}
+	state := loadCompactState(filepath.Join(a.config.StateDir, "compact.json"))
+	if _, ok := state["alpha-child"]; !ok || len(state) != 1 {
+		t.Fatalf("compact state=%v", state)
+	}
+}
+
+func TestCompactSkipsBusyAndTypedTargets(t *testing.T) {
+	for name, pane := range map[string]string{"busy": busyPane, "typing": typedPane} {
+		t.Run(name, func(t *testing.T) {
+			var sent []string
+			a := compactApp(t, &sent, map[string]string{"alpha-child": pane})
+			if err := a.compact([]string{"--apply"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(sent) != 0 {
+				t.Fatalf("sent=%v, want nothing", sent)
+			}
+			got := readTestOutput(t, a.out)
+			if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "MESGUL, atlandi")) {
+				t.Fatalf("table does not report the skip:\n%s", got)
+			}
+			if !strings.HasSuffix(got, "gonderildi: 0, atlanan: 7\n") {
+				t.Fatalf("summary:\n%s", got)
+			}
+			if _, err := os.Stat(filepath.Join(a.config.StateDir, "compact.json")); !os.IsNotExist(err) {
+				t.Fatalf("a skipped compact wrote state: %v", err)
+			}
+		})
+	}
+}
+
+// An unreadable pane counts as busy: bp never interrupts what it cannot see.
+func TestCompactSkipsUnreadablePane(t *testing.T) {
+	var sent []string
+	a := compactApp(t, &sent, nil)
+	a.capturePane = func(string) (string, error) { return "", errors.New("no such session") }
+	if err := a.compact([]string{"--apply"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent=%v, want nothing", sent)
+	}
+}
+
+func TestCompactAllKeepsTheDescendantSweep(t *testing.T) {
+	var sent []string
+	// --all has no idle or context thresholds, so only the pane says "busy".
+	a := compactApp(t, &sent, map[string]string{"alpha-grandchild": busyPane})
+	if err := a.compact([]string{"--all", "--exclude", "beta,does-not-exist", "--apply"}); err != nil {
+		t.Fatal(err)
+	}
+	// Every live descendant of server-main except the excluded one — no idle or
+	// context thresholds, exactly as --all behaved before.
+	want := []string{"alpha:/compact", "alpha-child:/compact", "orphan:/compact"}
+	if !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent=%v, want %v", sent, want)
+	}
+	got := readTestOutput(t, a.out)
+	for _, line := range []string{
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-grandchild", "25h", "200k", "MESGUL, atlandi"),
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "beta", "2d", "200k", "haric tutuldu"),
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "closed-agent", "25h", "200k", "kapali"),
+		"bilinmeyen exclude: does-not-exist\n",
+		"gonderildi: 3, atlanan: 3\n",
+	} {
+		if !strings.Contains(got, line) {
+			t.Fatalf("output missing %q:\n%s", line, got)
+		}
+	}
+}
+
+func statusTestApp(t *testing.T) *app {
+	t.Helper()
+	fleet := book.Fleet{
+		Root:  "server-main",
+		Order: []string{"server-main", "alpha", "closed-agent"},
+		Agents: map[string]book.Agent{
+			"server-main":  {Name: "server-main", Status: "open", Folder: "/srv"},
+			"alpha":        {Name: "alpha", Status: "open", Folder: "/srv/alpha"},
+			"closed-agent": {Name: "closed-agent", Status: "closed", Folder: "/srv/closed"},
+		},
+		Parents: map[string]string{"server-main": "", "alpha": "server-main", "closed-agent": "alpha"},
+	}
+	states := map[string]book.State{"server-main": {Alive: true}, "alpha": {Alive: true, Busy: true}}
+	cacheStates := map[string]bpcache.State{
+		"alpha": {Known: true, Age: 90 * time.Second, CtxTokens: 312_000, LastHumanAge: 25 * time.Hour, Model: "claude-opus-5"},
+		// Unknown transcript: no numbers may be invented for it.
+		"closed-agent": {LastHumanAge: -1},
+	}
+	return &app{
+		out:       testOutput(t),
+		loadFleet: func() (book.Fleet, map[string]book.State, error) { return fleet, states, nil },
+		loadCache: func(map[string]string) map[string]bpcache.State { return cacheStates },
+	}
+}
+
+// The human table is what every agent and script reads today: --json must be
+// additive, never a reformat.
+func TestStatusHumanOutputIsUnchanged(t *testing.T) {
+	a := statusTestApp(t)
+	if err := a.status(nil); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK") +
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "alpha", "working", "warm 1m 312k", "25h", "open", "") +
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "closed-agent", "closed", "-", "-", "closed", "") +
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "server-main", "idle", "-", "-", "open", "")
+	if got := readTestOutput(t, a.out); got != want {
+		t.Fatalf("output:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestStatusJSON(t *testing.T) {
+	a := statusTestApp(t)
+	if err := a.status([]string{"--json"}); err != nil {
+		t.Fatal(err)
+	}
+	raw := readTestOutput(t, a.out)
+	var report struct {
+		Agents []map[string]any `json:"agents"`
+		Codex  []map[string]any `json:"codex"`
+	}
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		t.Fatalf("not one JSON object: %v\n%s", err, raw)
+	}
+	if len(report.Agents) != 3 || len(report.Codex) != 0 {
+		t.Fatalf("report=%+v", report)
+	}
+	alpha := report.Agents[0]
+	want := map[string]any{
+		"name": "alpha", "tmux": "working", "status": "open", "folder": "/srv/alpha", "parent": "server-main",
+		"ctx_tokens": float64(312_000), "cache_age_seconds": float64(90), "last_human_age_seconds": float64(90_000),
+		"model": "claude-opus-5",
+	}
+	if !reflect.DeepEqual(alpha, want) {
+		t.Fatalf("alpha=%+v\nwant=%+v", alpha, want)
+	}
+	// Unknown numbers are omitted, never emitted as zeros that read as facts.
+	closed := report.Agents[1]
+	for _, key := range []string{"ctx_tokens", "cache_age_seconds", "last_human_age_seconds", "model"} {
+		if _, ok := closed[key]; ok {
+			t.Fatalf("closed-agent carries %s: %+v", key, closed)
+		}
+	}
+	if closed["tmux"] != "closed" || closed["name"] != "closed-agent" {
+		t.Fatalf("closed-agent=%+v", closed)
+	}
+}
+
+func TestStatusRejectsUnknownOption(t *testing.T) {
+	a := &app{}
+	if err := a.status([]string{"--nope"}); err == nil || !strings.Contains(err.Error(), "unknown status option") {
+		t.Fatalf("error=%v", err)
+	}
+	if err := a.status([]string{"--json", "--json"}); err == nil {
+		t.Fatal("repeated --json accepted")
+	}
+}
+
+// "bp status --help" once registered "--help" into the agentbook: help is
+// answered in the dispatcher, before any command sees its arguments.
+func TestHelpIsAnsweredBeforeCommandLogic(t *testing.T) {
+	for _, args := range [][]string{
+		{"status", "--help"}, {"status", "-h"}, {"tree", "--help"}, {"compact", "--help"},
+		{"peek", "-h"}, {"close", "--help"}, {"open", "--help"}, {"msg", "--help"},
+		{"compact", "--apply", "--help"}, {"fed", "--help"},
+	} {
+		out := testOutput(t)
+		a := &app{
+			out: out,
+			loadFleet: func() (book.Fleet, map[string]book.State, error) {
+				t.Fatalf("%v reached command logic", args)
+				return book.Fleet{}, nil, nil
+			},
+			deliverMessage: func(string, string, string) (bool, string, error) {
+				t.Fatalf("%v reached delivery", args)
+				return false, "", nil
+			},
+		}
+		if err := a.run(args); err != nil {
+			t.Fatalf("run(%v)=%v", args, err)
+		}
+		if got := readTestOutput(t, out); got != usage+"\n" {
+			t.Fatalf("run(%v) printed %q", args, got)
+		}
+	}
+}
+
+// A message whose text happens to contain --help is still a message.
+func TestHelpDoesNotSwallowMessageText(t *testing.T) {
+	t.Setenv("AGENT", "ada")
+	t.Setenv("TMUX", "")
+	var delivered string
+	a := &app{
+		config:        bpconfig.Config{StateDir: t.TempDir()},
+		out:           testOutput(t),
+		sessionExists: func(string) bool { return true },
+		deliverMessage: func(name, from, message string) (bool, string, error) {
+			delivered = message
+			return false, "", nil
+		},
+	}
+	if err := a.run([]string{"msg", "alp", "run", "--help"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "[ada] run --help"; delivered != want {
+		t.Fatalf("delivered=%q, want %q", delivered, want)
+	}
+}
+
+// An argument starting with "-" must never be taken for an agent name.
+func TestAgentNameArgumentsRejectFlags(t *testing.T) {
+	a := &app{ctx: context.Background(), config: bpconfig.Config{StateDir: t.TempDir()}, out: testOutput(t)}
+	cases := []struct {
+		run  func() error
+		want string
+	}{
+		{func() error { return a.tree([]string{"--nope"}) }, "unknown tree option: --nope"},
+		{func() error { return a.close([]string{"--nope"}) }, "unknown close option: --nope"},
+		{func() error { return a.peek([]string{"--nope"}) }, "unknown peek option: --nope"},
+		{func() error { return a.message([]string{"--nope", "hi"}) }, "unknown msg option: --nope"},
+		{func() error { return a.open([]string{"--nope", "/tmp"}) }, "unknown open option: --nope"},
+	}
+	for _, tc := range cases {
+		if err := tc.run(); err == nil || err.Error() != tc.want {
+			t.Errorf("error=%v, want %q", err, tc.want)
 		}
 	}
 }

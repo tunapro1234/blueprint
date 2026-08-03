@@ -261,4 +261,6 @@ iş mesajı sonra gider — goal'suz iş mesajı sürüklenmesin.
 - **HN postu (şimdilik)** — "bir tmux orkestratörü daha" pazarı dolu ve HN yorumları acımasız
   ("overengineering", "yeni TODO app"). Post açılacaksa açı ölçüm verisi olmalı, araç değil.
 - **`compact_before_task` agentbook bayrağı** — MVP'ye alınmadı.
-- **`--warm-window` / `--parent` gibi ek bayraklar** — sabit varsayılanlar yeterli.
+- **`--warm-window` gibi ayar bayrakları** — sabit varsayılanlar yeterli. (`bp open --parent/--role`
+  bu maddeden ÇIKARILDI: 2026-08-01'de yazıldı — ebeveyn yol öneğinden türetilemediği için
+  bayrak tek çözümdü, sabit varsayılan yanlış kayıt üretiyordu.)

@@ -65,13 +65,17 @@ type Usage struct {
 }
 
 type UsageSample struct {
-	TS            string            `json:"ts"`
-	Claude5H      Number            `json:"claude_5h"`
-	Claude7D      Number            `json:"claude_7d"`
-	ClaudeFable7D Number            `json:"claude_fable_7d"`
-	Codex5H       Number            `json:"codex_5h"`
-	Codex7D       Number            `json:"codex_7d"`
-	Resets        map[string]string `json:"resets"`
+	TS            string `json:"ts"`
+	Claude5H      Number `json:"claude_5h"`
+	Claude7D      Number `json:"claude_7d"`
+	ClaudeFable7D Number `json:"claude_fable_7d"`
+	// `codex_5h` holds the API's primary quota window regardless of its real
+	// length (weekly on the current prolite plan) and `codex_7d` holds the
+	// secondary window, which plans like prolite do not have. The keys are the
+	// collector's contract; only the display drops the window label.
+	Codex5H Number            `json:"codex_5h"`
+	Codex7D Number            `json:"codex_7d"`
+	Resets  map[string]string `json:"resets"`
 }
 
 type Agents struct {

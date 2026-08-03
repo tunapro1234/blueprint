@@ -89,7 +89,32 @@ func TestRenderOverviewShowsStatesAndResetCountdowns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Claude 5h", "95%", "critical", "2h 30m", "Claude 7d", "warning", "Codex 5h", "normal"} {
+	for _, want := range []string{"Claude 5h", "95%", "critical", "2h 30m", "Claude 7d", "warning", "Codex", "normal"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, output.String())
+		}
+	}
+	// The codex meter carries no window label (its length is plan-dependent)
+	// and the absent secondary window must not produce a row at all.
+	if strings.Contains(output.String(), "Codex 5h") || strings.Contains(output.String(), "Codex 7d") {
+		t.Errorf("codex meter must not claim a window length:\n%s", output.String())
+	}
+}
+
+func TestRenderOverviewKeepsCodexSecondaryWhenReported(t *testing.T) {
+	doc, err := Decode([]byte(`{"usage":{"current":{
+  "ts":"2026-07-10T12:00:00Z",
+  "codex_5h":10,"codex_7d":44,
+  "resets":{"codex_5h":"2026-07-10T14:30:00Z","codex_7d":"2026-07-11T12:00:00Z"}
+}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := Render(&output, doc, "overview", RenderOptions{Now: time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Codex ", "10%", "Codex 7d", "44%"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, output.String())
 		}

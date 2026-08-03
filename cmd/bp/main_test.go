@@ -731,6 +731,16 @@ func TestParseCompactArgs(t *testing.T) {
 		t.Fatalf("exclude=%v, want %v", opts.exclude, want)
 	}
 
+	// Combinations that mean something and must keep parsing.
+	for _, args := range [][]string{
+		{"--apply"}, {"--dry-run"}, {"--policy"}, {"--policy", "--apply"}, {"--all", "--apply"},
+		{"--all", "--exclude", "a"}, {"--idle-hours", "6", "--min-ctx=50000"},
+	} {
+		if _, err := parseCompactArgs(args); err != nil {
+			t.Errorf("parseCompactArgs(%v) = %v, want success", args, err)
+		}
+	}
+
 	for _, args := range [][]string{
 		{"--min-age"}, {"--min-age", "-1"}, {"--min-age", "x"}, {"--min-age", "1", "--min-age", "2"},
 		{"--idle-hours"}, {"--idle-hours", "-1"}, {"--idle-hours", "x"}, {"--idle-hours", "1", "--idle-hours=2"},
@@ -740,6 +750,66 @@ func TestParseCompactArgs(t *testing.T) {
 		if _, err := parseCompactArgs(args); err == nil {
 			t.Errorf("parseCompactArgs(%v) succeeded, want error", args)
 		}
+	}
+
+	// Self-contradictory pairs: a no-op synonym naming the default must never
+	// lose silently to the flag that overrides that default. Both orders must
+	// fail, and the message must name both flags so the typo is obvious.
+	for _, contradiction := range []struct{ args, mention []string }{
+		{[]string{"--apply", "--dry-run"}, []string{"--apply", "--dry-run"}},
+		{[]string{"--dry-run", "--apply"}, []string{"--apply", "--dry-run"}},
+		{[]string{"--all", "--policy"}, []string{"--all", "--policy"}},
+		{[]string{"--policy", "--all"}, []string{"--all", "--policy"}},
+	} {
+		_, err := parseCompactArgs(contradiction.args)
+		if err == nil {
+			t.Errorf("parseCompactArgs(%v) succeeded, want error", contradiction.args)
+			continue
+		}
+		for _, flag := range contradiction.mention {
+			if !strings.Contains(err.Error(), flag) {
+				t.Errorf("parseCompactArgs(%v) error %q does not mention %s", contradiction.args, err, flag)
+			}
+		}
+	}
+}
+
+// The contradiction is caught in parsing: bp compact --apply --dry-run must
+// fail before the fleet is read, before any pane is captured and above all
+// before anything is delivered.
+func TestCompactApplyWithDryRunNeverReachesFleet(t *testing.T) {
+	for _, args := range [][]string{{"--apply", "--dry-run"}, {"--dry-run", "--apply"}, {"--all", "--policy", "--apply"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Setenv("AGENT", "server-main")
+			t.Setenv("TMUX", "")
+			a := &app{
+				config: bpconfig.Config{StateDir: t.TempDir()},
+				out:    testOutput(t),
+				loadFleet: func() (book.Fleet, map[string]book.State, error) {
+					t.Fatalf("compact %v loaded the fleet", args)
+					return book.Fleet{}, nil, nil
+				},
+				loadCache: func(map[string]string) map[string]bpcache.State {
+					t.Fatalf("compact %v read the cache", args)
+					return nil
+				},
+				loadCommands: func() (map[string]string, error) { t.Fatalf("compact %v listed panes", args); return nil, nil },
+				capturePane: func(string) (string, error) {
+					t.Fatalf("compact %v captured a pane", args)
+					return "", nil
+				},
+				deliverMessage: func(name, from, message string) (bool, string, error) {
+					t.Fatalf("compact %v delivered %s to %s", args, message, name)
+					return false, "", nil
+				},
+			}
+			if err := a.compact(args); err == nil {
+				t.Fatalf("compact %v succeeded, want error", args)
+			}
+			if got := readTestOutput(t, a.out); got != "" {
+				t.Fatalf("compact %v printed:\n%s", args, got)
+			}
+		})
 	}
 }
 

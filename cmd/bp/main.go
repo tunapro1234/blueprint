@@ -1540,6 +1540,13 @@ func compactValue(args []string, index int, name, want string) (string, int, err
 func parseCompactArgs(args []string) (compactOptions, error) {
 	opts := defaultCompactOptions()
 	seen := map[string]bool{}
+	// The two back-compat no-ops name the defaults that --apply and --all
+	// override. Asking for both halves of such a pair is self-contradictory,
+	// and letting the explicit flag win silently resolves it the dangerous
+	// way: --apply --dry-run would send, --all --policy would sweep wider
+	// than asked. Refuse instead, here in parsing, before anything is read
+	// or delivered.
+	dryRun, policy := false, false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		name, _, hasValue := strings.Cut(arg, "=")
@@ -1561,9 +1568,12 @@ func parseCompactArgs(args []string) (compactOptions, error) {
 			opts.apply = true
 		case "--all":
 			opts.all = true
-		case "--dry-run", "--policy":
-			// Back-compat no-ops: listing is the default (--dry-run) and the
-			// policy selection is the default selector (--policy).
+		case "--dry-run":
+			// Back-compat no-op: listing is already the default.
+			dryRun = true
+		case "--policy":
+			// Back-compat no-op: the policy selection is already the default.
+			policy = true
 		case "--min-age":
 			value, next, err := compactValue(args, index, name, "a value in minutes")
 			if err != nil {
@@ -1620,6 +1630,12 @@ func parseCompactArgs(args []string) (compactOptions, error) {
 		default:
 			return opts, fmt.Errorf("unknown compact option: %s", arg)
 		}
+	}
+	if opts.apply && dryRun {
+		return opts, fmt.Errorf("--apply and --dry-run contradict each other: bp compact alone already lists without sending")
+	}
+	if opts.all && policy {
+		return opts, fmt.Errorf("--all and --policy contradict each other: --all sweeps the whole subtree, --policy is the default selector")
 	}
 	return opts, nil
 }

@@ -23,7 +23,8 @@ the printed channel id follows it with `bp qstat`. An agent that is not open at
 all keeps its messages until it opens. Read what an agent says with `bp peek
 <name>`, and see the fleet with `bp status` or `bp tree` (`closed` / `idle` /
 `working` / `dead` — `dead` means the session is up but its pane no longer runs
-an agent).
+an agent). `bp status --json` prints the same fleet as one JSON object, with
+context tokens, conversation age, and model where they are known.
 
 `bp` stamps every message with `[<sender>] `, taken from the tmux session the
 command runs in; `AGENT` is honoured only outside tmux. Never write your own
@@ -35,6 +36,14 @@ would break the command, so authority is checked instead: only the fleet root or
 an ancestor of the target may send one, and sideways or upward is refused.
 `/goal <text>` is rewritten to `/goal [<sender>] <text>` so the target records
 who set the goal; a bare `/goal` passes through untouched.
+
+`bp compact` looks for agents worth compacting — an open, not busy `claude` pane
+whose last human turn is older than `--idle-hours` (24) and whose context is
+above `--min-ctx` (200000 tokens) — and prints one decision row per agent. It
+sends nothing; `--apply` is what sends. Under `--apply` every pane is read again
+right before its `/compact`, and a target that has started working is skipped
+rather than queued. `--all` sweeps every descendant of the sender instead of the
+policy set.
 
 The fleet lives in one agentbook, `/srv/server-main/agentbook.json` (override
 with `AGENTBOOK`). `bp open` takes `--parent <name>` and `--role <text>` to

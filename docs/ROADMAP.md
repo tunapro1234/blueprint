@@ -255,12 +255,16 @@ iş mesajı sonra gider — goal'suz iş mesajı sürüklenmesin.
 
 ## Reddedilenler (tekrar tartışılmasın diye)
 
-- **Zamana dayalı otomatik compaction** — bedeli peşin, boşta agent zaten maliyetsiz.
-  Yerine teslim anında compact.
+- **Zamana dayalı OTOMATİK compaction** — bedeli peşin, boşta agent zaten maliyetsiz.
+  Yerine teslim anında compact. (Reddedilen "otomatik" kısmı: zamanlayıcı. `bp compact`'in
+  boşta-kalma eşiği bu maddeye girmez — elle çalıştırılır ve varsayılanı listelemektir;
+  `--apply` hiçbir crona/otomatiğe bağlı değil, öyle de kalacak.)
 - **cmux tarzı ayrı terminal emülatörü** — fazla bloat; tmux yeterli.
 - **HN postu (şimdilik)** — "bir tmux orkestratörü daha" pazarı dolu ve HN yorumları acımasız
   ("overengineering", "yeni TODO app"). Post açılacaksa açı ölçüm verisi olmalı, araç değil.
 - **`compact_before_task` agentbook bayrağı** — MVP'ye alınmadı.
 - **`--warm-window` gibi ayar bayrakları** — sabit varsayılanlar yeterli. (`bp open --parent/--role`
   bu maddeden ÇIKARILDI: 2026-08-01'de yazıldı — ebeveyn yol öneğinden türetilemediği için
-  bayrak tek çözümdü, sabit varsayılan yanlış kayıt üretiyordu.)
+  bayrak tek çözümdü, sabit varsayılan yanlış kayıt üretiyordu. `bp compact --idle-hours/--min-ctx`
+  de çıkarıldı: eşikler politika kararıdır, varsayılanları sabit kalır ama tek seferlik
+  incelemede kaydırılabilmesi listeleme modunu kullanışlı kılıyor.)

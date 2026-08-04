@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,8 +10,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"blueprint/internal/book"
+	bptmux "blueprint/internal/tmux"
 )
 
 // rename renames an agent everywhere bp knows about it: the tmux session, the
@@ -24,6 +27,23 @@ import (
 //
 // Historical records (timeline.md, policy.log, msgq/done, daily notes) are left
 // alone on purpose: they correctly hold the name the agent had that day.
+//
+// ORDER MATTERS, and it is the opposite of the obvious one. Four of the five
+// steps are local file or tmux edits that either work or fail loudly. The fifth
+// — making the agent retitle its own transcript, by typing /rename into its
+// composer — is the only one that can fail for reasons bp does not control (a
+// composer in vim INSERT mode, a mid-turn pane, a TUI that ate the keystrokes).
+// It used to run LAST as a best-effort warning, which is how `bp rename
+// worktrack-main worktrack` produced a half-renamed agent: session and
+// agentbook on the new name, transcript still on the old one. That is not
+// cosmetic — bp finds an agent's transcript by matching the in-file custom
+// title against the agent name, so the CACHE column went blank, bp compact
+// reported "transcript okunamadi", and `rush worktrack` had nothing to attach.
+//
+// So the unreliable step goes FIRST and everything else is downstream of it. If
+// the pane refuses, nothing else has happened yet: bp exits non-zero, says
+// plainly that nothing was renamed and prints the command to run by hand. That
+// is all-or-nothing without needing a rollback path that could itself fail.
 func (a *app) rename(args []string) error {
 	dry := false
 	var positional []string
@@ -77,7 +97,27 @@ func (a *app) rename(args []string) error {
 		fmt.Fprintf(a.out, prefix+format+"\n", args...)
 	}
 
-	// 1. tmux session.
+	// 1. Transcript title, via the agent's own pane. First, because it is the
+	// step that can fail: everything below is only reached once the agent's own
+	// transcript has been observed carrying the new name. Only Claude understands
+	// /rename; typing it at a codex or shell pane would just run it as a command,
+	// so those panes skip the step entirely (nothing to retitle).
+	switch {
+	case !liveOld:
+		fmt.Fprintf(a.out, "no live tmux session for %s (agentbook only)\n", old)
+	case !a.paneRunsClaude(old):
+		fmt.Fprintf(a.out, "the %s pane is not a Claude agent: no transcript title to change\n", old)
+	case dry:
+		report("send /rename %s to the %s pane and wait for its transcript title", name, old)
+	default:
+		if err := a.renamePane(fleet, old, name); err != nil {
+			a.reportRenameRefused(old, name, err)
+			return errReported
+		}
+		report("send /rename %s to the %s pane and wait for its transcript title", name, old)
+	}
+
+	// 2. tmux session.
 	if liveOld {
 		if !dry {
 			if err := a.tmux.RenameSession(a.ctx, old, name); err != nil {
@@ -85,11 +125,9 @@ func (a *app) rename(args []string) error {
 			}
 		}
 		report("rename tmux session %s -> %s", old, name)
-	} else {
-		fmt.Fprintf(a.out, "no live tmux session for %s (agentbook only)\n", old)
 	}
 
-	// 2. Agentbooks.
+	// 3. Agentbooks.
 	if dry {
 		for _, change := range a.renamePreview(old, name) {
 			report("update %s", change)
@@ -104,22 +142,9 @@ func (a *app) rename(args []string) error {
 		}
 	}
 
-	// 3. Usage state.
+	// 4. Usage state.
 	for _, change := range a.renameUsage(old, name, dry) {
 		report("update %s", change)
-	}
-
-	// 4. Transcript title, via the agent's own pane. Only Claude understands
-	// /rename; typing it at a codex or shell pane would just run it as a command.
-	if liveOld && a.paneRunsClaude(name, old) {
-		if dry {
-			report("send /rename %s to the pane", name)
-		} else if err := a.tmux.Send(a.ctx, name, "/rename "+name); err != nil {
-			fmt.Fprintf(a.err, "warning: could not send /rename to the pane: %v\n", err)
-			fmt.Fprintf(a.err, "         run `/rename %s` inside %s yourself, or bp status will keep the old title\n", name, name)
-		} else {
-			report("send /rename %s to the pane", name)
-		}
 	}
 
 	// 5. Live code references, reported but never edited.
@@ -133,23 +158,166 @@ func (a *app) rename(args []string) error {
 	return nil
 }
 
+const (
+	// renamePollInterval and renamePollAttempts bound the wait for the agent to
+	// record its new title (~10s in total). The agent writes the custom-title
+	// record as it processes the slash command, so this is a short wait on a
+	// live pane, not a poll for something that may never come.
+	renamePollInterval = 500 * time.Millisecond
+	renamePollAttempts = 20
+)
+
+// renamePane makes the agent retitle its own transcript and does not return
+// until that is a fact on disk.
+//
+// ClearComposer runs first — that is what it was written for. The reported
+// failure was a composer that LOOKED empty but made the pre-send check report
+// "composer is not empty", so the /rename never went in. ClearComposer settles
+// that state (Escape, then C-u only when nothing visible is typed), and refuses
+// a working pane, which is also this command's refusal: a rename is never worth
+// interrupting a turn for.
+//
+// Verification reads the TRANSCRIPT, never the screen. The rendered TUI title
+// bar is not evidence — some panes do not draw one at all — while the transcript
+// is exactly what every other bp command resolves an agent by, so a title bp can
+// read is the only outcome that counts as a successful rename.
+func (a *app) renamePane(fleet book.Fleet, old, name string) error {
+	if err := a.tmux.ClearComposer(a.ctx, old); err != nil {
+		return err
+	}
+	// ErrUnverified means the keystrokes went in but nothing confirmed the
+	// submit; it must not be re-sent, and the transcript below is a far better
+	// witness than the composer anyway. Every other error is a real failure to
+	// deliver, so there is nothing to wait for.
+	if err := a.tmux.Send(a.ctx, old, "/rename "+name); err != nil && !errors.Is(err, bptmux.ErrUnverified) {
+		return err
+	}
+	folders := a.agentFolders(fleet, old)
+	if len(folders) == 0 {
+		// Nothing to read the title out of. Rare (a live session that is in no
+		// agentbook and whose pane directory tmux would not report), and refusing
+		// here would make such an agent unrenameable, so this continues — loudly.
+		fmt.Fprintf(a.err, "warning: no folder known for %s, so its transcript title could not be verified\n", old)
+		fmt.Fprintf(a.err, "         check it with: bp status\n")
+		return nil
+	}
+	if !a.awaitTranscriptTitle(folders, old, name) {
+		return fmt.Errorf("the agent did not retitle its transcript to %q within %s", name, renamePollInterval*renamePollAttempts)
+	}
+	return nil
+}
+
+// awaitTranscriptTitle polls the agent's own session file until it reports the
+// new custom title. It resolves that file under the OLD name first and then
+// watches those exact files, because /rename appends a fresh custom-title record
+// to the running session rather than rewriting the first one — so the same file
+// simply starts answering to the new name.
+//
+// When the old title resolves to nothing (a session that was never titled, or
+// one already broken by a half-finished rename) it falls back to the looser
+// question bp status itself asks: does any transcript in the folder now carry
+// the new name. The precise check is preferred whenever it is available, because
+// a folder can hold a stale transcript from an agent that used to have this name.
+func (a *app) awaitTranscriptTitle(folders []string, old, name string) bool {
+	root := bptmux.ClaudeProjectsRoot()
+	var paths []string
+	for _, folder := range folders {
+		if path, ok := bptmux.ResumeSessionPath(root, folder, old); ok {
+			paths = append(paths, path)
+		}
+	}
+	for attempt := 0; ; attempt++ {
+		for _, path := range paths {
+			if title, ok := bptmux.ReadCustomTitle(path); ok && title == name {
+				return true
+			}
+		}
+		if len(paths) == 0 {
+			for _, folder := range folders {
+				if _, ok := bptmux.ResumeSessionPath(root, folder, name); ok {
+					return true
+				}
+			}
+		}
+		if attempt >= renamePollAttempts {
+			return false
+		}
+		a.sleep(renamePollInterval)
+	}
+}
+
+// agentFolders lists the working directories whose Claude project directory may
+// hold the agent's transcripts, best first: the agentbook folder (annotations
+// like "/srv (home: /srv/server-main)" stripped), then the directory tmux
+// started the session in and the pane's current one. Claude munges the cwd it
+// was launched in into its projects path, and a book entry can name a different
+// directory than the session was actually opened in, so both are worth asking.
+func (a *app) agentFolders(fleet book.Fleet, session string) []string {
+	var folders []string
+	add := func(folder string) {
+		if folder == "" {
+			return
+		}
+		for _, existing := range folders {
+			if existing == folder {
+				return
+			}
+		}
+		folders = append(folders, folder)
+	}
+	if entry, ok := fleet.Agents[session]; ok {
+		add(book.FirstPath(entry.Folder))
+	}
+	locations, err := a.tmux.Locations(a.ctx)
+	if err != nil {
+		return folders
+	}
+	for _, location := range locations {
+		if location.Session != session {
+			continue
+		}
+		add(location.StartDir)
+		add(location.CurrentDir)
+	}
+	return folders
+}
+
+// reportRenameRefused explains a refused rename. The point of the message is
+// that the operator is NOT left guessing which half of the rename happened:
+// nothing did, and the way forward is one command.
+func (a *app) reportRenameRefused(old, name string, err error) {
+	fmt.Fprintf(a.err, "could not make %s retitle its own transcript: %v\n", old, err)
+	fmt.Fprintf(a.err, "nothing was renamed: tmux session, agentbooks and usage state are all still on %s.\n", old)
+	if errors.Is(err, bptmux.ErrBusy) {
+		fmt.Fprintf(a.err, "the pane is mid-turn and must not be interrupted; wait for it to finish (bp peek %s), then run: bp rename %s %s\n", old, old, name)
+		return
+	}
+	fmt.Fprintf(a.err, "type this inside the pane by hand (rush %s; Escape, then Ctrl-u first if the composer is stuck):\n", old)
+	fmt.Fprintf(a.err, "  /rename %s\n", name)
+	fmt.Fprintf(a.err, "then run: bp rename %s %s\n", old, name)
+}
+
+// sleep waits through the client's clock, so tests that stub it out do not spend
+// real seconds waiting for a transcript a fake tmux will never write.
+func (a *app) sleep(d time.Duration) {
+	if a.tmux != nil && a.tmux.Sleep != nil {
+		a.tmux.Sleep(d)
+		return
+	}
+	time.Sleep(d)
+}
+
 var agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// paneRunsClaude reports whether the session's pane is a Claude agent, checking
-// under both names since the tmux rename may already have happened. A pane whose
-// command cannot be read is assumed not to be Claude: sending a slash command to
-// a shell would type it as a shell command.
-func (a *app) paneRunsClaude(names ...string) bool {
+// paneRunsClaude reports whether the session's pane is a Claude agent. A pane
+// whose command cannot be read is assumed not to be Claude: sending a slash
+// command to a shell would type it as a shell command.
+func (a *app) paneRunsClaude(session string) bool {
 	commands, err := a.tmux.Commands(a.ctx)
 	if err != nil {
 		return false
 	}
-	for _, name := range names {
-		if strings.Contains(commands[name], "claude") {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(commands[session], "claude")
 }
 
 // isProse reports whether a hit is documentation rather than something that

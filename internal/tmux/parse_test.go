@@ -415,8 +415,10 @@ func TestSendTabGivesUpWhenAffordancePersists(t *testing.T) {
 			"target\t900\n", "target\t900\n", "target\t900\n",
 		},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "a very large pasted message"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "a very large pasted message"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countEnter(h.mutations); got != 0 {
 		t.Fatalf("expected NO Enter ever, got %d: %v", got, h.mutations)
@@ -435,8 +437,10 @@ func TestSendRetryStopsAtBound(t *testing.T) {
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countEnter(h.mutations); got != 3 {
 		t.Fatalf("expected 3 Enter presses (1+2 bound), got %d: %v", got, h.mutations)
@@ -454,8 +458,10 @@ func TestSendRetryStopsWhenUserEditsAfterInjection(t *testing.T) {
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countEnter(h.mutations); got != 1 {
 		t.Fatalf("expected 1 Enter press, got %d: %v", got, h.mutations)
@@ -473,8 +479,10 @@ func TestSendRetryStopsWhenClientActiveAfterInjection(t *testing.T) {
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t1000\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countEnter(h.mutations); got != 1 {
 		t.Fatalf("expected 1 Enter press, got %d: %v", got, h.mutations)
@@ -545,8 +553,10 @@ func TestSendRecoversMultilineStuckComposerWithBackspace(t *testing.T) {
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countKey(h.mutations, "BSpace"); got != 1 {
 		t.Fatalf("expected 1 BSpace, got %d: %v", got, h.mutations)
@@ -581,8 +591,10 @@ func TestSendGivesUpWhenBackspaceIneffective(t *testing.T) {
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countEnter(h.mutations); got != 1 {
 		t.Fatalf("expected exactly 1 Enter press, got %d: %v", got, h.mutations)
@@ -604,8 +616,10 @@ func TestSendRecoveryStopsWhenContentChangesAfterBackspace(t *testing.T) {
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if got := countEnter(h.mutations); got != 1 {
 		t.Fatalf("expected exactly 1 Enter press, got %d: %v", got, h.mutations)
@@ -617,11 +631,193 @@ func TestSendDoesNotSubmitIfUserTypesAfterInjection(t *testing.T) {
 		captures:   []string{"❯ \n", "❯ \n", "❯ queued plus user text\n"},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t1000\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "queued"); err != nil {
-		t.Fatal(err)
+	// Nothing observed the composer clear, so the outcome is UNVERIFIED: keys
+	// stop, the message is never re-injected, and the caller is told so.
+	if err := testClient(h).Send(context.Background(), "target", "queued"); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
 	}
 	if len(h.mutations) != 2 || !strings.HasPrefix(h.mutations[0], "load-buffer ") ||
 		!strings.HasPrefix(h.mutations[1], "paste-buffer ") {
 		t.Fatalf("user text was submitted or message was retried: %v", h.mutations)
+	}
+}
+
+func TestAuthExpiredDetection(t *testing.T) {
+	// (a) The real state: an empty composer with the banner in the STATUS FOOTER
+	// under the composer border, exactly where Claude Code draws it.
+	expired := "  \x1b[38;5;153m> summarize the repo\x1b[39m\n" +
+		"\x1b[39m❯  \x1b[39m\n" +
+		"\x1b[38;5;244m" + strings.TrimSuffix(composerBorder, "\n") + "\x1b[39m\n" +
+		"  \x1b[2m⏵⏵ bypass permissions on\x1b[0m   \x1b[31m●\x1b[39m Login expired · Please run /login\n"
+	if !AuthExpired(expired) {
+		t.Fatal("expired-login footer not detected")
+	}
+	// A dim-rendered footer must still be found: only ANSI colour is stripped.
+	if !AuthExpired("❯  \n" + composerBorder + "\x1b[2m● Login expired · Please run /login\x1b[0m\n") {
+		t.Fatal("dim footer banner not detected")
+	}
+
+	// (b) A healthy pane whose TRANSCRIPT carries the phrase — every agent that
+	// discussed the 2026-08-01 incident does. This must never block delivery.
+	transcript := "  ● Login expired · Please run /login is the banner we are fixing\n" +
+		"  I grepped for \"login expired\" across the fleet\n" +
+		"❯  \n" + composerBorder +
+		"  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+	if AuthExpired(transcript) {
+		t.Fatal("quoted banner in the transcript reported as expired login")
+	}
+
+	// (c) The phrase as the operator's own composer text, both on the prompt line
+	// and wrapped onto a continuation row inside the box.
+	typed := "❯ why does ● Login expired · Please run /login show up?\n" + composerBorder
+	wrapped := "❯ why does ● Login expired ·\n  Please run /login show up?\n" + composerBorder
+	if AuthExpired(typed) || AuthExpired(wrapped) {
+		t.Fatal("composer text reported as expired login")
+	}
+
+	// Guards: a healthy footer, a busy pane, and a pane with no composer at all.
+	if AuthExpired("❯  \n"+composerBorder+"  ⏵⏵ bypass permissions on\n") ||
+		AuthExpired("✻ Working… (23s · Esc to interrupt)\n") ||
+		AuthExpired("● Login expired · Please run /login\n") {
+		t.Fatal("false positive expired login")
+	}
+	// The bullet is required: a bare footer line of prose does not match.
+	if AuthExpired("❯  \n" + composerBorder + "  login expired means the session died\n") {
+		t.Fatal("footer prose without the status bullet reported as expired login")
+	}
+}
+
+func TestClassifyComposer(t *testing.T) {
+	want := stripSpace("deploy the new bar chips")
+	cases := []struct {
+		name    string
+		pane    string
+		verdict composerVerdict
+	}{
+		{"empty", "❯  \n" + composerBorder, composerCleared},
+		{"exact", "❯ deploy the new bar chips\n" + composerBorder, composerMine},
+		{"wrapped first row only", "❯ deploy the new\n" + composerBorder, composerMine},
+		{"user appended", "❯ deploy the new bar chips please\n" + composerBorder, composerMine},
+		{"claude paste chip", "❯ [Pasted text #1 +12 lines]\n" + composerBorder, composerMine},
+		{"codex paste chip", collapsedChip, composerMine},
+		{"foreign fragment", "❯ ls -la /srv\n" + composerBorder, composerOther},
+	}
+	for _, tc := range cases {
+		if got := classifyComposer(tc.pane, want); got != tc.verdict {
+			t.Errorf("%s: verdict=%d, want %d", tc.name, got, tc.verdict)
+		}
+	}
+}
+
+func TestSendRefusesExpiredLoginBeforePasting(t *testing.T) {
+	// The 2026-08-01 incident state: the composer is empty and stable, but the
+	// session's auth expired and it consumes nothing. Nothing may be injected,
+	// and the caller must learn the message did NOT land.
+	h := &sendHarness{
+		captures: []string{"  earlier transcript output\n❯  \n" + composerBorder +
+			"  ⏵⏵ bypass permissions on   ● Login expired · Please run /login\n"},
+		activities: []string{},
+	}
+	err := testClient(h).Send(context.Background(), "target", "a 600 character brief")
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("err=%v, want ErrNotReady", err)
+	}
+	if len(h.mutations) != 0 {
+		t.Fatalf("pasted into an expired-login pane: %v", h.mutations)
+	}
+	if !strings.Contains(err.Error(), "Login expired") {
+		t.Fatalf("error does not name the reason: %v", err)
+	}
+}
+
+func TestSendReportsFailureWhenComposerHoldsForeignText(t *testing.T) {
+	// The incident's second half: the paste never landed and the composer holds
+	// a short fragment left from an earlier interaction. That is proof of
+	// failure, not ambiguity — no Enter is pressed on the foreign text and the
+	// caller is told to queue the message.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n", // readyToSend
+			"❯ /rename wor\n" + composerBorder, // 12 unrelated chars where our brief should be
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	err := testClient(h).Send(context.Background(), "target", strings.Repeat("brief ", 100))
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("err=%v, want ErrNotReady", err)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("pressed Enter on foreign composer text: %v", h.mutations)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("message was re-injected: %v", h.mutations)
+	}
+}
+
+func TestSendVerifiesHoldThenClear(t *testing.T) {
+	// The only outcome that may be called "sent": the composer was observed
+	// holding exactly our message and then observed empty.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n", // readyToSend
+			"❯ [ada] hello\n" + composerBorder, // holds ours -> Enter
+			"❯  \n" + composerBorder,           // cleared -> verified
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "[ada] hello"); err != nil {
+		t.Fatalf("verified send returned %v", err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected 1 Enter, got %d: %v", got, h.mutations)
+	}
+}
+
+func TestSendUnverifiedWhenComposerNeverHeldMessage(t *testing.T) {
+	// Straight after the paste the composer is empty. It may have auto-submitted,
+	// or the pane may have swallowed the paste; nothing distinguishes the two.
+	// No key is pressed, nothing is re-injected, and the outcome is UNVERIFIED
+	// rather than a silent "sent".
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n", // readyToSend
+			"❯  \n" + composerBorder, // never seen holding our text
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	err := testClient(h).Send(context.Background(), "target", "a 600 character brief")
+	if !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("expected no Enter, got %d: %v", got, h.mutations)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("message was re-injected: %v", h.mutations)
+	}
+}
+
+func TestSendDeliversToPaneQuotingTheBanner(t *testing.T) {
+	// Live regression (2026-08-04): a perfectly healthy agent that had been
+	// DISCUSSING the expired-login incident carried "Login expired" in its
+	// scrollback, and a whole-pane match turned its delivery into a permanent
+	// queue. The transcript must not gate delivery — this pane gets its message.
+	quoting := "  we are fixing the ● Login expired · Please run /login banner\n" +
+		"  grep -ci \"login expired\" -> 1\n"
+	healthy := composerBorder + "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+	h := &sendHarness{
+		captures: []string{
+			quoting + "❯  \n" + healthy,                          // readyToSend pass 1
+			quoting + "❯  \n" + healthy,                          // readyToSend pass 2
+			quoting + "❯ [ada] yanlis-pozitif testi\n" + healthy, // holds ours -> Enter
+			quoting + "❯  \n" + healthy,                          // cleared -> verified
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "[ada] yanlis-pozitif testi"); err != nil {
+		t.Fatalf("healthy pane quoting the banner was refused: %v", err)
+	}
+	if countInjections(h.mutations) != 1 || countEnter(h.mutations) != 1 {
+		t.Fatalf("mutations=%v", h.mutations)
 	}
 }

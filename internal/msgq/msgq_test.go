@@ -2,6 +2,7 @@ package msgq
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,4 +212,58 @@ func TestStatusTranslatesLegacyQueueRecord(t *testing.T) {
 	if !strings.HasPrefix(status, "DELIVERED: target") {
 		t.Fatalf("legacy status=%q", status)
 	}
+}
+
+func TestDispatchKeepsProvenFailurePendingAndClosesUnverified(t *testing.T) {
+	t.Run("not ready stays pending", func(t *testing.T) {
+		// Expired login / foreign composer: the message provably did not land,
+		// so it must stay queued for the next pass, with the reason reported.
+		q := New(t.TempDir())
+		q.Now = time.Now
+		id, err := q.Enqueue("target", "sender", "hello")
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := &fakeTarget{alive: true, pane: "❯  ", sendErr: fmt.Errorf("%w: login expired", bptmux.ErrNotReady)}
+		var reports []string
+		if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(filepath.Join(q.pending(), id+".json")); err != nil {
+			t.Fatalf("message did not stay pending: %v", err)
+		}
+		if !strings.Contains(strings.Join(reports, "\n"), "not delivered") {
+			t.Fatalf("reports=%v", reports)
+		}
+	})
+
+	t.Run("unverified is closed, never retried", func(t *testing.T) {
+		// The keystrokes went in unconfirmed. Leaving the record pending would
+		// paste the same message again on the next pass, so it is finished with
+		// an honest status instead.
+		q := New(t.TempDir())
+		q.Now = time.Now
+		id, err := q.Enqueue("target", "sender", "hello")
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := &fakeTarget{alive: true, pane: "❯  ", sendErr: bptmux.ErrUnverified}
+		var reports []string
+		if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Stat(filepath.Join(q.pending(), id+".json")); !os.IsNotExist(err) {
+			t.Fatalf("unverified message stayed pending (would duplicate), stat err=%v", err)
+		}
+		status, err := q.Status(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(status, "DELIVERED (UNVERIFIED)") {
+			t.Fatalf("status=%q", status)
+		}
+		if !strings.Contains(strings.Join(reports, "\n"), "UNVERIFIED") {
+			t.Fatalf("reports=%v", reports)
+		}
+	})
 }

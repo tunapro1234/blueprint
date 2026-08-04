@@ -83,6 +83,7 @@ type app struct {
 	loadCache      func(map[string]string) map[string]bpcache.State
 	loadCommands   func() (map[string]string, error)
 	capturePane    func(string) (string, error)
+	clearPane      func(string) error
 }
 
 func main() {
@@ -1975,6 +1976,19 @@ func (a *app) capture(name string) (string, error) {
 	return a.tmux.CaptureAnsi(a.ctx, name)
 }
 
+// clearComposer settles a pane's composer before bp types a SLASH COMMAND into
+// it. It is deliberately not part of deliver/Send, which also carry ordinary
+// messages: clearing there would eventually wipe a half-typed line out of
+// someone's composer. Only the two commands bp types itself (/rename, /compact)
+// go through it, and for both the alternative is worse than a lost keystroke —
+// a /compact that never lands leaves the fleet's biggest transcript unpruned.
+func (a *app) clearComposer(name string) error {
+	if a.clearPane != nil {
+		return a.clearPane(name)
+	}
+	return a.tmux.ClearComposer(a.ctx, name)
+}
+
 func (a *app) paneCommands() (map[string]string, error) {
 	if a.loadCommands != nil {
 		return a.loadCommands()
@@ -2067,6 +2081,25 @@ func (a *app) compact(args []string) error {
 		// lands after the next turn compacts the wrong conversation.
 		if a.paneBusy(target) {
 			rows[index].Send, rows[index].Reason = false, compactBusy
+			continue
+		}
+		// Same clearing step as bp rename, for the same reason: /compact is a
+		// slash command bp types itself, and a composer left in a state that only
+		// LOOKS empty makes the send bounce off with "composer is not empty".
+		// ErrBusy/ErrTyping are the pane saying it is in use — skip it exactly
+		// like the check above, never queue (a /compact delivered after the next
+		// turn compacts the wrong conversation).
+		if clearErr := a.clearComposer(target); clearErr != nil {
+			rows[index].Send = false
+			switch {
+			case errors.Is(clearErr, bptmux.ErrBusy), errors.Is(clearErr, bptmux.ErrTyping):
+				rows[index].Reason = compactBusy
+			case errors.Is(clearErr, bptmux.ErrNotAgent):
+				rows[index].Reason = compactNotAgent
+			default:
+				rows[index].Reason = fmt.Sprintf("gonderilemedi: %v", clearErr)
+				tally.errs = append(tally.errs, fmt.Errorf("%s: %w", target, clearErr))
+			}
 			continue
 		}
 		queued, channelID, deliveryErr := a.deliver(target, sender, "/compact")

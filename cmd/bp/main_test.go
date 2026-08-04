@@ -828,6 +828,7 @@ func compactApp(t *testing.T, sent *[]string, panes map[string]string) *app {
 		},
 		loadCache:    func(map[string]string) map[string]bpcache.State { return cacheStates },
 		loadCommands: func() (map[string]string, error) { return commands, nil },
+		clearPane:    func(string) error { return nil },
 		capturePane: func(name string) (string, error) {
 			if pane, ok := panes[name]; ok {
 				return pane, nil
@@ -908,6 +909,65 @@ func TestCompactApplySendsAndRecordsState(t *testing.T) {
 	state := loadCompactState(filepath.Join(a.config.StateDir, "compact.json"))
 	if _, ok := state["alpha-child"]; !ok || len(state) != 1 {
 		t.Fatalf("compact state=%v", state)
+	}
+}
+
+// /compact is a slash command bp types itself, so it takes the same clearing
+// step as bp rename: a composer left in a state that only LOOKS empty makes the
+// send bounce off, and a /compact that never lands is invisible — the agent just
+// keeps growing.
+func TestCompactApplyClearsTheComposerBeforeSending(t *testing.T) {
+	var sent []string
+	a := compactApp(t, &sent, nil)
+	var events []string
+	a.clearPane = func(name string) error {
+		events = append(events, "clear:"+name)
+		return nil
+	}
+	deliver := a.deliverMessage
+	a.deliverMessage = func(name, from, message string) (bool, string, error) {
+		events = append(events, "send:"+name+":"+message)
+		return deliver(name, from, message)
+	}
+	if err := a.compact([]string{"--apply"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"clear:alpha-child", "send:alpha-child:/compact"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events=%v, want %v", events, want)
+	}
+}
+
+// A pane that refuses to be cleared is skipped, never queued: a /compact
+// delivered after the next turn compacts the wrong conversation.
+func TestCompactSkipsPanesThatRefuseToClear(t *testing.T) {
+	cases := map[string]struct {
+		err    error
+		reason string
+	}{
+		"busy":      {bptmux.ErrBusy, compactBusy},
+		"typing":    {bptmux.ErrTyping, compactBusy},
+		"not agent": {bptmux.ErrNotAgent, compactNotAgent},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var sent []string
+			a := compactApp(t, &sent, nil)
+			a.clearPane = func(string) error { return tc.err }
+			if err := a.compact([]string{"--apply"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(sent) != 0 {
+				t.Fatalf("sent=%v, want nothing", sent)
+			}
+			got := readTestOutput(t, a.out)
+			if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", tc.reason)) {
+				t.Fatalf("table does not report the skip:\n%s", got)
+			}
+			if _, err := os.Stat(filepath.Join(a.config.StateDir, "compact.json")); !os.IsNotExist(err) {
+				t.Fatalf("a skipped compact wrote state: %v", err)
+			}
+		})
 	}
 }
 

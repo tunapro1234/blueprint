@@ -1167,6 +1167,26 @@ func (a *app) sender() string {
 	if value := os.Getenv("AGENT"); value != "" {
 		return value
 	}
+	// Outside tmux with no AGENT the caller is usually a human on the box:
+	// root login is disabled, so people SSH in as themselves and reach bp
+	// through sudo. SUDO_USER/USER name that human and neither is spoofable
+	// any more cheaply than AGENT already is. They are checked before the
+	// "server-main" default on purpose: falling straight through would stamp
+	// a person's message with the orchestrator's name, so agents would read
+	// it as an order from the fleet's coordinator instead of from a human.
+	// server-main stays the last resort for the callers that really are the
+	// server itself — the daemon, cron and root shells, which have no
+	// SUDO_USER and a USER of root.
+	for _, key := range []string{"SUDO_USER", "USER", "LOGNAME"} {
+		value := os.Getenv(key)
+		if value == "" || value == "root" {
+			continue
+		}
+		if !validAgentName(value) {
+			continue
+		}
+		return value
+	}
 	return "server-main"
 }
 

@@ -1240,6 +1240,93 @@ func TestSafeSessionName(t *testing.T) {
 	}
 }
 
+func TestSenderPrecedence(t *testing.T) {
+	// A human on the box reaches bp as `sudo -n bp msg ...`: outside tmux,
+	// no AGENT. Those messages must carry the person's name, never the
+	// orchestrator's.
+	sessionTmux := func(t *testing.T, session string) *bptmux.Client {
+		t.Helper()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "tmux")
+		script := "#!/bin/sh\ncase \"$1\" in\ndisplay-message) echo " + session + " ;;\n*) : ;;\nesac\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}
+	}
+
+	tests := []struct {
+		name    string
+		tmuxEnv string
+		session string
+		env     map[string]string
+		want    string
+	}{
+		{
+			name:    "tmux beats everything",
+			tmuxEnv: "/tmp/tmux-0/default,123,0",
+			session: "lab-scratch",
+			env:     map[string]string{"AGENT": "ada", "SUDO_USER": "tunapro", "USER": "tunapro"},
+			want:    "lab-scratch",
+		},
+		{
+			name: "agent beats sudo user",
+			env:  map[string]string{"AGENT": "tunarch", "SUDO_USER": "tunapro", "USER": "root"},
+			want: "tunarch",
+		},
+		{
+			name: "sudo user names the human",
+			env:  map[string]string{"SUDO_USER": "tunapro", "USER": "root", "LOGNAME": "root"},
+			want: "tunapro",
+		},
+		{
+			name: "sudo user root falls through to user",
+			env:  map[string]string{"SUDO_USER": "root", "USER": "tunapro"},
+			want: "tunapro",
+		},
+		{
+			name: "logname when user is root",
+			env:  map[string]string{"USER": "root", "LOGNAME": "tunapro"},
+			want: "tunapro",
+		},
+		{
+			name: "invalid user is skipped",
+			env:  map[string]string{"USER": "two words", "LOGNAME": "ok-name"},
+			want: "ok-name",
+		},
+		{
+			name: "control characters are skipped",
+			env:  map[string]string{"SUDO_USER": "ada\nserver-main", "USER": "bad\tname"},
+			want: "server-main",
+		},
+		{
+			name: "daemon and cron keep the default",
+			env:  map[string]string{"USER": "root", "LOGNAME": "root"},
+			want: "server-main",
+		},
+		{
+			name: "empty environment keeps the default",
+			want: "server-main",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TMUX", test.tmuxEnv)
+			for _, key := range []string{"AGENT", "SUDO_USER", "USER", "LOGNAME"} {
+				t.Setenv(key, test.env[key])
+			}
+			a := &app{ctx: context.Background(), tmux: bptmux.New()}
+			if test.session != "" {
+				a.tmux = sessionTmux(t, test.session)
+			}
+			if got := a.sender(); got != test.want {
+				t.Fatalf("sender()=%q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestRemoteAttachCommandUsesMoshByDefault(t *testing.T) {
 	binDir := t.TempDir()
 	writeTestExecutable(t, binDir, "mosh")

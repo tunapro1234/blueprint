@@ -26,6 +26,14 @@ all keeps its messages until it opens. Read what an agent says with `bp peek
 an agent). `bp status --json` prints the same fleet as one JSON object, with
 context tokens, conversation age, and model where they are known.
 
+Delivery is reported honestly, in three outcomes. `sent` means the composer was
+seen holding the message and then seen to clear. `GONDERILEMEDI: … kuyruga
+alindi` means bp proved it did not land (the pane's login expired, or the
+composer held someone else's text where the paste should be) and queued it for
+another attempt. `gonderildi ama DOGRULANAMADI` means the keystrokes went in but
+nothing confirmed them: bp exits non-zero and does NOT queue a retry, because
+the message may well have arrived — look with `bp peek <name>` before resending.
+
 `bp` stamps every message with `[<sender>] `, taken from the tmux session the
 command runs in; `AGENT` is honoured only outside tmux. Never write your own
 `[name]` prefix — a hand-written one just shows up nested inside the real

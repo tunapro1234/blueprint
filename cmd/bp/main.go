@@ -98,9 +98,21 @@ func main() {
 		args = []string{"status"}
 	}
 	if err := a.run(args); err != nil {
-		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		if !errors.Is(err, errReported) {
+			fmt.Fprintln(os.Stderr, "ERROR:", err)
+		}
 		os.Exit(1)
 	}
+}
+
+// errReported marks a failure whose explanation the command already printed
+// itself: bp still exits non-zero, but main adds no second, duplicate line.
+var errReported = errors.New("reported above")
+
+// deliveryReason unwraps a delivery sentinel so a user-visible line names the
+// cause ("pane oturumu dusmus …") instead of repeating the plumbing prefix.
+func deliveryReason(err error, sentinel error) string {
+	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
 }
 
 // helpRequested reports whether -h/--help appears among a subcommand's own
@@ -972,7 +984,11 @@ func (a *app) open(args []string) error {
 		}
 	}
 	if err := a.flushPending(name); err != nil {
-		fmt.Fprintf(a.err, "WARNING: pending messages for %s were not delivered: %v\n", name, err)
+		if errors.Is(err, bptmux.ErrUnverified) {
+			fmt.Fprintf(a.err, "WARNING: pending digest for %s was sent but DOGRULANAMADI; check with bp peek %s\n", name, name)
+		} else {
+			fmt.Fprintf(a.err, "WARNING: pending messages for %s were not delivered: %v\n", name, err)
+		}
 	}
 	fmt.Fprintf(a.out, "%s opened%s\n", name, rc)
 	return nil
@@ -1174,6 +1190,15 @@ func (a *app) flushPending(name string) error {
 		return err
 	}
 	if err := a.tmux.Send(a.ctx, name, formatDigest(entries, dropped)); err != nil {
+		if !errors.Is(err, bptmux.ErrUnverified) {
+			return err
+		}
+		// Unconfirmed, but the digest may well be in the pane: keeping the
+		// entries would repeat every announcement on the next flush. Clear them
+		// and let the caller report the doubt.
+		if clearErr := pending.Clear(a.config.StateDir, name); clearErr != nil {
+			return clearErr
+		}
 		return err
 	}
 	return pending.Clear(a.config.StateDir, name)
@@ -1299,7 +1324,8 @@ func (a *app) message(args []string) error {
 		}
 	}
 	queued, channelID, err := a.deliver(name, sender, message)
-	if err != nil {
+	notReady, unverified := errors.Is(err, bptmux.ErrNotReady), errors.Is(err, bptmux.ErrUnverified)
+	if err != nil && !notReady && !unverified {
 		if errors.Is(err, bptmux.ErrNotAgent) {
 			// The pane is a shell, not an agent CLI: surface a clear error
 			// rather than dropping the message into a root prompt.
@@ -1310,12 +1336,24 @@ func (a *app) message(args []string) error {
 		}
 		return err
 	}
+	// The digest travelled inside the message, whether that message reached the
+	// pane or the queue, so pending is cleared in every one of those cases —
+	// leaving it would repeat the whole digest on the next delivery.
 	if attachPending && len(entries) > 0 {
 		if err := pending.Clear(a.config.StateDir, name); err != nil {
 			return err
 		}
 	}
-	if !queued {
+	switch {
+	case unverified:
+		// Not a failure and not a delivery: the keystrokes went in and nothing
+		// confirmed them. Never silently "sent" again (2026-08-01 incident).
+		fmt.Fprintf(a.out, "gonderildi ama DOGRULANAMADI: %s — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek %s ile bak\n", name, name)
+		return errReported
+	case notReady:
+		fmt.Fprintf(a.out, "GONDERILEMEDI: %s — %s; mesaj kuyruga alindi (channel: %s). Durum: bp qstat %s\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID, channelID)
+		return nil
+	case !queued:
 		fmt.Fprintln(a.out, "sent")
 		return nil
 	}
@@ -1365,39 +1403,66 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	if err != nil {
 		return false, "", err
 	}
+	// reason survives the enqueue below so the caller can name WHY the message
+	// had to be queued instead of reporting a plain "busy" queue.
+	var reason error
 	if !bptmux.Typing(pane) && !bptmux.Busy(pane) {
-		err = a.tmux.Send(a.ctx, name, message)
-		if err == nil {
+		sendErr := a.tmux.Send(a.ctx, name, message)
+		switch {
+		case sendErr == nil:
 			return false, "", nil
-		}
-		if !errors.Is(err, bptmux.ErrTyping) {
-			return false, "", err
+		case errors.Is(sendErr, bptmux.ErrUnverified):
+			// Pasted and submitted, but unconfirmed. Queueing it would risk a
+			// second copy, so it is reported and NOT retried.
+			return false, "", sendErr
+		case errors.Is(sendErr, bptmux.ErrNotReady):
+			// Proven non-delivery: queue it exactly like a busy composer, and
+			// carry the reason out with the channel id.
+			reason = sendErr
+		case errors.Is(sendErr, bptmux.ErrTyping):
+			// Someone is typing: queue, as before.
+		default:
+			return false, "", sendErr
 		}
 	}
 	channelID, err = a.queue.Enqueue(name, sender, message)
-	return true, channelID, err
+	if err != nil {
+		return true, channelID, err
+	}
+	return true, channelID, reason
 }
 
 // deliveryTally accumulates per-target deliver() outcomes for the batch commands
 // (announce, compact). A non-agent target (ErrNotAgent) is recorded as a SKIP
 // with no hard error, so a single session that dropped to a shell neither fails
-// the whole batch nor has the message injected into its shell prompt.
+// the whole batch nor has the message injected into its shell prompt. An
+// UNVERIFIED delivery gets its own bucket: it must never be tallied as sent, and
+// it is not an error either — nobody may retry it.
 type deliveryTally struct {
-	sent     int
-	channels []string
-	skipped  int
-	errs     []error
+	sent       int
+	channels   []string
+	skipped    int
+	unverified []string
+	errs       []error
 }
 
 // record buckets one deliver() result and reports whether it counted as a real
 // delivery (queued or sent), so callers can update per-target bookkeeping only
-// on success.
+// on success. A provable non-delivery (ErrNotReady) arrives already queued, so
+// it counts like any other queued message — the message is not lost and the
+// queue will retry it.
 func (t *deliveryTally) record(target string, queued bool, channelID string, err error) bool {
-	if err != nil {
-		if errors.Is(err, bptmux.ErrNotAgent) {
-			t.skipped++
-			return false
-		}
+	switch {
+	case errors.Is(err, bptmux.ErrUnverified):
+		t.unverified = append(t.unverified, target)
+		return false
+	case errors.Is(err, bptmux.ErrNotAgent):
+		t.skipped++
+		return false
+	case errors.Is(err, bptmux.ErrNotReady) && queued:
+		t.channels = append(t.channels, channelID)
+		return true
+	case err != nil:
 		t.errs = append(t.errs, fmt.Errorf("%s: %w", target, err))
 		return false
 	}
@@ -1407,6 +1472,14 @@ func (t *deliveryTally) record(target string, queued bool, channelID string, err
 		t.sent++
 	}
 	return true
+}
+
+// report prints the unverified bucket, if any. It is a separate line so the
+// existing summaries stay byte-identical whenever every delivery was clean.
+func (t *deliveryTally) report(out *os.File) {
+	if len(t.unverified) > 0 {
+		fmt.Fprintf(out, "dogrulanamadi: %d (%s) — bp peek ile bak\n", len(t.unverified), strings.Join(t.unverified, ", "))
+	}
 }
 
 func (a *app) announce(args []string) error {
@@ -1466,6 +1539,7 @@ func (a *app) announce(args []string) error {
 		return nil
 	}
 	fmt.Fprintf(a.out, "sent: %d, deferred: %d\n", tally.sent+len(tally.channels), deferred)
+	tally.report(a.out)
 	return errors.Join(tally.errs...)
 }
 
@@ -1692,6 +1766,9 @@ const (
 	compactExcluded = "haric tutuldu"
 	compactNoCache  = "transcript okunamadi"
 	compactNotAgent = "agent CLI degil, atlandi"
+	// Enter was pressed but nothing confirmed the composer cleared. Never
+	// counted as "gonderildi": the operator has to look at the pane.
+	compactUnverified = "gonderildi ama DOGRULANAMADI (bp peek)"
 )
 
 // compactDecision is one row of the decision table: what bp measured about an
@@ -1973,12 +2050,27 @@ func (a *app) compact(args []string) error {
 			continue
 		}
 		queued, channelID, deliveryErr := a.deliver(target, sender, "/compact")
-		if tally.record(target, queued, channelID, deliveryErr) {
+		counted := tally.record(target, queued, channelID, deliveryErr)
+		if errors.Is(deliveryErr, bptmux.ErrUnverified) {
+			// The keystrokes went in unconfirmed. Re-sending could compact the
+			// same conversation twice, so the attempt is recorded like a send —
+			// but the row says plainly that nobody verified it.
+			lastCompact[target] = now
+			updated = true
+			rows[index].Send = false
+			rows[index].Reason = compactUnverified
+			continue
+		}
+		if counted {
 			lastCompact[target] = now
 			updated = true
 			rows[index].Reason = compactSent
 			if queued {
 				rows[index].Reason = fmt.Sprintf("%s (kuyruk: %s)", compactSent, channelID)
+			}
+			if errors.Is(deliveryErr, bptmux.ErrNotReady) {
+				// Queued because the pane provably could not take it.
+				rows[index].Reason = fmt.Sprintf("GONDERILEMEDI: %s, kuyrukta (%s)", deliveryReason(deliveryErr, bptmux.ErrNotReady), channelID)
 			}
 			continue
 		}
@@ -2001,6 +2093,7 @@ func (a *app) compact(args []string) error {
 		fmt.Fprintf(a.out, "bilinmeyen exclude: %s\n", strings.Join(unknownExcludes, ", "))
 	}
 	fmt.Fprintf(a.out, "gonderildi: %d, atlanan: %d\n", sent, len(rows)-sent)
+	tally.report(a.out)
 	return errors.Join(tally.errs...)
 }
 
@@ -2458,7 +2551,7 @@ func (a *app) remote(args []string) error {
 	}
 	type pending struct{ name string }
 	var sent []pending
-	queuedCount, skipped := 0, 0
+	queuedCount, skipped, unverified := 0, 0, 0
 	for _, name := range targets {
 		if !a.tmux.HasSession(a.ctx, name) {
 			fmt.Fprintf(a.out, "  skip   %-28s oturum yok\n", name)
@@ -2479,6 +2572,18 @@ func (a *app) remote(args []string) error {
 			time.Sleep(time.Second)
 		}
 		queued, channelID, err := a.deliver(name, sender, "/remote-control")
+		if errors.Is(err, bptmux.ErrUnverified) {
+			// Keystrokes went in, nothing confirmed them: not a send, not a
+			// failure. It is never counted as gonderildi.
+			fmt.Fprintf(a.out, "  ??     %-28s gonderildi ama DOGRULANAMADI (bp peek %s)\n", name, name)
+			unverified++
+			continue
+		}
+		if errors.Is(err, bptmux.ErrNotReady) && queued {
+			fmt.Fprintf(a.out, "  kuyruk %-28s GONDERILEMEDI: %s (%s)\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID)
+			queuedCount++
+			continue
+		}
 		if err != nil {
 			fmt.Fprintf(a.out, "  hata   %-28s %v\n", name, err)
 			skipped++
@@ -2543,5 +2648,8 @@ func (a *app) remote(args []string) error {
 		}
 	}
 	fmt.Fprintf(a.out, "remote: %d gonderildi, %d kuyrukta, %d atlandi\n", len(sent), queuedCount, skipped)
+	if unverified > 0 {
+		fmt.Fprintf(a.out, "        %d dogrulanamadi (bp peek ile bak)\n", unverified)
+	}
 	return nil
 }

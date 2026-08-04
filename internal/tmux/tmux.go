@@ -76,6 +76,30 @@ var codexChip = regexp.MustCompile(`\[Pasted Content\s+\d+\s+chars\]`)
 // matches. A message that merely contains the word "Pasted" lacks the bracketed
 // "[Pasted Content N chars]" form and does not match.
 func codexPasteChip(pane string) bool {
+	tail, ok := composerTail(pane)
+	return ok && codexChip.MatchString(tail)
+}
+
+// claudeChip matches Claude Code's own large/multiline paste placeholder
+// ("[Pasted text #1 +2 lines]"). Like the Codex chip it stands IN PLACE of the
+// literal message, so a composer showing it is holding OUR paste even though
+// composerContent can never equal the message.
+var claudeChip = regexp.MustCompile(`\[Pasted text[^\]]*\]`)
+
+// claudePasteChip reports whether the composer shows Claude's paste placeholder.
+// It is used only to CLASSIFY what the composer holds (classifyComposer), never
+// to authorize another Enter: composerHoldsMessage deliberately stays limited to
+// the literal text and the Codex chip, whose retry mechanics are known.
+func claudePasteChip(pane string) bool {
+	tail, ok := composerTail(pane)
+	return ok && claudeChip.MatchString(tail)
+}
+
+// composerTail joins every rendered row from the final prompt line to the end of
+// the pane (composer + overflow + status line, never the transcript above) with
+// dim/ANSI and the prompt marker removed, so a chip label split by a wrap still
+// matches as one string. ok is false when the pane has no prompt line at all.
+func composerTail(pane string) (string, bool) {
 	lines := strings.Split(pane, "\n")
 	last := -1
 	for i, line := range lines {
@@ -84,14 +108,14 @@ func codexPasteChip(pane string) bool {
 		}
 	}
 	if last < 0 {
-		return false
+		return "", false
 	}
 	var b strings.Builder
 	for _, line := range lines[last:] {
 		b.WriteString(promptLine.ReplaceAllString(StripDim(line), ""))
 		b.WriteByte(' ') // a wrap between rows is whitespace, not a join
 	}
-	return codexChip.MatchString(b.String())
+	return b.String(), true
 }
 
 // codexBusyQueuePhrase is the dim footer affordance a BUSY Codex renders under
@@ -127,6 +151,46 @@ func codexBusyQueue(pane string) bool {
 // it, and no key may be sent.
 func composerHoldsMessage(pane, want string) bool {
 	return composerContent(pane) == want || codexPasteChip(pane)
+}
+
+// composerVerdict classifies what the composer holds right after we pasted a
+// message into it.
+type composerVerdict int
+
+const (
+	// composerCleared: nothing is typed. After the composer was seen holding our
+	// message this is a submit; before that it proves nothing either way.
+	composerCleared composerVerdict = iota
+	// composerMine: our message, in one of the forms a TUI renders it in — the
+	// literal text, a Codex/Claude paste chip standing in for it, the first
+	// rendered row of a message that WRAPPED (a prefix), or our text with
+	// something appended (a user typing after our injection).
+	composerMine
+	// composerOther: content that has nothing to do with our message. Our paste
+	// never landed — this is proof of failure, not ambiguity. It is the state the
+	// 2026-08-01 incident left behind: a 600-character brief was "sent" while the
+	// composer held a 12-character fragment from an earlier interaction.
+	composerOther
+)
+
+// classifyComposer compares the rendered composer against the whitespace-stripped
+// message we injected. The prefix tests run in BOTH directions so neither a
+// wrapped render (we see only the first row) nor a user's later keystrokes (our
+// text plus theirs) is ever mistaken for a foreign composer: only content with no
+// relation at all to ours is called composerOther, because that verdict makes the
+// caller queue the message for another delivery attempt.
+func classifyComposer(pane, want string) composerVerdict {
+	if codexPasteChip(pane) || claudePasteChip(pane) {
+		return composerMine
+	}
+	got := composerContent(pane)
+	if got == "" {
+		return composerCleared
+	}
+	if strings.HasPrefix(want, got) || strings.HasPrefix(got, want) {
+		return composerMine
+	}
+	return composerOther
 }
 
 // composerTrail inspects the rendered lines between the final composer line
@@ -380,10 +444,111 @@ func (c *Client) IsBusy(ctx context.Context, session string) (bool, error) {
 
 var ErrTyping = errors.New("composer is not empty")
 
+// ErrBusy is returned when a pane is mid-turn ("esc to interrupt"). Nothing may
+// be typed into a working agent: Escape would cancel its turn and any other key
+// would land in the middle of someone's work.
+var ErrBusy = errors.New("pane is working (esc to interrupt)")
+
 // ErrNotAgent is returned by Send when the target pane is not running an agent
 // CLI (e.g. it dropped to a root shell). It signals the caller to skip delivery
 // rather than inject the message text into a shell prompt.
 var ErrNotAgent = errors.New("target pane is not an agent CLI")
+
+// ErrNotReady reports a PROVABLE non-delivery: either the pane could not accept
+// the message at all (an expired login, where a Claude session renders a /login
+// banner and silently eats input) or the composer was observed holding content
+// unrelated to what we pasted. Wrapped with the concrete reason at the return
+// site. The message did not land, so callers MUST queue it: it is retried and
+// leaves a record, exactly as ErrTyping already does.
+var ErrNotReady = errors.New("message was not delivered")
+
+// ErrUnverified reports the third outcome: the message was injected and Enter
+// was pressed, but the delivery could not be confirmed either way (a capture
+// failed, a client started typing, or the composer was never observed holding
+// our text). It may well have landed, so it must NOT be re-injected or queued —
+// a retry would duplicate it. The CLI reports it instead of calling it sent.
+var ErrUnverified = errors.New("delivery could not be verified")
+
+// authExpiredMarkers are the phrases a Claude Code session renders in its status
+// footer when its credentials expired ("● Login expired · Please run /login").
+// Such a pane looks exactly like a healthy idle one to Typing/readyToSend — an
+// empty, stable composer — but it does not consume input, which is how a
+// 600-character brief was reported "sent" and never arrived.
+var authExpiredMarkers = []string{"login expired", "run /login"}
+
+// authStatusBullet is the marker Claude Code prefixes its status banners with.
+// Requiring it keeps prose that merely mentions the words from matching.
+const authStatusBullet = "●"
+
+// AuthExpired reports whether the pane's LIVE STATUS FOOTER shows the
+// expired-credentials state.
+//
+// The region matters more than the phrase. A first version of this scanned the
+// whole pane and immediately fired on healthy agents: every agent discussing
+// this very incident carries "Login expired" somewhere in its scrollback, which
+// turned working delivery into a permanently queued message — worse than the bug
+// it was meant to catch. So the match follows the same discipline as Busy(),
+// codexBusyQueue() and composerTrail(): look only where the live UI is, and
+// require a signature rather than bare words.
+//
+//   - Scan starts BELOW the last prompt line, so transcript text (which is
+//     always above the composer) can never match, however often an agent quotes
+//     the banner.
+//   - When the composer box has a bottom border, the scan starts below THAT, so
+//     a message holding the phrase — typed, pasted or wrapped inside the
+//     composer — cannot match either.
+//   - The matching line must also carry the status bullet ●, the way the real
+//     banner renders.
+//
+// Only ANSI colour is stripped, never dim segments: the footer may itself be
+// dim-rendered and StripDim would delete the very line we look for.
+//
+// The residual direction is now a MISSED detection (a build that renders the
+// banner somewhere else), and that costs little: such a pane swallows the paste,
+// the composer is never seen holding our message, and Send already reports the
+// delivery as unverified instead of "sent".
+func AuthExpired(pane string) bool {
+	for _, line := range statusFooter(pane) {
+		clean := ansiSeq.ReplaceAllString(line, "")
+		if !strings.Contains(clean, authStatusBullet) {
+			continue
+		}
+		clean = strings.ToLower(clean)
+		for _, marker := range authExpiredMarkers {
+			if strings.Contains(clean, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// statusFooter returns the rendered rows BELOW the live composer — where a TUI
+// draws its status/footer lines. Everything above (the transcript) and the
+// composer's own content are excluded. A pane with no prompt line at all has no
+// live composer to speak of and yields nothing.
+func statusFooter(pane string) []string {
+	lines := strings.Split(pane, "\n")
+	last := -1
+	for i, line := range lines {
+		if promptLine.MatchString(line) {
+			last = i
+		}
+	}
+	if last < 0 {
+		return nil
+	}
+	rest := lines[last+1:]
+	// Claude draws a border under the composer; anything above it is still
+	// composer content (a wrapped message), so the footer starts below it.
+	// Codex has no border: there the rows under the prompt line ARE the footer.
+	for i, line := range rest {
+		if isComposerBorder(stripSpace(StripDim(line))) {
+			return rest[i+1:]
+		}
+	}
+	return rest
+}
 
 // IsAgentCommand reports whether cmd (a tmux pane's #{pane_current_command}) is
 // one of the agent runtimes we may safely inject keystrokes into: "claude",
@@ -474,10 +639,20 @@ const (
 // keyboard activity in any client attached to the target session. The second
 // composer check closes the old check-then-paste window in which a user could
 // begin typing just as a queued message was injected.
+//
+// It also refuses a pane whose credentials expired. That state passes every
+// other check — the composer is empty and perfectly stable — yet the session
+// consumes nothing, so pasting into it loses the message silently. Both captures
+// are tested, so a login that expires inside the quiet window is caught too. The
+// refusal is an ErrNotReady error rather than a plain not-ready result: it is
+// PROOF the message cannot land, and the caller must queue it.
 func (c *Client) readyToSend(ctx context.Context, session string) (bool, error) {
 	firstPane, err := c.CaptureAnsi(ctx, session)
 	if err != nil || Typing(firstPane) {
 		return false, err
+	}
+	if AuthExpired(firstPane) {
+		return false, fmt.Errorf("%w: %s", ErrNotReady, authExpiredReason)
 	}
 	firstActivity, err := c.clientActivity(ctx, session)
 	if err != nil {
@@ -487,6 +662,9 @@ func (c *Client) readyToSend(ctx context.Context, session string) (bool, error) 
 	secondPane, err := c.CaptureAnsi(ctx, session)
 	if err != nil || Typing(secondPane) {
 		return false, err
+	}
+	if AuthExpired(secondPane) {
+		return false, fmt.Errorf("%w: %s", ErrNotReady, authExpiredReason)
 	}
 	secondActivity, err := c.clientActivity(ctx, session)
 	if err != nil {
@@ -502,14 +680,104 @@ func (c *Client) readyToSend(ctx context.Context, session string) (bool, error) 
 	return true, nil
 }
 
+// composerClearWindow is the pause between a clearing keypress and the capture
+// that checks what it did.
+const composerClearWindow = 250 * time.Millisecond
+
+// ClearComposer prepares a pane for a SLASH COMMAND bp is about to type into it
+// (/rename, /compact). It is deliberately NOT part of Send: Send also delivers
+// ordinary messages, and clearing on every delivery would eventually wipe a
+// half-typed line out of someone's composer.
+//
+// Why it exists: a Claude composer sitting in vim INSERT mode can hold state
+// that renders as an empty line yet still makes the pre-send emptiness check
+// (Typing) report "composer is not empty", so the slash command is never
+// delivered — the false positive that left `bp rename` half-done, with the tmux
+// session and the agentbook renamed but the agent's own transcript title still
+// on the old name. Escape settles that state; the operator's hand fix was
+// exactly Escape, C-u, then the command.
+//
+// The steps, in order, and the reason each one is where it is:
+//
+//  1. Refuse a working pane (Busy) before pressing anything — on a mid-turn
+//     Claude, Escape CANCELS the turn.
+//  2. Escape. It leaves INSERT mode and dismisses a ghost suggestion, and is
+//     harmless in every other mode. It never destroys typed text, so it is safe
+//     to press before knowing what the composer holds.
+//  3. Capture again and read the composer. C-u is pressed ONLY when what is
+//     visible is empty (dim ghost text does not count as input — StripDim).
+//     A composer showing real text is left EXACTLY as it is and reported with
+//     ErrTyping: destroying a human's half-written line is a worse outcome than
+//     any command bp wanted to send.
+//  4. Capture once more, so the caller hands off to Send with a composer that
+//     has been observed empty rather than assumed empty.
+func (c *Client) ClearComposer(ctx context.Context, session string) error {
+	// Same chokepoint discipline as Send: C-u at a shell prompt would erase
+	// whatever a human left typed there.
+	cmd, err := c.PaneCommand(ctx, session)
+	if err != nil {
+		return err
+	}
+	if !IsAgentCommand(cmd) {
+		return ErrNotAgent
+	}
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return err
+	}
+	if Busy(pane) {
+		return ErrBusy
+	}
+	target := "=" + session + ":"
+	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "Escape"); err != nil {
+		return err
+	}
+	c.Sleep(composerClearWindow)
+	if pane, err = c.CaptureAnsi(ctx, session); err != nil {
+		return err
+	}
+	if Typing(pane) {
+		return ErrTyping
+	}
+	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "C-u"); err != nil {
+		return err
+	}
+	c.Sleep(composerClearWindow)
+	if pane, err = c.CaptureAnsi(ctx, session); err != nil {
+		return err
+	}
+	if Typing(pane) {
+		return ErrTyping
+	}
+	return nil
+}
+
 var bufferSequence uint64
+
+const (
+	authExpiredReason   = "pane oturumu dusmus (Login expired / run /login)"
+	composerOtherReason = "composer'da baska metin var: paste hic girmemis"
+)
 
 // Send first injects the message, then lets the TUI turn a large paste into its
 // internal "Pasted text" object before submitting it. Once injection succeeds,
-// the operation is at-most-once: later ambiguity is treated as delivered so the
-// dispatcher can never paste the same message again. If a user touches the
-// attached client during the settle window, their mixed composer is left alone
-// and Enter is deliberately not sent.
+// the operation is at-most-once: the message is never pasted twice, and the
+// return value tells the caller exactly which of three things happened:
+//
+//	nil            verified: the composer was observed holding our message and
+//	               then observed to clear.
+//	ErrNotReady    proven failure: the pane could not receive it (expired login)
+//	               or the composer held unrelated text after the paste. Nothing
+//	               was delivered; the caller must queue the message.
+//	ErrUnverified  unknown: injected and Enter pressed, but nothing confirmed it
+//	               either way. The caller must NOT retry (it may have landed) and
+//	               must not report it as sent either.
+//
+// Any other error is a plumbing failure (tmux itself, a non-agent pane, a busy
+// composer) with the same meaning as before.
+//
+// If a user touches the attached client during the settle window, their mixed
+// composer is left alone and Enter is deliberately not sent.
 func (c *Client) Send(ctx context.Context, session, message string) error {
 	// Guard first: never inject keystrokes into a pane that is not running an
 	// agent CLI. A session that dropped to a root shell (zsh) would otherwise
@@ -549,12 +817,35 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 		return err
 	}
 
-	// From this point onward, returning an error would leave the queue record
-	// pending and cause a duplicate paste on the next dispatch.
+	// From this point onward the text is in the pane, so an error must never
+	// mean "paste it again" unless we PROVED it did not land: ErrNotReady is
+	// returned only for a composer holding foreign content, and the ambiguous
+	// case gets ErrUnverified, which no caller retries.
 	c.Sleep(composerSettleWindow)
-	c.submit(ctx, target, session, message)
-	return nil
+	switch c.submit(ctx, target, session, message) {
+	case sendVerified:
+		return nil
+	case sendMismatch:
+		return fmt.Errorf("%w: %s", ErrNotReady, composerOtherReason)
+	default:
+		return ErrUnverified
+	}
 }
+
+// sendResult is submit's verdict, mapped to Send's error contract above.
+type sendResult int
+
+const (
+	// sendUnverified is the default: nothing observed contradicts delivery, and
+	// nothing confirms it.
+	sendUnverified sendResult = iota
+	// sendVerified: the composer was seen holding our message and later seen
+	// empty (or, on a busy Codex, moved into its native queue).
+	sendVerified
+	// sendMismatch: the composer holds content unrelated to our message, which
+	// proves the paste never landed.
+	sendMismatch
+)
 
 // submit presses Enter to send the freshly injected message, then verifies the
 // composer actually cleared. Under load Claude Code's paste detector can fold
@@ -578,12 +869,19 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 // operation stays at-most-once. No key is ever sent while the composer content
 // differs from our message or an attached client showed recent activity, so a
 // user who started editing is never disturbed and their input never mangled.
-func (c *Client) submit(ctx context.Context, target, session, message string) {
+//
+// Alongside the keypresses submit REPORTS what it observed. A delivery counts as
+// verified only when the composer was seen holding our message (held) and later
+// seen empty; an empty composer that never held it is not evidence of anything,
+// because that is exactly what a pane that swallowed the paste looks like. A
+// composer holding unrelated content is the opposite: proof the paste is gone.
+func (c *Client) submit(ctx context.Context, target, session, message string) sendResult {
 	want := stripSpace(message)
+	held := false
 	for attempt := 0; attempt <= submitRetries; attempt++ {
 		pane, ok := c.composerStable(ctx, session)
 		if !ok {
-			return
+			return sendUnverified
 		}
 		if codexBusyQueue(pane) {
 			// TOCTOU: the target went BUSY after Dispatch's idle check and our
@@ -592,54 +890,64 @@ func (c *Client) submit(ctx context.Context, target, session, message string) {
 			// with Tab. This branch takes precedence over the Enter/BSpace paths
 			// so Enter is never sent while the affordance is present.
 			_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Tab")
+			held = true // the affordance renders under OUR paste chip
 			c.Sleep(submitVerifyWindow)
 			next, ok := c.composerStable(ctx, session)
 			if !ok {
-				return
+				return sendUnverified
 			}
 			if !Typing(next) && !codexPasteChip(next) {
 				// Composer cleared: the message moved into Codex's queue.
-				// Tab-queuing is a real delivery, so returning here (Send -> nil)
-				// keeps the msgq "delivered" mark correct.
-				return
+				// Tab-queuing is a real delivery, and it was observed both
+				// holding and clearing, so it counts as verified.
+				return sendVerified
 			}
 			// Still holding our paste: retry Tab, bounded by the loop. If it
 			// never clears we give up silently at the bound WITHOUT ever
-			// falling through to Enter (ambiguity resolves to delivered).
+			// falling through to Enter.
 			continue
 		}
-		if attempt == 0 {
-			// The injected message is sitting in the composer; an empty
-			// composer means it already submitted (or a paste-chip replaced
-			// it, handled by the Typing check).
-			if !Typing(pane) {
-				return
+		switch classifyComposer(pane, want) {
+		case composerCleared:
+			// Empty composer. After we watched it hold our message this is the
+			// submit we were waiting for; before that (attempt 0, straight after
+			// the paste) it proves nothing — the paste may never have registered.
+			if held {
+				return sendVerified
 			}
-		} else {
+			return sendUnverified
+		case composerOther:
+			// The pane holds someone else's text where our paste should be: the
+			// message is provably gone. Report it so the caller queues it.
+			return sendMismatch
+		}
+		held = true
+		if attempt > 0 {
 			if !composerHoldsMessage(pane, want) {
-				// Either it submitted (composer cleared) or the content no
-				// longer matches ours (user edited it). Never press Enter on
-				// foreign text. A Codex large-paste chip standing in for our
-				// literal message still counts as holding our message.
-				return
+				// Ours, but not in a form another Enter may be pressed on: a
+				// partial/wrapped render, or our text with a user's keystrokes
+				// appended. Stop pressing keys; the outcome is unknown.
+				return sendUnverified
 			}
 			empty, foreign, found := composerTrail(pane)
 			if foreign {
-				return
+				return sendUnverified
 			}
 			if found && empty > 0 {
 				// Multiline-stuck: Enter would only append newlines here.
 				// One recovery attempt total, and never for a newline count
 				// our own keypresses could not have produced.
 				if empty > submitBackspaceMax {
-					return
+					return sendUnverified
 				}
 				if c.recoverTrailingNewlines(ctx, target, session, want, empty) {
 					// Verified single-line composer holding exactly our
-					// message: one final Enter, then stop either way.
+					// message: one final Enter, then stop either way. Nothing
+					// re-checks the composer afterwards, so the outcome of that
+					// last Enter is honestly reported as unverified.
 					_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
 				}
-				return
+				return sendUnverified
 			}
 		}
 		_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
@@ -647,6 +955,9 @@ func (c *Client) submit(ctx context.Context, target, session, message string) {
 			c.Sleep(submitVerifyWindow)
 		}
 	}
+	// The bound was reached with the composer still holding our message: every
+	// Enter was ignored, and we cannot tell whether the first one landed.
+	return sendUnverified
 }
 
 // composerStable captures the pane and reports false on any error or when an

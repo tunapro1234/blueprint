@@ -1367,3 +1367,170 @@ func TestOpenFlagsRequireValues(t *testing.T) {
 		}
 	}
 }
+
+// fakeTmux writes a shell script that stands in for the tmux binary, so delivery
+// can be exercised end to end (pane checks, queue records, printed lines) without
+// ever touching a live session. Every pane capture returns paneScript's output.
+func fakeTmux(t *testing.T, paneScript string) (*bptmux.Client, func() string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux")
+	log := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\necho \"$1\" >> " + log + "\ncase \"$1\" in\n" +
+		"has-session) exit 0 ;;\n" +
+		"display-message) echo claude ;;\n" +
+		"capture-pane) " + paneScript + " ;;\n" +
+		"list-clients) : ;;\n" +
+		"load-buffer) cat > " + filepath.Join(dir, "buffer") + " ;;\n" +
+		"*) : ;;\nesac\n"
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	calls := func() string {
+		data, err := os.ReadFile(log)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	return &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}, calls
+}
+
+func queuedMessages(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := filepath.Glob(filepath.Join(root, "pending", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+// TestMessageDeliveryOutcomes pins the three user-visible outcomes of bp msg and
+// the queueing rule behind each: a proven failure is queued (retried, traceable),
+// an unverified send is NOT (it may have landed; a retry would duplicate it).
+func TestMessageDeliveryOutcomes(t *testing.T) {
+	t.Setenv("AGENT", "ada")
+	t.Setenv("TMUX", "")
+
+	t.Run("verified prints sent", func(t *testing.T) {
+		out := testOutput(t)
+		a := &app{
+			config:        bpconfig.Config{StateDir: t.TempDir()},
+			out:           out,
+			sessionExists: func(string) bool { return true },
+			deliverMessage: func(string, string, string) (bool, string, error) {
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "hello"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestOutput(t, out); got != "sent\n" {
+			t.Fatalf("output=%q", got)
+		}
+	})
+
+	t.Run("proven failure is queued and named", func(t *testing.T) {
+		// The 2026-08-01 pane: an expired login. Nothing may be pasted, and the
+		// message has to end up in the queue with a record behind it.
+		stateDir := t.TempDir()
+		msgqRoot := filepath.Join(stateDir, "msgq")
+		out := testOutput(t)
+		a := &app{
+			ctx:           context.Background(),
+			config:        bpconfig.Config{StateDir: stateDir},
+			queue:         msgq.New(msgqRoot),
+			out:           out,
+			sessionExists: func(string) bool { return true },
+		}
+		// Real capture shape: transcript, empty composer, box border, then the
+		// status footer carrying the banner.
+		tmuxClient, calls := fakeTmux(t, `printf '  earlier output\n❯  \n──────────\n  ⏵⏵ bypass permissions on   ● Login expired · Please run /login\n'`)
+		a.tmux = tmuxClient
+		if err := a.message([]string{"alp", "the whole brief"}); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(calls(), "paste-buffer") || strings.Contains(calls(), "load-buffer") {
+			t.Fatalf("pasted into an expired-login pane:\n%s", calls())
+		}
+		got := readTestOutput(t, out)
+		if !strings.HasPrefix(got, "GONDERILEMEDI: alp — ") || !strings.Contains(got, "Login expired") ||
+			!strings.Contains(got, "kuyruga alindi (channel: q") {
+			t.Fatalf("output=%q", got)
+		}
+		records := queuedMessages(t, msgqRoot)
+		if len(records) != 1 {
+			t.Fatalf("queue records=%v, want exactly one", records)
+		}
+		data, err := os.ReadFile(records[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "the whole brief") {
+			t.Fatalf("queued record does not hold the message: %s", data)
+		}
+	})
+
+	t.Run("unverified is reported and never queued", func(t *testing.T) {
+		// Composer empty both before and after the paste: nothing confirms the
+		// message landed, nothing contradicts it either.
+		stateDir := t.TempDir()
+		msgqRoot := filepath.Join(stateDir, "msgq")
+		out := testOutput(t)
+		a := &app{
+			ctx:           context.Background(),
+			config:        bpconfig.Config{StateDir: stateDir},
+			queue:         msgq.New(msgqRoot),
+			out:           out,
+			sessionExists: func(string) bool { return true },
+		}
+		tmuxClient, calls := fakeTmux(t, `printf '❯  \n──────────\n'`)
+		a.tmux = tmuxClient
+		err := a.message([]string{"alp", "the whole brief"})
+		if !strings.Contains(calls(), "paste-buffer") {
+			t.Fatalf("the unverified case must be a real paste:\n%s", calls())
+		}
+		if !errors.Is(err, errReported) {
+			t.Fatalf("err=%v, want errReported (non-zero exit, no duplicate line)", err)
+		}
+		want := "gonderildi ama DOGRULANAMADI: alp — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek alp ile bak\n"
+		if got := readTestOutput(t, out); got != want {
+			t.Fatalf("output=%q, want %q", got, want)
+		}
+		if records := queuedMessages(t, msgqRoot); len(records) != 0 {
+			t.Fatalf("unverified send was queued (would duplicate): %v", records)
+		}
+	})
+}
+
+func TestDeliveryTallyBucketsUnverified(t *testing.T) {
+	var tally deliveryTally
+	// Unverified: neither a delivery nor an error — its own bucket.
+	if tally.record("alpha", false, "", fmt.Errorf("wrap: %w", bptmux.ErrUnverified)) {
+		t.Fatal("unverified must not count as a delivery")
+	}
+	// A proven failure arrives already queued: it counts, with its channel.
+	if !tally.record("beta", true, "q2", fmt.Errorf("%w: login", bptmux.ErrNotReady)) {
+		t.Fatal("queued proven failure should count as handled")
+	}
+	if tally.sent != 0 || len(tally.channels) != 1 || tally.channels[0] != "q2" {
+		t.Fatalf("sent=%d channels=%v", tally.sent, tally.channels)
+	}
+	if len(tally.unverified) != 1 || tally.unverified[0] != "alpha" {
+		t.Fatalf("unverified=%v", tally.unverified)
+	}
+	if len(tally.errs) != 0 {
+		t.Fatalf("errs=%v, want none", tally.errs)
+	}
+	out := testOutput(t)
+	tally.report(out)
+	if got := readTestOutput(t, out); !strings.Contains(got, "dogrulanamadi: 1 (alpha)") {
+		t.Fatalf("summary=%q", got)
+	}
+	// A clean tally prints nothing, so existing summaries stay byte-identical.
+	clean := testOutput(t)
+	(&deliveryTally{}).report(clean)
+	if got := readTestOutput(t, clean); got != "" {
+		t.Fatalf("clean summary=%q, want empty", got)
+	}
+}

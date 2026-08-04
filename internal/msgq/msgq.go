@@ -273,6 +273,27 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			if errors.Is(err, bptmux.ErrTyping) {
 				continue
 			}
+			if errors.Is(err, bptmux.ErrNotReady) {
+				// PROVEN non-delivery (expired login, foreign composer): the
+				// message stays PENDING for the next pass, and the reason is
+				// reported so the state is visible instead of silent.
+				if report != nil {
+					report(fmt.Sprintf("msgq: %s -> %s not delivered (%v); still queued", message.ID, message.To, err))
+				}
+				continue
+			}
+			if errors.Is(err, bptmux.ErrUnverified) {
+				// Injected and submitted, but nothing confirmed it. Re-sending
+				// could deliver the same message twice, so the record is closed
+				// with an honest status rather than retried.
+				if err := q.finish(path, message, "delivered (unverified)"); err != nil && report != nil {
+					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+				}
+				if report != nil {
+					report(fmt.Sprintf("delivered (UNVERIFIED): %s -> %s; check with bp peek %s", message.ID, message.To, message.To))
+				}
+				continue
+			}
 			if report != nil {
 				report(fmt.Sprintf("msgq: could not send %s: %v", message.ID, err))
 			}

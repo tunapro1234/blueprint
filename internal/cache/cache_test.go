@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,5 +96,41 @@ func writeJSONL(t *testing.T, path string, rows []any) {
 	}
 	if err := file.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A single transcript record can be larger than the tail window (real sessions
+// in this fleet reach 3.5 MB against a 500 KB window). The window then lands
+// entirely inside that one record and holds no complete record at all; reading
+// "unknown" out of it and reporting that as the agent's state is a silent
+// partial read, so the tail must widen instead.
+func TestReadWidensTailPastRecordLargerThanWindow(t *testing.T) {
+	root, folder, agent := t.TempDir(), "/srv/project", "ada"
+	dir := filepath.Join(root, "-srv-project")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	lines := []any{
+		map[string]any{"type": "custom-title", "customTitle": agent},
+		user(now.Add(-2*time.Hour), "real user message"),
+		usage(now.Add(-30*time.Minute), 150_000, 70_000),
+		// One record twice the tail window, as a big tool result or paste makes.
+		user(now.Add(-10*time.Minute), "[tool_result] "+strings.Repeat("z", tailSize*2)),
+	}
+	writeJSONL(t, filepath.Join(dir, "session.jsonl"), lines)
+
+	state := Read(root, folder, agent)
+	if !state.Known {
+		t.Fatalf("state=%+v, want a known state: the tail window sat inside one record", state)
+	}
+	if state.CtxTokens != 220_000 {
+		t.Fatalf("ctx=%d, want 220000", state.CtxTokens)
+	}
+	if state.Model != "claude-opus-5" {
+		t.Fatalf("model=%q, want claude-opus-5", state.Model)
+	}
+	if state.LastHumanAge < 9*time.Minute || state.LastHumanAge > 11*time.Minute {
+		t.Fatalf("last human age=%v, want about 10m", state.LastHumanAge)
 	}
 }

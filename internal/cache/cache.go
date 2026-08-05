@@ -11,7 +11,52 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
-const tailSize = 500 * 1024
+const (
+	// tailSize is the window bp normally reads from the end of a session file:
+	// enough for the recent records, cheap enough to run for every agent on
+	// every status refresh.
+	tailSize = 500 * 1024
+	// maxTailSize bounds the retry for the case tailSize cannot cover: ONE
+	// record longer than the window. Claude transcript lines reach 3.5 MB and
+	// codex rollout lines 7.1 MB in this fleet, both well past tailSize, and a
+	// window that lands inside such a record yields no complete record at all.
+	// Reporting "unknown" from that window would be a silent partial read
+	// dressed up as a finished one, so the tail is re-read once at this bound
+	// before giving up. Beyond 16 MiB a single record is genuinely unreadable
+	// here and the state stays unknown.
+	maxTailSize = 16 * 1024 * 1024
+)
+
+// readTail returns the complete records at the end of a session file: the
+// tailSize window with its leading partial record removed, widened once to
+// maxTailSize when that window turned out to hold no complete record. false
+// means the file could not be read at all.
+func readTail(file *os.File, size int64) ([]byte, bool) {
+	for _, window := range [...]int64{tailSize, maxTailSize} {
+		start := size - window
+		if start < 0 {
+			start = 0
+		}
+		data := make([]byte, size-start)
+		n, err := file.ReadAt(data, start)
+		if err != nil && n == 0 {
+			return nil, false
+		}
+		data = data[:n]
+		if start == 0 {
+			return data, true
+		}
+		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+			data = data[newline+1:]
+		} else {
+			data = nil
+		}
+		if len(bytes.TrimSpace(data)) > 0 {
+			return data, true
+		}
+	}
+	return nil, false
+}
 
 var digestPrefix = regexp.MustCompile(`^\[\d+ birikmis duyuru`)
 
@@ -44,21 +89,9 @@ func Read(projectsRoot, folder, agent string) State {
 	if err != nil {
 		return State{LastHumanAge: -1}
 	}
-	size := info.Size()
-	start := size - tailSize
-	if start < 0 {
-		start = 0
-	}
-	data := make([]byte, size-start)
-	n, err := file.ReadAt(data, start)
-	if err != nil && n == 0 {
+	data, ok := readTail(file, info.Size())
+	if !ok {
 		return State{LastHumanAge: -1}
-	}
-	data = data[:n]
-	if start > 0 {
-		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
-			data = data[newline+1:]
-		}
 	}
 
 	var usageTime, humanTime time.Time

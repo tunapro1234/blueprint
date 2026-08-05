@@ -110,3 +110,33 @@ func writeRollout(t *testing.T, path, cwd string, at time.Time, tokens, window i
 		t.Fatal(err)
 	}
 }
+
+// Same tail-window trap as the Claude transcript, with more headroom to lose:
+// codex rollout records reach 7.1 MB in this fleet against a 500 KB window.
+func TestReadCodexWidensTailPastRecordLargerThanWindow(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now()
+	path := filepath.Join(home, "sessions", "2026", "07", "29", "rollout-big.jsonl")
+	writeRollout(t, path, "/srv/server-crash", now.Add(-8*time.Minute), 177_990, 258_400)
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := map[string]any{
+		"timestamp": now.Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+		"type":      "response_item",
+		"payload":   map[string]any{"type": "function_call_output", "output": strings.Repeat("z", tailSize*2)},
+	}
+	if err := json.NewEncoder(file).Encode(row); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	state := ReadCodex(home, "/srv/server-crash")
+	if !state.Known || state.CtxTokens != 177_990 || state.Window != 258_400 {
+		t.Fatalf("state=%+v, want the token_count behind the oversized record", state)
+	}
+}

@@ -35,21 +35,9 @@ func ReadCodex(codexHome, folder string) State {
 	if err != nil {
 		return State{LastHumanAge: -1}
 	}
-	size := info.Size()
-	start := size - tailSize
-	if start < 0 {
-		start = 0
-	}
-	data := make([]byte, size-start)
-	n, err := file.ReadAt(data, start)
-	if err != nil && n == 0 {
+	data, ok := readTail(file, info.Size())
+	if !ok {
 		return State{LastHumanAge: -1}
-	}
-	data = data[:n]
-	if start > 0 {
-		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
-			data = data[newline+1:]
-		}
 	}
 
 	var eventTime time.Time

@@ -1333,12 +1333,18 @@ func (a *app) message(args []string) error {
 		fmt.Fprintf(a.out, "queued for %s (offline; delivered when it opens)\n", name)
 		return nil
 	}
-	entries, dropped, err := pending.Load(a.config.StateDir, name)
-	if err != nil {
-		return err
-	}
 	attachPending := !strings.HasPrefix(message, "/")
+	var entries []pending.Entry
 	if attachPending {
+		// Load prunes the spool, so it runs only on the branch that actually
+		// delivers the digest — the one place the drop count is shown. A slash
+		// command carries no digest: loading for it would trim the queue with
+		// nobody ever told what went missing.
+		loaded, dropped, err := pending.Load(a.config.StateDir, name)
+		if err != nil {
+			return err
+		}
+		entries = loaded
 		message = "[" + sender + "] " + message
 		if len(entries) > 0 {
 			message = formatDigest(entries, dropped) + "\n\n" + message

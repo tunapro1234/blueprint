@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,7 @@ import (
 
 func TestBarWidgetOrderFollowsConfig(t *testing.T) {
 	stateDir := t.TempDir()
-	if err := pending.Append(filepath.Join(stateDir, "pending"), "agent", pending.Entry{
+	if err := pending.Append(stateDir, "agent", pending.Entry{
 		TS: time.Now().Unix(), Text: "waiting",
 	}); err != nil {
 		t.Fatal(err)
@@ -31,6 +32,43 @@ func TestBarWidgetOrderFollowsConfig(t *testing.T) {
 	queue := strings.Index(line, "queue 1")
 	if clock < 0 || queue < 0 || clock > queue {
 		t.Fatalf("widgets did not render in configured order: %q", line)
+	}
+}
+
+// The queue widget must read the real spool layout, state/pending/<agent>.jsonl.
+// It used to be handed StateDir+"/pending", which pending then extended again,
+// so the bar looked in state/pending/pending/ and the widget never appeared
+// however many messages were waiting. Writing the file at the true path here
+// makes the widget vanish again if that doubling comes back. Reading it must
+// also leave the spool alone: a status bar has nowhere to report a drop count.
+func TestBarQueueWidgetReadsSpoolLayoutWithoutPruning(t *testing.T) {
+	stateDir := t.TempDir()
+	spool := filepath.Join(stateDir, "pending", "agent.jsonl")
+	now := time.Now().Unix()
+	writeBarTestFile(t, spool, fmt.Sprintf(
+		"{\"ts\":%d,\"from\":\"ada\",\"kind\":\"msg\",\"text\":\"one\"}\n"+
+			"{\"ts\":%d,\"from\":\"ada\",\"kind\":\"msg\",\"text\":\"two\"}\n", now-60, now))
+	before, err := os.Stat(spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &app{
+		ctx: context.Background(),
+		config: bpconfig.Config{
+			StateDir: stateDir,
+			Bar:      bpconfig.BarConfig{Widgets: []string{"queue"}},
+		},
+	}
+	if line := a.barLine("agent"); !strings.Contains(line, "queue 2") {
+		t.Fatalf("queue widget missing for a real spool: %q", line)
+	}
+	after, err := os.Stat(spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatalf("bar rewrote the spool: %d/%v -> %d/%v",
+			before.Size(), before.ModTime(), after.Size(), after.ModTime())
 	}
 }
 

@@ -60,6 +60,10 @@ func Append(dir, agent string, entry Entry) error {
 	return err
 }
 
+// Load is the DELIVERY path: it returns the entries to hand the agent and
+// PRUNES the spool to match, so the caller must surface dropped (formatDigest
+// does). Anything that only wants to look — a count, a status bar — must use
+// Peek or Stat instead, or a mere glance silently deletes messages.
 func Load(dir, agent string) ([]Entry, int, error) {
 	file, err := os.OpenFile(path(dir, agent), os.O_RDWR, 0644)
 	if errors.Is(err, os.ErrNotExist) {
@@ -74,38 +78,54 @@ func Load(dir, agent string) ([]Entry, int, error) {
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
-	cutoff := time.Now().Add(-maxAge).Unix()
-	var entries []Entry
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxRecordBytes)
-	for scanner.Scan() {
-		if strings.TrimSpace(scanner.Text()) == "" {
-			continue
-		}
-		var entry Entry
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			return nil, 0, err
-		}
-		if entry.TS >= cutoff {
-			entries = append(entries, entry)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, 0, err
-	}
-	total, err := countLines(file)
+	live, total, err := scan(file)
 	if err != nil {
 		return nil, 0, err
 	}
-	dropped := total - len(entries)
-	if len(entries) > maxItems {
-		dropped += len(entries) - maxItems
-		entries = entries[len(entries)-maxItems:]
-	}
+	entries, dropped := view(live, total)
 	if err := rewrite(file, entries); err != nil {
 		return nil, 0, err
 	}
 	return entries, dropped, nil
+}
+
+// Peek is Load without the pruning: same age cutoff, same cap, same numbers —
+// the file is left exactly as it was found. Use it wherever the drop count has
+// nowhere to go, so that reading a queue can never shorten it.
+//
+// It takes a SHARED lock rather than none. Load and Clear rewrite in place
+// (truncate, then write) under the exclusive lock, so an unlocked reader can
+// catch the file mid-rewrite and report an empty or half-written spool. A
+// shared lock excludes exactly those writers and nothing else: concurrent
+// Peeks still run together, and no writer is ever blocked longer than one read.
+func Peek(dir, agent string) ([]Entry, int, error) {
+	file, err := os.Open(path(dir, agent))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH); err != nil {
+		return nil, 0, err
+	}
+	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	live, total, err := scan(file)
+	if err != nil {
+		return nil, 0, err
+	}
+	entries, dropped := view(live, total)
+	return entries, dropped, nil
+}
+
+// Stat is Peek without the payload: items is how many entries a delivery would
+// show right now, over how many it would drop. Neither number costs the spool
+// anything.
+func Stat(dir, agent string) (items int, over int, err error) {
+	entries, dropped, err := Peek(dir, agent)
+	return len(entries), dropped, err
 }
 
 func Clear(dir, agent string) error {
@@ -128,13 +148,16 @@ func Counts(dir string) (agents int, items int, err error) {
 	}
 	for _, file := range files {
 		name := strings.TrimSuffix(filepath.Base(file), ".jsonl")
-		entries, _, loadErr := Load(dir, name)
-		if loadErr != nil {
-			return 0, 0, fmt.Errorf("%s: %w", file, loadErr)
+		// Peek, never Load: bp q reports these numbers and has nowhere to put a
+		// drop count, so pruning here would delete over-cap messages with nobody
+		// told. Counting a queue must not empty it.
+		count, _, statErr := Stat(dir, name)
+		if statErr != nil {
+			return 0, 0, fmt.Errorf("%s: %w", file, statErr)
 		}
-		if len(entries) > 0 {
+		if count > 0 {
 			agents++
-			items += len(entries)
+			items += count
 		}
 	}
 	return agents, items, nil
@@ -144,22 +167,45 @@ func path(dir, agent string) string {
 	return filepath.Join(dir, "pending", agent+".jsonl")
 }
 
-// countLines counts the records currently on disk so Load can report how many
-// it is about to drop. Its error is returned rather than swallowed: a short
-// count here would silently understate (or negate) the dropped total.
-func countLines(file *os.File) (int, error) {
+// scan reads the whole spool once: live is the records still inside maxAge,
+// total is how many records are on disk. Both Load and Peek go through it so
+// their views can never drift apart. Errors are returned rather than swallowed:
+// a short read here would silently understate (or negate) the dropped total.
+func scan(file *os.File) (live []Entry, total int, err error) {
 	if _, err := file.Seek(0, 0); err != nil {
-		return 0, err
+		return nil, 0, err
 	}
+	cutoff := time.Now().Add(-maxAge).Unix()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxRecordBytes)
-	count := 0
 	for scanner.Scan() {
-		if strings.TrimSpace(scanner.Text()) != "" {
-			count++
+		if strings.TrimSpace(scanner.Text()) == "" {
+			continue
+		}
+		var entry Entry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			return nil, 0, err
+		}
+		total++
+		if entry.TS >= cutoff {
+			live = append(live, entry)
 		}
 	}
-	return count, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, 0, err
+	}
+	return live, total, nil
+}
+
+// view applies the delivery view to a scanned spool: the newest maxItems live
+// entries, plus how many records a delivery would drop (aged out and over cap).
+func view(live []Entry, total int) ([]Entry, int) {
+	dropped := total - len(live)
+	if len(live) > maxItems {
+		dropped += len(live) - maxItems
+		live = live[len(live)-maxItems:]
+	}
+	return live, dropped
 }
 
 func rewrite(file *os.File, entries []Entry) error {

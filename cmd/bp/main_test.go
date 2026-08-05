@@ -428,6 +428,44 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		}
 	})
 
+	// A slash command carries no digest, so it must not touch the spool: the
+	// waiting messages (and any that are over the cap) stay for the delivery
+	// that will actually show them, drop count and all.
+	t.Run("slash command leaves pending untouched", func(t *testing.T) {
+		stateDir := t.TempDir()
+		for i := 0; i < 25; i++ {
+			entry := pending.Entry{TS: time.Now().Add(time.Duration(i-25) * time.Minute).Unix(), From: "ada", Kind: "announce", Text: fmt.Sprint(i)}
+			if err := pending.Append(stateDir, "alp", entry); err != nil {
+				t.Fatal(err)
+			}
+		}
+		spool := filepath.Join(stateDir, "pending", "alp.jsonl")
+		before, err := os.Stat(spool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := &app{
+			config:        bpconfig.Config{StateDir: stateDir},
+			out:           testOutput(t),
+			sessionExists: func(string) bool { return true },
+			loadFleet:     slashFleet,
+			deliverMessage: func(name, from, message string) (bool, string, error) {
+				return false, "", nil
+			},
+		}
+		if err := a.message([]string{"alp", "/compact"}); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.Stat(spool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
+			t.Fatalf("a slash command pruned the spool: %d/%v -> %d/%v",
+				before.Size(), before.ModTime(), after.Size(), after.ModTime())
+		}
+	})
+
 	t.Run("goal carries the sender inside the payload", func(t *testing.T) {
 		var delivered string
 		a := &app{

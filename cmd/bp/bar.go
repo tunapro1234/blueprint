@@ -213,8 +213,11 @@ func (a *app) barLine(agent string) string {
 			}
 			segments = append(segments, style(colour, "talk "+formatAge(state.LastHumanAge)))
 		case "queue":
-			if items, _, err := pending.Load(filepath.Join(a.config.StateDir, "pending"), agent); err == nil && len(items) > 0 {
-				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(len(items))))
+			// Stat, not Load: the bar refreshes on every tick and shows no drop
+			// count, so loading here would prune the spool behind the operator's
+			// back. StateDir is the root — pending itself appends "pending/".
+			if items, _, err := pending.Stat(a.config.StateDir, agent); err == nil && items > 0 {
+				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(items)))
 			}
 		case "model":
 			if model := a.barModel(readProcess(), readFolder(), readState); model != "" {

@@ -353,6 +353,33 @@ func TestJournalRecordsOutboundQueue(t *testing.T) {
 	}
 }
 
+// sanitize deliberately keeps \n, and federation payloads arrive from another
+// machine, so the journal is the store most exposed to a multi-line record. It
+// is line-delimited: each message must come back as ONE entry with its text
+// intact, never as extra entries with empty fields.
+func TestJournalKeepsMultiLineMessageAsOneRecord(t *testing.T) {
+	stateDir := t.TempDir()
+	peers := map[string]Peer{"yigit": {Token: testToken}}
+	text := "line one\n{\"ts\":\"forged\",\"dir\":\"in\",\"msg\":\"injected\"}\nline three\r\n"
+	if _, err := QueueOutbound(stateDir, peers, "yigit", "oz", "ada@tuna", text); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := ReadJournal(stateDir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal) != 1 {
+		t.Fatalf("journal has %d entries, want 1 — the newlines split the record: %+v", len(journal), journal)
+	}
+	// \r is stripped as a control byte before storage; \n is kept as text.
+	if journal[0].Msg != sanitize(text) || journal[0].From != "ada@tuna" {
+		t.Fatalf("round trip lost content: %+v", journal[0])
+	}
+	if !strings.Contains(journal[0].Msg, "\nline three") {
+		t.Fatalf("newlines did not survive as text: %q", journal[0].Msg)
+	}
+}
+
 func TestValidateNameStrictAlphabet(t *testing.T) {
 	for _, value := range []string{"a@b", "x] [y", "has space", "..", "*", strings.Repeat("a", 65)} {
 		if err := validateName(value); err == nil {

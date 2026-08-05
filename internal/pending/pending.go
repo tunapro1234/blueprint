@@ -15,6 +15,15 @@ import (
 const (
 	maxAge   = 7 * 24 * time.Hour
 	maxItems = 20
+	// maxRecordBytes bounds one spooled record, on both sides of the store.
+	// The spool is line-delimited, so a record longer than the reader's line
+	// buffer makes the WHOLE file unreadable: bufio.Scanner returns ErrTooLong
+	// and every later Load fails, stranding messages that were accepted. Append
+	// refuses anything the reader cannot read back, so "written" always implies
+	// "readable". 8 MiB is far above any real bp msg or bp announce text
+	// (federated messages are capped at fed.MaxMessageBytes = 16 KiB) and costs
+	// nothing until a line actually needs it.
+	maxRecordBytes = 8 << 20
 )
 
 type Entry struct {
@@ -25,6 +34,16 @@ type Entry struct {
 }
 
 func Append(dir, agent string, entry Entry) error {
+	// json.Marshal escapes newlines, so one record is always exactly one line
+	// however many line breaks the message text carries.
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if len(data) > maxRecordBytes {
+		return fmt.Errorf("message is %d bytes, over the %d byte spool record limit", len(data), maxRecordBytes)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "pending"), 0755); err != nil {
 		return err
 	}
@@ -37,7 +56,8 @@ func Append(dir, agent string, entry Entry) error {
 		return err
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	return json.NewEncoder(file).Encode(entry)
+	_, err = file.Write(data)
+	return err
 }
 
 func Load(dir, agent string) ([]Entry, int, error) {
@@ -57,6 +77,7 @@ func Load(dir, agent string) ([]Entry, int, error) {
 	cutoff := time.Now().Add(-maxAge).Unix()
 	var entries []Entry
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxRecordBytes)
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) == "" {
 			continue
@@ -72,7 +93,11 @@ func Load(dir, agent string) ([]Entry, int, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
 	}
-	dropped := countLines(file) - len(entries)
+	total, err := countLines(file)
+	if err != nil {
+		return nil, 0, err
+	}
+	dropped := total - len(entries)
 	if len(entries) > maxItems {
 		dropped += len(entries) - maxItems
 		entries = entries[len(entries)-maxItems:]
@@ -119,16 +144,22 @@ func path(dir, agent string) string {
 	return filepath.Join(dir, "pending", agent+".jsonl")
 }
 
-func countLines(file *os.File) int {
-	_, _ = file.Seek(0, 0)
+// countLines counts the records currently on disk so Load can report how many
+// it is about to drop. Its error is returned rather than swallowed: a short
+// count here would silently understate (or negate) the dropped total.
+func countLines(file *os.File) (int, error) {
+	if _, err := file.Seek(0, 0); err != nil {
+		return 0, err
+	}
 	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxRecordBytes)
 	count := 0
 	for scanner.Scan() {
 		if strings.TrimSpace(scanner.Text()) != "" {
 			count++
 		}
 	}
-	return count
+	return count, scanner.Err()
 }
 
 func rewrite(file *os.File, entries []Entry) error {

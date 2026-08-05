@@ -226,3 +226,47 @@ func equalJSON(a, b any) bool {
 	right, _ := json.Marshal(b)
 	return bytes.Equal(left, right)
 }
+
+// The token store keeps prompt text for 90 days in line-delimited files. A
+// multi-line prompt must stay ONE raw record and ONE prompt-rollup record: an
+// unescaped newline here would be read back as extra rows with an empty agent,
+// silently inflating a usage report instead of failing.
+func TestMultiLinePromptStaysOneRecordInStore(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, istanbul)
+	config := testConfig(t, now)
+	path := filepath.Join(config.ClaudeRoot, "-srv-test", "session.jsonl")
+	ts := "2026-07-26T08:00:00Z"
+	prompt := "first line\n{\"day\":\"2026-07-26\",\"agent\":\"\",\"in\":999999}\nlast line"
+	writeLines(t, path,
+		claudeUser("u1", "", "prompt-1", ts, prompt, false),
+		claudeAssistant("a1", "u1", "request-1", ts, 11),
+	)
+	if _, err := Collect(config); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, file := range []string{
+		filepath.Join(config.StoreDir, "raw", "2026-07-26.jsonl"),
+		filepath.Join(config.StoreDir, "prompts", "2026-07-26.jsonl"),
+	} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lines := strings.Count(string(data), "\n"); lines != 1 {
+			t.Fatalf("%s holds %d lines, want 1: %s", filepath.Base(file), lines, data)
+		}
+	}
+
+	rows, err := readRawDay(config.StoreDir, "2026-07-26")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Agent == "" || rows[0].In != 10 {
+		t.Fatalf("raw rows=%+v, want a single attributed row", rows)
+	}
+	// The preview collapses whitespace, so no newline reaches the store at all.
+	if strings.ContainsAny(rows[0].Prompt, "\n\r") {
+		t.Fatalf("stored preview still carries line breaks: %q", rows[0].Prompt)
+	}
+}

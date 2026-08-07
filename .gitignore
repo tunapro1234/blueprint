@@ -2,3 +2,4 @@
 /state/
 /config.json
 /dist/
+/config.json.bak-*

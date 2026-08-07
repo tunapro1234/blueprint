@@ -20,7 +20,12 @@ token takibi yalnızca üçünde vardı, hiçbirinde prompt bazlı kırılım yo
 
 ---
 
-## 1. Eski konuşmalarda arama
+## 1. Eski konuşmalarda arama (→ transcript analiz katmanına bağlandı)
+
+**2026-08-07:** bu madde artık kendi başına yazılmayacak; `docs/transcript-index.md`'deki
+indeksin bir alt komutu olarak gelecek (`bp trace search`, FTS5). Gerekçe: mesaj metni iki
+külliyatın yalnız %2-4'ü (78 MB), yani arama aynı indeksin yan ürünü — ayrı bir tarayıcı
+kurmaya değmez. Aşağıdaki özgün gerekçe hâlâ geçerli.
 
 **Ne:** `bp search "<sorgu>" [--agent <ad>] [--since 7d]` — oturum jsonl'lerinde tam metin arama;
 sonuçta agent, tarih, prompt önizlemesi ve session id.

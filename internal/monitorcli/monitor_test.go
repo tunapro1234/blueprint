@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"blueprint/internal/codexauth"
 )
 
 func TestDecodeKeepsValidSectionsWhenOneSectionIsMalformed(t *testing.T) {
@@ -219,5 +221,50 @@ func TestLoadRadarPrefersLocalThenEmbedded(t *testing.T) {
 	radar, source, err = LoadRadar(context.Background(), embedded, SourceOptions{LocalRadarPath: filepath.Join(t.TempDir(), "missing")})
 	if err != nil || radar.GeneratedAt != "embedded" || source != "data.json" {
 		t.Fatalf("embedded radar=%+v source=%q err=%v", radar, source, err)
+	}
+}
+
+// A missing codex meter during a proven outage must be explained, not simply
+// left out of the table.
+func TestRenderOverviewExplainsMissingCodexMeterWhenAuthIsBroken(t *testing.T) {
+	body := []byte(`{"usage":{"current":{
+  "ts":"2026-08-10T13:26:07Z",
+  "claude_5h":5,"claude_7d":9,"codex_5h":null,
+  "resets":{"claude_5h":"2026-08-10T18:10:00Z","claude_7d":"2026-08-14T23:00:00Z"}
+}}}`)
+	doc, err := Decode(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 10, 13, 30, 0, 0, time.UTC)
+	broken := codexauth.State{Status: codexauth.Expired, Reason: "last_refresh 3d old (>1d), id_token expired 3d 4h ago"}
+
+	var output bytes.Buffer
+	if err := Render(&output, doc, "overview", RenderOptions{Now: now, CodexAuth: broken}); err != nil {
+		t.Fatal(err)
+	}
+	want := "Note: Codex ERISIM YOK (codex auth: last_refresh 3d old (>1d), id_token expired 3d 4h ago); codex meters omitted."
+	if !strings.Contains(output.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, output.String())
+	}
+
+	// Without proof there is no claim, and a present meter is never annotated.
+	var quiet bytes.Buffer
+	if err := Render(&quiet, doc, "overview", RenderOptions{Now: now, CodexAuth: codexauth.State{Status: codexauth.Stale, Reason: "awaiting next refresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(quiet.String(), "ERISIM YOK") {
+		t.Fatalf("unproven auth trouble must not be reported:\n%s", quiet.String())
+	}
+	healthyDoc, err := Decode([]byte(`{"usage":{"current":{"ts":"2026-08-10T13:26:07Z","codex_5h":52}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var healthy bytes.Buffer
+	if err := Render(&healthy, healthyDoc, "overview", RenderOptions{Now: now, CodexAuth: broken}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(healthy.String(), "ERISIM YOK") {
+		t.Fatalf("a present codex meter must not be annotated:\n%s", healthy.String())
 	}
 }

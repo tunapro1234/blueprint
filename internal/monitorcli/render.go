@@ -11,6 +11,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"blueprint/internal/codexauth"
 )
 
 const DefaultJobsPath = "/srv/blueprint/state/jobs.json"
@@ -46,6 +48,11 @@ type RenderOptions struct {
 	Jobs     map[string]JobState
 	JobsNote string
 	Radar    *Radar
+	// CodexAuth explains a missing codex meter. Unlike usagecli, this renderer
+	// cannot print a Go nil - every meter is a Number and invalid ones are
+	// skipped - but a silently absent row still reads as "nothing to report"
+	// during a total outage. The zero value claims nothing.
+	CodexAuth codexauth.State
 }
 
 func LoadJobs(path string) (map[string]JobState, error) {
@@ -74,7 +81,7 @@ func Render(out io.Writer, doc *Document, view string, options RenderOptions) er
 	}
 	switch view {
 	case "", "overview":
-		renderOverview(out, doc, options.Now)
+		renderOverview(out, doc, options)
 	case "usage":
 		renderUsage(out, doc)
 	case "cost":
@@ -93,7 +100,8 @@ func Render(out io.Writer, doc *Document, view string, options RenderOptions) er
 	return nil
 }
 
-func renderOverview(out io.Writer, doc *Document, now time.Time) {
+func renderOverview(out io.Writer, doc *Document, options RenderOptions) {
+	now := options.Now
 	fmt.Fprintln(out, "MONITOR OVERVIEW")
 	stamp(out, "Generated", doc.GeneratedAt)
 	if doc.Usage == nil {
@@ -115,6 +123,11 @@ func renderOverview(out io.Writer, doc *Document, now time.Time) {
 	})
 	if !hasAnyMeter(doc.Usage.Current) {
 		fmt.Fprintln(out, "Note: no usage meters are present.")
+	}
+	// Say why the codex row is missing when we can prove it, using the same
+	// wording as `bp usage` so the two commands cannot contradict each other.
+	if !doc.Usage.Current.Codex5H.Valid && options.CodexAuth.Broken() {
+		fmt.Fprintf(out, "Note: Codex ERISIM YOK (codex auth: %s); codex meters omitted.\n", oneLine(options.CodexAuth.Reason))
 	}
 }
 

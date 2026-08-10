@@ -21,6 +21,7 @@ import (
 
 	"blueprint/internal/book"
 	bpcache "blueprint/internal/cache"
+	"blueprint/internal/codexauth"
 	"blueprint/internal/codexrpc"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
@@ -2334,7 +2335,11 @@ func (a *app) usage() error {
 	if err != nil {
 		return err
 	}
-	for _, line := range usagecli.Lines(sample) {
+	// The collector writes a null both when codex was idle and when its OAuth
+	// session is dead, so the local session file is what lets the renderer name
+	// which one happened. Reading it is offline and cheap.
+	opts := usagecli.Options{Now: time.Now(), Auth: codexauth.Check()}
+	for _, line := range usagecli.Lines(sample, opts) {
 		fmt.Fprintln(a.out, line)
 	}
 	return nil
@@ -2365,7 +2370,7 @@ func (a *app) monitor(args []string) error {
 	if err != nil {
 		return err
 	}
-	renderOptions := monitorcli.RenderOptions{Now: time.Now()}
+	renderOptions := monitorcli.RenderOptions{Now: time.Now(), CodexAuth: codexauth.Check()}
 	var trailingNote string
 	if view == "services" {
 		jobs, jobsErr := monitorcli.LoadJobs(filepath.Join(a.config.StateDir, "jobs.json"))

@@ -173,9 +173,10 @@ const (
 // ClearComposer runs first — that is what it was written for. The reported
 // failure was a composer that LOOKED empty but made the pre-send check report
 // "composer is not empty", so the /rename never went in. ClearComposer settles
-// that state (Escape, then C-u only when nothing visible is typed), and refuses
-// a working pane, which is also this command's refusal: a rename is never worth
-// interrupting a turn for.
+// that state with C-u — never Escape, which would cancel a running turn (see its
+// own doc comment for the retraction) — and refuses both a working pane and a
+// composer holding real text, which is also this command's refusal: a rename is
+// never worth interrupting a turn or overwriting a half-written line for.
 //
 // Verification reads the TRANSCRIPT, never the screen. The rendered TUI title
 // bar is not evidence — some panes do not draw one at all — while the transcript
@@ -292,7 +293,7 @@ func (a *app) reportRenameRefused(old, name string, err error) {
 		fmt.Fprintf(a.err, "the pane is mid-turn and must not be interrupted; wait for it to finish (bp peek %s), then run: bp rename %s %s\n", old, old, name)
 		return
 	}
-	fmt.Fprintf(a.err, "type this inside the pane by hand (rush %s; Escape, then Ctrl-u first if the composer is stuck):\n", old)
+	fmt.Fprintf(a.err, "type this inside the pane by hand (rush %s; Ctrl-u a few times first if the composer is stuck):\n", old)
 	fmt.Fprintf(a.err, "  /rename %s\n", name)
 	fmt.Fprintf(a.err, "then run: bp rename %s %s\n", old, name)
 }

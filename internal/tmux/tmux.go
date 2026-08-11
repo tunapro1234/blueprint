@@ -145,11 +145,20 @@ func codexBusyQueue(pane string) bool {
 }
 
 // composerHoldsMessage reports whether the composer still holds exactly our
-// unsubmitted message: either the literal text (space-collapsed match) or the
-// Codex large-paste chip that stands in for it. When true, pressing Enter again
-// is safe; when false the composer either cleared (submitted) or a user edited
-// it, and no key may be sent.
+// unsubmitted message: the FULL box content, the literal text on the final row
+// (space-collapsed match), or the Codex large-paste chip that stands in for it.
+// When true, pressing Enter again is safe; when false the composer either
+// cleared (submitted) or a user edited it, and no key may be sent.
+//
+// The box is consulted first and only ever WIDENS the answer, and only on proof:
+// a message that WRAPPED across several rows has no single row equal to it, so
+// the row-only test used to bail without pressing Enter again and leave the
+// message hanging. The box compares the whole content, which is exactly the
+// evidence needed to press Enter on our own multi-row paste.
 func composerHoldsMessage(pane, want string) bool {
+	if box, ok := composerBoxText(pane); ok && box == want {
+		return true
+	}
 	return composerContent(pane) == want || codexPasteChip(pane)
 }
 
@@ -179,15 +188,22 @@ const (
 // text plus theirs) is ever mistaken for a foreign composer: only content with no
 // relation at all to ours is called composerOther, because that verdict makes the
 // caller queue the message for another delivery attempt.
+// When the composer BOX can be read it is preferred over the single row, because
+// it is the complete content: a message that merely WRAPPED reads as an exact
+// match instead of a prefix, and text that is genuinely unrelated is recognised
+// as such even when its first row happens to start like ours.
 func classifyComposer(pane, want string) composerVerdict {
 	if codexPasteChip(pane) || claudePasteChip(pane) {
 		return composerMine
 	}
-	got := composerContent(pane)
+	got, boxed := composerJudgeText(pane)
+	if !boxed {
+		got = composerContent(pane)
+	}
 	if got == "" {
 		return composerCleared
 	}
-	if strings.HasPrefix(want, got) || strings.HasPrefix(got, want) {
+	if got == want || strings.HasPrefix(want, got) || strings.HasPrefix(got, want) {
 		return composerMine
 	}
 	return composerOther
@@ -640,16 +656,27 @@ const (
 // composer check closes the old check-then-paste window in which a user could
 // begin typing just as a queued message was injected.
 //
+// firstPane is the capture the stuck-paste gate (resolveStuckPaste) already took;
+// it becomes this function's first pass, so the pane is not captured twice in a
+// row. An empty string means "look yourself", which is what the gate passes after
+// it pressed any key, since its own capture is then stale.
+//
 // It also refuses a pane whose credentials expired. That state passes every
 // other check — the composer is empty and perfectly stable — yet the session
 // consumes nothing, so pasting into it loses the message silently. Both captures
 // are tested, so a login that expires inside the quiet window is caught too. The
 // refusal is an ErrNotReady error rather than a plain not-ready result: it is
 // PROOF the message cannot land, and the caller must queue it.
-func (c *Client) readyToSend(ctx context.Context, session string) (bool, error) {
-	firstPane, err := c.CaptureAnsi(ctx, session)
-	if err != nil || Typing(firstPane) {
-		return false, err
+func (c *Client) readyToSend(ctx context.Context, session, firstPane string) (bool, error) {
+	if firstPane == "" {
+		captured, err := c.CaptureAnsi(ctx, session)
+		if err != nil {
+			return false, err
+		}
+		firstPane = captured
+	}
+	if Typing(firstPane) {
+		return false, nil
 	}
 	if AuthExpired(firstPane) {
 		return false, fmt.Errorf("%w: %s", ErrNotReady, authExpiredReason)
@@ -680,9 +707,18 @@ func (c *Client) readyToSend(ctx context.Context, session string) (bool, error) 
 	return true, nil
 }
 
-// composerClearWindow is the pause between a clearing keypress and the capture
-// that checks what it did.
-const composerClearWindow = 250 * time.Millisecond
+const (
+	// composerClearWindow is the pause between a clearing keypress and the capture
+	// that checks what it did.
+	composerClearWindow = 250 * time.Millisecond
+	// composerClearAttempts bounds the C-u presses of one clearing pass. The
+	// operator measured a single C-u clearing only ONE line: multi-line content
+	// needs it repeated 6-8 times. The loop stops as soon as the composer reads
+	// empty, so the bound is only reached when the presses are not working — and
+	// then the caller is told (ErrTyping) rather than left believing the composer
+	// is clean.
+	composerClearAttempts = 8
+)
 
 // ClearComposer prepares a pane for a SLASH COMMAND bp is about to type into it
 // (/rename, /compact). It is deliberately NOT part of Send: Send also delivers
@@ -694,23 +730,30 @@ const composerClearWindow = 250 * time.Millisecond
 // (Typing) report "composer is not empty", so the slash command is never
 // delivered — the false positive that left `bp rename` half-done, with the tmux
 // session and the agentbook renamed but the agent's own transcript title still
-// on the old name. Escape settles that state; the operator's hand fix was
-// exactly Escape, C-u, then the command.
+// on the old name.
+//
+// ESCAPE IS RETRACTED (operator's instruction, 2026-08-11). This function used
+// to press Escape first and this comment used to call that safe because "it
+// never destroys typed text". That claim is withdrawn: Escape CANCELS a running
+// turn, the Busy check that was supposed to keep it away from working panes has
+// been wrong in both directions before, and a cancelled turn destroys work that
+// cannot be recovered. Nothing in bp may press Escape into an agent pane again.
+// The vim-INSERT state Escape used to settle is now simply refused instead
+// (ErrTyping), which costs a `bp rename` retry and risks nothing.
 //
 // The steps, in order, and the reason each one is where it is:
 //
-//  1. Refuse a working pane (Busy) before pressing anything — on a mid-turn
-//     Claude, Escape CANCELS the turn.
-//  2. Escape. It leaves INSERT mode and dismisses a ghost suggestion, and is
-//     harmless in every other mode. It never destroys typed text, so it is safe
-//     to press before knowing what the composer holds.
-//  3. Capture again and read the composer. C-u is pressed ONLY when what is
-//     visible is empty (dim ghost text does not count as input — StripDim).
-//     A composer showing real text is left EXACTLY as it is and reported with
+//  1. Refuse a working pane (Busy) before pressing anything.
+//  2. Read the composer. Real visible text — the full box when it can be read,
+//     otherwise the final row — is left EXACTLY as it is and reported with
 //     ErrTyping: destroying a human's half-written line is a worse outcome than
-//     any command bp wanted to send.
-//  4. Capture once more, so the caller hands off to Send with a composer that
-//     has been observed empty rather than assumed empty.
+//     any command bp wanted to send. Dim ghost text is not input (StripDim).
+//  3. C-u, repeated while anything remains visible and bounded by
+//     composerClearAttempts, each press followed by a fresh capture. A single
+//     C-u clears one line only; the operator measured 6-8 presses for multi-line
+//     content.
+//  4. The last capture is the caller's guarantee: it hands off to Send with a
+//     composer that has been OBSERVED empty rather than assumed empty.
 func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	// Same chokepoint discipline as Send: C-u at a shell prompt would erase
 	// whatever a human left typed there.
@@ -728,47 +771,130 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	if Busy(pane) {
 		return ErrBusy
 	}
+	if composerFilled(pane) {
+		// Someone's text (or a paste we cannot read): never erase it. nil `mine`
+		// below would refuse it anyway; refusing here also keeps the promise that
+		// not a single key is pressed in this case.
+		return ErrTyping
+	}
+	return c.clearWithCtrlU(ctx, session, nil)
+}
+
+// ClearDelivered erases a composer that provably holds text which has ALREADY
+// been delivered, and only then.
+//
+// It exists because proof arriving late is still proof. When the queue's
+// transcript witness finds a message in the agent's own session file, and the
+// same text is still sitting in the composer, both facts together are decisive:
+// the text is OURS (it matches a record, by the same comparison and the same
+// 32-character thresholds as every other judgment here) and it has already
+// reached the agent. Leaving it there would be the deadlock all over again from
+// the other end — the record is gone, so nothing can recognise the text as ours
+// any more, and every later message queues behind it forever.
+//
+// texts are the messages known to be delivered. Without a match in that set
+// nothing is touched: no proof, no keys. Enter is never pressed here — the
+// message has landed already, and pressing it would deliver a second copy.
+//
+// Reports whether it actually cleared anything, so the caller can say so out
+// loud instead of clearing a human's composer in silence.
+func (c *Client) ClearDelivered(ctx context.Context, session string, texts []string) (bool, error) {
+	cmd, err := c.PaneCommand(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if !IsAgentCommand(cmd) {
+		return false, ErrNotAgent
+	}
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if Busy(pane) {
+		return false, ErrBusy
+	}
+	if !composerFilled(pane) {
+		return false, nil // nothing hanging: the ordinary case
+	}
+	if _, ours := StuckPaste(pane, texts); !ours {
+		return false, nil // not provably ours: leave it exactly as it is
+	}
+	if err := c.clearWithCtrlU(ctx, session, texts); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// composerFilled reports whether a composer holds anything visible, using the
+// full box when it can be read and the final rendered row otherwise. A paste
+// chip counts as content: it stands in for text we cannot read.
+func composerFilled(pane string) bool {
+	if box, ok := composerBoxText(pane); ok {
+		return box != "" || codexPasteChip(pane) || claudePasteChip(pane)
+	}
+	return Typing(pane) || codexPasteChip(pane) || claudePasteChip(pane)
+}
+
+// clearWithCtrlU empties a composer with repeated C-u presses — never Escape,
+// which would cancel a running turn.
+//
+// mine lists the texts C-u is allowed to erase: our own message and any queue
+// record pending for this target. The moment what remains in the composer is NOT
+// one of those (a human started typing, or a paste chip made the content
+// unreadable) the loop stops at once with ErrTyping and leaves the rest alone.
+// A nil/empty mine therefore means "erase nothing that is visible", which is what
+// ClearComposer wants: it presses C-u only to settle an INVISIBLE state.
+//
+// At least one press always happens, because that invisible state is the whole
+// reason ClearComposer exists — a composer that reads empty can still refuse the
+// next paste.
+func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []string) error {
 	target := "=" + session + ":"
-	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "Escape"); err != nil {
-		return err
+	for attempt := 0; attempt < composerClearAttempts; attempt++ {
+		if _, err := c.run(ctx, nil, "send-keys", "-t", target, "C-u"); err != nil {
+			return err
+		}
+		c.Sleep(composerClearWindow)
+		pane, err := c.CaptureAnsi(ctx, session)
+		if err != nil {
+			return err
+		}
+		if Busy(pane) {
+			// The pane started working under us: stop pressing keys immediately.
+			return ErrBusy
+		}
+		if !composerFilled(pane) {
+			return nil
+		}
+		if _, ok := StuckPaste(pane, mine); !ok {
+			// What is left is not ours to erase.
+			return ErrTyping
+		}
 	}
-	c.Sleep(composerClearWindow)
-	if pane, err = c.CaptureAnsi(ctx, session); err != nil {
-		return err
-	}
-	if Typing(pane) {
-		return ErrTyping
-	}
-	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "C-u"); err != nil {
-		return err
-	}
-	c.Sleep(composerClearWindow)
-	if pane, err = c.CaptureAnsi(ctx, session); err != nil {
-		return err
-	}
-	if Typing(pane) {
-		return ErrTyping
-	}
-	return nil
+	return ErrTyping
 }
 
 var bufferSequence uint64
 
 const (
-	authExpiredReason   = "pane oturumu dusmus (Login expired / run /login)"
-	composerOtherReason = "composer'da baska metin var: paste hic girmemis"
+	authExpiredReason    = "pane oturumu dusmus (Login expired / run /login)"
+	composerOtherReason  = "composer'da baska metin var: paste hic girmemis"
+	composerBrokenReason = "paste composer'a bozuk girdi (yeniden yazildi, hala eslesmiyor)"
 )
 
-// Send first injects the message, then lets the TUI turn a large paste into its
-// internal "Pasted text" object before submitting it. Once injection succeeds,
-// the operation is at-most-once: the message is never pasted twice, and the
-// return value tells the caller exactly which of three things happened:
+// Send resolves anything of ours already hanging in the composer, then injects
+// the message, lets the TUI turn a large paste into its internal "Pasted text"
+// object, verifies what landed, and submits it. The return value tells the caller
+// exactly which of three things happened:
 //
 //	nil            verified: the composer was observed holding our message and
-//	               then observed to clear.
-//	ErrNotReady    proven failure: the pane could not receive it (expired login)
-//	               or the composer held unrelated text after the paste. Nothing
-//	               was delivered; the caller must queue the message.
+//	               then observed to clear. (Also the outcome when the message was
+//	               ALREADY sitting in the composer from an earlier attempt and one
+//	               Enter finished it.)
+//	ErrNotReady    proven failure: the pane could not receive it (expired login),
+//	               the composer held unrelated text after the paste, or our paste
+//	               landed damaged and a second attempt did not fix it. Nothing was
+//	               delivered; the caller must queue the message.
 //	ErrUnverified  unknown: injected and Enter pressed, but nothing confirmed it
 //	               either way. The caller must NOT retry (it may have landed) and
 //	               must not report it as sent either.
@@ -776,9 +902,33 @@ const (
 // Any other error is a plumbing failure (tmux itself, a non-agent pane, a busy
 // composer) with the same meaning as before.
 //
+// DELIVERY is at-most-once: Enter is pressed only on content verified to be
+// exactly this message, so no caller can be told "sent" twice for one message.
+// The TEXT may be pasted twice — once by the damage repair — but only after the
+// composer was observed empty and with no Enter in between, so a repair cannot
+// produce a second delivery.
+//
 // If a user touches the attached client during the settle window, their mixed
 // composer is left alone and Enter is deliberately not sent.
 func (c *Client) Send(ctx context.Context, session, message string) error {
+	_, err := c.SendWithPending(ctx, session, message, nil)
+	return err
+}
+
+// SendWithPending is Send with the queue's own records in hand.
+//
+// pending lists the message texts already QUEUED for this target. They are used
+// for one purpose: recognising bp's OWN unsubmitted paste in a non-empty
+// composer. Without them a hanging paste of an earlier queued message reads as
+// "a human is typing", every later delivery queues behind it, and the queue
+// blocks itself — measured at four days for compec-main and 25 hours for another
+// target, with `bp qstat` cheerfully reporting "still busy" at three idle agents.
+//
+// finished names the pending texts this call SUBMITTED out of the composer (it
+// pressed Enter on text that was already sitting there, whole). The caller owns
+// those queue records and must close them; leaving them open is what let a
+// hand-delivered message be pasted a second time.
+func (c *Client) SendWithPending(ctx context.Context, session, message string, pending []string) (finished []string, err error) {
 	// Guard first: never inject keystrokes into a pane that is not running an
 	// agent CLI. A session that dropped to a root shell (zsh) would otherwise
 	// receive the message text at its shell prompt. Send is the single delivery
@@ -786,49 +936,269 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 	// msgq.Dispatch->Send). The check targets the exact pane keystrokes go to.
 	cmd, err := c.PaneCommand(ctx, session)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !IsAgentCommand(cmd) {
-		return ErrNotAgent
-	}
-	ready, err := c.readyToSend(ctx, session)
-	if err != nil {
-		return err
-	}
-	if !ready {
-		return ErrTyping
+		return nil, ErrNotAgent
 	}
 	target := "=" + session + ":"
-	// Always inject via a bracketed paste, never send-keys -l. Every agent on
-	// this fleet runs Claude Code with editorMode "vim": literal keystrokes into
-	// a NORMAL-mode composer are interpreted as vim commands and silently eaten
-	// until an i/a/s happens to appear in the text — exactly how single-line
-	// federation messages arrived mangled. A paste is inserted as text in any
-	// mode, and it is also what keeps external message content data rather than
-	// keys.
-	buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
-	if _, err = c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
-		return err
-	}
-	_, err = c.run(ctx, nil, "paste-buffer", "-b", buffer, "-d", "-t", target)
+	finished, firstPane, outcome, err := c.resolveStuckPaste(ctx, target, session, message, pending)
 	if err != nil {
-		// A failed paste may leave the uniquely named buffer behind.
-		_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
-		return err
+		return finished, err
+	}
+	switch outcome {
+	case stuckDelivered:
+		// The composer was already holding THIS message, whole, from an earlier
+		// paste whose Enter never registered. It has now been submitted: a normal
+		// delivery, and emphatically not something to queue behind.
+		return finished, nil
+	case stuckUnresolved:
+		// Ours, but it could not be finished or cleaned up. Behave exactly as a
+		// busy composer does: the message is queued and nothing was mangled.
+		return finished, ErrTyping
+	}
+	ready, err := c.readyToSend(ctx, session, firstPane)
+	if err != nil {
+		return finished, err
+	}
+	if !ready {
+		return finished, ErrTyping
+	}
+	if err := c.inject(ctx, target, message); err != nil {
+		return finished, err
 	}
 
 	// From this point onward the text is in the pane, so an error must never
 	// mean "paste it again" unless we PROVED it did not land: ErrNotReady is
-	// returned only for a composer holding foreign content, and the ambiguous
-	// case gets ErrUnverified, which no caller retries.
+	// returned only for a composer holding foreign content or a paste that
+	// arrived broken, and the ambiguous case gets ErrUnverified, which no caller
+	// retries.
 	c.Sleep(composerSettleWindow)
-	switch c.submit(ctx, target, session, message) {
+	pane, stable := c.composerStable(ctx, session)
+	if !stable {
+		// A client is typing or the pane could not be read: no key may be pressed
+		// and nothing confirms the delivery either way, which is exactly what
+		// submit would have reported after the same check.
+		return finished, ErrUnverified
+	}
+	pane, ok := c.checkPaste(ctx, target, session, message, pane)
+	if !ok {
+		return finished, fmt.Errorf("%w: %s", ErrNotReady, composerBrokenReason)
+	}
+	switch c.submit(ctx, target, session, message, &pane) {
 	case sendVerified:
-		return nil
+		return finished, nil
 	case sendMismatch:
-		return fmt.Errorf("%w: %s", ErrNotReady, composerOtherReason)
+		return finished, fmt.Errorf("%w: %s", ErrNotReady, composerOtherReason)
 	default:
-		return ErrUnverified
+		return finished, ErrUnverified
+	}
+}
+
+// inject puts message into the composer with a bracketed paste, never
+// send-keys -l. Every agent on this fleet runs Claude Code with editorMode
+// "vim": literal keystrokes into a NORMAL-mode composer are interpreted as vim
+// commands and silently eaten until an i/a/s happens to appear in the text —
+// exactly how single-line federation messages arrived mangled. A paste is
+// inserted as text in any mode, and it is also what keeps external message
+// content data rather than keys.
+func (c *Client) inject(ctx context.Context, target, message string) error {
+	buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
+	if _, err := c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
+		return err
+	}
+	if _, err := c.run(ctx, nil, "paste-buffer", "-b", buffer, "-d", "-t", target); err != nil {
+		// A failed paste may leave the uniquely named buffer behind.
+		_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
+		return err
+	}
+	return nil
+}
+
+// stuckOutcome is what the pre-send gate made of a non-empty composer.
+type stuckOutcome int
+
+const (
+	// stuckAbsent: nothing of ours to resolve. Either the composer is empty, or
+	// it holds text we may not touch — readyToSend then makes the same call it
+	// always did (empty -> proceed, anything else -> ErrTyping -> queue).
+	stuckAbsent stuckOutcome = iota
+	// stuckDelivered: the composer held the message we were about to send, and
+	// pressing Enter submitted it. Nothing left to paste.
+	stuckDelivered
+	// stuckUnresolved: ours, but not resolvable right now (Enter did not clear
+	// it, or the clearing was refused). The caller queues, as for a busy pane.
+	stuckUnresolved
+)
+
+// resolveStuckPaste is the fix for the deadlock, and the one place bp is allowed
+// to touch a composer it did not just paste into.
+//
+// It answers a question the old code never asked: is this text in the composer
+// SOMEONE ELSE'S, or is it OUR OWN paste whose Enter never registered? The full
+// box content (never the single visible row — a multi-line paste could never be
+// compared against the message that produced it) is matched against the message
+// about to be sent and every queue record pending for this target:
+//
+//	exact    -> our unsubmitted paste, intact. Finish it with the same submit
+//	            machinery a fresh paste uses, verify the composer clears, and
+//	            report it as the normal delivery it is. Never queue behind it.
+//	damaged  -> our paste, mutilated (truncated, or sharing a long affix). Enter
+//	            is NEVER pressed: that is precisely how the operator's message
+//	            went out with its leading ~200 characters missing. The composer is
+//	            cleared with C-u and the caller re-pastes the whole message.
+//	foreign  -> somebody's half-written line, an unreadable paste chip, or a pane
+//	            whose structure we do not recognise. Untouched, queued, exactly as
+//	            before. Every doubt resolves into this branch.
+//
+// Two refusals come before any of that: a BUSY pane is never touched at all, and
+// neither is a composer whose attached client showed keyboard activity inside
+// clientIdleWindow — if a human is at the keyboard, whatever is in the box is
+// theirs by default.
+//
+// The returned pane is the capture this gate took, handed on to readyToSend as
+// its first pass so an untouched pane is never captured twice; it is empty
+// whenever a key was pressed and the capture is therefore stale.
+func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message string, pending []string) ([]string, string, stuckOutcome, error) {
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return nil, "", stuckAbsent, err
+	}
+	// An empty composer is the overwhelmingly common case and needs nothing from
+	// this gate — not even the client-activity round trip readyToSend will make.
+	if !composerFilled(pane) || Busy(pane) {
+		return nil, pane, stuckAbsent, nil
+	}
+	activity, err := c.clientActivity(ctx, session)
+	if err != nil {
+		return nil, "", stuckAbsent, err
+	}
+	if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
+		// Someone is at the keyboard: the composer is theirs until proven
+		// otherwise, and readyToSend will queue the message.
+		return nil, pane, stuckAbsent, nil
+	}
+	texts := append([]string{message}, pending...)
+	verdict, text := classifyPaste(pane, texts)
+	switch verdict {
+	case pasteExact:
+		if c.submit(ctx, target, session, text, &pane) != sendVerified {
+			// Enter did not clear it. Nothing was re-injected and nothing was
+			// destroyed; the message goes to the queue like any busy pane.
+			return nil, "", stuckUnresolved, nil
+		}
+		if text == message {
+			return nil, "", stuckDelivered, nil
+		}
+		// A DIFFERENT queued message was sitting there and has now been
+		// delivered. Its record must be closed by the caller (or the queue would
+		// paste it again), and our own message still has to go in.
+		return []string{text}, "", stuckAbsent, nil
+	case pasteDamaged:
+		if err := c.clearWithCtrlU(ctx, session, texts); err != nil {
+			return nil, "", stuckUnresolved, nil
+		}
+		return nil, "", stuckAbsent, nil
+	default:
+		return nil, pane, stuckAbsent, nil
+	}
+}
+
+// checkPaste verifies, BEFORE any Enter, that what landed in the composer is
+// what we pasted, and returns the pane capture the submit step should judge on.
+//
+// pane is the capture taken after the settle window; it has already passed the
+// client-activity check. The verdicts:
+//
+//   - the box reads exactly our message (a wrap included, since whitespace is
+//     stripped): submit.
+//   - the box cannot be read (no status footer, a collapsed empty composer, a
+//     Codex pane, a paste chip standing in for the text): unchanged behavior —
+//     submit decides on the single rendered row, as it always has.
+//   - the box is a PREFIX of our message, or the box is tall enough to be
+//     scrolled (composerBoxScrollRows): the render is a window, not the content.
+//     Treated as unreadable rather than damaged, deliberately: a scrolled box
+//     that read as "damaged" every time would clear, re-paste and queue the same
+//     message forever — the very failure mode this whole change is about.
+//   - the box is related to our message but shorter/altered: our paste arrived
+//     broken. Clear it and paste it ONCE more. If the second attempt still does
+//     not match, ok=false and the caller returns ErrNotReady so the message is
+//     queued rather than delivered mangled.
+//   - the box holds something unrelated: our paste never landed. ok=false, and
+//     no key is pressed on someone else's text.
+//
+// What this cannot catch: anything the pane does not RENDER. Content scrolled out
+// of the visible box, a truncation hidden behind a paste chip, or bytes the TUI
+// accepted but drew differently are all invisible here — the box is evidence
+// about the screen, not about the composer's internal buffer. The final witness
+// for a delivery is still the agent's own transcript (see msgq reconciliation).
+func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string) (string, bool) {
+	switch c.pasteIntegrity(pane, message) {
+	case pasteIntact:
+		return pane, true
+	case pasteMangled:
+		// Repair exactly once: clear our own broken text, paste it again, and
+		// re-verify. Re-pasting is not a second DELIVERY — no Enter has been
+		// pressed, and the composer was observed empty in between.
+		if err := c.clearWithCtrlU(ctx, session, []string{message}); err != nil {
+			return pane, false
+		}
+		if err := c.inject(ctx, target, message); err != nil {
+			return pane, false
+		}
+		c.Sleep(composerSettleWindow)
+		next, ok := c.composerStable(ctx, session)
+		if !ok {
+			return pane, false
+		}
+		if verdict := c.pasteIntegrity(next, message); verdict == pasteBroken || verdict == pasteMangled {
+			return next, false
+		}
+		return next, true
+	case pasteBroken:
+		return pane, false
+	default:
+		return pane, true
+	}
+}
+
+// pasteVerification is checkPaste's reading of a pane.
+type pasteVerification int
+
+const (
+	// pasteUnreadable: no usable box view; judge as before, on the single row.
+	pasteUnreadable pasteVerification = iota
+	// pasteIntact: the box holds exactly our message.
+	pasteIntact
+	// pasteMangled: our message, damaged — repairable by clear + re-paste.
+	pasteMangled
+	// pasteBroken: unrelated content where our paste should be. Proof of failure.
+	pasteBroken
+)
+
+func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
+	if codexPasteChip(pane) || claudePasteChip(pane) {
+		return pasteUnreadable
+	}
+	box, top, ok := composerBoxAt(pane)
+	if !ok {
+		return pasteUnreadable
+	}
+	got, want := stripSpace(box), stripSpace(message)
+	switch {
+	case got == want:
+		return pasteIntact
+	case got == "":
+		// Empty right after the paste: it may have auto-submitted, or the pane may
+		// have swallowed it. submit() already reports that honestly as unverified.
+		return pasteUnreadable
+	case strings.HasPrefix(want, got), composerBoxScrolled(box, top):
+		// A partial render or a scrolled window, not proof of a partial paste.
+		return pasteUnreadable
+	case relatedPaste(got, want):
+		return pasteMangled
+	default:
+		return pasteBroken
 	}
 }
 
@@ -875,11 +1245,21 @@ const (
 // seen empty; an empty composer that never held it is not evidence of anything,
 // because that is exactly what a pane that swallowed the paste looks like. A
 // composer holding unrelated content is the opposite: proof the paste is gone.
-func (c *Client) submit(ctx context.Context, target, session, message string) sendResult {
+// first, when non-nil, is a capture already taken (and already checked for
+// client activity) that the first attempt judges on instead of capturing again:
+// the integrity check in Send/resolveStuckPaste has just looked at the composer,
+// and a second capture would only widen the window between looking and pressing.
+func (c *Client) submit(ctx context.Context, target, session, message string, first *string) sendResult {
 	want := stripSpace(message)
 	held := false
 	for attempt := 0; attempt <= submitRetries; attempt++ {
-		pane, ok := c.composerStable(ctx, session)
+		var pane string
+		var ok bool
+		if attempt == 0 && first != nil {
+			pane, ok = *first, true
+		} else {
+			pane, ok = c.composerStable(ctx, session)
+		}
 		if !ok {
 			return sendUnverified
 		}

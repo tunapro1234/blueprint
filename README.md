@@ -34,6 +34,31 @@ another attempt. `gonderildi ama DOGRULANAMADI` means the keystrokes went in but
 nothing confirmed them: bp exits non-zero and does NOT queue a retry, because
 the message may well have arrived — look with `bp peek <name>` before resending.
 
+A composer that is not empty no longer automatically means "someone is typing".
+bp first reads the WHOLE composer box and compares it with the message it is
+about to send and with the records already queued for that target. Text that is
+exactly one of them is bp's OWN paste whose Enter never registered: it is
+finished with Enter and reported as a normal delivery (this is what used to
+deadlock the queue behind itself — one message sat for four days). A damaged
+version of one of them is cleared with Ctrl-u and pasted again, never submitted,
+because pressing Enter on it delivers a silently truncated message. Anything else
+is someone's own text and is left completely untouched, exactly as before. bp
+never sends Escape into a pane — it would cancel a running turn. Before the queue
+re-pastes anything it also checks the target's transcript, so a message that
+already arrived some other way is closed instead of delivered twice; when that
+same text is still hanging in the composer, bp clears it (with Ctrl-u, never
+Enter) and says so, because the closed record would otherwise be the last thing
+able to recognise it.
+
+A message that waits says WHY it waits. `bp q` prints a `!` line under it and
+`bp qstat` names the cause instead of a bare "is still busy" — `composer'da
+okunamayan bir paste var (chip)` (only a human can clear that one),
+`composer'da yabanci metin var`, `pane calisiyor`, or the concrete delivery
+failure (an expired login). `bp msg` prints the same reason immediately under its
+queue line. The reason is refreshed on every dispatch pass and cleared when the
+pane frees up, so a stuck target is one glance away from being fixed instead of
+days away from being noticed.
+
 `bp` stamps every message with `[<sender>] `, taken from the tmux session the
 command runs in; `AGENT` is honoured only outside tmux. Never write your own
 `[name]` prefix — a hand-written one just shows up nested inside the real

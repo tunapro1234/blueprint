@@ -173,8 +173,14 @@ func TestRenameSendsToThePaneBeforeAnythingElse(t *testing.T) {
 	if paste > renameSession {
 		t.Fatalf("the pane step must run before rename-session:\n%s", calls)
 	}
-	if !strings.Contains(calls, "send-keys -t =worktrack-main: Escape") || !strings.Contains(calls, "send-keys -t =worktrack-main: C-u") {
+	if !strings.Contains(calls, "send-keys -t =worktrack-main: C-u") {
 		t.Fatalf("the composer was not cleared before the send:\n%s", calls)
+	}
+	// Escape is RETRACTED (2026-08-11): on a pane whose Busy detection was wrong
+	// it cancels a running turn and destroys work. C-u is the only clearing key
+	// bp may press, and this asserts it over the WHOLE call log of the rename.
+	if strings.Contains(calls, "Escape") {
+		t.Fatalf("Escape was sent to an agent pane:\n%s", calls)
 	}
 	// The /rename goes to the OLD session name: the tmux rename has not happened
 	// yet, so addressing the new one would hit nothing.

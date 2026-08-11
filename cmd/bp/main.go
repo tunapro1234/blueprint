@@ -1395,6 +1395,13 @@ func (a *app) message(args []string) error {
 		return nil
 	}
 	fmt.Fprintf(a.out, "BUSY: queued (channel: %s). Check: bp qstat %s\n", channelID, channelID)
+	// "BUSY" is the honest word only when the agent is actually working. When the
+	// hold-up is a composer bp refuses to touch — an unreadable paste chip, someone
+	// else's text — say so on the spot, or the operator walks away believing the
+	// agent is mid-turn and comes back days later to a queue that never moved.
+	if why := a.queue.Reason(channelID); why != "" {
+		fmt.Fprintf(a.out, "BEKLEME SEBEBI: %s — bak: bp peek %s\n", why, name)
+	}
 	return nil
 }
 
@@ -1443,8 +1450,23 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	// reason survives the enqueue below so the caller can name WHY the message
 	// had to be queued instead of reporting a plain "busy" queue.
 	var reason error
-	if !bptmux.Typing(pane) && !bptmux.Busy(pane) {
-		sendErr := a.tmux.Send(a.ctx, name, message)
+	// The queue's own records for this target. They let the delivery step tell OUR
+	// OWN unsubmitted paste apart from a human's half-written line: a composer
+	// still holding a message bp pasted earlier used to read as "busy", so every
+	// later message queued behind it and the queue blocked itself (measured: four
+	// days). A composer whose content is provably ours is therefore no longer a
+	// reason to skip the send — anything else still is.
+	pendingTexts := a.queue.PendingFor(name)
+	_, ours := bptmux.StuckPaste(pane, append([]string{message}, pendingTexts...))
+	if (!bptmux.Typing(pane) || ours) && !bptmux.Busy(pane) {
+		finished, sendErr := a.tmux.SendWithPending(a.ctx, name, message, pendingTexts)
+		// A queued message that was hanging in the composer and has now been
+		// submitted: close its record, or the queue would paste it again.
+		for _, text := range finished {
+			if id, ok := a.queue.CloseDelivered(name, text, "delivered (composer'da bekliyordu, Enter atildi)"); ok {
+				fmt.Fprintf(a.out, "kuyruk %s: %s composer'inda bekleyen mesaj Enter ile gonderildi\n", id, name)
+			}
+		}
 		switch {
 		case sendErr == nil:
 			return false, "", nil
@@ -1462,7 +1484,16 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 			return false, "", sendErr
 		}
 	}
-	channelID, err = a.queue.Enqueue(name, sender, message)
+	// Why this message is being queued, in words the operator can act on. A
+	// provable non-delivery names its own cause (expired login, a paste that landed
+	// broken); otherwise the pane is asked — a composer holding an unreadable paste
+	// chip, or someone else's text, is a state only a human can clear, and it must
+	// not hide behind "still busy" for four days.
+	why := bptmux.ComposerBlockReason(pane, append([]string{message}, pendingTexts...))
+	if reason != nil {
+		why = deliveryReason(reason, bptmux.ErrNotReady)
+	}
+	channelID, err = a.queue.EnqueueReason(name, sender, message, why)
 	if err != nil {
 		return true, channelID, err
 	}
@@ -2183,6 +2214,12 @@ func (a *app) queueList(args []string) error {
 				text = text[:60]
 			}
 			fmt.Fprintf(a.out, "%s %s -> %s : %s\n", row.ID, row.From, row.To, string(text))
+			// A waiting message says why it waits. Without this line a target
+			// blocked by an unreadable paste (or a fragment too short to identify)
+			// looks exactly like an agent that is merely working.
+			if row.Reason != "" {
+				fmt.Fprintf(a.out, "    ! %s — bak: bp peek %s\n", row.Reason, row.To)
+			}
 		}
 	}
 	agents, items, err := pending.Counts(a.config.StateDir)

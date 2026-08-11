@@ -34,7 +34,13 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	if logger == nil {
 		logger = log.New(os.Stderr, "blueprint: ", log.LstdFlags)
 	}
-	return &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: msgq.New(cfg.MsgqRoot), log: logger}
+	queue := msgq.New(cfg.MsgqRoot)
+	// Reconciliation: before the queue re-pastes anything, it asks the target's own
+	// transcript whether the message already arrived. Without this, a message that
+	// landed some other way (hand-delivered, or submitted out of a composer where
+	// it had been hanging) is pasted a second time.
+	queue.Witness = book.DeliveryWitness(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
+	return &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 }
 
 func (s *Service) Run(ctx context.Context) {

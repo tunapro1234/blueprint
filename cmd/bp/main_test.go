@@ -1865,3 +1865,207 @@ func TestDeliveryTallyBucketsUnverified(t *testing.T) {
 		t.Fatalf("clean summary=%q, want empty", got)
 	}
 }
+
+// --- deliver against a scripted tmux --------------------------------------
+
+// deliverPane wraps composer text in the structure of a live Claude Code pane
+// (two borders, prompt marker on the first row, the "-- INSERT --" status footer).
+// Synthetic text only: real pane content is private mail.
+func deliverPane(text string) string {
+	// The TOP border carries the agent name on live panes (measured on all 29
+	// sessions, 2026-08-11); only the bottom one is a pure rule. A fixture with two
+	// pure borders is not what any real pane draws.
+	top := "──────────────────────────────────── worker ──"
+	border := "──────────────────────────────────────────────"
+	row := "❯   "
+	if text != "" {
+		row = "❯ " + text
+	}
+	return strings.Join([]string{
+		"  agent: onceki turdan kalan cikti",
+		top,
+		row,
+		border,
+		"  -- INSERT -- ⏵⏵ bypass permissions on (shift+tab to cycle)",
+		"",
+	}, "\n")
+}
+
+// scriptedPanes writes a stand-in tmux that answers capture-pane with the given
+// panes in order (the last one repeats), reports a claude pane, and logs every
+// call so a test can prove which keys were and were not sent.
+func scriptedPanes(t *testing.T, panes ...string) (*bptmux.Client, func() string) {
+	t.Helper()
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	counter := filepath.Join(dir, "counter")
+	for i, pane := range panes {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("pane-%d", i+1)), []byte(pane), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := "#!/bin/sh\n" +
+		"echo \"$*\" >> " + log + "\n" +
+		"case \"$1\" in\n" +
+		"has-session) exit 0 ;;\n" +
+		"display-message) echo claude ;;\n" +
+		"capture-pane)\n" +
+		"  n=$(cat " + counter + " 2>/dev/null || echo 0); n=$((n+1)); echo $n > " + counter + "\n" +
+		"  if [ -f " + dir + "/pane-$n ]; then cat " + dir + "/pane-$n; else cat " + dir + fmt.Sprintf("/pane-%d", len(panes)) + "; fi ;;\n" +
+		"list-clients) : ;;\n" +
+		"load-buffer) cat > /dev/null ;;\n" +
+		"*) : ;;\n" +
+		"esac\n"
+	path := filepath.Join(dir, "tmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	calls := func() string {
+		data, err := os.ReadFile(log)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	return &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}, calls
+}
+
+func deliverApp(t *testing.T, client *bptmux.Client) *app {
+	t.Helper()
+	return &app{
+		ctx:    context.Background(),
+		config: bpconfig.Config{StateDir: t.TempDir()},
+		tmux:   client,
+		queue:  msgq.New(t.TempDir()),
+		out:    testOutput(t),
+		err:    testOutput(t),
+	}
+}
+
+// The deadlock, from the CLI side. A message bp queued earlier is still hanging
+// in the composer because its Enter never registered. The old gate read that as
+// "the agent is busy" and queued the new message behind it — for four days. Now
+// the hanging text is recognised as ours, submitted, and its queue record closed;
+// the new message is delivered in the same pass and NOTHING is queued.
+func TestDeliverFinishesAHangingQueuedPasteInsteadOfQueueingBehindIt(t *testing.T) {
+	hanging := "[ada] onceki kuyruk mesaji: bar chip renklerini kontrol eder misin"
+	fresh := "[server-main] yeni mesaj: roadmap hedef sistemi bolumunu bugun bitirelim"
+	client, calls := scriptedPanes(t,
+		deliverPane(hanging), // deliver's own look at the pane
+		deliverPane(hanging), // Send's pre-send gate: ours, whole -> Enter
+		deliverPane(""),      // submitted
+		deliverPane(""),      // readyToSend pass 1
+		deliverPane(""),      // readyToSend pass 2
+		deliverPane(fresh),   // our paste landed whole -> Enter
+		deliverPane(""),      // submitted
+	)
+	a := deliverApp(t, client)
+	channel, err := a.queue.Enqueue("worker", "ada", hanging)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queued, _, err := a.deliver("worker", "server-main", fresh)
+	if err != nil {
+		t.Fatalf("err=%v, want a clean delivery", err)
+	}
+	if queued {
+		t.Fatal("the message was queued behind our own hanging paste again")
+	}
+	if left := a.queue.PendingFor("worker"); len(left) != 0 {
+		t.Fatalf("queue still holds %d record(s) for worker: %v", len(left), left)
+	}
+	status, err := a.queue.Status(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "DELIVERED") {
+		t.Fatalf("the hanging record was not closed: %q", status)
+	}
+	log := calls()
+	if got := strings.Count(log, "send-keys -t =worker: Enter"); got != 2 {
+		t.Fatalf("expected 2 Enter presses (hanging paste, then ours), got %d:\n%s", got, log)
+	}
+	if got := strings.Count(log, "paste-buffer"); got != 1 {
+		t.Fatalf("expected exactly 1 paste (the hanging text is never re-pasted), got %d:\n%s", got, log)
+	}
+	if strings.Contains(log, "Escape") {
+		t.Fatalf("Escape was sent to an agent pane:\n%s", log)
+	}
+}
+
+// The other side of the same gate: text that is NOT ours is left completely
+// alone and the message is queued, exactly as before.
+func TestDeliverQueuesBehindSomeoneElsesTypingWithoutTouchingThePane(t *testing.T) {
+	client, calls := scriptedPanes(t, deliverPane("kendi yarim kalan sorum burada duruyor"))
+	a := deliverApp(t, client)
+	queued, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap incelemesi bugun bitmeli")
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !queued || channel == "" {
+		t.Fatalf("queued=%v channel=%q, want the message queued", queued, channel)
+	}
+	log := calls()
+	if strings.Contains(log, "send-keys") || strings.Contains(log, "paste-buffer") {
+		t.Fatalf("a composer holding someone's text was touched:\n%s", log)
+	}
+}
+
+// A queued message must say WHY it is waiting, in both places an operator looks.
+// Without this, a target blocked by an unreadable paste (or by a fragment too
+// short to identify) is indistinguishable from an agent that is merely working —
+// which is how one message waited four days under "is still busy".
+func TestQueueListAndStatusNameTheReasonAMessageWaits(t *testing.T) {
+	client, calls := scriptedPanes(t, deliverPane("[Pasted text #1 +12 lines]"))
+	a := deliverApp(t, client)
+	queued, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap incelemesi bugun bitmeli")
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if !queued {
+		t.Fatal("a composer holding an unreadable paste must queue the message")
+	}
+	if log := calls(); strings.Contains(log, "send-keys") || strings.Contains(log, "paste-buffer") {
+		t.Fatalf("an unreadable paste was touched:\n%s", log)
+	}
+
+	if err := a.queueList(nil); err != nil {
+		t.Fatal(err)
+	}
+	list := readTestOutput(t, a.out)
+	if !strings.Contains(list, bptmux.BlockedByPasteChip) || !strings.Contains(list, "bp peek worker") {
+		t.Fatalf("bp q does not name the reason:\n%s", list)
+	}
+
+	a.out = testOutput(t)
+	if err := a.queueStatus([]string{channel}); err != nil {
+		t.Fatal(err)
+	}
+	status := readTestOutput(t, a.out)
+	if !strings.Contains(status, bptmux.BlockedByPasteChip) {
+		t.Fatalf("bp qstat does not name the reason:\n%s", status)
+	}
+	if strings.Contains(status, "is still busy") {
+		t.Fatalf("bp qstat still reports a bare busy state:\n%s", status)
+	}
+}
+
+// A provable non-delivery names its own cause instead of the composer's state.
+func TestQueueReasonNamesAnExpiredLogin(t *testing.T) {
+	expired := strings.Replace(deliverPane(""),
+		"  -- INSERT -- ⏵⏵ bypass permissions on (shift+tab to cycle)",
+		"  -- INSERT -- ⏵⏵ bypass permissions on   ● Login expired · Please run /login", 1)
+	client, _ := scriptedPanes(t, expired)
+	a := deliverApp(t, client)
+	_, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap incelemesi bugun bitmeli")
+	if !errors.Is(err, bptmux.ErrNotReady) {
+		t.Fatalf("err=%v, want ErrNotReady", err)
+	}
+	if err := a.queueStatus([]string{channel}); err != nil {
+		t.Fatal(err)
+	}
+	if status := readTestOutput(t, a.out); !strings.Contains(status, "Login expired") {
+		t.Fatalf("bp qstat does not name the expired login:\n%s", status)
+	}
+}

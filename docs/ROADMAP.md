@@ -258,6 +258,61 @@ iş mesajı sonra gider — goal'suz iş mesajı sürüklenmesin.
 
 ---
 
+## 8. Memory paylaşımı — filoda ortak hafıza (2026-08-12, Tuna)
+
+Şikâyet: "memory paylaşımı bizim sistem içinde çok kötü". Ölçüm bunu doğruluyor ve nedeni
+disiplin değil, **yapı**:
+
+- 372 memory dosyası, 35 ayrı depo. Depo **git deposuna** göre anahtarlanıyor (belgelenmiş),
+  agent'a göre değil. Sonuç: probot-business (22 memory) ile çocuğu probot-fon (13) ayrı
+  repolar → sıfır kesişim; ama /srv/filtresiz'i paylaşan 5 agent tek depoya sıkışmış.
+  Sistem aynı anda hem fazla izole hem yanlış yerde ortak.
+- "Giden mail server-mail ile koordine edilir" kuralı **8 ayrı slug adıyla 15 depoda** var.
+  Model/effort politikasını baştan anlatan 31 dosya, 24 projede.
+- Kök neden: **ajanın ortak hafızaya YAZMA yolu yok.** Filo geneli tek ortak yüzey elle
+  düzenlenen global `CLAUDE.md`. "Bunu hatırla" denen ajanın tek hamlesi yerel dosya yazmak;
+  kopyalar bu yüzden zorunlu.
+
+Belgelenmiş iki gerçek tasarımı belirliyor: (1) **auto memory subagent'lara hiç geçmiyor**,
+(2) **CLAUDE.md hiyerarşisi geçiyor** (`~/.claude/CLAUDE.md`, üst dizin CLAUDE.md'leri,
+`.claude/rules/`). Yani ortak bilgi memory katmanında değil **kural katmanında** yaşamalı:
+
+| katman | mekanizma | kim okur | durum |
+|---|---|---|---|
+| filo | `~/.claude/CLAUDE.md` + `~/.claude/rules/*.md` | her oturum + her subagent | `rules/` yok; CLAUDE.md tek blok |
+| altağaç | `/srv/probot/CLAUDE.md` (dizin yürüyüşü, otomatik) | ailenin 15 ajanı | yok — bedava kazanç |
+| agent | bugünkü auto memory | yalnız kendisi | doğru, dokunulmaz |
+
+bp'nin payı (aracın vermediği kısım): `bp memory grep` (tüm katman + 35 depoda tek arama —
+"yazmadan önce bak"ı kopya yazmaktan ucuz kılan parça), `bp memory ls <agent>`,
+`bp memory promote <agent> <slug> --to fleet|subtree` (eksik olan yazma yolu; işaretçi bırakır,
+sahip+tarih kaydeder), `bp memory dupes`.
+
+Kısıtlar: filo katmanının her satırını 29 canlı oturum + her subagent her turda ödüyor
+(`MEMORY.md` tavanı 200 satır / 25 KB) → terfi bilinçli ve bütçeli, asla otomatik değil.
+Gizlilik: iç veri (fiyat, NFR, teslim taahhüdü) her ajanın okuduğu katmana çıkmaz — "asla
+terfi etmez" sınıfı gerekiyor.
+
+**Sıra kararı (Tuna, 2026-08-12): önce TEMİZLİK, sonra yapı.** 337 dosya kapsamına göre
+sınıflandırılıp yinelenenler tek otoriteye indirilecek; katman ve komutlar ondan sonra.
+Mevcut agentların memory dosyalarına dokunmak ayrı onaya bağlı.
+
+### Not: `claude agents --json` — yerli oturum kaydı
+
+Ölçüldü (claude 2.1.228): komut her canlı oturum için ad, cwd, pid, sessionId ve
+**busy/idle/waiting + waitingFor** veriyor — `bp status`'un pane kazıyarak ürettiği bilginin
+aynısı, üstelik "idle mi ölü mü" ayrımını yerlinden. Karar: **şimdilik yalnız not.**
+`bp status` çalışıyor, değiştirmek regresyon riski taşır.
+
+Cross-session mesajlaşma (`SendMessage`/`ListAgents`) ise 2.1.228'de VAR ama bu makinede
+çalışmıyor: 29 canlı oturumun hiçbirinde mesajlaşma soketi/env yok, `ListAgents` araç olarak
+görünmüyor (kapı `agents_cross_session_inbox`). Ayrıca changelog'a göre **bypass-permissions
+oturumuna gelen mesaj onay için tutuluyor** — filonun tamamı bypass, açmak için
+`crossSessionInbound: accept` gerekir, yani sahtecilik kapısını gönüllü açmak. `bp msg`
+yerini almıyor.
+
+---
+
 ## Reddedilenler (tekrar tartışılmasın diye)
 
 - **Zamana dayalı OTOMATİK compaction** — bedeli peşin, boşta agent zaten maliyetsiz.

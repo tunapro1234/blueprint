@@ -7,12 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/identity"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -307,8 +307,6 @@ func (a *app) sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
-var agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
 // paneRunsClaude reports whether the session's pane is a Claude agent. A pane
 // whose command cannot be read is assumed not to be Claude: sending a slash
 // command to a shell would type it as a shell command.
@@ -330,8 +328,10 @@ func isProse(path string) bool {
 	return false
 }
 
+// validAgentName defers to the identity package: the name shape and the sender
+// labels built to fail it must never drift apart.
 func validAgentName(name string) bool {
-	return agentNamePattern.MatchString(name)
+	return identity.ValidName(name)
 }
 
 // renamePreview reports what a rename would change in the books without taking

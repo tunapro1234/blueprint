@@ -27,6 +27,7 @@ import (
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/fed"
+	"blueprint/internal/identity"
 	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
 	"blueprint/internal/ntfy"
@@ -55,7 +56,9 @@ bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]
 bp remote [<name>...]        # print or open /remote-control (default: every live claude agent)
 bp q | bp qstat <channel-id> | bp qcancel <channel-id>
 bp peek <name> [n]
-bp wa send [--to <target>] [--reply <msgId>] <message...>
+bp wa send [--to <target>] [--reply <msgId>] [--from <label>] <message...>
+                             # --from states the sender outside tmux (cron, scripts);
+                             # inside a pane the session name is the sender
 bp wa read <target> [n] | bp wa chats
 bp usage
 bp tokens [--day YYYY-MM-DD | --since 7d] [--hours | --prompts] [--agent <name>] [--json]
@@ -1155,41 +1158,47 @@ func (a *app) close(args []string) error {
 	return book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{Sender: a.sender()})
 }
 
+// sender names the caller for in-fleet traffic: the "[sender]" envelope on
+// bp msg, the registrations bp writes into the agentbooks, and the hierarchy
+// gates on announce/compact/slash commands. It shares one resolver with
+// WhatsApp (internal/identity) so the tmux-outside-a-pane trap has a single
+// home, but it asks for a different tail:
+//
+//   - no process-tree inference. An inferred label would be a stranger to the
+//     agentbook, so bp announce and bp compact would start refusing the daemon
+//     and cron ("sender X is not in the agentbook hierarchy").
+//   - "server-main" stays the last resort. For agent-to-agent traffic the
+//     daemon, cron and root shells ARE the server, and their envelope has read
+//     "[server-main]" by design; relabelling it silently would change what
+//     every agent sees on messages that carry orders. WhatsApp is the opposite
+//     case and keeps no such default.
 func (a *app) sender() string {
-	// Inside tmux the pane's own session is the caller's identity, and it is
-	// authoritative: it comes from the tmux server, not from anything the
-	// caller can export. AGENT is honored only outside tmux (daemon, systemd,
-	// plain shells) — checking it first would let any agent sign its messages
-	// as someone else with a one-line export.
-	if os.Getenv("TMUX") != "" {
-		if value, err := a.tmux.DisplaySession(a.ctx); err == nil && value != "" {
-			return value
-		}
+	return identity.Resolve(a.ctx, a.session(), identity.Options{
+		Known:    a.knownAgent,
+		Fallback: "server-main",
+	}).Label
+}
+
+// session hands the resolver a tmux client, or a genuinely nil interface when
+// there is none: a nil *tmux.Client stored in an interface is not nil, and the
+// resolver would call through it.
+func (a *app) session() identity.Sessioner {
+	if a.tmux == nil {
+		return nil
 	}
-	if value := os.Getenv("AGENT"); value != "" {
-		return value
+	return a.tmux
+}
+
+// knownAgent reports agentbook membership. Used to stop a login name that
+// happens to match an agent's name from inheriting that agent's standing; an
+// unreadable book means "unknown", never "known".
+func (a *app) knownAgent(name string) bool {
+	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	if err != nil {
+		return false
 	}
-	// Outside tmux with no AGENT the caller is usually a human on the box:
-	// root login is disabled, so people SSH in as themselves and reach bp
-	// through sudo. SUDO_USER/USER name that human and neither is spoofable
-	// any more cheaply than AGENT already is. They are checked before the
-	// "server-main" default on purpose: falling straight through would stamp
-	// a person's message with the orchestrator's name, so agents would read
-	// it as an order from the fleet's coordinator instead of from a human.
-	// server-main stays the last resort for the callers that really are the
-	// server itself — the daemon, cron and root shells, which have no
-	// SUDO_USER and a USER of root.
-	for _, key := range []string{"SUDO_USER", "USER", "LOGNAME"} {
-		value := os.Getenv(key)
-		if value == "" || value == "root" {
-			continue
-		}
-		if !validAgentName(value) {
-			continue
-		}
-		return value
-	}
-	return "server-main"
+	_, ok := fleet.Agents[name]
+	return ok
 }
 
 func (a *app) hasSession(name string) bool {
@@ -2240,7 +2249,7 @@ func (a *app) whatsapp(args []string) error {
 	}
 	switch args[0] {
 	case "send":
-		to, reply, index := "", "", 1
+		to, reply, from, index := "", "", "", 1
 		for index < len(args) {
 			switch args[index] {
 			case "--to":
@@ -2255,6 +2264,12 @@ func (a *app) whatsapp(args []string) error {
 				}
 				reply = args[index+1]
 				index += 2
+			case "--from":
+				if index+1 >= len(args) {
+					return fmt.Errorf("--from requires a label")
+				}
+				from = args[index+1]
+				index += 2
 			default:
 				goto message
 			}
@@ -2262,9 +2277,26 @@ func (a *app) whatsapp(args []string) error {
 	message:
 		text := strings.Join(args[index:], " ")
 		if text == "" {
-			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] <message...>")
+			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] [--from <label>] <message...>")
 		}
-		agent := wa.Agent(a.ctx, a.tmux)
+		if from != "" {
+			// Inside a pane the tmux session is the sender and it wins, so a
+			// --from here could only be an attempt to sign as somebody else —
+			// refuse it out loud instead of silently ignoring it.
+			if os.Getenv("TMUX") != "" {
+				return fmt.Errorf("--from is not accepted inside tmux: the pane's own session is the sender")
+			}
+			if err := identity.ValidFrom(from); err != nil {
+				return err
+			}
+		}
+		who := wa.Agent(a.ctx, a.session(), identity.Options{From: from, Known: a.knownAgent})
+		agent := who.Label
+		if !who.Certain {
+			// The label is all the attribution a phone gets. Say so on stderr
+			// rather than let a guess pass for a signature.
+			fmt.Fprintf(a.err, "WARNING: sender not established (%s); sending as [%s]. Use --from <label> to state who is sending.\n", who.Source, agent)
+		}
 		waErr := wa.Send(a.config.WAOutbox, agent, to, reply, text)
 		if err := ntfy.Send(a.ctx, a.config.Ntfy, wa.Format(agent, text)); err != nil {
 			fmt.Fprintf(a.err, "WARNING: ntfy notification failed: %v\n", err)
@@ -2280,7 +2312,8 @@ func (a *app) whatsapp(args []string) error {
 		if reply != "" {
 			suffix = " (reply: " + reply + ")"
 		}
-		fmt.Fprintf(a.out, "queued -> %s%s\n", destination, suffix)
+		// The label is echoed because it is what the recipient will read.
+		fmt.Fprintf(a.out, "queued -> %s as [%s]%s\n", destination, agent, suffix)
 		return nil
 	case "read":
 		if len(args) < 2 || len(args) > 3 {

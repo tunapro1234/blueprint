@@ -26,7 +26,12 @@ bp compact [--idle-hours S] [--min-ctx N] [--apply]      politika seçimi; bayra
 bp compact --all [--min-age <dk>] [--exclude <ad,...>] [--apply]   gönderenin tüm alt ağacı
 bp q | bp qstat <kanal-id>
 bp peek <ad> [n]
-bp wa send [--to <hedef>] [--reply <msgId>] <mesaj...>   (outbox json'a yazar; prefix [agent])
+bp wa send [--to <hedef>] [--reply <msgId>] [--from <etiket>] <mesaj...>   (outbox json'a yazar; prefix [gönderen])
+                               gönderen tek yerden çözülür (internal/identity): pane içinde tmux
+                               oturumu (sahte yapılamaz, --from'u da ezer), dışarıda --from → AGENT
+                               → SUDO_USER/USER → süreç ağacından TAHMİN ("cron?:x.py" — soru
+                               işareti tahmini itiraf eder) → "bilinmiyor". WA'da server-main
+                               varsayılanı YOK (bkz. 2026-08-09/10 yanlış imza olayı).
 bp wa read <hedef> [n] | bp wa chats
 bp usage                       history.jsonl son durum (5h/7d/fable/codex + resetler)
 bp policy status|override <saat>

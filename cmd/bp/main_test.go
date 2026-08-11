@@ -20,10 +20,12 @@ import (
 	"blueprint/internal/codexrpc"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/identity"
 	"blueprint/internal/msgq"
 	"blueprint/internal/ntfy"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/wa"
 	"blueprint/internal/worktree"
 )
 
@@ -1411,7 +1413,9 @@ func TestSenderPrecedence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("TMUX", test.tmuxEnv)
-			for _, key := range []string{"AGENT", "SUDO_USER", "USER", "LOGNAME"} {
+			// AGENTBOOK is cleared so the collision rule (a login name that is
+			// also an agent) cannot pull the live fleet book into a unit test.
+			for _, key := range []string{"AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
 				t.Setenv(key, test.env[key])
 			}
 			a := &app{ctx: context.Background(), tmux: bptmux.New()}
@@ -1423,6 +1427,148 @@ func TestSenderPrecedence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSenderNeverAsksTmuxOutsidePane is the regression guard for the incident:
+// `tmux display-message -p '#S'` with no target and no TMUX in the environment
+// answers for the ATTACHED client, so a cron job that asks gets a spectator's
+// name. The fake tmux here records every invocation; outside a pane there must
+// be none.
+func TestSenderNeverAsksTmuxOutsidePane(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "asked")
+	path := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\necho \"$@\" >> " + marker + "\necho compec-outreach\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"TMUX", "AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
+		t.Setenv(key, "")
+	}
+	a := &app{ctx: context.Background(), tmux: &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}}
+
+	if got := a.sender(); got != "server-main" {
+		t.Fatalf("sender()=%q, want the deliberate server-main default", got)
+	}
+	if data, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("tmux was consulted with TMUX empty: %q", data)
+	}
+}
+
+// TestWhatsAppSendFrom covers the flag that lets a cron script state who it is,
+// and the two ways it must be refused.
+func TestWhatsAppSendFrom(t *testing.T) {
+	const script = "cron:/srv/kavram/outreach/workers/inbox_watcher.py"
+
+	newApp := func(t *testing.T, outbox string) (*app, *os.File) {
+		t.Helper()
+		errOutput := testOutput(t)
+		return &app{
+			ctx:    context.Background(),
+			config: bpconfig.Config{WAOutbox: outbox},
+			tmux:   bptmux.New(),
+			out:    testOutput(t),
+			err:    errOutput,
+		}, errOutput
+	}
+	clearEnv := func(t *testing.T) {
+		t.Helper()
+		for _, key := range []string{"TMUX", "AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
+			t.Setenv(key, "")
+		}
+	}
+	queued := func(t *testing.T, outbox string) wa.Outgoing {
+		t.Helper()
+		entries, err := os.ReadDir(outbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("outbox entries=%v, want exactly one", entries)
+		}
+		data, err := os.ReadFile(filepath.Join(outbox, entries[0].Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record wa.Outgoing
+		if err := json.Unmarshal(data, &record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+
+	t.Run("states the sender outside tmux", func(t *testing.T) {
+		clearEnv(t)
+		outbox := t.TempDir()
+		a, errOutput := newApp(t, outbox)
+		if err := a.whatsapp([]string{"send", "--from", script, "4 yeni cevap"}); err != nil {
+			t.Fatal(err)
+		}
+		record := queued(t, outbox)
+		if record.Agent != script || record.Text != "["+script+"] 4 yeni cevap" {
+			t.Fatalf("record=%+v", record)
+		}
+		if warning := readTestOutput(t, errOutput); warning != "" {
+			t.Fatalf("stated sender still warned: %q", warning)
+		}
+	})
+
+	t.Run("refused inside a pane", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("TMUX", "/tmp/tmux-0/default,4242,0")
+		outbox := t.TempDir()
+		a, _ := newApp(t, outbox)
+		err := a.whatsapp([]string{"send", "--from", "server-main", "hello"})
+		if err == nil || !strings.Contains(err.Error(), "not accepted inside tmux") {
+			t.Fatalf("error=%v", err)
+		}
+		if entries, _ := os.ReadDir(outbox); len(entries) != 0 {
+			t.Fatalf("a refused send still queued %v", entries)
+		}
+	})
+
+	for name, value := range map[string]string{
+		"bracket":         "[server-main] hi",
+		"closing bracket": "cron]",
+		"newline":         "cron\nserver-main",
+		"control byte":    "cron\x01",
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			clearEnv(t)
+			outbox := t.TempDir()
+			a, _ := newApp(t, outbox)
+			if err := a.whatsapp([]string{"send", "--from", value, "hello"}); err == nil {
+				t.Fatalf("--from %q accepted", value)
+			}
+			if entries, _ := os.ReadDir(outbox); len(entries) != 0 {
+				t.Fatalf("a rejected send still queued %v", entries)
+			}
+		})
+	}
+
+	t.Run("an unattributable send confesses instead of signing as server-main", func(t *testing.T) {
+		clearEnv(t)
+		t.Setenv("USER", "root")
+		outbox := t.TempDir()
+		a, errOutput := newApp(t, outbox)
+		if err := a.whatsapp([]string{"send", "ping"}); err != nil {
+			t.Fatal(err)
+		}
+		record := queued(t, outbox)
+		if record.Agent == "server-main" {
+			t.Fatalf("server-main signed a message it did not send: %+v", record)
+		}
+		if !strings.Contains(record.Agent, identity.InferMark) && record.Agent != identity.Unknown {
+			t.Fatalf("label %q neither confesses a guess nor says unknown", record.Agent)
+		}
+		if validAgentName(record.Agent) {
+			t.Fatalf("label %q is agent-shaped: it can be mistaken for a real sender", record.Agent)
+		}
+		if warning := readTestOutput(t, errOutput); !strings.Contains(warning, "sender not established") {
+			t.Fatalf("no warning for an unattributable send: %q", warning)
+		}
+	})
 }
 
 func TestRemoteAttachCommandUsesMoshByDefault(t *testing.T) {

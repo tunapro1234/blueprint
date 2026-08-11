@@ -37,6 +37,46 @@ raporlar. Doctor kararını `last_refresh` bayatlığı ve `id_token.exp` üzeri
 `access_token.exp` **kanıt sayılmaz**. Bu, "şemaya bakıp tasarlarsan yanılırsın" sınıfının
 ders örneği.
 
+## Sıra kararı (2026-08-11)
+
+probot-business'ın çerçevesi doğru ama bir düzeltmeyle: *"alan eklemek geçmişi açıklar, canlılık
+kontrolü geleceği korur."* Alan **geçmişi açıklamıyor** — 7-10 Ağustos'ta yazılmış null satırlar
+sonsuza dek belirsiz kalıyor, çünkü alan yalnız kendisinden SONRA yazılan satırları açıklar. İkisi
+de ileriye dönük; farkları başka: alan **kanıt biriktirir**, doctor **o anda cevap verir**.
+
+Yazılmış null'ları geriye dönük doldurmayacağız: çıkarımı ölçüm deposuna yazmak, bu hafta
+temizlediğimiz "yokluğu değermiş gibi göstermek" hatasının kendisi olur. Boşluk boşluk olarak
+kalır; `bp usage` zaten tarihini söylüyor ("son deger 2d 2h once").
+
+**Sıra: (1) collector alanı, (2) doctor.** Gerekçe teknik, öncelik değil: collector'ın 401'i,
+**yerel dosyadan görülemeyen** sunucu-tarafı iptali yakalayan tek kanıt. Bizim yerel okuyucumuz
+(`internal/codexauth`) token'ı sunucuda iptal edilmiş ama dosyası tazeyken "OK" der. Doctor bu
+kanıtı okuyabilirse olağan durumda `--probe`'a hiç ihtiyaç duymaz. Yani alan doctor'ı
+güçlendiriyor; tersi değil.
+
+### Collector sözleşmesi (usage-pulse, server-main'in dosyası — ada uygular)
+
+Mevcut anahtarlara DOKUNMADAN, satır başına eklenir:
+
+| alan | değer | kural |
+|---|---|---|
+| `codex_status` | `ok` \| `auth` \| `http` \| `network` \| `skipped` | bu satırda neden sayı yok |
+| `codex_error_ts` | RFC3339 | son başarısız denemenin zamanı |
+| `codex_http` | tamsayı (401, 429, 5xx) | HTTP yanıtı varsa |
+
+- Sayılar VARSA `codex_status: "ok"` ve hata alanları **hiç yazılmaz** (null da değil) — okuyan
+  taraf "yok" ile "null"u ayırt etmek zorunda kalmasın.
+- Token'ın hiçbir parçası ve yanıt gövdesi yazılmaz.
+- `codex_5h` haftalık figürü taşımaya devam eder (13 Tem'deki plan değişikliğinden kalan yanlış
+  etiket; anahtar collector'ın sözleşmesi olduğu için yeniden adlandırılmıyor).
+
+### Doctor'ın codex kararı bu sözleşmeyle
+
+1. son N dakikada `codex_status: "auth"` → **KAPALI**, sunucu-tarafı kanıt, yoklama gerekmez
+2. yerel `codexauth` Expired → **KAPALI**
+3. yerel Stale + collector'dan yakın başarı yok → **BİLİNMİYOR**, kanıtlar listelenir
+4. aksi hâlde **AÇIK** — "model çağrısı denenmedi" itirafıyla
+
 ## Kontroller (v1)
 
 Her satır: ad · verdict (açık/kapalı/bilinmiyor) · kanıt · ne yapmalı. Tek ekranı geçmeyecek.

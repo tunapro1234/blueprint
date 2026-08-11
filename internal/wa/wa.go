@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/identity"
 )
 
 type Outgoing struct {
@@ -20,14 +20,21 @@ type Outgoing struct {
 	Text    string  `json:"text"`
 }
 
-func Agent(ctx context.Context, client *bptmux.Client) string {
-	if value := os.Getenv("AGENT"); value != "" {
-		return value
-	}
-	if value, err := client.DisplaySession(ctx); err == nil && value != "" {
-		return value
-	}
-	return "server-main"
+// Agent resolves the label a WhatsApp message will be signed with. It is the
+// shared resolver, not a local chain: this file used to consult
+// tmux display-message with no TMUX in the environment, which answered for
+// whichever client was attached and signed cron's messages with three
+// bystanders' names.
+//
+// Nothing here falls back to "server-main". A WhatsApp message reaches a phone
+// where the label is the only attribution there is, so an unattributable one
+// must say "bilinmiyor" (or confess a guess) rather than borrow the
+// orchestrator's authority. Inference is allowed for the same reason: the label
+// admits it with a "?".
+func Agent(ctx context.Context, client identity.Sessioner, opts identity.Options) identity.Identity {
+	opts.Infer = true
+	opts.Fallback = ""
+	return identity.Resolve(ctx, client, opts)
 }
 
 func Send(outbox, agent, to, reply, text string) error {

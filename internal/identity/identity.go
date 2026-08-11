@@ -1,0 +1,330 @@
+// Package identity answers one question for every outbound message: who is
+// sending it. The answer becomes a visible label — the "[sender]" envelope on
+// agent-to-agent messages and the "[agent]" prefix on WhatsApp — so a wrong
+// answer is not a cosmetic bug: agents act on the name they read.
+//
+// The rule that matters is that `tmux display-message -p '#S'` with no target
+// is only meaningful INSIDE a pane. Called from cron, a systemd unit or any
+// other process with no TMUX in its environment, tmux answers for whichever
+// client happens to be attached — a spectator, not the sender. That is how four
+// cron-sent WhatsApp messages ended up signed by three uninvolved agents on
+// 2026-08-09/10. Everything below exists so that mistake has exactly one place
+// to live, and so an unattributable message says "bilinmiyor" instead of
+// borrowing the orchestrator's name.
+package identity
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
+
+// Sessioner is the sliver of the tmux client this package needs. It is an
+// interface so a test can prove DisplaySession is never consulted with TMUX
+// empty — the single fact that caused the incident.
+type Sessioner interface {
+	DisplaySession(ctx context.Context) (string, error)
+}
+
+// Unknown is the label for a sender we cannot name. It is deliberately a word
+// no agent answers to: readers must see the gap rather than trust a guess.
+const Unknown = "bilinmiyor"
+
+// InferMark separates a guessed label from a stated one. It cannot appear in a
+// valid agent name (see namePattern), so "cron?:inbox_watcher.py" is
+// structurally impossible to mistake for an agent. A stated origin uses the
+// same shape without the mark: "cron:/srv/kavram/.../inbox_watcher.py".
+const InferMark = "?"
+
+// Identity is a label plus how much the label is worth.
+type Identity struct {
+	Label string
+	// Certain is true only when the sender was stated by something with
+	// standing (the tmux server, an explicit flag, AGENT, a login name) rather
+	// than guessed from the process tree.
+	Certain bool
+	// Source names the signal that won, for diagnostics and warnings.
+	Source string
+}
+
+// Inferred reports whether the label confesses a guess.
+func (i Identity) Inferred() bool { return strings.Contains(i.Label, InferMark) }
+
+// Options tunes the resolution for a given call site.
+type Options struct {
+	// From is a sender stated by the caller (bp wa send --from). It is honored
+	// only outside tmux: inside a pane the pane's own session wins, so an agent
+	// cannot sign as somebody else. An invalid value is ignored here; call
+	// sites reject it loudly with ValidFrom before getting this far.
+	From string
+	// Known reports agentbook membership. A derived name (a login name) that
+	// collides with a real agent is downgraded to a guess instead of claiming
+	// that agent's identity: a plausible-but-wrong name is more dangerous than
+	// "unknown". Nil means "nothing is known".
+	Known func(string) bool
+	// Infer allows the last-ditch guess from the process tree. Call sites whose
+	// label carries authority (bp msg envelopes, hierarchy gates) leave it off
+	// and set Fallback instead.
+	Infer bool
+	// Fallback is the label of last resort, used only when every signal above
+	// is silent. Empty means Unknown. This is where a call site may keep a
+	// historical default; the chain itself never invents one.
+	Fallback string
+	// Ancestors returns the process chain, nearest first, each entry a command
+	// line split into arguments. Nil reads /proc. Tests inject their own.
+	Ancestors func() [][]string
+}
+
+// namePattern is the shape of an agent name (tmux session names, agentbook
+// keys). Single definition on purpose: the inference labels are built to fail
+// this pattern.
+var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ValidName reports whether name has agent-name shape.
+func ValidName(name string) bool { return namePattern.MatchString(name) }
+
+// maxLabel keeps an envelope readable and bounded; nothing legitimate is close.
+const maxLabel = 120
+
+// ValidFrom accepts the values a caller may state as its own name. A path or a
+// "cron:<path>" origin must stay expressible, so this is a rejection list, not
+// an allow list: anything that could forge envelope structure ("[", "]"),
+// smuggle a second line, or hide as a control byte is refused.
+func ValidFrom(value string) error {
+	if value == "" {
+		return fmt.Errorf("--from requires a label")
+	}
+	if strings.TrimSpace(value) != value {
+		return fmt.Errorf("--from must not start or end with whitespace")
+	}
+	if len(value) > maxLabel {
+		return fmt.Errorf("--from is too long (max %d bytes)", maxLabel)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("--from must be valid UTF-8")
+	}
+	if strings.ContainsAny(value, "[]") {
+		return fmt.Errorf("--from must not contain [ or ]: they are the envelope's own markers")
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("--from must not contain control characters")
+		}
+	}
+	return nil
+}
+
+// Resolve names the sender. Precedence, most authoritative first:
+//
+//  1. the tmux session of the calling pane — authoritative and unforgeable,
+//     because it comes from the tmux server and not from the caller's
+//     environment. Consulted only when TMUX is set.
+//  2. an explicit From (outside tmux only).
+//  3. AGENT, with agent-name shape.
+//  4. SUDO_USER, then USER/LOGNAME: a human ran this.
+//  5. a confessing guess from the process tree, when Options.Infer is set.
+//  6. Options.Fallback, else Unknown.
+//
+// Steps 1-4 are Certain. "server-main" is never produced here; a call site that
+// wants it must ask for it by name through Fallback.
+func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
+	// The gate is the whole fix: with no TMUX, display-message answers for an
+	// attached spectator, so we must not even ask.
+	if os.Getenv("TMUX") != "" && client != nil {
+		if value, err := client.DisplaySession(ctx); err == nil {
+			if value = strings.TrimSpace(value); value != "" {
+				return Identity{Label: value, Certain: true, Source: "tmux"}
+			}
+		}
+	}
+	if opts.From != "" && ValidFrom(opts.From) == nil {
+		return Identity{Label: opts.From, Certain: true, Source: "--from"}
+	}
+	if value := os.Getenv("AGENT"); value != "" && ValidName(value) {
+		return Identity{Label: value, Certain: true, Source: "AGENT"}
+	}
+	// Root login is disabled on the box, so people SSH as themselves and reach
+	// bp through sudo: these name that human.
+	for _, key := range []string{"SUDO_USER", "USER", "LOGNAME"} {
+		value := os.Getenv(key)
+		if value == "" || value == "root" || !ValidName(value) {
+			continue
+		}
+		if opts.Known != nil && opts.Known(value) {
+			// A login name that happens to be an agent's name must not inherit
+			// that agent's standing.
+			return Identity{Label: "user" + InferMark + ":" + value, Source: key + "-collision"}
+		}
+		return Identity{Label: value, Certain: true, Source: key}
+	}
+	if opts.Infer {
+		if label := inferred(opts.Ancestors); label != "" {
+			return Identity{Label: label, Source: "process-tree"}
+		}
+	}
+	if opts.Fallback != "" {
+		return Identity{Label: opts.Fallback, Source: "fallback"}
+	}
+	return Identity{Label: Unknown, Source: "none"}
+}
+
+// interpreters are programs that say nothing about who is calling: the script
+// they are running does.
+var interpreters = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true,
+	"fish": true, "env": true, "sudo": true, "nohup": true, "timeout": true,
+	"xargs": true, "python": true, "python3": true, "perl": true, "ruby": true,
+	"node": true, "deno": true, "bwrap": true,
+}
+
+// launchers map a recognizable ancestor to the origin worth reporting.
+var launchers = map[string]string{
+	"cron": "cron", "crond": "cron", "cronie": "cron", "anacron": "cron",
+	"atd": "cron", "systemd": "systemd", "sshd": "ssh",
+}
+
+// inferred builds a label from the process tree. The operator's warning stands:
+// inferring identity is the disease being cured, so the result must never be
+// mistakable for an agent name — every label produced here carries InferMark,
+// and a label that somehow would not is dropped.
+func inferred(ancestors func() [][]string) string {
+	if ancestors == nil {
+		ancestors = func() [][]string { return procAncestors(os.Getppid(), 8) }
+	}
+	chain := ancestors()
+	if len(chain) == 0 || len(chain[0]) == 0 {
+		return ""
+	}
+	kind := ""
+	for _, frame := range chain {
+		if len(frame) == 0 {
+			continue
+		}
+		if mapped, ok := launchers[strings.ToLower(program(frame[0]))]; ok {
+			kind = mapped
+			break
+		}
+	}
+	if kind == "" {
+		kind = strings.ToLower(program(chain[0][0]))
+	}
+	detail := ""
+	for _, frame := range chain {
+		for _, arg := range frame[1:] {
+			if scriptish(arg) {
+				detail = program(arg)
+				break
+			}
+		}
+		if detail != "" {
+			break
+		}
+	}
+	kind, detail = sanitize(kind), sanitize(detail)
+	if kind == "" && detail == "" {
+		return ""
+	}
+	if kind == "" {
+		kind = "proc"
+	}
+	label := kind + InferMark
+	if detail != "" && detail != kind {
+		label += ":" + detail
+	}
+	if !strings.Contains(label, InferMark) || ValidName(label) {
+		return "" // belt and braces: never hand back an agent-shaped name
+	}
+	return label
+}
+
+// program strips a path and a login shell's leading dash.
+func program(arg string) string {
+	return strings.TrimLeft(filepath.Base(arg), "-")
+}
+
+// scriptish reports whether an argument names the work being done rather than
+// how it is being run: a path, or a file with an extension.
+func scriptish(arg string) bool {
+	if arg == "" || strings.HasPrefix(arg, "-") {
+		return false
+	}
+	base := program(arg)
+	if base == "" || base == "bp" || interpreters[strings.ToLower(base)] {
+		return false
+	}
+	return strings.Contains(arg, "/") || strings.Contains(base, ".")
+}
+
+// sanitize keeps a label's pieces to characters that cannot disturb an envelope
+// or a log line, and bounded in length.
+func sanitize(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		}
+		if b.Len() >= 40 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), ".-_")
+}
+
+// procAncestors reads command lines up the process tree, nearest first.
+func procAncestors(pid, limit int) [][]string {
+	var chain [][]string
+	for hop := 0; hop < limit && pid > 1; hop++ {
+		if args := procCmdline(pid); len(args) > 0 {
+			chain = append(chain, args)
+		}
+		parent, ok := procParent(pid)
+		if !ok || parent == pid {
+			break
+		}
+		pid = parent
+	}
+	return chain
+}
+
+func procCmdline(pid int) []string {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		return nil
+	}
+	var args []string
+	for _, part := range strings.Split(string(data), "\x00") {
+		if part != "" {
+			args = append(args, part)
+		}
+	}
+	return args
+}
+
+// procParent reads PPid from /proc/<pid>/status. status is used instead of stat
+// because a comm containing spaces or parentheses makes stat's fields
+// ambiguous.
+func procParent(pid int) (int, bool) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		rest, ok := strings.CutPrefix(line, "PPid:")
+		if !ok {
+			continue
+		}
+		parent, err := strconv.Atoi(strings.TrimSpace(rest))
+		if err != nil {
+			return 0, false
+		}
+		return parent, true
+	}
+	return 0, false
+}

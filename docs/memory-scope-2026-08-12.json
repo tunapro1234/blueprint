@@ -1,0 +1,3265 @@
+{
+ "files": [
+  {
+   "dir": "-srv-3dprinter",
+   "file": "bitti-olculebilir-kanit.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tamamlanma kaniti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-3dprinter",
+   "file": "browser-server.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "paylasimli browser sunucusu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-3dprinter",
+   "file": "codex-arkaplan-guvenlik.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-3dprinter",
+   "file": "giden-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-3dprinter",
+   "file": "model-pinleme.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model pinleme politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-archive-ilter",
+   "file": "ilter-hoca-usb-flaky.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "usb ariza teshisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-discover",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-discover",
+   "file": "project_agentic_economy.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "agentic economy projesi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-discover",
+   "file": "user_profile.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna kullanici profili",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "feedback_big5.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "big5 prompt tasarimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "feedback_claude_attribution.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "claude atif formati",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "feedback_model_choice.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "deney modeli degistirme",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "feedback_overclaiming.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "bulgu titizligi",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "feedback_preflight.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "api preflight testi",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "feedback_run_procedure.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "deney kosu proseduru",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "project_multiturn_next.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "multiturn deney onceligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "user_language.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "ingilizce iletisim tercihi",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-behave-who-to-punish",
+   "file": "user_role.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna kullanici profili",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "announce-cost-policy.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "duyuru maliyeti ve compact",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "codex-bypass-touches-system.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex sandbox bypass riski",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "deploy-coordination.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "bp deploy tehlikesi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "domain-tunapro-xyz.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "domain duzeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "fed-tunnel.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "bp federation tuneli",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "gpt-subagents-preferred.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/subagent politikasi",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "gpt-worktree-commit-limit.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex worktree commit kisiti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "memory-katmanlari.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "memory vs kural katmani",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "outbound-mail-coordination.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "radar-aa-scores.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "model radar AA skoru",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "resume-by-customtitle.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "bp open resume cozumu",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "tmux-stuck-composer-recovery.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tmux composer kurtarma",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "usage-endpoints-quirks.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "usage endpoint tuhafliklari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-blueprint",
+   "file": "yigit-side-channels.md",
+   "scope": "subtree",
+   "subtree": "kavram",
+   "topic": "yigit yan kanallari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-compec",
+   "file": "codex-delege-kurallari.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-compec",
+   "file": "compec-rol.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "tuna compec rolu",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-compec",
+   "file": "compec-sunucu-durumu.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "compec sunucu durumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-compec",
+   "file": "icebreaker-uygulamasi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "icebreaker uygulamasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-ders-chem105",
+   "file": "chem105-final-prep.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "chem105 final hazirligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-ders-chem105",
+   "file": "chem105-midterm1-prep.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "chem105 midterm hazirligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-ders-chem105",
+   "file": "chem105-midterm2-prep.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "chem105 midterm hazirligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-impact",
+   "file": "fail2ban.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "fail2ban self-ban",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-impact",
+   "file": "impact-site.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "impact sitesi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-impact",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-impact",
+   "file": "server.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "sunucu altyapi genel",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-impact",
+   "file": "user.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna kullanici profili",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "design-taste.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "kavram tasarim zevki",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "gonderim-zamani.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "outreach gonderim zamani",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "gpu-inference-pivot.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "kavram gpu pivotu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "kanit-image-inference.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "kavram hedef citasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "kontrol-veri-katmaninda.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kontrol veri katmaninda",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "outreach-interview-phase.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "kavram outreach fazi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kavram",
+   "file": "yigit-codex-bridge.md",
+   "scope": "subtree",
+   "subtree": "kavram",
+   "topic": "yigit yan kanallari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kitap",
+   "file": "giden-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kitap",
+   "file": "kitap-agent-fleet.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "kitap agent hiyerarsisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kitap",
+   "file": "pipeline2-v2.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "ceviri pipeline v2",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-kitap",
+   "file": "transformers5-mt5-bozuk.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "transformers mt5 regresyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "background-process-safety.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "brevo-per-domain-relay.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "brevo domain bazli relay",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "check-target-busy-before-messaging.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "docker-port-bind-explicit.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "docker port bind tuzagi",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "dont-recascade-announcements.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "duyuru cascade etmeme",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "fleet-model-policy.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "forwarding-external-blocked-by-brevo.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "dis yonlendirme engeli",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "mail-tls-cert-manual-sync.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "mail TLS sertifika sync",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "medlul-mail-setup.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "medlul mail kurulumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "opendkim-etc-not-synced-on-restart.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "opendkim sync tuzagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "outbound-block-park-domains.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "park domain gonderim blogu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "outbound-mail-coordination.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "probotstudio-mailbox-inventory.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probotstudio mail envanteri",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "probotstudio-mail-identities.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probotstudio mail kimlikleri",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "probotstudio-support-remailer.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probotstudio destek remailer",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "verify-completion-by-evidence.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tamamlanma kaniti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "webmail-fail2ban-selfban.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "fail2ban self-ban",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-mailserver",
+   "file": "webmail-storage-failed-docker-dns.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "docker dns kaybi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "agent-folder-per-agent.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent basina klasor",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "agent-naming-discipline.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent adlandirma disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "agent-nicknames.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent takma adlari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "agent-tree-view.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent listesini agac goster",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "big-model-smell.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "big model smell",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "bp-msg-protectsystem-strict-tuzagi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "systemd ProtectSystem bp kuyrugu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "bp-open-resume-shared-folder-bug.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "bp open resume hatasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "bp-tool-ownership.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "bp tool sahipligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "claudex-gpt-in-claude-code.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "claude code icinde gpt",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "cloudflare-dns-access.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "cloudflare dns erisimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "codex-sandbox-bwrap-wrapper.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex sandbox bypass riski",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "dms-fail2ban-config-sessiz-dusuyor.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "fail2ban self-ban",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "domain-scheme.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "domain duzeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "durdurulmus-sistem-ariza-maskeler.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "susturma arizayi maskeler",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "gece-penceresi-agir-isler.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "gece penceresi agir isler",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "guvenlik-sertlestirme-2026-08.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "sunucu guvenlik sertlestirme",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv",
+   "file": "koruma-kapsami-zaman-boslugu.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "koruma kapsami zaman boslugu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "mail-cikisi-server-mail-koordinasyonu.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "model-policy-uc-model.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "no-compact-without-asking.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "duyuru maliyeti ve compact",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "no-model-effort-changes-without-asking.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "probot-outreach-livesync.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "outreach vault livesync",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "server-hardware-legion.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "sunucu donanimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "server-orchestration.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent orkestrasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "shared-browser-server.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "paylasimli browser sunucusu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "tmux-clipboard-smart-cc.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tmux pano kurulumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "tone-with-user.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kullaniciyla ton",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv",
+   "file": "yedek-sistemi-depo3-borg.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "borg yedek sistemi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-openclaw",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-openclaw",
+   "file": "project_probot.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probot sirket ozeti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-openclaw",
+   "file": "reference_notion.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probot notion workspace",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-openclaw",
+   "file": "user_tuna.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna kullanici profili",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost-agents-usr-tuna-gul-mail",
+   "file": "background-codex-safety.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost-agents-usr-tuna-gul-mail",
+   "file": "outgoing-mail-coordination.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost-agents-usr-tuna-gul-mail",
+   "file": "verify-completion-not-claims.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tamamlanma kaniti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "duyuru-cascade.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "duyuru cascade etmeme",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "kendi-gecmisimiz-agda-yok.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "gecmis temaslar kayitsiz",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "kontrol-veri-katmaninda.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kontrol veri katmaninda",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "mail-dogrulama.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "mail varlik dogrulama",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "model-maliyet-olcumu.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex model maliyeti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outpost-control.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "outpost kontrol kanali",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outpost-infra.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "outpost altyapisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outpost-kurallar.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "outpost kurallari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outpost-mvp-yon.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "outpost urun yonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outpost-progress.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "outpost insa durumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outpost-workspace-mimari.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "outpost workspace mimarisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "outreach-bilgi-havuzu.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "outreach bilgi havuzu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "surec-guvenligi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "tek-kurum-db.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "tek kurum DB karari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "tuna-calisma-tarzi.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "tuna outreach ritmi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-outpost",
+   "file": "wa-kimlik-kaynagi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa kimlik/grup tespiti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-printer",
+   "file": "home-printers.md",
+   "scope": "subtree",
+   "subtree": "3d-baski",
+   "topic": "ev yazicilari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business-anket",
+   "file": "hasan-hoca-kimlik.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "hasan hoca kimligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business-anket",
+   "file": "mail-server-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "agent-mesaj-mesgul-kontrolu.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "anket-onay-kurali.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "anket onay kurali",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "bogazici-avantaji-ibb-hatti.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "bogazici avantaji",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "bp-msg-kullan.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "codex-atif-log.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex atif logu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "codex-kota-tabani.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex kota/maliyet disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "ftc-pivot.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "ftc pivotu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "insaat-degil-konusma-onceligi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "musteri konusma onceligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "kurum-listesi-temas-derinligi.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "kurum listesi citasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "mail-gonderim-kurali.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "mail onay kurali",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "mail-server-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "mufredat-meb-sinir.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "mufredat rol siniri",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "nf-products-gecmisi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "nf products gecmisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "probot-business-working-files.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "business is dosyalari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "rakip-sikayet-kullanimi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "rakip sikayet kullanimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "sirket-yapisi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "tuzel yapi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "stratejik-rol-ayrimi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "business/outreach rol ayrimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "subagent-effort-secimi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex kota/maliyet disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "tuna-profile.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna kullanici profili",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "value-first-open-dev.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "open-dev iptali",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-business",
+   "file": "yigit-dm-yasak.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "yigit DM yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-core",
+   "file": "fleet-model-pinning.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-core",
+   "file": "probot-core-role.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "probot-core rolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-core",
+   "file": "shared-browser-server.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "paylasimli browser sunucusu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-core",
+   "file": "tuna-feedback-minimal.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kullaniciyla ton",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "agent-kapatma-hijyeni.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent kapatma hijyeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "agent-mesajlasma-guvenlik.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "arka-plan-surec-guvenlik.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "ftc-opmode-gecis.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "core opmode gecisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "mail-gonderim-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "model-pinleme-kurali.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "probot-docs-project.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "docs proje mimarisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "probot-kit-canon.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kit canon zorunlu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "snap-chromium-screenshot.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "ui screenshot dogrulama",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-docs",
+   "file": "tamamlanma-olculebilir-kanit.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tamamlanma kaniti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "agent-mesajlasma-guvenlik.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "codex-arka-plan-guvenligi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "dev-site-basic-auth.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "dev domain basic auth",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "egitim-git-gitea.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "egitim repo duzeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "egitim-icerik-pedagoji-kurallari.md",
+   "scope": "subtree",
+   "subtree": "probot-egitim",
+   "topic": "icerik pedagoji kurallari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "egitim-site-yapisi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "egitim site yapisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "giden-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "icerik-dil-kurallari.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "site metin dil yasaklari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "kit-robot-isim-canon.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kit canon zorunlu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "market-arastirma-durumu.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "market arastirma durumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "model-politikasi-guncel.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim",
+   "file": "open-dev-satissiz-site-plani.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "open-dev iptali",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim-mufredat",
+   "file": "agent-kapatma-hijyeni.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent kapatma hijyeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim-mufredat",
+   "file": "arastirma-subagent-modeli.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex kota/maliyet disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim-mufredat",
+   "file": "blocks-cross-subtree-koordinasyon.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "mufredat-blocks koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim-mufredat",
+   "file": "gitea-paylasimli-repo.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "mufredat paylasimli repo",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim-mufredat",
+   "file": "limit-donemi-effort-medium.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-egitim-mufredat",
+   "file": "meb-giris-arastirma-sonuc.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "meb arastirma sonucu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-equity",
+   "file": "beyan-gun-teyidi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "beyan gun teyidi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-equity",
+   "file": "grup-mesaj-disiplini.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "wa grup mesaj disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "acil-bildirim-whatsapp.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "acil bildirim whatsapp",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "basvuru-metni-uslubu.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "uzun tire yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "bulgu-hipotez-ayrimi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "bulgu titizligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "codex-disiplin.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "codex kota/maliyet disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "hukmu-denetle-kaydi-degil.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "hukmu kaynaktan denetle",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "ic-veri-disa-cikmaz.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "ic veri disa cikmaz",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "kisitlamayi-amacindan-uygula.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kisitlamayi amacindan uygula",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "mufredat-acik-degil.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "mufredat acik degil",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "nf-products-sorusu-kapali.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "nf products gecmisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "no-artifacts-use-admin-probot.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "artifact yerine admin sayfasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "sunum-malzemesi-once-kontrol.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "sunum oncesi kontrol",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "urun-odagi-yon-karari.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "ftc pivotu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-fon",
+   "file": "wa-mesajlari-kisa.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa grup mesaj disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "3d-print-routing-server-3dprinter.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "baski sahipligi/routing",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "admin-shelf-preview-pattern.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "admin.probotstudio yayin",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "agent-closure-hygiene.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent kapatma hijyeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "agent-own-folder-rule.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent basina klasor",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "alias-alp-wa-discipline.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "wa persona disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "busy-check-two-checks-before-send.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "codex-background-hygiene.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "dont-recascade-server-main-announcements.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "duyuru cascade etmeme",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "drive-mekanik-cad-kutuphanesi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "cad kutuphanesi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "fleet-token-economy.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "duyuru maliyeti ve compact",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "incidents-log-read-discipline.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "incident log okuma",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "meb-research-outcome-2026-07.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "meb arastirma sonucu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "mecanum-3dbaski-canon-live-conflict.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "open-dev iptali",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "nfr-never-mention-huseyin-wa-only.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "nfr marka yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "no-memory-answers-delegate-live.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "canli veriyi hafizadan cevaplama",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "outbound-mail-coordinate-server-mail.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "outpost-ui-research-status.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "outpost kontrol kanali",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "priority-customers-first-rest-is-polish.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "musteri konusma onceligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "probot-gitea-repo-layout.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "gitea repo duzeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "probot-logo-assets.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "logo varliklari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "studio-4-agents-keep-on-opus.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "systemd-bpqueue-silent-drop.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "systemd ProtectSystem bp kuyrugu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "verify-completion-measurable-evidence.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tamamlanma kaniti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "wa-bridge-file-send.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa dosya gonderimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot",
+   "file": "wa-group-two-personas-no-double-answer.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "wa persona disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "bakilamadi-bulunamadi-farki.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "bulgu titizligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "ham-cikti-damga-kurali.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "ham cikti damgasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "iletisim-ertelenenler-listesi.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "temas yasak listesi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "kit-hazir-degil.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kit hazir degil",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "kontrol-kurarken-uc-soru.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kontrol kurma uc soru",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "mail-arastirma-sizdirma-yasagi.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "arastirma sizdirma yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "nfr-probot-ayni-kisi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "nfr veri kullanimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "nfr-siparisi-sicak-lead-degil.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "nfr siparisi lead degil",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "outreach-fazi-user-interview.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "outreach fazi interview",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "probot-adi-ortak-zemin-sarti.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "marka adi ortak zemin",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "susturma-arizayi-maskeler.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "susturma arizayi maskeler",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "tek-arastirma-tek-workflow.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tek arastirma tek workflow",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "tuna-konum.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna konumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "vault-cift-dosya-birlestirme.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "vault dosya birlestirme",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "wa-grup-uye-listesi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa kimlik/grup tespiti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-outreach",
+   "file": "yazim-uslubu-insan-gibi.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "uzun tire yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "admin-panel-hesaplari.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "medusa admin hesaplari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "admin-subdomain.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "admin.probotstudio yayin",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "birakilan-sistem-durumu.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "birakilan sistem envanteri",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "blocks-dev-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "blocks dev servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "blog-is-akisi-kurallari.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "blog is akisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "blog-yorum-bulten-servisi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "blog yorum servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "builder-dev-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "builder dev servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "content-package.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "urun medya kaynagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "designer-pipeline.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "designer pipeline",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "design-test-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "design-test servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "dev-domain-basic-auth.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "dev domain basic auth",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "dev-domain-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "dev domain servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "dev-prod-ayni-dosyalar.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "dev-prod ayni dosyalar",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "gitea-folder-remote-setup.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "gitea repo duzeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "global-header-standard.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "global header standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "gsc-seo-api.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "gsc seo api",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "hiyerarsi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "studio hiyerarsisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "hub-dev-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "hub dev servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "kartvizit-sistemi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "kartvizit sistemi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "kartvizit-tasarim-feedback.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tasarimciya art-direction dikte etme",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "kit-canon-zorunlu.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kit canon zorunlu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "landing-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "landing servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "mail-server-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "mimari-degerlendirme.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "studio mimari degerlendirmesi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "model-pinleme-kurali.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "nginx-reverse-proxy.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "sunucu altyapi genel",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "no-fabricated-specs.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "spec uydurma yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "no-nfr-branding.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "nfr marka yasagi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "paylasimli-browser.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "paylasimli browser sunucusu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "pil-sarj-sku-hold.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "pil/sarj sku hold",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "probot-blocks-role.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "blocks agent rolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "probot-core-referans.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probot-core api referansi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "probot-shop-role.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "shop agent rolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "prod-serving.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "prod servisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "shop-auth-modeli.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "shop auth modeli",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "shop-dev-fiyat-gizli.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "shop dev fiyat gizli",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "shop-katalog-bom-sync.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "shop katalog bom sync",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "shop-platform-karari.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "shop platform karari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "shop-uretim-modu.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "shop uretim modu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "site-metin-kurallari.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "site metin dil yasaklari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "site-nav-standard.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "site nav standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "staged-rollout-approval.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kademeli rollout onayi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "studio-repo-duzeni.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "studio repo duzeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "subagent-ve-codex-kurallari.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "tasarlagelistir-durum.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "tasarlagelistir domaini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "tmux-etiket-ve-delegasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "tool-ui-density.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "arac ui yogunlugu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "ui-visual-verification.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "ui screenshot dogrulama",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-studio",
+   "file": "value-first-pivot.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "open-dev iptali",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "agent-kapatma-hijyeni.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "agent kapatma hijyeni",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "agent-messaging-safety.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "baski-bom-sistemi.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "plastik bom sistemi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "baski-models-git-lfs.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "3d model git lfs",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "codex-arka-surec-hijyeni.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "git-workflow-fetch-before-push.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "git fetch-before-push",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "kit-bom-yapisi.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kit bom yapisi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "kit-canon-mandatory-read.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "kit canon zorunlu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "mail-server-mail-koordinasyon.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "model-politika-2026-07-25.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "scope-printing-responsibility.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "baski sahipligi/routing",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "tamamlanma-olculebilir-kanit.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tamamlanma kaniti",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tedarik",
+   "file": "whatsapp-probot-main.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "probot-main wa kanali",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "canli-serp-dogrulama-engeli.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "serp dogrulama engeli",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "codex-background-safety.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "dis-lead-s24fe.md",
+   "scope": "subtree",
+   "subtree": "probot-outreach",
+   "topic": "ilk dis lead",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "outbound-mail-coordination.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "role-tracking-agent.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "tracking agent rolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "seo-gercek-indeks-olcumu.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "gerçek indeks olcumu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "shared-browser-server.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "paylasimli browser sunucusu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "tasarlagelistir-gsc-pending.md",
+   "scope": "subtree",
+   "subtree": "probot",
+   "topic": "tasarlagelistir domaini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "tracking-dashboard.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "tracking dashboard",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-tracking",
+   "file": "video-sunucusu-kimlik-arsivi.md",
+   "scope": "subtree",
+   "subtree": "video",
+   "topic": "video sunucusu kimlik arsivi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-probot-vitrin",
+   "file": "vitrin-rol-ve-baski.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "vitrin rolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-remote",
+   "file": "a1-print-cost-script.md",
+   "scope": "subtree",
+   "subtree": "3d-baski",
+   "topic": "a1 baski maliyet araci",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-remote",
+   "file": "bambu-a1-setup.md",
+   "scope": "subtree",
+   "subtree": "3d-baski",
+   "topic": "ev yazicilari",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-remote",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz",
+   "file": "identity-server-monitor-dash.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "monitor dash kimligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz",
+   "file": "mesajlasma-disiplini.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "mesaj oncesi mesgul kontrolu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz",
+   "file": "model-radar.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "model radar sistemi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz",
+   "file": "tuna-dashboard-tercihleri.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "dashboard ui tercihleri",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz",
+   "file": "tuna-model-tercihleri.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "big model smell",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "feedback_style.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "kullaniciyla ton",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "project_tuna_cookie.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "video cookie erisimi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "project_video_system.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "video kayit sistemi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "project_youtube_quota.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "youtube upload kotasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "reference_server.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "sunucu altyapi genel",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video",
+   "file": "user_profile.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "tuna kullanici profili",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video-recordings",
+   "file": "port-standard.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "port standardi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-video-recordings",
+   "file": "user_identity.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "sunucu/ip kimligi",
+   "confidence": "low"
+  },
+  {
+   "dir": "-srv-video-recordings",
+   "file": "visitor_ndng_tuna.md",
+   "scope": "subtree",
+   "subtree": "video",
+   "topic": "video sunucusu kimlik arsivi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "identity-and-relay.md",
+   "scope": "local",
+   "subtree": null,
+   "topic": "wa kopru kimligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "keep-quiet-in-groups.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa grup mesaj disiplini",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "mail-coordination-rule.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "giden mail koordinasyonu",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "model-policy-opus5.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "model/effort politikasi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "notification-target-scope.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa bildirim etiketi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "process-kill-discipline.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "arka plan surec guvenligi",
+   "confidence": "high"
+  },
+  {
+   "dir": "-srv-whatsapp",
+   "file": "wa-send-no-probe.md",
+   "scope": "fleet",
+   "subtree": null,
+   "topic": "wa send probe etme",
+   "confidence": "high"
+  }
+ ],
+ "clusters": [
+  {
+   "topic": "giden mail server-mail koordinasyonu",
+   "scope": "fleet",
+   "members": [
+    "-srv-3dprinter/giden-mail-koordinasyon.md",
+    "-srv-blueprint/outbound-mail-coordination.md",
+    "-srv-kitap/giden-mail-koordinasyon.md",
+    "-srv-mailserver/outbound-mail-coordination.md",
+    "-srv/mail-cikisi-server-mail-koordinasyonu.md",
+    "-srv-outpost-agents-usr-tuna-gul-mail/outgoing-mail-coordination.md",
+    "-srv-probot-business-anket/mail-server-mail-koordinasyon.md",
+    "-srv-probot-business/mail-server-mail-koordinasyon.md",
+    "-srv-probot-docs/mail-gonderim-koordinasyon.md",
+    "-srv-probot-egitim/giden-mail-koordinasyon.md",
+    "-srv-probot/outbound-mail-coordinate-server-mail.md",
+    "-srv-probot-studio/mail-server-mail-koordinasyon.md",
+    "-srv-probot-tedarik/mail-server-mail-koordinasyon.md",
+    "-srv-probot-tracking/outbound-mail-coordination.md",
+    "-srv-whatsapp/mail-coordination-rule.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "model/effort politikasi + model pinleme",
+   "scope": "fleet",
+   "members": [
+    "-srv-3dprinter/model-pinleme.md",
+    "-srv-mailserver/fleet-model-policy.md",
+    "-srv/model-policy-uc-model.md",
+    "-srv/no-model-effort-changes-without-asking.md",
+    "-srv-probot-core/fleet-model-pinning.md",
+    "-srv-probot-docs/model-pinleme-kurali.md",
+    "-srv-probot-egitim/model-politikasi-guncel.md",
+    "-srv-probot-egitim-mufredat/limit-donemi-effort-medium.md",
+    "-srv-probot-studio/model-pinleme-kurali.md",
+    "-srv-probot-studio/subagent-ve-codex-kurallari.md",
+    "-srv-probot-tedarik/model-politika-2026-07-25.md",
+    "-srv-probot/studio-4-agents-keep-on-opus.md",
+    "-srv-whatsapp/model-policy-opus5.md",
+    "-srv-blueprint/gpt-subagents-preferred.md"
+   ],
+   "distinct_variants": 4,
+   "contradictions": [
+    "-srv/model-policy-uc-model.md kendi icinde celisiyor: bas kisim 'effort MEDIUM, xhigh YASAK' (2026-07-26) derken 'How to apply' satiri hala 'pin dosyasini opus[1m]+high yaz' diyor.",
+    "-srv-blueprint/gpt-subagents-preferred.md (2026-08-01) 'Fable orchestrator olacak, kodu Opus 5 subagent yazacak' derken -srv-probot-tedarik/model-politika-2026-07-25.md, -srv-probot/studio-4-agents-keep-on-opus.md ve -srv-probot-egitim/model-politikasi-guncel.md 'Fable-orchestrator kurali GECERSIZ, Fable varsayilan degil' diyor; 08-01 notu tek agent icin mi filo geneli mi belirsiz.",
+    "Bes dosyanin FRONTMATTER description'i hala 'Opus 5 + high' diyor (probot-core/fleet-model-pinning, probot-tedarik/model-politika-2026-07-25, probot/studio-4-agents-keep-on-opus, whatsapp/model-policy-opus5); GOVDELERI 07-26 medium+xhigh-yasak ile guncel — sadece ozetler bayat, index/description okuyan bir agent yanlis kurali alir."
+   ]
+  },
+  {
+   "topic": "arka plan/codex surec guvenligi (pgrep, self-update, stdin)",
+   "scope": "fleet",
+   "members": [
+    "-srv-3dprinter/codex-arkaplan-guvenlik.md",
+    "-srv-compec/codex-delege-kurallari.md",
+    "-srv-mailserver/background-process-safety.md",
+    "-srv-outpost-agents-usr-tuna-gul-mail/background-codex-safety.md",
+    "-srv-outpost/surec-guvenligi.md",
+    "-srv-probot-docs/arka-plan-surec-guvenlik.md",
+    "-srv-probot-egitim/codex-arka-plan-guvenligi.md",
+    "-srv-probot/codex-background-hygiene.md",
+    "-srv-probot-tedarik/codex-arka-surec-hijyeni.md",
+    "-srv-probot-tracking/codex-background-safety.md",
+    "-srv-whatsapp/process-kill-discipline.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "tamamlanmayi olculebilir kanitla dogrula",
+   "scope": "fleet",
+   "members": [
+    "-srv-3dprinter/bitti-olculebilir-kanit.md",
+    "-srv-mailserver/verify-completion-by-evidence.md",
+    "-srv-outpost-agents-usr-tuna-gul-mail/verify-completion-not-claims.md",
+    "-srv-probot-docs/tamamlanma-olculebilir-kanit.md",
+    "-srv-probot/verify-completion-measurable-evidence.md",
+    "-srv-probot-tedarik/tamamlanma-olculebilir-kanit.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "mesaj oncesi mesgul kontrolu / bp msg kullan",
+   "scope": "fleet",
+   "members": [
+    "-srv-mailserver/check-target-busy-before-messaging.md",
+    "-srv-probot-business/agent-mesaj-mesgul-kontrolu.md",
+    "-srv-probot-business/bp-msg-kullan.md",
+    "-srv-probot-docs/agent-mesajlasma-guvenlik.md",
+    "-srv-probot-egitim/agent-mesajlasma-guvenlik.md",
+    "-srv-probot/busy-check-two-checks-before-send.md",
+    "-srv-probot-studio/tmux-etiket-ve-delegasyon.md",
+    "-srv-probot-tedarik/agent-messaging-safety.md",
+    "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz/mesajlasma-disiplini.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "port standardi /srv/docs/ports.md",
+   "scope": "fleet",
+   "members": [
+    "-srv-behave-discover/port-standard.md",
+    "-srv-behave-who-to-punish/port-standard.md",
+    "-srv-impact/port-standard.md",
+    "-srv-kavram/port-standard.md",
+    "-srv-openclaw/port-standard.md",
+    "-srv-probot-studio/port-standard.md",
+    "-srv-probot-tedarik/port-standard.md",
+    "-srv-remote/port-standard.md",
+    "-srv-video/port-standard.md",
+    "-srv-video-recordings/port-standard.md"
+   ],
+   "distinct_variants": 1,
+   "contradictions": []
+  },
+  {
+   "topic": "paylasimli Playwright/Chromium browser sunucusu",
+   "scope": "fleet",
+   "members": [
+    "-srv-3dprinter/browser-server.md",
+    "-srv/shared-browser-server.md",
+    "-srv-probot-core/shared-browser-server.md",
+    "-srv-probot-studio/paylasimli-browser.md",
+    "-srv-probot-tracking/shared-browser-server.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "[ANNOUNCE server-main] cascade etmeme",
+   "scope": "fleet",
+   "members": [
+    "-srv-mailserver/dont-recascade-announcements.md",
+    "-srv-outpost/duyuru-cascade.md",
+    "-srv-probot/dont-recascade-server-main-announcements.md"
+   ],
+   "distinct_variants": 1,
+   "contradictions": []
+  },
+  {
+   "topic": "agent kapatma hijyeni (4 adim)",
+   "scope": "fleet",
+   "members": [
+    "-srv-probot-docs/agent-kapatma-hijyeni.md",
+    "-srv-probot-egitim-mufredat/agent-kapatma-hijyeni.md",
+    "-srv-probot-tedarik/agent-kapatma-hijyeni.md",
+    "-srv-probot/agent-closure-hygiene.md"
+   ],
+   "distinct_variants": 1,
+   "contradictions": []
+  },
+  {
+   "topic": "codex kota/maliyet disiplini (luna-oncelik, kuyruk tahmini)",
+   "scope": "fleet",
+   "members": [
+    "-srv-probot-business/codex-kota-tabani.md",
+    "-srv-probot-business/subagent-effort-secimi.md",
+    "-srv-probot-egitim-mufredat/arastirma-subagent-modeli.md",
+    "-srv-probot-fon/codex-disiplin.md",
+    "-srv-outpost/model-maliyet-olcumu.md"
+   ],
+   "distinct_variants": 4,
+   "contradictions": [
+    "Filo model listesi kurali (-srv-probot/studio-4-agents-keep-on-opus.md, 2026-07-26 + global CLAUDE.md) 'terra/luna ACMA' diyor; buna karsi -srv-probot-egitim-mufredat/arastirma-subagent-modeli.md (2026-07-26, Tuna) arastirma kollarini terra ile acmayi, -srv-probot-business/codex-kota-tabani.md (2026-08-10), -srv-probot-fon/codex-disiplin.md (2026-08-10) ve -srv-outpost/model-maliyet-olcumu.md (2026-08-03) mekanik isi ZORUNLU luna ile kosmayi emrediyor. Tarihce gore yeni kural (luna/terra serbest) gecerli, 'ACMA' satiri bayat."
+   ]
+  },
+  {
+   "topic": "duyuru maliyeti + compact izni + filo token ekonomisi",
+   "scope": "fleet",
+   "members": [
+    "-srv-blueprint/announce-cost-policy.md",
+    "-srv/no-compact-without-asking.md",
+    "-srv-probot/fleet-token-economy.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "agent basina ayri klasor (paylasimli cwd yasak)",
+   "scope": "fleet",
+   "members": [
+    "-srv/agent-folder-per-agent.md",
+    "-srv-probot/agent-own-folder-rule.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "kontrol veri katmaninda durur",
+   "scope": "fleet",
+   "members": [
+    "-srv-kavram/kontrol-veri-katmaninda.md",
+    "-srv-outpost/kontrol-veri-katmaninda.md"
+   ],
+   "distinct_variants": 1,
+   "contradictions": []
+  },
+  {
+   "topic": "susturulmus sistem arizayi maskeler",
+   "scope": "fleet",
+   "members": [
+    "-srv/durdurulmus-sistem-ariza-maskeler.md",
+    "-srv-probot-outreach/susturma-arizayi-maskeler.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "uzun tire yasagi / insan gibi Turkce",
+   "scope": "fleet",
+   "members": [
+    "-srv-probot-fon/basvuru-metni-uslubu.md",
+    "-srv-probot-outreach/yazim-uslubu-insan-gibi.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "tuna kullanici profili/kimligi",
+   "scope": "fleet",
+   "members": [
+    "-srv-behave-discover/user_profile.md",
+    "-srv-behave-who-to-punish/user_role.md",
+    "-srv-impact/user.md",
+    "-srv-openclaw/user_tuna.md",
+    "-srv-video/user_profile.md",
+    "-srv-probot-business/tuna-profile.md"
+   ],
+   "distinct_variants": 5,
+   "contradictions": []
+  },
+  {
+   "topic": "kullaniciyla ton: sade, dogrudan, minimal",
+   "scope": "fleet",
+   "members": [
+    "-srv/tone-with-user.md",
+    "-srv-probot-core/tuna-feedback-minimal.md",
+    "-srv-video/feedback_style.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "fail2ban kendini/konteyneri banlar",
+   "scope": "fleet",
+   "members": [
+    "-srv-impact/fail2ban.md",
+    "-srv-mailserver/webmail-fail2ban-selfban.md",
+    "-srv/dms-fail2ban-config-sessiz-dusuyor.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "domain duzeni tunapro.xyz",
+   "scope": "fleet",
+   "members": [
+    "-srv/domain-scheme.md",
+    "-srv-blueprint/domain-tunapro-xyz.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "systemd ProtectSystem=strict bp kuyrugunu sessizce dusuruyor",
+   "scope": "fleet",
+   "members": [
+    "-srv/bp-msg-protectsystem-strict-tuzagi.md",
+    "-srv-probot/systemd-bpqueue-silent-drop.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "bp open --resume paylasimli klasor sorunu",
+   "scope": "fleet",
+   "members": [
+    "-srv/bp-open-resume-shared-folder-bug.md",
+    "-srv-blueprint/resume-by-customtitle.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": [
+    "-srv/bp-open-resume-shared-folder-bug.md (2026-07-20) hatayi ACIK gosteriyor ve 'kalici fix blueprint agent'inda bekliyor, elle claude --resume <uuid> gerekir' diyor; -srv-blueprint/resume-by-customtitle.md (2026-07-21, commit eb93a4b) fix'in customTitle taramasiyla DEPLOY EDILDIGINI belgeliyor. Ilki bayat kaldi, hala gecerli kuralmis gibi elle mudahale tarif ediyor."
+   ]
+  },
+  {
+   "topic": "sunucu altyapi genel gorunumu (nginx + docker vhost)",
+   "scope": "fleet",
+   "members": [
+    "-srv-impact/server.md",
+    "-srv-video/reference_server.md",
+    "-srv-probot-studio/nginx-reverse-proxy.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "bulgu/hipotez ayrimi, asiri iddia etmeme",
+   "scope": "fleet",
+   "members": [
+    "-srv-behave-who-to-punish/feedback_overclaiming.md",
+    "-srv-probot-fon/bulgu-hipotez-ayrimi.md",
+    "-srv-probot-outreach/bakilamadi-bulunamadi-farki.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "codex sandbox root'ta etkisiz / bypass sistemi degistirir",
+   "scope": "fleet",
+   "members": [
+    "-srv-blueprint/codex-bypass-touches-system.md",
+    "-srv/codex-sandbox-bwrap-wrapper.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "big model smell / Tuna model zevki",
+   "scope": "fleet",
+   "members": [
+    "-srv/big-model-smell.md",
+    "-srv-usage-dashboard-v2-fable-m-gpt-kilavuz/tuna-model-tercihleri.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": [
+    "-srv/big-model-smell.md (modified 2026-07-25) 'varsayilan Opus 5 + HIGH oldu, Fable kullanilirsa effort tavani high' diyerek 07-25 kuralini GUNCEL gibi anlatiyor; filonun 2026-07-26 kurali effort MEDIUM + xhigh yasak."
+   ]
+  },
+  {
+   "topic": "wa grup mesaj disiplini (kisa yaz, sessiz kal)",
+   "scope": "fleet",
+   "members": [
+    "-srv-probot-fon/wa-mesajlari-kisa.md",
+    "-srv-probot-equity/grup-mesaj-disiplini.md",
+    "-srv-whatsapp/keep-quiet-in-groups.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "wa kimlik/grup uye tespiti",
+   "scope": "fleet",
+   "members": [
+    "-srv-outpost/wa-kimlik-kaynagi.md",
+    "-srv-probot-outreach/wa-grup-uye-listesi.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "ui screenshot ile gorsel dogrulama",
+   "scope": "fleet",
+   "members": [
+    "-srv-probot-docs/snap-chromium-screenshot.md",
+    "-srv-probot-studio/ui-visual-verification.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "outpost kontrol kanali / research_status",
+   "scope": "fleet",
+   "members": [
+    "-srv-outpost/outpost-control.md",
+    "-srv-probot/outpost-ui-research-status.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "KIT.md canon zorunlu okuma",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-docs/probot-kit-canon.md",
+    "-srv-probot-egitim/kit-robot-isim-canon.md",
+    "-srv-probot-studio/kit-canon-zorunlu.md",
+    "-srv-probot-tedarik/kit-canon-mandatory-read.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": []
+  },
+  {
+   "topic": "open-dev branch iptali",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-business/value-first-open-dev.md",
+    "-srv-probot-studio/value-first-pivot.md",
+    "-srv-probot-egitim/open-dev-satissiz-site-plani.md",
+    "-srv-probot/mecanum-3dbaski-canon-live-conflict.md"
+   ],
+   "distinct_variants": 3,
+   "contradictions": [
+    "-srv-probot-business/value-first-open-dev.md ve -srv-probot-studio/value-first-pivot.md (ikisi de 2026-07-24) 'open-dev branch IPTAL/kapandi' diyor; -srv-probot-egitim/open-dev-satissiz-site-plani.md (modified 2026-07-25) hala 'egitim open-dev branch'inde BASTAN yazilacak, Tuna/alp sinyal verecek' diye bekleyen bir plan olarak anlatiyor ve -srv-probot/mecanum-3dbaski-canon-live-conflict.md (2026-07-25) mecanum temizligini 'Tuna'nin open-dev rewrite'ina PARK edildi' diye o iptal edilmis branch'e baglıyor."
+   ]
+  },
+  {
+   "topic": "NF Products gecmisi kapali soru",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-business/nf-products-gecmisi.md",
+    "-srv-probot-fon/nf-products-sorusu-kapali.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "NFR marka adi hicbir yerde gecmez",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot/nfr-never-mention-huseyin-wa-only.md",
+    "-srv-probot-studio/no-nfr-branding.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "MEB giris arastirmasi sonucu",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot/meb-research-outcome-2026-07.md",
+    "-srv-probot-egitim-mufredat/meb-giris-arastirma-sonuc.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "FTC pivotu (awards/girisim kapali)",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-business/ftc-pivot.md",
+    "-srv-probot-fon/urun-odagi-yon-karari.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "musteri konusmasi her seyin onunde",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-business/insaat-degil-konusma-onceligi.md",
+    "-srv-probot/priority-customers-first-rest-is-polish.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "gitea repo/folder-remote duzeni",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot/probot-gitea-repo-layout.md",
+    "-srv-probot-studio/gitea-folder-remote-setup.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "dev.probotstudio.com basic auth",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-egitim/dev-site-basic-auth.md",
+    "-srv-probot-studio/dev-domain-basic-auth.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "site/icerik metin dil yasaklari",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-egitim/icerik-dil-kurallari.md",
+    "-srv-probot-studio/site-metin-kurallari.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "admin.probotstudio.com ozel yayin alani",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot/admin-shelf-preview-pattern.md",
+    "-srv-probot-studio/admin-subdomain.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "baski sahipligi/routing (ev yazicilarina dokunma)",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot/3d-print-routing-server-3dprinter.md",
+    "-srv-probot-tedarik/scope-printing-responsibility.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "ev 3D yazicilari (A1 / K1 Max)",
+   "scope": "subtree",
+   "members": [
+    "-srv-printer/home-printers.md",
+    "-srv-remote/bambu-a1-setup.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "wa probot-main persona disiplini (alp/tarik)",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot/alias-alp-wa-discipline.md",
+    "-srv-probot/wa-group-two-personas-no-double-answer.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "yigit yan kanallari / kavram-main-server koprusu",
+   "scope": "subtree",
+   "members": [
+    "-srv-blueprint/yigit-side-channels.md",
+    "-srv-kavram/yigit-codex-bridge.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "video sunucusu ziyaretci kimlik arsivi",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-tracking/video-sunucusu-kimlik-arsivi.md",
+    "-srv-video-recordings/visitor_ndng_tuna.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  },
+  {
+   "topic": "tasarlagelistir.com domaini",
+   "scope": "subtree",
+   "members": [
+    "-srv-probot-studio/tasarlagelistir-durum.md",
+    "-srv-probot-tracking/tasarlagelistir-gsc-pending.md"
+   ],
+   "distinct_variants": 2,
+   "contradictions": []
+  }
+ ],
+ "summary": {
+  "fleet": 161,
+  "subtree": 83,
+  "local": 94,
+  "cluster_count": 46,
+  "files_in_clusters": 168
+ }
+}

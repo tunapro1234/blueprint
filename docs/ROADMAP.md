@@ -260,6 +260,10 @@ iş mesajı sonra gider — goal'suz iş mesajı sürüklenmesin.
 
 ## 8. Memory paylaşımı — filoda ortak hafıza (2026-08-12, Tuna)
 
+> **2026-08-12 derlemesi:** bu bölümün devamı + alternatif sistem taraması + model ekonomisi
+> + bağlam yönetimi + görev-kapsamlı oturum tasarımı tek dosyada: `docs/bulgular-2026-08-12.md`.
+> Kararlar orada K1-K6 olarak listeli, hiçbiri verilmedi.
+
 Şikâyet: "memory paylaşımı bizim sistem içinde çok kötü". Ölçüm bunu doğruluyor ve nedeni
 disiplin değil, **yapı**:
 

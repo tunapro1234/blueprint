@@ -34,6 +34,86 @@ func TestTypingNoPrompt(t *testing.T) {
 	}
 }
 
+// spinnerPane puts transcript rows above a real composer box, which is the structure
+// Busy's region test is written against: the live spinner sits in the narrow strip
+// just above the box, everything further up is transcript. The fixtures below are
+// modelled on captures taken from this fleet on 2026-08-15 (Claude Code 2.1.233),
+// with the TEXT rewritten — real pane content is private.
+func spinnerPane(transcript ...string) string {
+	return strings.Join(transcript, "\n") + "\n" + claudePane(emptyRow)
+}
+
+// filler is transcript padding, used to push a quoted spinner far enough above the
+// composer box that it falls outside the search window.
+func filler(n int) []string {
+	rows := make([]string, n)
+	for i := range rows {
+		rows[i] = "  agent: ara satir"
+	}
+	return rows
+}
+
+// The quotation that made this test necessary: an IDLE pane whose transcript is
+// discussing the busy signature itself. Every token of the live row is present.
+const quotedSpinner = "  imza ✻ Symbioting… (29s · ↓ 163 tokens). Yani kapi kapali degil."
+
+func TestBusyReadsTheLiveSpinner(t *testing.T) {
+	cases := []struct {
+		name string
+		pane string
+		want bool
+	}{
+		// (a) the four live spinner frames, each in a real pane structure.
+		{"spinner with thinking segment", spinnerPane("  agent: cikti", "✻ Baking… (2m 32s · ↓ 6.1k tokens · thought for 6s)"), true},
+		{"spinner short timer", spinnerPane("  agent: cikti", "✽ Baking… (30s · ↓ 943 tokens)"), true},
+		{"spinner other verb", spinnerPane("  agent: cikti", "✻ Symbioting… (29s · ↓ 163 tokens)"), true},
+		{"spinner dim frame glyph", spinnerPane("  agent: cikti", "· Symbioting… (2m 13s · ↓ 422 tokens)"), true},
+		// Frames copied verbatim from a driven 2.1.233 session (2026-08-15), where
+		// Busy was polled twice a second across a whole turn. The counter is absent
+		// at the start, then arrives WITHOUT a token segment, then with one: a
+		// pattern that insisted on "… tokens" would have called a third of a live
+		// working turn idle.
+		{"spinner before the counter appears", spinnerPane("  agent: cikti", "✽ Unravelling…"), true},
+		{"spinner before the counter, dim frame", spinnerPane("  agent: cikti", "· Misting…"), true},
+		{"counter without a token segment", spinnerPane("  agent: cikti", "✻ Marinating… (1s · thinking with medium effort)"), true},
+		{"counter with tokens and thinking", spinnerPane("  agent: cikti", "· Marinating… (5s · ↓ 256 tokens · thought for 2s)"), true},
+		// The rows a FINISHED (or merely waiting) pane draws in the same place, all
+		// three copied from live captures. One word and an ellipsis is what tells
+		// them apart from a running turn.
+		{"finished turn", spinnerPane("  agent: cikti", "✻ Baked for 3s"), false},
+		{"finished turn with a background shell", spinnerPane("  agent: cikti", "✻ Baked for 6m 19s · 1 shell still running"), false},
+		{"waiting for a background agent", spinnerPane("  agent: cikti", "✻ Waiting for 1 background agent to finish"), false},
+		// (b) a tool is running: the box is drawn AND the spinner keeps turning.
+		{"tool box with spinner", spinnerPane(
+			"  ⎿  $ go test ./... (27s · 28 lines)",
+			"     (ctrl+b ctrl+b (twice) to run in background)",
+			"✽ Baking… (30s · ↓ 943 tokens)",
+		), true},
+		// (c) the live quotation from server-main: idle pane, quote deep in the
+		// transcript. Region AND line structure both refuse it.
+		{"quoted spinner in the transcript", spinnerPane(append([]string{quotedSpinner}, filler(9)...)...), false},
+		// The region rule on its own: a PERFECT spinner row, but deep in the
+		// scrollback where only a quotation of one can be.
+		{"spinner row far above the box", spinnerPane(append([]string{"✻ Baking… (30s · ↓ 943 tokens)"}, filler(9)...)...), false},
+		// (d) the same quotation dragged INTO the search window: only the line
+		// structure is left to refuse it, and it must.
+		{"quoted spinner above the box", spinnerPane("  agent: cikti", quotedSpinner), false},
+		// (e) the previous generation, still printed by Codex panes and older builds.
+		{"legacy esc-to-interrupt spinner", spinnerPane("  agent: cikti", "✻ Working… (23s · esc to interrupt)"), true},
+		// (f) background shells are not a running turn.
+		{"background shell footer", spinnerPane("  agent: cikti", "⏵⏵ bypass permissions on · 2 shells · esc to interrupt"), false},
+		// (g) nothing at all.
+		{"idle pane", spinnerPane("  agent: cikti", "  agent: bitti"), false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := Busy(testCase.pane); got != testCase.want {
+				t.Fatalf("Busy = %v, want %v", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestBusyRequiresLiveIndicator(t *testing.T) {
 	// Live indicators: spinner timer or the ⏵ footer.
 	if !Busy("✻ Working… (23s · Esc to interrupt)") {

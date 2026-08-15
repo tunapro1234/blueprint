@@ -271,11 +271,133 @@ func stripSpace(s string) string {
 
 var busyIndicator = regexp.MustCompile(`\(\s*\d+\s*[a-z]?\s*s?\s*[·•]|⏵`)
 
+// busySpinner is the CURRENT generation of the "this pane is working" signature:
+// the animated status row Claude Code draws above its composer while a turn runs.
+// All live shapes are one pattern, because the counter grows into the row rather
+// than being part of it. Measured on 2026-08-15 by driving a throwaway 2.1.233
+// session and polling twice a second across whole turns:
+//
+//	✽ Unravelling…                                   <- the first seconds
+//	· Misting…
+//	✻ Marinating… (1s · thinking with medium effort) <- timer, no token count yet
+//	· Marinating… (5s · ↓ 256 tokens · thought for 2s)
+//	✻ Baking… (2m 32s · ↓ 6.1k tokens · thought for 6s)
+//	✽ Baking… (30s · ↓ 943 tokens)
+//	· Symbioting… (2m 13s · ↓ 422 tokens)
+//
+// Neither the counter nor the token segment may therefore be required: a whole
+// three-second turn was captured without the timer ever appearing, and the first
+// seconds of every longer turn carry a timer with no token count. A pattern
+// demanding either would call a live working pane idle — the same silent-false
+// shape this rewrite exists to remove.
+//
+// What is left carries the weight, and each piece is a discriminator against
+// QUOTED prose, the historical enemy of this function (2026-07-10, third
+// false-positive class — one agent discussing the busy rule made every other agent
+// look busy):
+//
+//   - column 0. The live row starts at the very left edge; a quotation sits inside
+//     a paragraph, which on these panes is always indented.
+//   - one SYMBOL glyph (never a letter or a digit) plus a space. The frame rune
+//     rotates (✻ ✽ ✳ · ✢ * +) and future builds will rotate others, so the set is
+//     deliberately NOT enumerated — only "a symbol, alone, first".
+//   - a SINGLE word, and the ELLIPSIS that ends it. This is what separates running
+//     from finished, and it was measured rather than guessed: the same row reads
+//     "✻ Baked for 3s" when the turn is over, "✻ Baked for 6m 19s · 1 shell still
+//     running" while a background shell outlives it, and "✻ Waiting for 1
+//     background agent to finish" in a pane whose composer is free — none of them
+//     one word, none of them with an ellipsis, all of them correctly not busy.
+//     The verb itself (Baking/Symbioting/Unravelling/Misting/…) changes with every
+//     release and is therefore never matched.
+//   - the counter, WHEN present, must be the whole rest of the row: an opening
+//     parenthesis, a timer ("30s", "2m 32s"), anything else, and then the row ENDS
+//     with the closing parenthesis. A quotation carries the rest of its sentence
+//     behind it ("… tokens). Yani …") and fails here.
+//
+// What this cannot tell apart is a transcript that reproduces the row EXACTLY, at
+// column 0, alone on its line — for that there is the region test (busyRegion),
+// and beyond it the daemon's busy-sanity watchdog.
+//
+// One measured GAP, recorded here so the next reader does not rediscover it as a
+// bug: while a long assistant message is STREAMING, 2.1.233 draws no indicator at
+// all — the spinner is replaced by the growing text, and the pane is
+// indistinguishable from an idle one in a single frame. It returns for every
+// thinking and tool phase, which is where agent turns spend nearly all of their
+// time (in a driven measurement Busy was true for every frame of the working
+// phase, 11 of 11). The gap is also the mildest one: a composer typed into during
+// streaming QUEUES the text in the TUI instead of interrupting a tool call. Closing
+// it would take two frames and a clock, and Busy must stay a pure function of one.
+var busySpinner = regexp.MustCompile(`^[^\p{L}\p{N}\s] +[^\s()]*(?:…|\.\.\.) *(?:\((?:\d+h +)?(?:\d+m +)?\d+(?:\.\d+)?s[^()]*\))?$`)
+
+// busySpinnerLookback is how far ABOVE the composer box's top border the live
+// spinner row is looked for, and busyTailRows the same window for a pane whose box
+// cannot be read (a Codex pane, a modal picker, an unfamiliar build). The live
+// spinner always sits in that narrow strip; a transcript quote of one usually does
+// not, and the region test is what makes the difference cheap.
+const (
+	busySpinnerLookback = 8
+	busyTailRows        = 12
+)
+
+// busyRegion returns the rows in which a LIVE spinner may appear: the strip just
+// above the composer box, or — when the box is not readable — the tail of the
+// capture. Everything else is transcript, where the same text is only ever a
+// quotation.
+func busyRegion(pane string) []string {
+	lines := strings.Split(pane, "\n")
+	if _, top, ok := composerBoxAt(pane); ok {
+		start := top - busySpinnerLookback
+		if start < 0 {
+			start = 0
+		}
+		return lines[start:top]
+	}
+	start := len(lines) - busyTailRows
+	if start < 0 {
+		start = 0
+	}
+	return lines[start:]
+}
+
+// Busy reports whether the pane is mid-turn. It reads ONE frame and decides from
+// its structure alone: no timing, no history, no side effects — every caller
+// (msgq's delivery gate, `bp status`, compact, the send path) depends on that.
+//
+// TWO GENERATIONS of signature are accepted, because the fleet runs both.
+//
+// The new one (busySpinner) is the spinner row Claude Code 2.1.233 draws. The old
+// one is the "esc to interrupt" affordance, which Codex panes and older Claude
+// builds still print; it is kept as an OR branch and its own rules are unchanged —
+// the phrase alone was never enough (transcripts quote it, and a "2 shells · esc to
+// interrupt" footer only reports background shells), so a live-indicator signature
+// is still required next to it on the same row.
+//
+// Why the rewrite (2026-08-15). Claude Code 2.1.233 stopped printing "esc to
+// interrupt" in a working pane entirely — 45+ live samples, zero occurrences — and
+// because the old code required that phrase BEFORE looking at anything else, Busy
+// returned false for every working Claude pane on the machine. Nothing crashed and
+// nothing was logged: `bp status` simply showed an idle fleet, and every guard built
+// on top of it (compact, the queue's "do not type into a working pane", the send
+// path's pre-flight check) silently became a no-op. That is the failure mode this
+// function must be read against — a detector that goes quiet is worse than one that
+// is wrong, so the daemon's "busy-sanity" loop now watches for exactly this shape
+// of drift (panes changing for a day while Busy never once fires) and files a
+// message instead of letting the next signature change go unnoticed for weeks.
+//
+// The tool-run box a working pane also shows ("⎿ $ cmd (27s · 28 lines)" plus its
+// "ctrl+b ctrl+b to run in background" hint) is deliberately NOT a second signal:
+// the spinner is present for the WHOLE turn while that box only appears around a
+// shell command, so it would add false-positive surface (its shape survives being
+// quoted much better) for no coverage.
 func Busy(pane string) bool {
-	// "esc to interrupt" alone is NOT enough: transcripts often QUOTE the phrase (rule
-	// announcements), and a "2 shells · esc to interrupt" footer only means background shells.
-	// Count busy only when the line carries a live indicator signature: the ⏵ footer or a
-	// spinner timer like "(23s ·" (2026-07-10, third false-positive class).
+	for _, line := range busyRegion(pane) {
+		// Only ANSI colour is stripped, never dim segments: the spinner may well be
+		// dim-rendered, and StripDim would delete the very row being tested.
+		clean := strings.TrimRight(ansiSeq.ReplaceAllString(line, ""), " \t ")
+		if busySpinner.MatchString(clean) {
+			return true
+		}
+	}
 	for _, line := range strings.Split(strings.ToLower(pane), "\n") {
 		if !strings.Contains(line, "esc to interrupt") || strings.Contains(line, "shell") {
 			continue
@@ -505,7 +627,11 @@ const authStatusBullet = "●"
 // turned working delivery into a permanently queued message — worse than the bug
 // it was meant to catch. So the match follows the same discipline as Busy(),
 // codexBusyQueue() and composerTrail(): look only where the live UI is, and
-// require a signature rather than bare words.
+// require a signature rather than bare words. (Busy() arrived at the region half
+// of that discipline late — its 2026-08-15 rewrite — and its legacy "esc to
+// interrupt" branch still scans the whole pane, leaning on a two-part signature
+// on one row instead. The rule here is unchanged either way: this function reads
+// the footer region only.)
 //
 //   - Scan starts BELOW the last prompt line, so transcript text (which is
 //     always above the composer) can never match, however often an agent quotes

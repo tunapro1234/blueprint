@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"os"
@@ -114,6 +116,9 @@ func (s *Service) Run(ctx context.Context) {
 				return
 			}
 		}
+	})
+	s.startLoop(ctx, "busy-sanity", 5*time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
+		s.tracked(run, "busy-sanity", interval, func() error { return s.busySanity(run) })
 	})
 	s.startLoop(ctx, "watch-reset", 150*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "watch-reset", interval, func() error {
@@ -361,6 +366,183 @@ func (s *Service) keepalive(ctx context.Context) error {
 		return err
 	}
 	return book.SetStatus(s.config.Agentbooks, "server-main", "open", dir, book.Registration{})
+}
+
+// --- busy-sanity: a watchdog for the busy DETECTOR, not for the agents --------
+//
+// On 2026-08-15 Claude Code 2.1.233 stopped printing "esc to interrupt" in a
+// working pane, and tmux.Busy — which required that phrase before looking at
+// anything else — began returning false for every Claude pane on the machine.
+// Nothing failed loudly: `bp status` showed an idle fleet, and every guard built
+// on Busy (compact, the queue's refusal to type into a working pane, the send
+// path's pre-flight check) quietly stopped guarding. The signature had drifted
+// once before, and it will drift again; what was missing was not a better regex
+// but a way to NOTICE.
+//
+// So this loop watches the detector against a fact that no UI change can take
+// away: panes whose content keeps changing are panes where turns are running. If
+// agent panes have been moving for a whole day while Busy never once said "yes",
+// the detector — not the fleet — is what stopped working, and the operator hears
+// about it in one message rather than after weeks of paper guarantees.
+//
+// Deliberately dull about everything else: it presses nothing, touches no pane,
+// and its verdict is one message per day at most.
+const (
+	// busySanityFile lives under StateDir next to jobs.json.
+	busySanityFile = "busy-sanity.json"
+	// busySanityWindow is both the "recent enough" span for the two observations
+	// and the alarm's own cooldown: a day is long enough that an ordinary quiet
+	// night (or a fleet-wide compact) can never look like drift.
+	busySanityWindow = 24 * time.Hour
+	// busySanityMessage is written for a human, so it names the suspicion, the
+	// thing that is now untrustworthy, and where to look.
+	busySanityMessage = "bp: Busy() 24 saattir hic true donmedi ama pane'ler aktif — busy imzasi muhtemelen yine sessizce kaydi (Claude Code guncellemesi?). bp status Busy sutununa guvenme, internal/tmux Busy() imzalarini kontrol et."
+)
+
+// busySanityState is the whole memory of the loop. Timestamps are RFC3339 so the
+// file can be read by a human during an incident.
+type busySanityState struct {
+	// Since is when observation started (first run, or the run after an
+	// unreadable file). No alarm may fire before a full window has passed since
+	// then — on a fresh install there is simply not enough evidence yet.
+	Since string `json:"since,omitempty"`
+	// LastBusySeen: the last time ANY agent pane read as busy.
+	LastBusySeen string `json:"last_busy_seen,omitempty"`
+	// LastActivitySeen: the last time an agent pane's content DIFFERED from the
+	// previous sweep. This is the ground truth Busy is judged against.
+	LastActivitySeen string `json:"last_activity_seen,omitempty"`
+	// LastAlarm enforces the one-per-window cooldown.
+	LastAlarm string `json:"last_alarm,omitempty"`
+	// PaneHashes carries the previous sweep's fingerprints, per session.
+	PaneHashes map[string]string `json:"pane_hashes,omitempty"`
+}
+
+// busySanity runs one sweep. Errors from a single pane are never fatal: a session
+// that closed between the listing and the capture proves nothing either way, and
+// the loop must keep its own state file current regardless.
+func (s *Service) busySanity(ctx context.Context) error {
+	path := filepath.Join(s.config.StateDir, busySanityFile)
+	state := readBusySanity(path)
+	sessions, err := s.tmux.Sessions(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	hashes := make(map[string]string, len(sessions))
+	busy, moved := false, false
+	for _, session := range sessions {
+		// Only agent panes count, on BOTH signals. A plain shell tailing a log
+		// changes every second and can never be busy, and letting it feed the
+		// activity side would eventually raise an alarm about nothing — which is
+		// the one way a watchdog like this gets ignored.
+		process, err := s.tmux.PaneProcess(ctx, session)
+		if err != nil || !bptmux.IsAgentCommand(process.Command) {
+			continue
+		}
+		pane, err := s.tmux.Capture(ctx, session)
+		if err != nil {
+			continue
+		}
+		hash := paneHash(pane)
+		hashes[session] = hash
+		if bptmux.Busy(pane) {
+			busy = true
+		}
+		if previous, seen := state.PaneHashes[session]; seen && previous != hash {
+			moved = true
+		}
+	}
+	state.PaneHashes = hashes
+	if state.Since == "" {
+		state.Since = now.Format(time.RFC3339)
+	}
+	if busy {
+		state.LastBusySeen = now.Format(time.RFC3339)
+	}
+	if moved {
+		state.LastActivitySeen = now.Format(time.RFC3339)
+	}
+	if state.alarmDue(now) {
+		state.LastAlarm = now.Format(time.RFC3339)
+		s.log.Print(busySanityMessage)
+		if s.queue != nil {
+			if _, err := s.queue.Enqueue("server-main", "bp", busySanityMessage); err != nil {
+				s.log.Printf("busy-sanity: alarm could not be queued: %v", err)
+			}
+		}
+	}
+	return writeBusySanity(path, state)
+}
+
+// alarmDue is the whole decision, kept apart from the sweep so it can be read —
+// and tested — without tmux. All four clauses must hold:
+//
+//   - a full window of observation has passed (never on a fresh install);
+//   - agent panes moved within the window (there was work to detect);
+//   - Busy has NOT been true within the window (the detector said nothing);
+//   - no alarm was raised within the window (say it once a day, not hourly).
+//
+// A missing or unreadable timestamp always reads as "not recent", which keeps the
+// two directions honest: an absent LastBusySeen is exactly the drift being looked
+// for, while an absent activity stamp cannot raise an alarm on its own.
+func (b busySanityState) alarmDue(now time.Time) bool {
+	started, err := time.Parse(time.RFC3339, b.Since)
+	if err != nil || now.Sub(started) < busySanityWindow {
+		return false
+	}
+	return recentStamp(b.LastActivitySeen, now) && !recentStamp(b.LastBusySeen, now) && !recentStamp(b.LastAlarm, now)
+}
+
+// recentStamp reports whether an RFC3339 stamp lies within the window before now.
+// A stamp in the FUTURE (a clock step) counts as recent: that direction only ever
+// delays an alarm, never invents one.
+func recentStamp(value string, now time.Time) bool {
+	when, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return false
+	}
+	return now.Sub(when) < busySanityWindow
+}
+
+// paneHash fingerprints a capture. FNV-1a is chosen for being cheap and
+// dependency-free: the only question asked of it is "did this screen change",
+// where a collision costs one missed sweep and nothing else.
+func paneHash(pane string) string {
+	sum := fnv.New64a()
+	_, _ = sum.Write([]byte(pane))
+	return fmt.Sprintf("%016x", sum.Sum64())
+}
+
+// readBusySanity returns the previous sweep's state, or a zero state whenever the
+// file is missing or unreadable. A zero state restarts the observation window
+// rather than alarming on partial evidence.
+func readBusySanity(path string) busySanityState {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return busySanityState{}
+	}
+	var state busySanityState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return busySanityState{}
+	}
+	return state
+}
+
+// writeBusySanity replaces the file atomically, so a sweep interrupted mid-write
+// leaves the previous state rather than a truncated one.
+func writeBusySanity(path string, state busySanityState) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, append(data, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 func (s *Service) superviseWA(ctx context.Context, bridgePath string) {

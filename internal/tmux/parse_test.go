@@ -739,6 +739,7 @@ func TestSendReportsFailureWhenComposerHoldsForeignText(t *testing.T) {
 		captures: []string{
 			"❯ \n", "❯ \n", // readyToSend
 			"❯ /rename wor\n" + composerBorder, // 12 unrelated chars where our brief should be
+			"❯ /rename wor\n" + composerBorder, // still-frame check: the screen is not moving
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
 	}

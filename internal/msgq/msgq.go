@@ -36,6 +36,26 @@ type Message struct {
 	Reason   string  `json:"reason,omitempty"`
 	Status   string  `json:"status,omitempty"`
 	Finished float64 `json:"finished,omitempty"`
+	// Attempts counts the deliveries that came back as PROVEN failures
+	// (bptmux.ErrNotReady). It exists to bound them: the same message was pasted
+	// into the same pane every 30 seconds for as long as the screen kept
+	// producing that verdict (q163159804, 2026-08-15). Three tries is where bp
+	// stops trusting the screen and waits for the transcript instead.
+	Attempts int `json:"attempts,omitempty"`
+	// NoRepaste marks a record that must NEVER be pasted again, whatever the
+	// pane looks like. It is set when the text may already be in the agent
+	// (an unverified injection) or when repeated attempts could not be verified.
+	// Such a record is not closed either: only the transcript witness may settle
+	// it, or the timeout below. It is the single flag that separates "we do not
+	// know" from "we know it failed".
+	NoRepaste bool `json:"noRepaste,omitempty"`
+	// Notified records that the SENDER has been told this delivery could not be
+	// verified, so the notice goes out exactly once.
+	Notified bool `json:"notified,omitempty"`
+	// NextTry is the unix time before which no further Send is attempted
+	// (exponential backoff after a proven failure). The transcript witness still
+	// runs on every pass — waiting to retry is not waiting to notice.
+	NextTry float64 `json:"nextTry,omitempty"`
 }
 
 type Queue struct {
@@ -50,7 +70,14 @@ type Queue struct {
 	// the transcript counts, so an older, identical message cannot close a fresh
 	// record.
 	Witness func(to, text string, since time.Time) bool
-	mu      sync.Mutex
+	// CanWitness reports whether a text is one the Witness could ever recognise.
+	// A message too short to identify (a "/compact") will never be closed by the
+	// transcript, so keeping its record open "until the witness speaks" would
+	// keep it open forever — those records must still take the old, immediate
+	// outcome. The dependency runs this way round because msgq must not know what
+	// a transcript is; the daemon binds book.CanWitness here.
+	CanWitness func(text string) bool
+	mu         sync.Mutex
 }
 
 func New(root string) *Queue {
@@ -59,6 +86,35 @@ func New(root string) *Queue {
 
 func (q *Queue) pending() string { return filepath.Join(q.Root, "pending") }
 func (q *Queue) done() string    { return filepath.Join(q.Root, "done") }
+
+const (
+	// unverifiedReason is what a record says while the screen could not confirm
+	// a delivery and the transcript has not yet spoken. It is a WAIT, not a
+	// failure: the text may well be in the agent already, which is exactly why
+	// nothing pastes it again.
+	unverifiedReason = "teslimat belirsiz: ekran dogrulayamadi; transcript tanigi bekleniyor"
+	// exhaustedReason is the other way into the same waiting state: the screen
+	// kept claiming a proven failure and three pastes could not be verified.
+	// Continuing would only produce more copies of a message that may already
+	// have arrived (measured: three copies of one message, q163159804).
+	exhaustedReason = "3 deneme dogrulanamadi; tekrar paste edilmeyecek; transcript tanigi bekleniyor"
+	// notReadyAttemptMax bounds the proven-failure retries. Three is enough for a
+	// transient cause (someone's line in the composer, a redraw) and few enough
+	// that a wrong verdict cannot flood a pane.
+	notReadyAttemptMax = 3
+	// notReadyBackoff is the first pause after a proven failure; it doubles with
+	// each further attempt. The old queue retried every dispatch tick (30s) no
+	// matter how many times the same verdict came back.
+	notReadyBackoff = 60 * time.Second
+	// witnessWindow is how long a NoRepaste record is kept open for the
+	// transcript witness. Long enough for an agent to finish a turn and for its
+	// session file to be flushed; short enough that the operator hears about it
+	// while the context is still alive.
+	witnessWindow = 15 * time.Minute
+	// noticeHeadRunes is how much of the message the sender's notice quotes —
+	// enough to recognise WHICH message, not enough to re-deliver it by accident.
+	noticeHeadRunes = 60
+)
 
 // Enqueue records a message with no reason attached (the caller does not know why
 // the target could not take it, or there is nothing to say).
@@ -72,6 +128,25 @@ func (q *Queue) Enqueue(to, from, text string) (string, error) {
 func (q *Queue) EnqueueReason(to, from, text, reason string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	return q.enqueueLocked(to, from, text, reason, false)
+}
+
+// EnqueueUnverified records a message that was ALREADY injected into the pane
+// but could not be verified. The record exists only so the transcript witness
+// can settle it: it is marked NoRepaste, so no pass will ever paste the text a
+// second time. Without it an unverified send has no record at all — it is either
+// silently lost or silently delivered, and nobody ever learns which.
+func (q *Queue) EnqueueUnverified(to, from, text string) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.enqueueLocked(to, from, text, unverifiedReason, true)
+}
+
+// enqueueLocked is the body of every enqueue, WITHOUT taking q.mu. It exists
+// because Dispatch already holds the mutex and must be able to queue a message
+// of its own (the notice to a sender whose delivery could not be verified);
+// calling the exported entry point from there would deadlock against itself.
+func (q *Queue) enqueueLocked(to, from, text, reason string, noRepaste bool) (string, error) {
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
 		return "", err
 	}
@@ -87,7 +162,7 @@ func (q *Queue) EnqueueReason(to, from, text, reason string) (string, error) {
 		_ = tmp.Close()
 		return "", err
 	}
-	message := Message{ID: base, To: to, From: from, Msg: text, TS: float64(now.UnixNano()) / 1e9, Reason: reason}
+	message := Message{ID: base, To: to, From: from, Msg: text, TS: float64(now.UnixNano()) / 1e9, Reason: reason, NoRepaste: noRepaste}
 	if err = json.NewEncoder(tmp).Encode(message); err == nil {
 		err = tmp.Sync()
 	}
@@ -187,6 +262,18 @@ func (q *Queue) Status(id string) (string, error) {
 		seconds := int(q.Now().Sub(time.Unix(0, int64(message.TS*1e9))).Seconds())
 		if seconds < 0 {
 			seconds = 0
+		}
+		// A record nobody will paste again must SAY so. Reporting it as an
+		// ordinary "PENDING" would suggest the queue is still trying, and the
+		// operator would keep waiting for a delivery that is now in the
+		// transcript's hands.
+		if message.NoRepaste {
+			return fmt.Sprintf("PENDING (yeniden paste edilmeyecek): %s — %s (%d seconds queued); bak: bp peek %s",
+				message.To, message.Reason, seconds, message.To), nil
+		}
+		if wait := int(time.Unix(0, int64(message.NextTry*1e9)).Sub(q.Now()).Seconds()); message.NextTry > 0 && wait > 0 {
+			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued; %d. deneme, sonraki deneme ~%ds); bak: bp peek %s",
+				message.To, message.Reason, seconds, message.Attempts+1, wait, message.To), nil
 		}
 		// With a known reason, say it and say what to do about it. "is still busy"
 		// is kept ONLY for records nobody has a reason for, because that sentence
@@ -304,6 +391,123 @@ func (q *Queue) remember(path string, message Message, reason string, report fun
 	if err := writePending(path, message); err != nil && report != nil {
 		report(fmt.Sprintf("msgq: could not record the reason for %s: %v", message.ID, err))
 	}
+}
+
+// update writes a pending record whose bookkeeping fields changed (attempts,
+// backoff, the never-paste-again flag). Unlike remember it always writes: the
+// caller has already decided something must be remembered across passes, and a
+// lost write here would restart a retry count that exists to be bounded.
+func (q *Queue) update(path string, message Message, report func(string)) {
+	if err := writePending(path, message); err != nil && report != nil {
+		report(fmt.Sprintf("msgq: could not record the state of %s: %v", message.ID, err))
+	}
+}
+
+// retryLater records a PROVEN non-delivery and decides when — or whether — the
+// message may be pasted again.
+//
+// The old code simply left the record pending, so the next tick pasted the same
+// text into the same pane 30 seconds later, forever. That is survivable when the
+// verdict is true (an expired login) and catastrophic when it is not: on
+// q163159804 a redrawing pane produced the verdict over and over for a message
+// the agent had already taken, and every retry added a copy. Hence both bounds:
+// a growing pause between attempts, and a hard stop after notReadyAttemptMax
+// where bp stops believing the screen and waits for the transcript instead.
+func (q *Queue) retryLater(path string, message Message, cause error, report func(string)) {
+	message.Attempts++
+	if message.Attempts >= notReadyAttemptMax {
+		message.NoRepaste, message.Reason, message.NextTry = true, exhaustedReason, 0
+		q.update(path, message, report)
+		if report != nil {
+			report(fmt.Sprintf("msgq: %s -> %s %d denemede dogrulanamadi (%s); tekrar paste edilmeyecek, transcript tanigi bekleniyor",
+				message.ID, message.To, message.Attempts, whyNotDelivered(cause)))
+		}
+		return
+	}
+	delay := notReadyBackoff << (message.Attempts - 1)
+	message.Reason = whyNotDelivered(cause)
+	message.NextTry = float64(q.Now().Add(delay).UnixNano()) / 1e9
+	q.update(path, message, report)
+	if report != nil {
+		report(fmt.Sprintf("msgq: %s -> %s not delivered (%v); still queued, %d. deneme %s sonra",
+			message.ID, message.To, cause, message.Attempts+1, delay))
+	}
+}
+
+// whyNotDelivered strips the sentinel off a wrapped delivery error so the queue
+// record carries the CAUSE in the operator's own words ("composer'da baska metin
+// var...") rather than the English sentinel in front of it.
+func whyNotDelivered(err error) string {
+	reason := strings.TrimPrefix(err.Error(), bptmux.ErrNotReady.Error()+": ")
+	if reason == "" {
+		return bptmux.ErrNotReady.Error()
+	}
+	return reason
+}
+
+// settleUnrepasted handles a record that may never be pasted again: it waits for
+// the transcript witness (which runs before this on every pass) and, when that
+// wait runs out, closes the record honestly and tells the SENDER once.
+//
+// Telling the sender is the point. Both roads into this state end in "we do not
+// know", and an unknown that nobody hears about is how a message goes missing in
+// silence — the failure mode this queue keeps rediscovering.
+func (q *Queue) settleUnrepasted(path string, message Message, report func(string)) {
+	if q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
+		return
+	}
+	// Which of the two roads got here decides the wording: an injection nobody
+	// could confirm may well have landed, while an attempt that never got past a
+	// verdict of failure probably did not.
+	status := "delivered (unverified)"
+	if message.Reason == exhaustedReason {
+		status = "not delivered (verification failed)"
+	}
+	if q.shouldNotify(message) {
+		// Notified is persisted BEFORE the notice is queued. A crash in between
+		// costs one missing notice; the other order would risk sending the same
+		// notice on every later pass, and duplicated messages are the very bug
+		// this change exists to end.
+		message.Notified = true
+		q.update(path, message, report)
+		if _, err := q.enqueueLocked(message.From, "bp", noticeText(message), "", false); err != nil {
+			if report != nil {
+				report(fmt.Sprintf("msgq: %s icin gonderene haber verilemedi: %v", message.ID, err))
+			}
+		} else if report != nil {
+			report(fmt.Sprintf("msgq: %s teslimati dogrulanamadi; gonderen %s haberdar edildi", message.ID, message.From))
+		}
+	}
+	if err := q.finish(path, message, status); err != nil {
+		if report != nil {
+			report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+		}
+		return
+	}
+	if report != nil {
+		report(fmt.Sprintf("%s: %s -> %s (transcript tanigi %s icinde bulamadi); bak: bp peek %s",
+			strings.ToUpper(status), message.ID, message.To, witnessWindow, message.To))
+	}
+}
+
+// shouldNotify keeps the notice from becoming noise or a loop: it goes out once
+// (Notified), only to a real sender, never from bp to itself, and never to a
+// target that is its own sender — an agent that messaged itself would otherwise
+// be told about its own message.
+func (q *Queue) shouldNotify(message Message) bool {
+	return !message.Notified && message.From != "" && message.From != "bp" && message.From != message.To
+}
+
+// noticeText is what the sender reads: which message, to whom, how to look, and
+// enough of the opening to recognise it. It quotes the head only — a notice that
+// repeated the whole message would be indistinguishable from a re-delivery.
+func noticeText(message Message) string {
+	head := []rune(strings.TrimSpace(message.Msg))
+	if len(head) > noticeHeadRunes {
+		head = head[:noticeHeadRunes]
+	}
+	return fmt.Sprintf("bp: %s mesajinin (%s hedefine) teslimati dogrulanamadi; bp peek %s ile kontrol et. Bas: %s",
+		message.ID, message.To, message.To, string(head))
 }
 
 // writePending rewrites a pending record in place, atomically. The temp file is
@@ -438,6 +642,14 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			}
 			continue
 		}
+		// A record that may never be pasted again gets no further than this. The
+		// witness above is its only way to a "delivered" close; everything below
+		// this line exists to put text into a pane, and for this record that is
+		// precisely what must not happen.
+		if message.NoRepaste {
+			q.settleUnrepasted(path, message, report)
+			continue
+		}
 		if bptmux.Busy(pane) {
 			q.remember(path, message, bptmux.BlockedByBusyPane, report)
 			continue
@@ -451,6 +663,11 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 		// waits does not wait silently.
 		if reason := bptmux.ComposerBlockReason(paneAnsi, []string{message.Msg}); reason != "" {
 			q.remember(path, message, reason, report)
+			continue
+		}
+		// Backing off after a proven failure. The witness above already ran, so a
+		// message that did arrive still closes on time; only the PASTE waits.
+		if message.NextTry > 0 && q.Now().Before(time.Unix(0, int64(message.NextTry*1e9))) {
 			continue
 		}
 		// The pane is free: drop any stale reason before handing over to Send.
@@ -468,19 +685,38 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			if errors.Is(err, bptmux.ErrTyping) {
 				continue
 			}
+			if errors.Is(err, bptmux.ErrBusy) {
+				// The pane started a turn between the capture above and the
+				// paste. Nothing was injected — this is the ordinary busy wait,
+				// recorded under the same reason the capture would have given.
+				q.remember(path, message, bptmux.BlockedByBusyPane, report)
+				continue
+			}
 			if errors.Is(err, bptmux.ErrNotReady) {
 				// PROVEN non-delivery (expired login, foreign composer): the
-				// message stays PENDING for the next pass, and the reason is
-				// reported so the state is visible instead of silent.
-				if report != nil {
-					report(fmt.Sprintf("msgq: %s -> %s not delivered (%v); still queued", message.ID, message.To, err))
-				}
+				// message stays PENDING, but not unconditionally and not forever.
+				q.retryLater(path, message, err, report)
 				continue
 			}
 			if errors.Is(err, bptmux.ErrUnverified) {
-				// Injected and submitted, but nothing confirmed it. Re-sending
-				// could deliver the same message twice, so the record is closed
-				// with an honest status rather than retried.
+				// Injected and submitted, but nothing confirmed it either way.
+				// Closing the record here — the old behavior — is honest only
+				// when nobody could ever settle it: if the text never landed the
+				// message is silently LOST, and if it did land the transcript
+				// witness would have closed the record by itself. So whenever the
+				// witness could recognise this text, the record is KEPT OPEN and
+				// marked never-paste-again: no copy can come out of it, and the
+				// only remaining source of truth gets its chance.
+				if q.CanWitness != nil && q.CanWitness(message.Msg) {
+					message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
+					q.update(path, message, report)
+					if report != nil {
+						report(fmt.Sprintf("delivery UNVERIFIED: %s -> %s; tekrar paste edilmeyecek, transcript tanigi bekleniyor", message.ID, message.To))
+					}
+					continue
+				}
+				// Too short for the witness to identify (a slash command): nothing
+				// will ever settle it, so waiting would only mean waiting forever.
 				if err := q.finish(path, message, "delivered (unverified)"); err != nil && report != nil {
 					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
 				}

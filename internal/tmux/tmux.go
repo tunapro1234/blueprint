@@ -894,7 +894,9 @@ const (
 //	ErrNotReady    proven failure: the pane could not receive it (expired login),
 //	               the composer held unrelated text after the paste, or our paste
 //	               landed damaged and a second attempt did not fix it. Nothing was
-//	               delivered; the caller must queue the message.
+//	               delivered; the caller must queue the message. A verdict read
+//	               off a pane that is still MOVING is not proof of anything and
+//	               becomes ErrUnverified instead (see provenFailure).
 //	ErrUnverified  unknown: injected and Enter pressed, but nothing confirmed it
 //	               either way. The caller must NOT retry (it may have landed) and
 //	               must not report it as sent either.
@@ -983,16 +985,65 @@ func (c *Client) SendWithPending(ctx context.Context, session, message string, p
 	}
 	pane, ok := c.checkPaste(ctx, target, session, message, pane)
 	if !ok {
-		return finished, fmt.Errorf("%w: %s", ErrNotReady, composerBrokenReason)
+		return finished, c.provenFailure(ctx, session, pane, composerBrokenReason)
 	}
 	switch c.submit(ctx, target, session, message, &pane) {
 	case sendVerified:
 		return finished, nil
 	case sendMismatch:
-		return finished, fmt.Errorf("%w: %s", ErrNotReady, composerOtherReason)
+		return finished, c.provenFailure(ctx, session, pane, composerOtherReason)
 	default:
 		return finished, ErrUnverified
 	}
+}
+
+// provenFailure decides whether a non-delivery verdict may be reported as PROOF
+// (ErrNotReady, which the caller retries) or only as doubt (ErrUnverified, which
+// nobody retries).
+//
+// The verdict itself was read off ONE capture. That is sound on a still pane and
+// worthless on a moving one: a pane redrawing mid-turn hands back torn frames,
+// and on q163159804 (2026-08-15) those frames produced alternating
+// "composer'da baska metin var" / "paste composer'a bozuk girdi" verdicts for a
+// message the agent had ALREADY queued internally. Each verdict said "provably
+// not delivered", the record stayed pending, and the daemon pasted the same
+// message again every 30 seconds.
+//
+// So the screen is asked a second time before the word "proof" is used. The
+// verdict stands only when a fresh capture shows the very same still composer:
+//
+//   - the capture fails       -> we cannot see anything, so we know nothing
+//   - the pane reads BUSY     -> the frame the verdict came from was a moving one
+//   - the composer changed    -> likewise; the verdict described a frame, not a state
+//
+// Every one of those downgrades to ErrUnverified. Nothing is re-injected on
+// either path, so this can never produce a second delivery — it only decides
+// what the caller is allowed to believe.
+func (c *Client) provenFailure(ctx context.Context, session, verdictPane, reason string) error {
+	fresh, err := c.CaptureAnsi(ctx, session)
+	if err != nil || Busy(fresh) {
+		return ErrUnverified
+	}
+	if composerSnapshot(fresh) != composerSnapshot(verdictPane) {
+		return ErrUnverified
+	}
+	return fmt.Errorf("%w: %s", ErrNotReady, reason)
+}
+
+// composerSnapshot reduces a capture to the composer state a verdict rests on,
+// read the same way every verdict in this package reads it: the full box while
+// it is a complete view, the final rendered row otherwise, and a bare marker for
+// a paste chip (whose content cannot be read at all, so two chips are as equal
+// as they can ever be known to be). The prefix keeps the three readings from
+// comparing equal to one another by accident.
+func composerSnapshot(pane string) string {
+	if codexPasteChip(pane) || claudePasteChip(pane) {
+		return "chip"
+	}
+	if box, ok := composerJudgeText(pane); ok {
+		return "box:" + box
+	}
+	return "row:" + composerContent(pane)
 }
 
 // inject puts message into the composer with a bracketed paste, never
@@ -1064,9 +1115,20 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 	if err != nil {
 		return nil, "", stuckAbsent, err
 	}
+	if Busy(pane) {
+		// A pane mid-turn is refused HERE, before anything is pasted. It used to
+		// fall through as stuckAbsent into readyToSend, which asks about typing,
+		// credentials and client activity but never about BUSY — so a message was
+		// pasted into a running turn, the redrawing screen was then read for
+		// verification, and the torn frames it produced became "proof" of
+		// non-delivery. That is the loop measured on q163159804 (2026-08-15): one
+		// message delivered three times. The caller queues it, exactly as it does
+		// for a busy composer.
+		return nil, "", stuckAbsent, ErrBusy
+	}
 	// An empty composer is the overwhelmingly common case and needs nothing from
 	// this gate — not even the client-activity round trip readyToSend will make.
-	if !composerFilled(pane) || Busy(pane) {
+	if !composerFilled(pane) {
 		return nil, pane, stuckAbsent, nil
 	}
 	activity, err := c.clientActivity(ctx, session)

@@ -16,6 +16,7 @@ type fakeTarget struct {
 	alive   bool
 	pane    string
 	sent    []string
+	calls   int
 	sendErr error // when set, Send returns it instead of recording the delivery
 	// cleared records every ClearDelivered call and, when the pane provably holds
 	// one of the texts, empties it — the way the real client's C-u loop does.
@@ -26,6 +27,10 @@ type fakeTarget struct {
 func (f *fakeTarget) HasSession(context.Context, string) bool         { return f.alive }
 func (f *fakeTarget) Capture(context.Context, string) (string, error) { return f.pane, nil }
 func (f *fakeTarget) Send(_ context.Context, to, text string) error {
+	// calls counts every ATTEMPT, including the failing ones: the retry bounds and
+	// the never-paste-again flag are about how often bp touches a pane, which a
+	// list of successful deliveries cannot show.
+	f.calls++
 	if f.sendErr != nil {
 		return f.sendErr
 	}
@@ -543,10 +548,11 @@ func TestDispatchKeepsProvenFailurePendingAndClosesUnverified(t *testing.T) {
 		}
 	})
 
-	t.Run("unverified is closed, never retried", func(t *testing.T) {
-		// The keystrokes went in unconfirmed. Leaving the record pending would
-		// paste the same message again on the next pass, so it is finished with
-		// an honest status instead.
+	t.Run("unverified with no witness is closed, never retried", func(t *testing.T) {
+		// The keystrokes went in unconfirmed AND nothing could ever settle the
+		// record (CanWitness is unset here, as it is for a text too short to
+		// identify). Leaving it pending would paste the same message again on the
+		// next pass, so it is finished with an honest status instead.
 		q := New(t.TempDir())
 		q.Now = time.Now
 		id, err := q.Enqueue("target", "sender", "hello")
@@ -572,4 +578,302 @@ func TestDispatchKeepsProvenFailurePendingAndClosesUnverified(t *testing.T) {
 			t.Fatalf("reports=%v", reports)
 		}
 	})
+}
+
+// witnessable is a message long enough for the transcript witness to identify,
+// which is the condition for holding an unconfirmed delivery open instead of
+// closing it blind.
+const witnessable = "[ders-main] tek mesaj uc kere teslim edildi; bu kaydin kapanmasi transcript tanigina bagli"
+
+// heldQueue is a queue whose transcript witness can identify long messages but
+// finds nothing yet — the state every unconfirmed delivery starts in.
+func heldQueue(t *testing.T, now *time.Time) *Queue {
+	t.Helper()
+	q := New(t.TempDir())
+	q.Now = func() time.Time { return *now }
+	q.CanWitness = func(text string) bool { return len([]rune(text)) >= 24 }
+	return q
+}
+
+func TestDispatchHoldsAnUnverifiedDeliveryForTheWitness(t *testing.T) {
+	// The old behavior closed this record on the spot as "delivered (unverified)".
+	// If the text never landed, that DROPS a message in silence; if it did land,
+	// the transcript would have closed the record anyway. So the record is kept
+	// open and marked never-paste-again: nothing can duplicate the message, and
+	// the witness gets the chance to settle it.
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
+	q := heldQueue(t, &now)
+	id, err := q.Enqueue("target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: bptmux.ErrUnverified}
+	var reports []string
+	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+		t.Fatal(err)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatalf("record was closed instead of held: %v", err)
+	}
+	if !record.NoRepaste || record.Reason != unverifiedReason {
+		t.Fatalf("record=%+v", record)
+	}
+	status, err := q.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "yeniden paste edilmeyecek") || !strings.Contains(status, "transcript tanigi") {
+		t.Fatalf("status=%q", status)
+	}
+	if !strings.Contains(strings.Join(reports, "\n"), "UNVERIFIED") {
+		t.Fatalf("reports=%v", reports)
+	}
+
+	// Next pass: the record must not be pasted again, whatever the pane says.
+	target.sendErr = nil
+	now = now.Add(time.Minute)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 1 {
+		t.Fatalf("a never-paste-again record was sent again: %d attempts", target.calls)
+	}
+
+	// And the witness closes it, exactly as for any other delivered message.
+	q.Witness = func(_, text string, _ time.Time) bool { return text == witnessable }
+	now = now.Add(time.Minute)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	status, err = q.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "FOUND IN TRANSCRIPT") {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestUnsettledRecordClosesAndTellsTheSender(t *testing.T) {
+	// The witness never spoke. After witnessWindow the queue stops waiting, closes
+	// the record with the honest status for the road it took, and tells the SENDER
+	// once — an unknown nobody hears about is how a message goes missing quietly.
+	for _, tc := range []struct {
+		name     string
+		sendErr  error
+		status   string
+		fastFwd  time.Duration
+		wantSend int
+	}{
+		{"unverified injection", bptmux.ErrUnverified, "DELIVERED (UNVERIFIED)", witnessWindow + time.Minute, 1},
+		{"three unverifiable attempts", fmt.Errorf("%w: %s", bptmux.ErrNotReady, "composer'da baska metin var"), "NOT DELIVERED (VERIFICATION FAILED)", witnessWindow + time.Minute, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
+			q := heldQueue(t, &now)
+			id, err := q.Enqueue("target", "sender", witnessable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := &fakeTarget{alive: true, pane: "❯  ", sendErr: tc.sendErr}
+			// Enough passes (each past its backoff, all of them still inside
+			// witnessWindow) to reach the never-paste-again state by whichever road
+			// this case takes.
+			for pass := 0; pass < 3; pass++ {
+				if err = q.Dispatch(context.Background(), target, nil); err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(3 * time.Minute)
+			}
+			if target.calls != tc.wantSend {
+				t.Fatalf("send attempts=%d, want %d", target.calls, tc.wantSend)
+			}
+			now = now.Add(tc.fastFwd)
+			var reports []string
+			if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+				t.Fatal(err)
+			}
+			status, err := q.Status(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(status, tc.status) {
+				t.Fatalf("status=%q, want %s", status, tc.status)
+			}
+			// The notice: one new pending record, addressed to the sender, from bp,
+			// naming the id, the target, how to look and the head of the message.
+			messages, err := q.List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 1 {
+				t.Fatalf("expected exactly one notice, got %d: %+v", len(messages), messages)
+			}
+			notice := messages[0]
+			if notice.To != "sender" || notice.From != "bp" {
+				t.Fatalf("notice=%+v", notice)
+			}
+			for _, want := range []string{id, "target hedefine", "bp peek target", witnessable[:60]} {
+				if !strings.Contains(notice.Msg, want) {
+					t.Fatalf("notice %q does not mention %q", notice.Msg, want)
+				}
+			}
+			if !strings.Contains(strings.Join(reports, "\n"), "haberdar edildi") {
+				t.Fatalf("reports=%v", reports)
+			}
+			// Once only: the notice record itself must not spawn another one, and a
+			// second pass must not repeat this one.
+			if err = q.Dispatch(context.Background(), &fakeTarget{alive: true, pane: "❯  "}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if messages, err = q.List(); err != nil || len(messages) > 1 {
+				t.Fatalf("the notice was repeated: %+v (err=%v)", messages, err)
+			}
+		})
+	}
+}
+
+func TestUnsettledRecordKeepsQuietWhenThereIsNobodyToTell(t *testing.T) {
+	// A notice is worth sending only to a real sender who is not the target: bp
+	// telling itself, or an agent being told about the message it sent to itself,
+	// is noise at best and a loop at worst.
+	for _, tc := range []struct{ name, from, to string }{
+		{"no sender recorded", "", "target"},
+		{"bp is its own sender", "bp", "target"},
+		{"sender is the target", "target", "target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
+			q := heldQueue(t, &now)
+			if _, err := q.Enqueue(tc.to, tc.from, witnessable); err != nil {
+				t.Fatal(err)
+			}
+			target := &fakeTarget{alive: true, pane: "❯  ", sendErr: bptmux.ErrUnverified}
+			if err := q.Dispatch(context.Background(), target, nil); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(witnessWindow + time.Minute)
+			if err := q.Dispatch(context.Background(), target, nil); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := q.List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 0 {
+				t.Fatalf("a notice was queued anyway: %+v", messages)
+			}
+		})
+	}
+}
+
+func TestProvenFailureBacksOffAndStopsAtThreeAttempts(t *testing.T) {
+	// The measured loop (q163159804): the same message pasted into the same pane
+	// every 30 seconds because the screen kept returning "provably not delivered".
+	// Now each failure costs a doubling pause, and the third one ends the pasting
+	// for good — whatever the screen claims after that, bp waits for the
+	// transcript instead of adding another copy.
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
+	q := heldQueue(t, &now)
+	id, err := q.Enqueue("target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: fmt.Errorf("%w: %s", bptmux.ErrNotReady, "composer'da baska metin var: paste hic girmemis")}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Attempts != 1 || record.NextTry == 0 || record.Reason != "composer'da baska metin var: paste hic girmemis" {
+		t.Fatalf("record=%+v", record)
+	}
+	status, err := q.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "sonraki deneme ~") {
+		t.Fatalf("status=%q", status)
+	}
+	// Inside the backoff window nothing is pasted again.
+	now = now.Add(notReadyBackoff / 2)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 1 {
+		t.Fatalf("the backoff was ignored: %d attempts", target.calls)
+	}
+	// Past it, the retries resume — and stop at the third. The advances stay well
+	// inside witnessWindow so this measures the attempt ceiling alone.
+	for pass := 0; pass < 3; pass++ {
+		now = now.Add(3 * time.Minute)
+		if err = q.Dispatch(context.Background(), target, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if target.calls != notReadyAttemptMax {
+		t.Fatalf("send attempts=%d, want the %d-attempt ceiling", target.calls, notReadyAttemptMax)
+	}
+	if record, err = read(filepath.Join(q.pending(), id+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if !record.NoRepaste || record.Reason != exhaustedReason {
+		t.Fatalf("record=%+v", record)
+	}
+}
+
+func TestReadKeepsWorkingForRecordsWithoutTheNewFields(t *testing.T) {
+	// Back-compat: records written before attempts/noRepaste/notified/nextTry
+	// existed must keep loading, and must behave like a fresh, retryable record.
+	q := New(t.TempDir())
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
+	q.Now = func() time.Time { return now }
+	if err := os.MkdirAll(q.pending(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"id":"q1","to":"target","from":"sender","msg":"eski kayit, yeni alanlari yok","ts":1755255600.0}` + "\n"
+	if err := os.WriteFile(filepath.Join(q.pending(), "q1.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	message, err := read(filepath.Join(q.pending(), "q1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Attempts != 0 || message.NoRepaste || message.Notified || message.NextTry != 0 {
+		t.Fatalf("legacy record did not read as a plain pending message: %+v", message)
+	}
+	target := &fakeTarget{alive: true, pane: "❯  "}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 {
+		t.Fatalf("a legacy record was not delivered: %v", target.sent)
+	}
+}
+
+func TestDispatchTreatsALateBusyPaneAsAnOrdinaryWait(t *testing.T) {
+	// The pane began its turn between the capture and the paste, so Send refused
+	// to inject anything (ErrBusy). Nothing landed and nothing was proven about
+	// the message: it stays pending under the plain busy reason, and it must NOT
+	// count as a failed attempt — that budget exists for verdicts, not for waits.
+	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
+	q := heldQueue(t, &now)
+	id, err := q.Enqueue("target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: bptmux.ErrBusy}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatalf("a busy pane closed the record: %v", err)
+	}
+	if record.Reason != bptmux.BlockedByBusyPane || record.Attempts != 0 || record.NoRepaste {
+		t.Fatalf("record=%+v", record)
+	}
 }

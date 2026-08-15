@@ -3,6 +3,7 @@ package book
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -43,16 +44,34 @@ const (
 	recQuotesInterrupt = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_02","type":"tool_result","content":"grep sonucu: [Request interrupted by user]"}]},"timestamp":"2026-08-15T17:40:00.000Z"}`
 )
 
-// turnFixture writes a transcript for the agent and stamps the file's mtime,
-// which is half of what TurnOpen reads. age is how long ago the last write was.
+var recordStamp = regexp.MustCompile(`"timestamp":"[^"]*"`)
+
+// restamp rewrites a record fixture's timestamp to `when`, so a test can age
+// individual records independently of the file — which is exactly the situation
+// the ceiling has to judge (metadata appends keep the FILE fresh while the
+// decisive record is days old).
+func restamp(record string, when time.Time) string {
+	return recordStamp.ReplaceAllString(record, `"timestamp":"`+when.UTC().Format(time.RFC3339Nano)+`"`)
+}
+
+// turnFixture writes a transcript for the agent and stamps BOTH clocks TurnOpen
+// reads to the same moment, age ago: the file's mtime and every record's own
+// timestamp. The fixtures carry the timestamps of the day they were captured,
+// and the ceiling now measures against the record, so leaving them literal
+// would age every "open" case past the ceiling as soon as the capture day was
+// over.
 func turnFixture(t *testing.T, agent, folder string, age time.Duration, records ...string) string {
 	t.Helper()
-	root := writeTranscript(t, agent, folder, records...)
+	when := time.Now().Add(-age)
+	stamped := make([]string, len(records))
+	for i, record := range records {
+		stamped[i] = restamp(record, when)
+	}
+	root := writeTranscript(t, agent, folder, stamped...)
 	matches, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("fixture layout: %v %v", matches, err)
 	}
-	when := time.Now().Add(-age)
 	if err := os.Chtimes(matches[0], when, when); err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +191,39 @@ func TestTurnOpenPhases(t *testing.T) {
 				t.Fatalf("TurnOpen = %v, want %v", got, testCase.want)
 			}
 		})
+	}
+}
+
+// The regression server-main measured on 2026-08-15: two agents whose
+// half-finished turns were DAYS old (compec-mail 08-03, probot-vitrin 08-11)
+// read "working", because timestamp-less metadata appends had refreshed the
+// file's mtime that afternoon and the ceiling counted from mtime. The decisive
+// record's own timestamp is what the ceiling must age — a fresh file must not
+// resurrect a dead turn.
+func TestTurnOpenCeilingCountsFromTheDecisiveRecord(t *testing.T) {
+	const folder = "/srv/kavram-main"
+	const agent = "kavram-main"
+	deadTurn := time.Now().Add(-72 * time.Hour)
+	records := []string{
+		restamp(recPrompt, deadTurn),
+		restamp(recToolUse, deadTurn),
+		restamp(recToolResult, deadTurn), // structurally open, three days dead
+		recLastPrompt,                    // the timestamp-less metadata appended today
+		recMode,
+		recPermMode,
+	}
+	root := writeTranscript(t, agent, folder, records...)
+	matches, err := filepath.Glob(filepath.Join(root, "*", "*.jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("fixture layout: %v %v", matches, err)
+	}
+	// The metadata touch: the FILE is a minute old, the TURN three days.
+	fresh := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(matches[0], fresh, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if TurnOpen(root, folder, agent, time.Now()) {
+		t.Fatal("a three-day-dead turn read as open because metadata refreshed the file's mtime")
 	}
 }
 

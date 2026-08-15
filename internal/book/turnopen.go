@@ -68,16 +68,20 @@ func TurnOpen(projectsRoot, folder, agent string, now time.Time) bool {
 	if age < 0 {
 		age = 0 // a clock that runs behind the writer's is not evidence of anything
 	}
-	// The ceiling comes first, and it is what keeps this gate cheap: an agent
-	// that has not been written to in a quarter of an hour is answered with a
-	// single stat, and that is most of the fleet most of the time.
+	// The mtime bound comes first, and it is what keeps this gate cheap: an agent
+	// whose FILE has not been written to in a quarter of an hour cannot hold any
+	// record younger than that, so it is answered with a single stat — and that
+	// is most of the fleet most of the time. It is only the outer bound, though:
+	// the real ceiling is measured inside the tail, against the decisive record's
+	// own timestamp. mtime alone was the reference at first, and it lied within
+	// hours of shipping (see turnOpenCeiling).
 	if age > turnOpenCeiling {
 		return false
 	}
 	if age <= turnOpenFresh {
 		return true
 	}
-	return tailTurnOpen(path)
+	return tailTurnOpen(path, now)
 }
 
 const (
@@ -93,6 +97,16 @@ const (
 	// silence. 15 minutes clears that with margin and matches msgq's witnessWindow,
 	// so no record can be held by this gate longer than the window in which the
 	// transcript witness would settle it anyway.
+	//
+	// WHAT IT COUNTS FROM: the decisive record's own timestamp, never the file's
+	// mtime. The first version counted from mtime and was refuted the same day it
+	// shipped: Claude Code appends timestamp-LESS metadata records (last-prompt,
+	// agent-name, mode, permission-mode, bridge-session) to session files long
+	// after their last turn, so two agents whose half-finished turns were days old
+	// (compec-mail 08-03, probot-vitrin 08-11) read "working" for exactly fifteen
+	// minutes after every metadata touch — server-main predicted both flips to the
+	// minute from the mtimes. Same lesson as the streaming measurement, from the
+	// other side: mtime says something wrote the FILE, never that the TURN moved.
 	turnOpenCeiling = 15 * time.Minute
 	// turnOpenFresh is the "written just now, do not think about it" shortcut. A
 	// turn's records land in one burst (the 16 KB answer, its turn_duration and
@@ -118,13 +132,13 @@ const (
 )
 
 // tailTurnOpen reads the bounded tail and returns the verdict of the LAST
-// decisive record in it. Records are classified going forward and the verdict is
-// overwritten, which is the same thing as scanning backwards without having to
-// hold the tail in memory.
+// decisive record in it, aged against that record's OWN timestamp. Records are
+// classified going forward and the verdict is overwritten, which is the same
+// thing as scanning backwards without having to hold the tail in memory.
 //
 // A tail with nothing decisive in it returns false: that happens when the window
 // lands entirely inside one enormous record, and a partial line is not evidence.
-func tailTurnOpen(path string) bool {
+func tailTurnOpen(path string, now time.Time) bool {
 	file, err := os.Open(path)
 	if err != nil {
 		return false
@@ -147,13 +161,26 @@ func tailTurnOpen(path string) bool {
 	if partial {
 		scanner.Scan() // discard the partial line the offset landed in
 	}
-	verdict := turnNone
+	verdict, decisiveStamp := turnNone, ""
 	for scanner.Scan() {
-		if v := classifyTurnRecord(scanner.Bytes()); v != turnNone {
-			verdict = v
+		if v, stamp := classifyTurnRecord(scanner.Bytes()); v != turnNone {
+			verdict, decisiveStamp = v, stamp
 		}
 	}
-	return verdict == turnOpenVerdict
+	if verdict != turnOpenVerdict {
+		return false
+	}
+	// The ceiling is applied HERE, against the decisive record's own timestamp —
+	// the file's mtime cannot carry it, because timestamp-less metadata appends
+	// keep refreshing mtime on files whose last turn died days ago (see
+	// turnOpenCeiling). A decisive record without a readable timestamp falls back
+	// to the mtime bound alone, which TurnOpen has already applied: the record
+	// that knows the phase but not the hour still outranks a guess.
+	stamp, err := time.Parse(time.RFC3339, decisiveStamp)
+	if err != nil {
+		return true
+	}
+	return now.Sub(stamp) <= turnOpenCeiling
 }
 
 // turnRecord is the part of a transcript record this gate reads. Everything else
@@ -166,7 +193,11 @@ type turnRecord struct {
 	// InterruptedMessageID is present ONLY on the record Claude Code writes when
 	// a turn is interrupted, which makes it the reliable half of that detection.
 	InterruptedMessageID string `json:"interruptedMessageId"`
-	Message              struct {
+	// Timestamp is when the record was RECORDED (not written — a streamed answer's
+	// records carry timestamps minutes apart and hit the disk together). It is
+	// what the ceiling measures against.
+	Timestamp string `json:"timestamp"`
+	Message   struct {
 		Role       string          `json:"role"`
 		StopReason string          `json:"stop_reason"`
 		Content    json.RawMessage `json:"content"`
@@ -199,16 +230,16 @@ const interruptedPrefix = "[Request interrupted"
 // whatever the next Claude Code version adds) fall through as "says nothing".
 // That is deliberate: an unrecognised record must not be able to overwrite the
 // verdict of the record that actually knows.
-func classifyTurnRecord(line []byte) int {
+func classifyTurnRecord(line []byte) (int, string) {
 	if !bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("{")) {
-		return turnNone
+		return turnNone, ""
 	}
 	var record turnRecord
 	if json.Unmarshal(line, &record) != nil {
-		return turnNone
+		return turnNone, ""
 	}
 	if record.IsSidechain {
-		return turnNone
+		return turnNone, ""
 	}
 	switch record.Type {
 	case "system":
@@ -216,28 +247,28 @@ func classifyTurnRecord(line []byte) int {
 		// system record that means anything here (local_command and friends are
 		// noise from slash commands).
 		if record.Subtype == "turn_duration" {
-			return turnClosedVerdict
+			return turnClosedVerdict, record.Timestamp
 		}
-		return turnNone
+		return turnNone, ""
 	case "user":
 		if record.InterruptedMessageID != "" || interruptedText(record.Message.Content) {
-			return turnClosedVerdict
+			return turnClosedVerdict, record.Timestamp
 		}
 		if record.IsMeta {
-			return turnNone
+			return turnNone, ""
 		}
 		// A real prompt and a tool_result are the same thing to this gate: the
 		// agent has been handed something and no answer has been recorded yet.
-		return turnOpenVerdict
+		return turnOpenVerdict, record.Timestamp
 	case "assistant":
 		if turnEndingStop[record.Message.StopReason] {
-			return turnClosedVerdict
+			return turnClosedVerdict, record.Timestamp
 		}
 		// stop_reason "tool_use" is a turn that continues, and an empty or
 		// unrecognised one is a doubt — both read as open.
-		return turnOpenVerdict
+		return turnOpenVerdict, record.Timestamp
 	}
-	return turnNone
+	return turnNone, ""
 }
 
 // turnEndingStop lists the stop reasons that hand control back to the human.

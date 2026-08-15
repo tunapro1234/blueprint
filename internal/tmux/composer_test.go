@@ -442,8 +442,12 @@ func TestSendDoesNotTouchAHangingPasteOnABusyPane(t *testing.T) {
 		activities: []string{},
 	}
 	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
-	if !errors.Is(err, ErrTyping) {
-		t.Fatalf("err=%v, want ErrTyping", err)
+	// ErrBusy, not ErrTyping (2026-08-15): a working pane is now refused by NAME
+	// before anything is pasted, so the caller can say "pane calisiyor" instead of
+	// blaming a composer. Both are queueing outcomes, so nothing downstream
+	// changes; only the reason the operator is shown does.
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("err=%v, want ErrBusy", err)
 	}
 	if len(h.mutations) != 0 {
 		t.Fatalf("keys were sent into a working pane: %v", h.mutations)
@@ -465,6 +469,7 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 			claudePane("❯ " + mangled), // post-paste: damaged -> repair
 			claudePane(emptyRow),       // after C-u
 			claudePane("❯ " + mangled), // the re-paste is damaged too
+			claudePane("❯ " + mangled), // still-frame check: same calm screen -> the verdict is proof
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
@@ -479,6 +484,71 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 		t.Fatalf("expected the one repair re-paste, got: %v", h.mutations)
 	}
 	assertNoEscape(t, h.mutations)
+}
+
+// --- a moving pane never produces proof ------------------------------------
+
+// busyPane wraps composer rows in a pane that is mid-turn, the way a live
+// Claude Code footer renders it while a turn runs.
+func busyPane(rows ...string) string {
+	return "✻ Working… (23s · Esc to interrupt)\n" + claudePane(rows...)
+}
+
+func TestSendRefusesToPasteIntoAWorkingPane(t *testing.T) {
+	// The state that started q163159804 (2026-08-15): the composer is EMPTY and
+	// the agent is mid-turn. The old path let that through — the stuck-paste gate
+	// only skipped itself and readyToSend never asks about Busy — so the message
+	// was pasted into a running turn and then "verified" against a redrawing
+	// screen. Nothing may be pressed or pasted here; the caller queues.
+	h := &sendHarness{captures: []string{busyPane(emptyRow)}}
+	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("err=%v, want ErrBusy", err)
+	}
+	if len(h.mutations) != 0 {
+		t.Fatalf("keys or paste went into a working pane: %v", h.mutations)
+	}
+}
+
+func TestSendDowngradesAVerdictReadOffAMovingPane(t *testing.T) {
+	// A "foreign composer" verdict is only proof when the screen it was read from
+	// is still there when we look again. A torn frame from a redrawing pane must
+	// become ErrUnverified — the caller must NOT paste the message a second time
+	// on the strength of it, which is exactly how one message was delivered three
+	// times.
+	foreign := claudePane("❯ /rename wor")
+	for _, tc := range []struct {
+		name  string
+		again string
+		want  error
+	}{
+		{"composer changed under the verdict", claudePane(emptyRow), ErrUnverified},
+		{"pane is working", busyPane("❯ /rename wor"), ErrUnverified},
+		{"same still screen", foreign, ErrNotReady},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &sendHarness{
+				captures: []string{
+					claudePane(emptyRow), // gate / readyToSend pass 1
+					claudePane(emptyRow), // readyToSend pass 2
+					foreign,              // post-paste verdict frame
+					tc.again,             // the still-frame check
+				},
+				activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+			}
+			_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err=%v, want %v", err, tc.want)
+			}
+			if got := countEnter(h.mutations); got != 0 {
+				t.Fatalf("Enter was pressed on foreign text: %v", h.mutations)
+			}
+			if countInjections(h.mutations) != 1 {
+				t.Fatalf("message was re-injected: %v", h.mutations)
+			}
+			assertNoEscape(t, h.mutations)
+		})
+	}
 }
 
 func TestSendSubmitsWhenTheRepairedPasteMatches(t *testing.T) {
@@ -515,6 +585,7 @@ func TestSendReportsFailureWhenItsPasteIsReplacedByForeignText(t *testing.T) {
 			claudePane(emptyRow),
 			claudePane(emptyRow),
 			claudePane("❯ /rename wor"), // 12 unrelated characters
+			claudePane("❯ /rename wor"), // still-frame check: unchanged, so the verdict stands
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
 	}

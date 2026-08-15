@@ -40,6 +40,11 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// landed some other way (hand-delivered, or submitted out of a composer where
 	// it had been hanging) is pasted a second time.
 	queue.Witness = book.DeliveryWitness(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
+	// And the other half of the same question: whether a given text is one the
+	// witness could ever recognise. The queue holds an unconfirmed delivery open
+	// for the transcript only when the answer is yes — otherwise nothing would
+	// ever settle the record.
+	queue.CanWitness = book.CanWitness
 	return &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 }
 

@@ -1832,6 +1832,44 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 			t.Fatalf("unverified send was queued (would duplicate): %v", records)
 		}
 	})
+
+	t.Run("unverified but witnessable is handed to the transcript", func(t *testing.T) {
+		// Same doubt, but this message is long enough for the transcript witness to
+		// identify. The doubt is therefore given to something that can settle it: a
+		// record marked never-paste-again. It cannot duplicate the message (nothing
+		// will ever paste it) and it cannot vanish in silence either.
+		stateDir := t.TempDir()
+		msgqRoot := filepath.Join(stateDir, "msgq")
+		out := testOutput(t)
+		a := &app{
+			ctx:           context.Background(),
+			config:        bpconfig.Config{StateDir: stateDir},
+			queue:         msgq.New(msgqRoot),
+			out:           out,
+			sessionExists: func(string) bool { return true },
+		}
+		tmuxClient, _ := fakeTmux(t, `printf '❯  \n──────────\n'`)
+		a.tmux = tmuxClient
+		brief := "roadmap incelemesi: hedef sistemi bolumunu bugun bitirelim"
+		if err := a.message([]string{"alp", brief}); !errors.Is(err, errReported) {
+			t.Fatalf("err=%v, want errReported", err)
+		}
+		got := readTestOutput(t, out)
+		if !strings.HasPrefix(got, "TESLIMAT BELIRSIZ: alp") || !strings.Contains(got, "transcript tanigi") {
+			t.Fatalf("output=%q", got)
+		}
+		records := queuedMessages(t, msgqRoot)
+		if len(records) != 1 {
+			t.Fatalf("expected one held record, got %v", records)
+		}
+		data, err := os.ReadFile(records[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"noRepaste":true`) {
+			t.Fatalf("the held record may be pasted again: %s", data)
+		}
+	})
 }
 
 func TestDeliveryTallyBucketsUnverified(t *testing.T) {

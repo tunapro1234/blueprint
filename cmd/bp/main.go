@@ -1385,6 +1385,19 @@ func (a *app) message(args []string) error {
 	case unverified:
 		// Not a failure and not a delivery: the keystrokes went in and nothing
 		// confirmed them. Never silently "sent" again (2026-08-01 incident).
+		//
+		// Where the message is long enough for the transcript witness to identify,
+		// the doubt is handed to something that can actually resolve it: a queue
+		// record marked never-paste-again. It can only be closed by the witness
+		// (or, after a wait, by an honest "could not verify" back to the sender) —
+		// and it can never produce a second copy, which the ordinary queue path
+		// could.
+		if book.CanWitness(message) {
+			if channelID, enqueueErr := a.queue.EnqueueUnverified(name, sender, message); enqueueErr == nil {
+				fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s — pane'de dogrulanamadi, tekrar gonderilmeyecek; transcript tanigi kontrol edecek (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
+				return errReported
+			}
+		}
 		fmt.Fprintf(a.out, "gonderildi ama DOGRULANAMADI: %s — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek %s ile bak\n", name, name)
 		return errReported
 	case notReady:
@@ -1450,6 +1463,10 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	// reason survives the enqueue below so the caller can name WHY the message
 	// had to be queued instead of reporting a plain "busy" queue.
 	var reason error
+	// busyLate records that the pane began a turn AFTER the capture above, which
+	// only the send step can see. Without it the queue reason would be computed
+	// from a capture that is already stale and would read "" — an empty wait.
+	var busyLate bool
 	// The queue's own records for this target. They let the delivery step tell OUR
 	// OWN unsubmitted paste apart from a human's half-written line: a composer
 	// still holding a message bp pasted earlier used to read as "busy", so every
@@ -1478,6 +1495,11 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 			// Proven non-delivery: queue it exactly like a busy composer, and
 			// carry the reason out with the channel id.
 			reason = sendErr
+		case errors.Is(sendErr, bptmux.ErrBusy):
+			// The pane started working between the capture above and the paste.
+			// Nothing was injected, so this is an ordinary queueing case — it
+			// only needs to say "calisiyor" rather than the stale capture's "".
+			busyLate = true
 		case errors.Is(sendErr, bptmux.ErrTyping):
 			// Someone is typing: queue, as before.
 		default:
@@ -1490,6 +1512,9 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	// chip, or someone else's text, is a state only a human can clear, and it must
 	// not hide behind "still busy" for four days.
 	why := bptmux.ComposerBlockReason(pane, append([]string{message}, pendingTexts...))
+	if busyLate {
+		why = bptmux.BlockedByBusyPane
+	}
 	if reason != nil {
 		why = deliveryReason(reason, bptmux.ErrNotReady)
 	}

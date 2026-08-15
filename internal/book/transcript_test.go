@@ -69,6 +69,34 @@ func TestTranscriptDeliveredIgnoresOlderCopies(t *testing.T) {
 	}
 }
 
+func TestTranscriptDeliveredMatchesPastedCarriageReturns(t *testing.T) {
+	// The regression that made this witness useless in practice (q163159804,
+	// 2026-08-15): a message pasted through tmux arrives in the transcript with
+	// its line breaks stored as \r, not \n, so EVERY multi-line message failed to
+	// match its own record and the queue kept pasting it again. The record below
+	// is written exactly as the live transcript wrote it — CR where the message
+	// has LF.
+	folder := "/srv/server-main"
+	queued := time.Now().Add(-time.Minute)
+	message := "[ders-main] tek mesaj uc kere teslim edildi, bunu yazdim.\n\nBu kaydin transcriptteki hali \\r tasiyor."
+	stored := strings.ReplaceAll(message, "\n", "\r")
+	root := writeTranscript(t, "server-main", folder, userRecord(queued.Add(10*time.Second), stored))
+	if !TranscriptDelivered(root, folder, "server-main", message, queued) {
+		t.Fatal("a delivered multi-line message stored with \\r was not recognised")
+	}
+	// The \n form must keep matching: a message typed/queued without going through
+	// a bracketed paste is still recorded with escaped newlines.
+	newlines := writeTranscript(t, "server-main", folder, userRecord(queued.Add(10*time.Second), message))
+	if !TranscriptDelivered(newlines, folder, "server-main", message, queued) {
+		t.Fatal("the escaped-newline form stopped matching")
+	}
+	// The variant must not make the witness careless: an unrelated message is
+	// still not found.
+	if TranscriptDelivered(root, folder, "server-main", "bambaska bir mesaj, hicbir yerde gecmiyor ve gecmemeli", queued) {
+		t.Fatal("a message that never arrived was reported as delivered")
+	}
+}
+
 func TestTranscriptDeliveredRefusesWhatItCannotProve(t *testing.T) {
 	folder := "/srv/kavram-main"
 	queued := time.Now().Add(-time.Minute)

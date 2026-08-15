@@ -14,12 +14,17 @@ import (
 
 const (
 	// TranscriptTailBytes bounds the reconciliation read. Agent session files run
-	// to 100 MB+, and a message that was delivered is at the END of one: only the
-	// last 256 KiB are searched, which on these transcripts covers the most recent
-	// few hundred records. A delivery older than that window reads as "not found",
-	// which falls back to the previous behavior (paste again) rather than to a
-	// wrong answer.
-	TranscriptTailBytes = 256 * 1024
+	// to 100 MB+, and a message that was delivered is at the END of one — but "the
+	// end" must be sized for how fast these files GROW, not for how many records
+	// it takes to hold a delivery. A NoRepaste record waits up to witnessWindow
+	// (15 min) for this witness, and an agent mid-task was measured appending
+	// ~47 KiB/min with single tool-result lines in the hundreds of KiB: the
+	// deliveries of q163159804 sat 426 KiB behind EOF within three hours, past
+	// the old 256 KiB window. 4 MiB covers the wait with margin and is still a
+	// trivial read. A delivery older than the window reads as "not found", which
+	// falls back to the previous behavior (paste again, or close unverified)
+	// rather than to a wrong answer.
+	TranscriptTailBytes = 4 * 1024 * 1024
 	// transcriptProbeMin is the shortest message this witness will look for. Below
 	// it a match proves nothing — "/compact" appears in every transcript that ever
 	// ran one — and a false "already delivered" would DROP a message, which is
@@ -60,7 +65,7 @@ func TranscriptDelivered(projectsRoot, folder, agent, text string, since time.Ti
 	if !ok {
 		return false
 	}
-	probe, ok := transcriptProbe(text)
+	probes, ok := transcriptProbes(text)
 	if !ok {
 		return false
 	}
@@ -87,7 +92,7 @@ func TranscriptDelivered(projectsRoot, folder, agent, text string, since time.Ti
 	cutoff := since.Add(-transcriptClockSkew)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		if !bytes.Contains(line, probe) {
+		if !containsAny(line, probes) {
 			continue
 		}
 		if recordedAfter(line, cutoff) {
@@ -97,12 +102,50 @@ func TranscriptDelivered(projectsRoot, folder, agent, text string, since time.Ti
 	return false
 }
 
-// transcriptProbe returns the needle to look for: the message's leading
-// characters in the JSON-escaped form a transcript record stores them in (so a
-// multi-line message, whose newlines are written as \n, is still found). HTML
-// escaping is disabled because Claude Code's own writer does not escape <, > or &
-// either.
-func transcriptProbe(text string) ([]byte, bool) {
+// containsAny reports whether the line holds ANY of the needles. The variants
+// differ only in how the line breaks of one and the same message are spelled, so
+// a hit on either is a hit on the message.
+func containsAny(line []byte, probes [][]byte) bool {
+	for _, probe := range probes {
+		if bytes.Contains(line, probe) {
+			return true
+		}
+	}
+	return false
+}
+
+// CanWitness reports whether a text is one this witness could ever recognise —
+// i.e. long enough to identify (transcriptProbeMin). It exists so a caller that
+// must decide "may I stop re-pasting and wait for the transcript instead?" asks
+// the witness itself rather than re-deriving the threshold. A text this returns
+// false for will NEVER close a queue record here, so waiting on it would be
+// waiting forever.
+func CanWitness(text string) bool {
+	_, ok := transcriptProbes(text)
+	return ok
+}
+
+// transcriptProbes returns the needles to look for: the message's leading
+// characters in the JSON-escaped forms a transcript record can store them in.
+// HTML escaping is disabled because Claude Code's own writer does not escape <,
+// > or & either.
+//
+// There are TWO variants, and the second one is the whole reason this witness
+// ever worked at all. A message is delivered with a tmux bracketed paste, and the
+// line breaks that arrive that way are recorded by Claude Code as CARRIAGE
+// RETURNS: the stored record reads "...yazdim.\r\rBu..." where the message held
+// "...yazdim.\n\nBu...". Measured on q163159804 (2026-08-15), where one message
+// was delivered three times because this function only ever produced the \n form
+// and therefore NO multi-line message could match its own transcript record — the
+// one check that was supposed to stop the repeats never fired.
+//
+// The substitution is done AFTER escaping, on the two-byte sequence \n, which
+// inside a JSON string can only be an escaped newline (a bare 0x0A cannot appear
+// there). The single dull edge is a message containing a literal backslash-n:
+// its escaped form is \\n and the tail of that gets rewritten too, which makes
+// the variant needle useless but never wrong — the unmodified first needle is
+// always searched as well.
+func transcriptProbes(text string) ([][]byte, bool) {
 	trimmed := strings.TrimSpace(text)
 	runes := []rune(trimmed)
 	if len(runes) < transcriptProbeMin {
@@ -121,7 +164,12 @@ func transcriptProbe(text string) ([]byte, bool) {
 	if len(quoted) < 2 {
 		return nil, false
 	}
-	return quoted[1 : len(quoted)-1], true // drop the surrounding quotes
+	escaped := quoted[1 : len(quoted)-1] // drop the surrounding quotes
+	probes := [][]byte{escaped}
+	if carriage := bytes.ReplaceAll(escaped, []byte(`\n`), []byte(`\r`)); !bytes.Equal(carriage, escaped) {
+		probes = append(probes, carriage)
+	}
+	return probes, true
 }
 
 // recordedAfter reports whether a transcript record carries a timestamp at or

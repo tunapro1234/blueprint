@@ -630,11 +630,21 @@ func LiveStates(ctx context.Context, client *bptmux.Client, fleet *Fleet) (map[s
 		commands = nil // degrade to Dead=false rather than failing status
 	}
 	states := make(map[string]State, len(sessions))
+	projectsRoot := bptmux.ClaudeProjectsRoot()
+	now := time.Now()
 	for _, name := range sessions {
 		pane, captureErr := client.Capture(ctx, name)
+		// Busy is the OR of both gates, so the column means the same thing here as
+		// it does in the queue. The screen is asked first and settles most rows;
+		// the transcript is only read when the screen says idle, which is what
+		// makes a streaming turn — invisible on screen for minutes at a time —
+		// show up as busy instead of as an agent waiting for work. The extra cost
+		// is one stat per idle agent, and a bounded tail read only for the ones
+		// whose session file was touched in the last quarter of an hour.
+		screenBusy := captureErr == nil && bptmux.Busy(pane)
 		states[name] = State{
 			Alive: true,
-			Busy:  captureErr == nil && bptmux.Busy(pane),
+			Busy:  screenBusy || TurnOpen(projectsRoot, fleet.Agents[name].Folder, name, now),
 			Dead:  commands != nil && !bptmux.IsAgentCommand(commands[name]),
 		}
 	}

@@ -88,6 +88,7 @@ type app struct {
 	loadCommands   func() (map[string]string, error)
 	capturePane    func(string) (string, error)
 	clearPane      func(string) error
+	turnOpenProbe  func(string) bool
 }
 
 func main() {
@@ -1475,7 +1476,11 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	// reason to skip the send — anything else still is.
 	pendingTexts := a.queue.PendingFor(name)
 	_, ours := bptmux.StuckPaste(pane, append([]string{message}, pendingTexts...))
-	if (!bptmux.Typing(pane) || ours) && !bptmux.Busy(pane) {
+	// The transcript is only consulted when the frame says idle — the case where
+	// the screen has nothing to show because the agent is streaming an answer.
+	// Everything that follows types into the pane, so this is exactly where a
+	// wrong "idle" costs something.
+	if (!bptmux.Typing(pane) || ours) && !bptmux.Busy(pane) && !a.turnOpen(name) {
 		finished, sendErr := a.tmux.SendWithPending(a.ctx, name, message, pendingTexts)
 		// A queued message that was hanging in the composer and has now been
 		// submitted: close its record, or the queue would paste it again.
@@ -2033,12 +2038,32 @@ func saveCompactState(path string, state map[string]time.Time) error {
 // paneBusy reports whether an agent is mid-turn or has someone typing into its
 // composer. A capture failure counts as busy: a pane bp cannot see is never
 // interrupted.
+//
+// The transcript gate is part of the answer because the frame alone misses a
+// streaming turn entirely, and this predicate guards /compact — a slash command
+// typed into a pane that is mid-answer, which is the worst interruption bp can
+// deliver.
 func (a *app) paneBusy(name string) bool {
 	pane, err := a.capture(name)
 	if err != nil {
 		return true
 	}
-	return bptmux.Typing(pane) || bptmux.Busy(pane)
+	return bptmux.Typing(pane) || bptmux.Busy(pane) || a.turnOpen(name)
+}
+
+// turnOpen asks the target's own transcript whether a turn is running. The probe
+// is built on first use rather than in main, so the commands that never ask
+// never load an agentbook, and so a test can stub it. A missing probe (nothing
+// resolvable, an app assembled without config) answers false and leaves the
+// screen's verdict standing.
+func (a *app) turnOpen(name string) bool {
+	if a.turnOpenProbe == nil {
+		if len(a.config.Agentbooks) == 0 {
+			return false
+		}
+		a.turnOpenProbe = book.TurnOpenProbe(a.config.Agentbooks, bptmux.ClaudeProjectsRoot())
+	}
+	return a.turnOpenProbe(name)
 }
 
 func (a *app) capture(name string) (string, error) {

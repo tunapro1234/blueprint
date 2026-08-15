@@ -384,6 +384,14 @@ func busyRegion(pane string) []string {
 // of drift (panes changing for a day while Busy never once fires) and files a
 // message instead of letting the next signature change go unnoticed for weeks.
 //
+// What this function CANNOT see, and is not asked to: while a long assistant
+// message is being streamed, the TUI draws no spinner and no affordance at all —
+// measured on 2026-08-15, a 147-second answer during which every screen sample
+// read idle. There is nothing on the frame to match, so the blind window is
+// closed one level up, by the second gate in book.TurnOpen, which asks the
+// agent's own transcript instead of its screen. Busy stays a pure single-frame
+// function; callers OR the two gates together.
+//
 // The tool-run box a working pane also shows ("⎿ $ cmd (27s · 28 lines)" plus its
 // "ctrl+b ctrl+b to run in background" hint) is deliberately NOT a second signal:
 // the spinner is present for the WHOLE turn while that box only appears around a

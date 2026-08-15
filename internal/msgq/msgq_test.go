@@ -877,3 +877,53 @@ func TestDispatchTreatsALateBusyPaneAsAnOrdinaryWait(t *testing.T) {
 		t.Fatalf("record=%+v", record)
 	}
 }
+
+func TestDispatchWaitsForAnOpenTurnTheScreenCannotSee(t *testing.T) {
+	// The pane is idle by every screen signal there is — an empty composer, no
+	// spinner — and the agent is nonetheless mid-turn, streaming an answer. That
+	// combination is not hypothetical: it was measured for 147 uninterrupted
+	// seconds on 2026-08-15, and it is the whole reason for the second gate.
+	// Nothing may be typed while it holds, and the record must say why.
+	q := New(t.TempDir())
+	q.Now = time.Now
+	turnOpen := true
+	var asked []string
+	q.TurnOpen = func(to string) bool {
+		asked = append(asked, to)
+		return turnOpen
+	}
+	id, err := q.Enqueue("target", "sender", "streaming sirasinda gelen mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 0 || target.calls != 0 {
+		t.Fatalf("message was typed into a pane that was mid-turn: sent=%v calls=%d", target.sent, target.calls)
+	}
+	if len(asked) != 1 || asked[0] != "target" {
+		t.Fatalf("the transcript gate was asked about %v", asked)
+	}
+	rows, err := q.List()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("list=%v err=%v", rows, err)
+	}
+	// The reason is the SAME one a visibly busy pane produces: which gate noticed
+	// is bp's business, not the operator's.
+	if rows[0].Reason != bptmux.BlockedByBusyPane {
+		t.Fatalf("reason=%q, want %q", rows[0].Reason, bptmux.BlockedByBusyPane)
+	}
+	// The turn ends; the very next pass delivers, with no further nudging.
+	turnOpen = false
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 {
+		t.Fatalf("sent=%v", target.sent)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
+		t.Fatalf("delivered record was not moved to done: %v", err)
+	}
+}

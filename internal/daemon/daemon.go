@@ -47,6 +47,10 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// for the transcript only when the answer is yes — otherwise nothing would
 	// ever settle the record.
 	queue.CanWitness = book.CanWitness
+	// The busy question, asked of the transcript rather than the screen. The pane
+	// draws nothing at all while a long answer streams, so the screen gate alone
+	// lets the queue paste into a working agent; this is what closes that window.
+	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	return &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 }
 
@@ -387,6 +391,12 @@ func (s *Service) keepalive(ctx context.Context) error {
 //
 // Deliberately dull about everything else: it presses nothing, touches no pane,
 // and its verdict is one message per day at most.
+//
+// It watches tmux.Busy ALONE and must keep doing so, even though the queue and
+// bp status now also consult book.TurnOpen. The transcript gate would answer
+// "busy" for the very panes whose screen signature had drifted, so folding it in
+// here would hide the drift from the one loop whose entire job is to see it: the
+// detector under test must stay the detector being read.
 const (
 	// busySanityFile lives under StateDir next to jobs.json.
 	busySanityFile = "busy-sanity.json"

@@ -77,7 +77,15 @@ type Queue struct {
 	// outcome. The dependency runs this way round because msgq must not know what
 	// a transcript is; the daemon binds book.CanWitness here.
 	CanWitness func(text string) bool
-	mu         sync.Mutex
+	// TurnOpen is the second busy gate, and it exists because the first one has a
+	// measured blind window: while a long answer is STREAMED the pane draws no
+	// spinner, so bptmux.Busy reads idle for as long as the streaming lasts (147
+	// seconds in the 2026-08-15 lab run). A message dispatched into that window is
+	// pasted into a working agent. This one asks the target's own transcript
+	// instead of the screen; the daemon binds book.TurnOpenProbe here. A queue
+	// with no probe behaves exactly as before.
+	TurnOpen func(to string) bool
+	mu       sync.Mutex
 }
 
 func New(root string) *Queue {
@@ -650,7 +658,13 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			q.settleUnrepasted(path, message, report)
 			continue
 		}
-		if bptmux.Busy(pane) {
+		// Two gates, one verdict. The screen is asked first because it is free and
+		// answers for every pane type; the transcript is asked only when the screen
+		// says idle, and it is the one that sees a streaming turn. Both produce the
+		// SAME record reason: from the queue's side there is no difference between
+		// the two kinds of busy, and the reason a human reads should not depend on
+		// which gate happened to catch it.
+		if bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(message.To)) {
 			q.remember(path, message, bptmux.BlockedByBusyPane, report)
 			continue
 		}

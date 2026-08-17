@@ -44,6 +44,11 @@ const (
 	// systematically would otherwise turn one hour's sweep into a flood in
 	// server-main's own queue — which is itself a delivery channel.
 	mergeMaxPerSweep = 5
+	// mergeOverlap is how far each sweep reads BEHIND the watermark, so a record
+	// whose write races the sweep cannot slip between two of them. Records land
+	// within seconds of their timestamps; five minutes is a wide margin, and the
+	// seen set already deduplicates whatever the overlap re-reads.
+	mergeOverlap = 5 * time.Minute
 )
 
 // truncatedEnvelope matches a first line that STARTS with the tail of an envelope:
@@ -104,10 +109,32 @@ func (s *Service) mergeScan(sessions []string, state *busySanityState, now time.
 	for _, key := range state.MergeSeen {
 		seen[key] = true
 	}
-	// The first sweep looks back one window and no further: a merge from last month
-	// is history, not an incident, and reporting the whole archive at once would bury
-	// the one record that still matters.
-	since := now.Add(-busySanityWindow)
+	// The watermark is what makes SILENCE mean something. The first version of this
+	// scan looked back a whole window on its first sweep and promptly reported a
+	// record from BEFORE the fix it was deployed to watch — technically true,
+	// operationally noise, and exactly the alarm-fatigue class the fleet paid for
+	// on 2026-08-17 (a chronic condition reported as an incident teaches everyone
+	// to ignore the report). So: the first sweep sets the baseline at deploy time
+	// and reports NOTHING — the past has already been examined by the humans who
+	// shipped the fix — and every later sweep reads only what arrived since the
+	// last one. The overlap guards records whose write races the sweep; the seen
+	// set makes the overlap harmless.
+	since := now.Add(-mergeOverlap)
+	if state.MergeWatermark != "" {
+		if mark, err := time.Parse(time.RFC3339, state.MergeWatermark); err == nil && mark.Before(since) {
+			since = mark
+		}
+	}
+	baseline := state.MergeWatermark == ""
+	defer func() {
+		state.MergeWatermark = now.Add(-mergeOverlap).UTC().Format(time.RFC3339)
+		if len(state.MergeSeen) > mergeSeenMax {
+			state.MergeSeen = state.MergeSeen[len(state.MergeSeen)-mergeSeenMax:]
+		}
+	}()
+	if baseline {
+		return
+	}
 	notices := 0
 	for _, session := range sessions {
 		folder := fleet.Agents[session].Folder
@@ -137,9 +164,6 @@ func (s *Service) mergeScan(sessions []string, state *busySanityState, now time.
 				}
 			}
 		}
-	}
-	if len(state.MergeSeen) > mergeSeenMax {
-		state.MergeSeen = state.MergeSeen[len(state.MergeSeen)-mergeSeenMax:]
 	}
 }
 

@@ -542,6 +542,41 @@ func (a *app) fleet() (book.Fleet, map[string]book.State, error) {
 	return fleet, states, err
 }
 
+// Mismatch kinds: the two ways tmux and the agentbook can contradict each other.
+// Both are reported rather than silently reconciled — bp cannot know which side
+// is stale, and a hidden disagreement is what let a running agent sit behind a
+// "closed" entry for weeks.
+const (
+	mismatchTmuxOpenBookClosed = "tmux-open-book-closed"
+	mismatchTmuxClosedBookOpen = "tmux-closed-book-open"
+)
+
+// bookMismatch names the disagreement between a live tmux session and the book
+// entry, or "" when they agree. "opening" is never a mismatch: it is an honest
+// intermediate state that already admits it does not know.
+func bookMismatch(bookState string, alive bool) string {
+	switch {
+	case alive && bookState == "closed":
+		return mismatchTmuxOpenBookClosed
+	case !alive && bookState == "open":
+		return mismatchTmuxClosedBookOpen
+	}
+	return ""
+}
+
+// mismatchMark is the operator-facing tail of the AGENTBOOK cell. It follows the
+// padded status so the marks line up down the column, and the column is last, so
+// a long one cannot push anything out of place.
+func mismatchMark(mismatch string) string {
+	switch mismatch {
+	case mismatchTmuxOpenBookClosed:
+		return " !TMUX ACIK"
+	case mismatchTmuxClosedBookOpen:
+		return " !TMUX YOK"
+	}
+	return ""
+}
+
 // tmuxStateLabel names what tmux shows for an agent: the same four words the
 // human table and the JSON output both report.
 func tmuxStateLabel(state book.State, alive bool) string {
@@ -584,13 +619,7 @@ func (a *app) status(args []string) error {
 		if bookState == "" {
 			bookState = "?"
 		}
-		flag := ""
-		if !alive && bookState == "open" {
-			flag = "  <-- book:open but tmux is missing"
-		}
-		if alive && bookState == "closed" {
-			flag = "  <-- tmux is open but book:closed"
-		}
+		mark := mismatchMark(bookMismatch(bookState, alive))
 		cacheText, talkText := "-", "-"
 		if state, ok := cacheStates[name]; ok {
 			if state.Known {
@@ -604,7 +633,7 @@ func (a *app) status(args []string) error {
 				talkText = shortAge(state.LastHumanAge)
 			}
 		}
-		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", name, tmuxState, cacheText, talkText, bookState, flag)
+		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", name, tmuxState, cacheText, talkText, bookState, mark)
 	}
 	a.renderCodexStatus(a.codexThreads())
 	return nil
@@ -620,8 +649,11 @@ type statusReport struct {
 }
 
 type statusAgent struct {
-	Name                string `json:"name"`
-	Tmux                string `json:"tmux"`
+	Name string `json:"name"`
+	Tmux string `json:"tmux"`
+	// Mismatch is written only when tmux and the book disagree, so a consumer can
+	// treat the field's presence as the alarm.
+	Mismatch            string `json:"mismatch,omitempty"`
 	Status              string `json:"status,omitempty"`
 	Folder              string `json:"folder,omitempty"`
 	Parent              string `json:"parent,omitempty"`
@@ -645,11 +677,12 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 		state, alive := states[name]
 		agent := fleet.Agents[name]
 		row := statusAgent{
-			Name:   name,
-			Tmux:   tmuxStateLabel(state, alive),
-			Status: agent.Status,
-			Folder: agent.Folder,
-			Parent: fleet.Parents[name],
+			Name:     name,
+			Tmux:     tmuxStateLabel(state, alive),
+			Mismatch: bookMismatch(agent.Status, alive),
+			Status:   agent.Status,
+			Folder:   agent.Folder,
+			Parent:   fleet.Parents[name],
 		}
 		if cacheState, ok := cacheStates[name]; ok {
 			if cacheState.Known {
@@ -1012,6 +1045,18 @@ func (a *app) open(args []string) error {
 				fmt.Fprintf(a.out, "%s is already open (agentbook updated)\n", name)
 				return nil
 			}
+			// A half-finished open leaves the book at "opening" (see below) with a
+			// live session behind it. Reopening is the natural reflex and this is
+			// the one moment both facts are in hand, so settle the entry rather
+			// than answering "already open" and leaving the record undecided.
+			if fleetErr == nil && fleet.Agents[name].Status == "opening" {
+				reg.Sender = a.sender()
+				if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
+					return err
+				}
+				fmt.Fprintf(a.out, "%s is already open (agentbook: opening -> open)\n", name)
+				return nil
+			}
 			fmt.Fprintf(a.out, "%s is already open\n", name)
 			return nil
 		}
@@ -1037,10 +1082,28 @@ func (a *app) open(args []string) error {
 			fmt.Fprintln(a.out, hint)
 		}
 	}
-	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
+	// The session comes up before the book can record it, so the gap between the
+	// two used to be a lie: a timeout or a Ctrl-C in between left the book saying
+	// "closed" over an agent that was really running, and a reader of bp status
+	// cannot tell that apart from an agent that was never started. "opening" is
+	// written first so the crash window says "I don't know" instead — the entry is
+	// settled to "open" below, or rolled back when tmux refuses.
+	reg.Sender = a.sender()
+	if err := book.SetStatus(a.config.Agentbooks, name, "opening", dir, reg); err != nil {
 		return err
 	}
-	reg.Sender = a.sender()
+	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
+		// Roll back only while tmux can still be believed. A cancelled or timed-out
+		// open cannot ask it anything (HasSession reports "no" for an unreachable
+		// tmux exactly as it does for a missing session), and writing "closed" over
+		// a session that is actually up is the very lie this change removes.
+		if a.ctx.Err() == nil && !a.tmux.HasSession(a.ctx, name) {
+			if backErr := book.SetStatus(a.config.Agentbooks, name, "closed", dir, reg); backErr != nil {
+				return errors.Join(err, backErr)
+			}
+		}
+		return err
+	}
 	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
 		return err
 	}

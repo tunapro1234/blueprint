@@ -430,6 +430,11 @@ type busySanityState struct {
 	// shares the loop, and because both are answers to the same question: is the
 	// machinery under bp still doing what it says.
 	MergeSeen []string `json:"merge_seen,omitempty"`
+	// MergeWatermark is the moment up to which transcripts have already been
+	// examined for damaged deliveries. Only records NEWER than it are ever
+	// reported, so the detector's silence means "clean since the last sweep" —
+	// not "clean, or drowning you in history". See merge.go for why it exists.
+	MergeWatermark string `json:"merge_watermark,omitempty"`
 }
 
 // busySanity runs one sweep. Errors from a single pane are never fatal: a session

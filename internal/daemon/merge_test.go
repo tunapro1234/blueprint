@@ -104,11 +104,11 @@ func deliveryRecord(when time.Time, text string) string {
 func TestMergeScanReportsADamagedDeliveryExactlyOnce(t *testing.T) {
 	now := time.Now()
 	service, queue := mergeService(t, "probot-outreach", "/srv/probot/outreach",
-		deliveryRecord(now.Add(-30*time.Hour), truncatedRecord), // outside the window: history
+		deliveryRecord(now.Add(-30*time.Hour), truncatedRecord), // before the watermark: history
 		deliveryRecord(now.Add(-2*time.Hour), piggybackRecord),  // by design, never an alarm
 		deliveryRecord(now.Add(-time.Hour), truncatedRecord),
 	)
-	state := busySanityState{}
+	state := busySanityState{MergeWatermark: now.Add(-3 * time.Hour).UTC().Format(time.RFC3339)}
 	service.mergeScan([]string{"probot-outreach"}, &state, now)
 	rows, err := queue.List()
 	if err != nil {
@@ -132,6 +132,53 @@ func TestMergeScanReportsADamagedDeliveryExactlyOnce(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("the same record was reported again: %+v", rows)
+	}
+}
+
+// The watermark is what turns the detector's silence into information. Its first
+// sweep must set the baseline and report NOTHING — the archive was examined by
+// whoever shipped the fix, and a chronic condition reported as an incident is how
+// alarms stop being read (server-main, 2026-08-17: the detector's very first
+// notice was the pre-deploy 12:53 record, already investigated for hours).
+func TestMergeScanFirstSweepBaselinesAndStaysSilent(t *testing.T) {
+	now := time.Now()
+	service, queue := mergeService(t, "probot-outreach", "/srv/probot/outreach",
+		deliveryRecord(now.Add(-time.Hour), truncatedRecord), // damaged, but historical
+	)
+	state := busySanityState{}
+	service.mergeScan([]string{"probot-outreach"}, &state, now)
+	if rows, err := queue.List(); err != nil || len(rows) != 0 {
+		t.Fatalf("the baseline sweep reported history: rows=%v err=%v", rows, err)
+	}
+	if state.MergeWatermark == "" {
+		t.Fatal("the baseline sweep did not set the watermark")
+	}
+	// A record NEWER than the baseline is an incident and must be reported.
+	second := now.Add(time.Hour)
+	appendRecord(t, "/srv/probot/outreach", deliveryRecord(second.Add(-time.Minute), truncatedRecord))
+	service.mergeScan([]string{"probot-outreach"}, &state, second)
+	if rows, err := queue.List(); err != nil || len(rows) != 1 {
+		t.Fatalf("a fresh damaged delivery was not reported: rows=%v err=%v", rows, err)
+	}
+}
+
+func appendRecord(t *testing.T, folder, record string) {
+	t.Helper()
+	munged := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		}
+		return '-'
+	}, folder)
+	path := filepath.Join(os.Getenv("HOME"), ".claude", "projects", munged, "sess-1.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString(record + "\n"); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -2107,3 +2107,114 @@ func TestQueueReasonNamesAnExpiredLogin(t *testing.T) {
 		t.Fatalf("bp qstat does not name the expired login:\n%s", status)
 	}
 }
+
+// --- duplicate guard and the pane lock, from the CLI side ---------------------
+
+func TestMessageRefusesADuplicateThatIsStillInFlight(t *testing.T) {
+	// The measured retry burst: probot-business sent the same 441 characters to
+	// op-main three times in 33 seconds, because the first attempt could only say
+	// "TESLIMAT BELIRSIZ". Every copy landed. The second send is refused here — and
+	// the refusal carries the record's live status, because a sender that cannot see
+	// what happened to its message is exactly the sender that repeats it somewhere
+	// bp cannot see at all.
+	t.Setenv("AGENT", "ada")
+	t.Setenv("TMUX", "")
+	queue := msgq.New(t.TempDir())
+	id, err := queue.EnqueueReason("alp", "ada", "[ada] ayni metin", bptmux.BlockedByBusyPane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := testOutput(t)
+	delivered := 0
+	a := &app{
+		ctx:           context.Background(),
+		config:        bpconfig.Config{StateDir: t.TempDir()},
+		queue:         queue,
+		out:           out,
+		sessionExists: func(string) bool { return true },
+		deliverMessage: func(string, string, string) (bool, string, error) {
+			delivered++
+			return false, "", nil
+		},
+	}
+	if err := a.message([]string{"alp", "ayni metin"}); err != nil {
+		t.Fatal(err)
+	}
+	if delivered != 0 {
+		t.Fatal("an identical message already in flight was delivered a second time")
+	}
+	report := readTestOutput(t, out)
+	for _, want := range []string{"AYNI METIN ZATEN YOLDA", id, "Durum:", "bp qcancel " + id} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("output=%q, want it to contain %q", report, want)
+		}
+	}
+	// A different message is not touched by the guard.
+	a.out = testOutput(t)
+	if err := a.message([]string{"alp", "bambaska bir mesaj"}); err != nil {
+		t.Fatal(err)
+	}
+	if delivered != 1 {
+		t.Fatalf("a different message was blocked: %d deliveries", delivered)
+	}
+}
+
+func TestMessageResendsAfterTheDuplicateWindow(t *testing.T) {
+	// The guard is a window, not a ban: "say it again, it never arrived" has to keep
+	// working, or the operator loses a channel.
+	t.Setenv("AGENT", "ada")
+	t.Setenv("TMUX", "")
+	queue := msgq.New(t.TempDir())
+	queue.Now = func() time.Time { return time.Now().Add(-11 * time.Minute) }
+	if _, err := queue.EnqueueReason("alp", "ada", "[ada] ayni metin", bptmux.BlockedByBusyPane); err != nil {
+		t.Fatal(err)
+	}
+	queue.Now = time.Now
+	delivered := 0
+	a := &app{
+		ctx:           context.Background(),
+		config:        bpconfig.Config{StateDir: t.TempDir()},
+		queue:         queue,
+		out:           testOutput(t),
+		sessionExists: func(string) bool { return true },
+		deliverMessage: func(string, string, string) (bool, string, error) {
+			delivered++
+			return false, "", nil
+		},
+	}
+	if err := a.message([]string{"alp", "ayni metin"}); err != nil {
+		t.Fatal(err)
+	}
+	if delivered != 1 {
+		t.Fatalf("a record older than the window blocked a resend: %d deliveries", delivered)
+	}
+}
+
+func TestDeliverQueuesWhileAnotherBpHoldsThePane(t *testing.T) {
+	// The merge of 2026-08-17, refused: `bp open`'s digest flush is inside the
+	// critical section for this pane, so this delivery does not capture it, does not
+	// paste into it, and does not press Enter on whatever is in there. It queues,
+	// with a reason that names bp itself.
+	defer func(previous time.Duration) { bptmux.PaneLockWait = previous }(bptmux.PaneLockWait)
+	bptmux.PaneLockWait = 200 * time.Millisecond
+	client, calls := scriptedPanes(t, deliverPane(""))
+	a := deliverApp(t, client)
+	release, err := bptmux.AcquirePaneLock(a.queue.Root, "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	queued, channelID, err := a.deliver("worker", "server-main", "[server-main] kilit tutulurken gelen mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !queued || channelID == "" {
+		t.Fatalf("queued=%v channel=%q", queued, channelID)
+	}
+	if reason := a.queue.Reason(channelID); reason != bptmux.BlockedByPaneLock {
+		t.Fatalf("reason=%q, want %q", reason, bptmux.BlockedByPaneLock)
+	}
+	if log := calls(); strings.Contains(log, "send-keys") || strings.Contains(log, "load-buffer") {
+		t.Fatalf("keys were sent into a pane another bp was holding:\n%s", log)
+	}
+}

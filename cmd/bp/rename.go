@@ -183,15 +183,30 @@ const (
 // is exactly what every other bp command resolves an agent by, so a title bp can
 // read is the only outcome that counts as a successful rename.
 func (a *app) renamePane(fleet book.Fleet, old, name string) error {
-	if err := a.tmux.ClearComposer(a.ctx, old); err != nil {
+	// Clear and send are one operation on one composer, so one pane lock covers
+	// both: another bp pasting in between would be typing into a composer this
+	// command has just emptied for its own slash command. The lock is given back
+	// before the transcript poll below, which reads a file and touches no pane —
+	// holding it there would only make the fleet's queues wait on a rename.
+	release, err := a.lockPane(old)
+	if err != nil {
 		return err
+	}
+	clearErr := a.tmux.ClearComposer(a.ctx, old)
+	var sendErr error
+	if clearErr == nil {
+		sendErr = a.tmux.Send(a.ctx, old, "/rename "+name)
+	}
+	release()
+	if clearErr != nil {
+		return clearErr
 	}
 	// ErrUnverified means the keystrokes went in but nothing confirmed the
 	// submit; it must not be re-sent, and the transcript below is a far better
 	// witness than the composer anyway. Every other error is a real failure to
 	// deliver, so there is nothing to wait for.
-	if err := a.tmux.Send(a.ctx, old, "/rename "+name); err != nil && !errors.Is(err, bptmux.ErrUnverified) {
-		return err
+	if sendErr != nil && !errors.Is(sendErr, bptmux.ErrUnverified) {
+		return sendErr
 	}
 	folders := a.agentFolders(fleet, old)
 	if len(folders) == 0 {

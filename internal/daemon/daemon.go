@@ -425,6 +425,11 @@ type busySanityState struct {
 	LastAlarm string `json:"last_alarm,omitempty"`
 	// PaneHashes carries the previous sweep's fingerprints, per session.
 	PaneHashes map[string]string `json:"pane_hashes,omitempty"`
+	// MergeSeen holds the "<agent>@<record timestamp>" keys of the damaged
+	// deliveries already reported (see merge.go). It shares this file because it
+	// shares the loop, and because both are answers to the same question: is the
+	// machinery under bp still doing what it says.
+	MergeSeen []string `json:"merge_seen,omitempty"`
 }
 
 // busySanity runs one sweep. Errors from a single pane are never fatal: a session
@@ -481,6 +486,11 @@ func (s *Service) busySanity(ctx context.Context) error {
 			}
 		}
 	}
+	// The second watchdog on the same hourly beat, and on the same principle: this
+	// one reads what the agents RECEIVED and asks whether it still looks like one
+	// message per delivery. It shares the state file, never fails the sweep, and is
+	// run last so a failure in it cannot cost the busy verdict its bookkeeping.
+	s.mergeScan(sessions, &state, now)
 	return writeBusySanity(path, state)
 }
 

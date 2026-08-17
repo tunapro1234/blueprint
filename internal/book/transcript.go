@@ -189,6 +189,123 @@ func recordedAfter(line []byte, cutoff time.Time) bool {
 	return !stamp.Before(cutoff)
 }
 
+// UserRecord is one thing an agent was HANDED, with the moment it was recorded.
+// It is the same material the delivery witness searches, read out whole instead of
+// matched against one message — which is what a caller needs when the question is
+// not "did this arrive" but "does what arrived look like a single message".
+type UserRecord struct {
+	Timestamp time.Time
+	Text      string
+}
+
+// RecentUserTexts returns the text of every user record an agent received at or
+// after `since`, oldest first.
+//
+// It reads the same bounded tail as the turn probe (turnOpenTailBytes, 1 MiB): the
+// caller looks at a day of DELIVERIES, which are small records, while the megabytes
+// in these files are tool results. A record older than the window is simply not
+// returned — the caller's own bookkeeping is what makes that safe, since a delivery
+// nobody saw in time is not worth reporting a day late.
+//
+// Skipped on purpose: sidechain records (a Task subagent's own conversation),
+// injected meta records (the session-open system reminder), interrupt markers, and
+// tool results — none of them is a message somebody sent to this agent. Anything
+// that cannot be resolved (no folder, no session file, an unreadable line) yields
+// nothing rather than a guess.
+func RecentUserTexts(projectsRoot, folder, agent string, since time.Time) []UserRecord {
+	dir := FirstPath(folder)
+	if dir == "" || agent == "" {
+		return nil
+	}
+	path, ok := bptmux.ResumeSessionPath(projectsRoot, dir, agent)
+	if !ok {
+		return nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil
+	}
+	partial := info.Size() > turnOpenTailBytes
+	if partial {
+		if _, err := file.Seek(info.Size()-turnOpenTailBytes, io.SeekStart); err != nil {
+			return nil
+		}
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	if partial {
+		scanner.Scan() // discard the partial line the offset landed in
+	}
+	var records []UserRecord
+	for scanner.Scan() {
+		record, ok := userDelivery(scanner.Bytes())
+		if !ok || record.Timestamp.Before(since) {
+			continue
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+// userDelivery decodes one transcript line into a delivery, or reports that the
+// line is not one.
+func userDelivery(line []byte) (UserRecord, bool) {
+	if !bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("{")) {
+		return UserRecord{}, false
+	}
+	var record turnRecord
+	if json.Unmarshal(line, &record) != nil {
+		return UserRecord{}, false
+	}
+	if record.Type != "user" || record.IsSidechain || record.IsMeta {
+		return UserRecord{}, false
+	}
+	if record.InterruptedMessageID != "" || interruptedText(record.Message.Content) {
+		return UserRecord{}, false
+	}
+	text := userContentText(record.Message.Content)
+	if strings.TrimSpace(text) == "" {
+		return UserRecord{}, false
+	}
+	stamp, err := time.Parse(time.RFC3339, record.Timestamp)
+	if err != nil {
+		return UserRecord{}, false
+	}
+	return UserRecord{Timestamp: stamp, Text: text}, true
+}
+
+// userContentText pulls the human-readable text out of a user record's content,
+// which is stored either as a plain string (older records) or as a list of blocks.
+// Only text blocks are read: a tool_result block is the machine talking to itself.
+func userContentText(content json.RawMessage) string {
+	if len(content) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(content, &text) == nil {
+		return text
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return ""
+	}
+	var parts []string
+	for _, block := range blocks {
+		if block.Type == "text" && block.Text != "" {
+			parts = append(parts, block.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // DeliveryWitness builds the function msgq.Queue.Witness expects: it resolves the
 // target's folder out of the agentbooks on every call, because the fleet changes
 // under a long-running daemon.

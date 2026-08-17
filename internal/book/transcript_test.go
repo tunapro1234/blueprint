@@ -122,3 +122,37 @@ func TestTranscriptDeliveredRefusesWhatItCannotProve(t *testing.T) {
 		t.Fatal("a record without a timestamp was accepted as proof")
 	}
 }
+
+func TestRecentUserTextsReadsWhatTheAgentWasHanded(t *testing.T) {
+	// The delivery-integrity view of a transcript: what arrived, and when. It must
+	// return real deliveries only — a Task subagent's own prompts, the session-open
+	// reminder, an interrupt marker and a tool result are not messages somebody sent
+	// to this agent.
+	folder := "/srv/probot/outreach"
+	now := time.Now()
+	root := writeTranscript(t, "probot-outreach", folder,
+		userRecord(now.Add(-40*time.Hour), "[server-main] cok eski, penceresinin disinda"),
+		userRecord(now.Add(-2*time.Hour), "[probot-business] BUSINESS → OUTREACH — birinci talimat"),
+		`{"type":"user","isMeta":true,"timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"<system-reminder> The user named this session"}}`,
+		`{"type":"user","isSidechain":true,"timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"subagent kendi promptu"}}`,
+		`{"type":"user","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"[Request interrupted by user]"}}`,
+		`{"type":"user","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":[{"type":"tool_result","content":"grep cikti"}]}}`,
+		`{"type":"assistant","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"assistant","stop_reason":"end_turn","content":"cevap"}}`,
+		userRecord(now.Add(-time.Minute), "[server-main] ikinci talimat"),
+	)
+	records := RecentUserTexts(root, folder, "probot-outreach", now.Add(-24*time.Hour))
+	if len(records) != 2 {
+		t.Fatalf("read %d deliveries, want 2: %+v", len(records), records)
+	}
+	if records[0].Text != "[probot-business] BUSINESS → OUTREACH — birinci talimat" || records[1].Text != "[server-main] ikinci talimat" {
+		t.Fatalf("records=%+v", records)
+	}
+	if !records[0].Timestamp.Before(records[1].Timestamp) {
+		t.Fatalf("records are not oldest first: %+v", records)
+	}
+	// Nothing resolvable (a Codex pane has no transcript at all) reads as nothing,
+	// never as an error the caller has to handle.
+	if got := RecentUserTexts(root, "", "probot-outreach", now.Add(-24*time.Hour)); got != nil {
+		t.Fatalf("an unresolvable agent returned %+v", got)
+	}
+}

@@ -89,6 +89,68 @@ type app struct {
 	capturePane    func(string) (string, error)
 	clearPane      func(string) error
 	turnOpenProbe  func(string) bool
+
+	// paneLocks counts the pane locks this process is holding, per session. It
+	// exists because the lock is an flock and flock is NOT reentrant even within one
+	// process: a command that already holds a pane (compact clears the composer,
+	// then delivers; rename does the same) would otherwise wait out the whole
+	// acquire budget against itself and then report the pane as busy. bp is a
+	// single-threaded CLI, so a counter is the whole of the bookkeeping.
+	paneLocks map[string]*heldPaneLock
+}
+
+// heldPaneLock is one flock this process owns, with the number of nested holders.
+type heldPaneLock struct {
+	release func()
+	depth   int
+}
+
+// lockPane makes this process the only bp allowed to type into one pane, and
+// returns the function that gives it back.
+//
+// Every path that captures a composer and then presses keys on it must hold this:
+// `bp msg`'s delivery, `bp open`'s pending-digest flush, /rename and /compact. On
+// 2026-08-17 an open-flush and a msg-paste hit one composer at the same moment and
+// the agent read both as a single 590-character message from two senders.
+//
+// The lock file lives under the shared queue root, so the daemon's dispatch loop
+// and every CLI process resolve the same file from the same config key. Without a
+// queue there is nothing shared to coordinate through (tests, an app built without
+// config), and the lock degrades to a no-op rather than to an error.
+func (a *app) lockPane(name string) (func(), error) {
+	root := ""
+	if a.queue != nil {
+		root = a.queue.Root
+	}
+	if root == "" || name == "" {
+		return func() {}, nil
+	}
+	if a.paneLocks == nil {
+		a.paneLocks = map[string]*heldPaneLock{}
+	}
+	if held, ok := a.paneLocks[name]; ok {
+		held.depth++
+		return func() { a.releasePane(name) }, nil
+	}
+	release, err := bptmux.AcquirePaneLock(root, name)
+	if err != nil {
+		return nil, err
+	}
+	a.paneLocks[name] = &heldPaneLock{release: release, depth: 1}
+	return func() { a.releasePane(name) }, nil
+}
+
+func (a *app) releasePane(name string) {
+	held, ok := a.paneLocks[name]
+	if !ok {
+		return
+	}
+	held.depth--
+	if held.depth > 0 {
+		return
+	}
+	delete(a.paneLocks, name)
+	held.release()
 }
 
 func main() {
@@ -1216,12 +1278,32 @@ func (a *app) readCache(folders map[string]string) map[string]bpcache.State {
 	return bpcache.Fleet(bptmux.ClaudeProjectsRoot(), folders)
 }
 
+// flushPending delivers the announcements that piled up while an agent was closed,
+// as one digest, and clears the spool only for an outcome that could have put the
+// text in the pane.
+//
+// It holds the pane lock for the whole Send. This is the OTHER half of the merge
+// that cost a delivery on 2026-08-17: `bp open` was flushing this digest while
+// another process pasted a message into the same composer, and one Enter submitted
+// both. Send does not return until it has observed the composer clear again (or
+// reported that it could not), so any bp waiting on this lock afterwards captures a
+// pane that is genuinely past the digest — the handshake asked for in the incident
+// review needs no extra probe of its own.
 func (a *app) flushPending(name string) error {
 	entries, dropped, err := pending.Load(a.config.StateDir, name)
 	if err != nil || len(entries) == 0 {
 		return err
 	}
-	if err := a.tmux.Send(a.ctx, name, formatDigest(entries, dropped)); err != nil {
+	release, lockErr := a.lockPane(name)
+	if lockErr != nil {
+		// Somebody else is typing into this pane. The spool is deliberately left
+		// alone: an undelivered digest must stay pending, and the next `bp open` or
+		// message delivery carries it.
+		return lockErr
+	}
+	defer release()
+	digest := formatDigest(entries, dropped)
+	if err := a.tmux.Send(a.ctx, name, digest); err != nil {
 		if !errors.Is(err, bptmux.ErrUnverified) {
 			return err
 		}
@@ -1230,6 +1312,19 @@ func (a *app) flushPending(name string) error {
 		// and let the caller report the doubt.
 		if clearErr := pending.Clear(a.config.StateDir, name); clearErr != nil {
 			return clearErr
+		}
+		// And leave the queue something it can recognise. If that paste is HANGING
+		// in the composer, clearing the spool has just destroyed the only proof the
+		// text is bp's: every later message would queue behind what now reads as a
+		// stranger's line, and only a human could unblock the pane. A
+		// never-paste-again record keeps the identity alive instead — the transcript
+		// witness closes it if the digest did arrive, and the same dispatch pass
+		// erases the copy left behind. The sender is "bp", so nobody is notified
+		// about a digest that has no author to tell.
+		if a.queue != nil && book.CanWitness(digest) {
+			if _, enqueueErr := a.queue.EnqueueUnverified(name, "bp", digest); enqueueErr != nil {
+				fmt.Fprintf(a.err, "WARNING: %s icin dogrulanamayan digest kuyruga islenemedi: %v\n", name, enqueueErr)
+			}
 		}
 		return err
 	}
@@ -1361,6 +1456,17 @@ func (a *app) message(args []string) error {
 			message = formatDigest(entries, dropped) + "\n\n" + message
 		}
 	}
+	// Nothing goes into the pane while an identical message is still in flight. This
+	// is the only guard that can stop the measured duplicate: an agent whose first
+	// send came back "TESLIMAT BELIRSIZ" re-sent the same text twice within 33
+	// seconds, all three pastes went into a streaming pane, and the recipient read
+	// the same 441 characters three times. Neither the screen nor the transcript can
+	// see that while it happens — the copies sit in the CLI's own input queue — so
+	// the duplicate has to be refused at the source.
+	if existing, ok := a.identicalInFlight(name, message); ok {
+		a.reportInFlight(existing)
+		return nil
+	}
 	queued, channelID, err := a.deliver(name, sender, message)
 	notReady, unverified := errors.Is(err, bptmux.ErrNotReady), errors.Is(err, bptmux.ErrUnverified)
 	if err != nil && !notReady && !unverified {
@@ -1394,6 +1500,13 @@ func (a *app) message(args []string) error {
 		// and it can never produce a second copy, which the ordinary queue path
 		// could.
 		if book.CanWitness(message) {
+			// One unresolved record per message, never two. A second unverified
+			// record for the same text would double every later notice and would
+			// make the duplicate guard above point at whichever copy it read first.
+			if existing, ok := a.identicalInFlight(name, message); ok {
+				a.reportInFlight(existing)
+				return errReported
+			}
 			if channelID, enqueueErr := a.queue.EnqueueUnverified(name, sender, message); enqueueErr == nil {
 				fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s — pane'de dogrulanamadi, tekrar gonderilmeyecek; transcript tanigi kontrol edecek (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
 				return errReported
@@ -1417,6 +1530,46 @@ func (a *app) message(args []string) error {
 		fmt.Fprintf(a.out, "BEKLEME SEBEBI: %s — bak: bp peek %s\n", why, name)
 	}
 	return nil
+}
+
+// dedupWindow is how long an identical message to the same target counts as still
+// on the way. It is sized on the measured retry burst — three sends of the same 441
+// characters inside 33 seconds — with room for the slower version of the same
+// mistake: an agent that re-sends after a minute or two of silence. Ten minutes is
+// also the horizon inside which a queued message is normally either delivered or
+// settled, so a legitimate "say it again, it never arrived" after that still goes
+// through untouched.
+const dedupWindow = 10 * time.Minute
+
+// identicalInFlight reports an existing queue record for this target carrying
+// exactly this text, queued within dedupWindow. Records that will never be pasted
+// again count too: their text may already be in the agent, which is the strongest
+// possible reason not to send a second copy.
+func (a *app) identicalInFlight(name, message string) (msgq.Message, bool) {
+	if a.queue == nil {
+		return msgq.Message{}, false
+	}
+	return a.queue.RecentIdentical(name, message, dedupWindow)
+}
+
+// reportInFlight refuses a duplicate OUT LOUD, and with the existing record's live
+// status in the same breath.
+//
+// That second half is the point, and it is what keeps this guard from backfiring.
+// The sender did not repeat itself out of stubbornness — it repeated itself because
+// it could not SEE that the message had landed. Forbidding the retry without
+// showing the state would push the same sender onto a channel bp cannot see at all
+// (WhatsApp, a file, keys typed into tmux by hand), and the duplicate would simply
+// become invisible. So the record's status is quoted verbatim, together with the
+// one command that overrides the refusal: a silent success is worse than a loud
+// failure.
+func (a *app) reportInFlight(existing msgq.Message) {
+	status, err := a.queue.Status(existing.ID)
+	if err != nil || status == "" {
+		status = existing.Reason
+	}
+	fmt.Fprintf(a.out, "AYNI METIN ZATEN YOLDA — kanal %s. Durum: %s\n", existing.ID, status)
+	fmt.Fprintf(a.out, "Bekle ya da israr icin: bp qcancel %s && bp msg ...\n", existing.ID)
 }
 
 func (a *app) federatedMessage(target, peer, message string) error {
@@ -1457,6 +1610,25 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	if !a.tmux.HasSession(a.ctx, name) {
 		return false, "", fmt.Errorf("no open session named %s", name)
 	}
+	// The critical section starts BEFORE the capture and ends after the send's own
+	// verification, because a capture taken while another bp is mid-paste is worth
+	// nothing: that is exactly how the digest of `bp open` and the message of
+	// `bp msg` ended up in one composer, submitted by one Enter. Holding the lock
+	// across the capture is also what makes the flush handshake work — this capture
+	// now sees the composer as it is AFTER any flush, so a digest still hanging in
+	// there reads as "not empty" and the message is queued instead of stacked.
+	release, lockErr := a.lockPane(name)
+	if lockErr != nil {
+		// Another bp owns the pane. Treat it as the busy pane it effectively is:
+		// queue the message with the reason, never type into a composer someone
+		// else is in the middle of.
+		channelID, err := a.queue.EnqueueReason(name, sender, message, bptmux.BlockedByPaneLock)
+		if err != nil {
+			return true, channelID, err
+		}
+		return true, channelID, nil
+	}
+	defer release()
 	pane, err := a.tmux.CaptureAnsi(a.ctx, name)
 	if err != nil {
 		return false, "", err
@@ -2180,13 +2352,32 @@ func (a *app) compact(args []string) error {
 			rows[index].Send, rows[index].Reason = false, compactBusy
 			continue
 		}
+		// The clearing and the send are ONE operation on one composer: bp empties it
+		// and then types into it, and another bp pasting in between would be typing
+		// into a composer this command has just wiped. So both happen under a single
+		// pane lock, which deliver() then re-enters instead of fighting.
+		release, lockErr := a.lockPane(target)
+		if lockErr != nil {
+			// Another bp owns the pane. Skip, never queue: a /compact that lands
+			// after the next turn compacts the wrong conversation.
+			rows[index].Send, rows[index].Reason = false, compactBusy
+			continue
+		}
 		// Same clearing step as bp rename, for the same reason: /compact is a
 		// slash command bp types itself, and a composer left in a state that only
 		// LOOKS empty makes the send bounce off with "composer is not empty".
 		// ErrBusy/ErrTyping are the pane saying it is in use — skip it exactly
 		// like the check above, never queue (a /compact delivered after the next
 		// turn compacts the wrong conversation).
-		if clearErr := a.clearComposer(target); clearErr != nil {
+		clearErr := a.clearComposer(target)
+		var queued bool
+		var channelID string
+		var deliveryErr error
+		if clearErr == nil {
+			queued, channelID, deliveryErr = a.deliver(target, sender, "/compact")
+		}
+		release()
+		if clearErr != nil {
 			rows[index].Send = false
 			switch {
 			case errors.Is(clearErr, bptmux.ErrBusy), errors.Is(clearErr, bptmux.ErrTyping):
@@ -2199,7 +2390,6 @@ func (a *app) compact(args []string) error {
 			}
 			continue
 		}
-		queued, channelID, deliveryErr := a.deliver(target, sender, "/compact")
 		counted := tally.record(target, queued, channelID, deliveryErr)
 		if errors.Is(deliveryErr, bptmux.ErrUnverified) {
 			// The keystrokes went in unconfirmed. Re-sending could compact the

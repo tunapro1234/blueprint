@@ -927,3 +927,334 @@ func TestDispatchWaitsForAnOpenTurnTheScreenCannotSee(t *testing.T) {
 		t.Fatalf("delivered record was not moved to done: %v", err)
 	}
 }
+
+// --- strict per-target FIFO --------------------------------------------------
+
+// fifoQueue returns a queue whose clock the caller drives, so a test can mint records
+// whose ids and send times DISAGREE — the state the 2026-08-17 reordering needed.
+func fifoQueue(t *testing.T, clock *time.Time) *Queue {
+	t.Helper()
+	q := New(t.TempDir())
+	q.Now = func() time.Time { return *clock }
+	return q
+}
+
+func TestDispatchDeliversInSendOrderNotInIDOrder(t *testing.T) {
+	// The measured incident, in miniature. Ids are minted from the nanoseconds
+	// WITHIN the second, so a message sent at 10:43 can be called "q950734611" while
+	// one sent at 12:55 is "q436531039". Sorted by file name — which is what
+	// Dispatch used to do — the 12:55 message went first, and probot-outreach
+	// received a "DUR/IPTAL" correction AFTER the instruction it cancelled.
+	clock := time.Date(2026, 8, 17, 10, 43, 30, 950734611, time.Local)
+	q := fifoQueue(t, &clock)
+	first, err := q.Enqueue("target", "sender", "[probot-business] birinci talimat: kosuyu baslat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = time.Date(2026, 8, 17, 12, 55, 13, 436531039, time.Local)
+	second, err := q.Enqueue("target", "sender", "[probot-business] DUR, onceki talimati IPTAL ET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second >= first {
+		t.Fatalf("fixture is not the incident: ids %s then %s sort in send order by accident", first, second)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	// Two passes, because a target takes at most one paste per pass.
+	for pass := 0; pass < 2; pass++ {
+		clock = clock.Add(30 * time.Second)
+		if err = q.Dispatch(context.Background(), target, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(target.sent) != 2 {
+		t.Fatalf("sent=%v", target.sent)
+	}
+	if !strings.Contains(target.sent[0], "birinci talimat") || !strings.Contains(target.sent[1], "IPTAL") {
+		t.Fatalf("delivered out of send order: %v", target.sent)
+	}
+}
+
+func TestDispatchDeliversOneMessagePerTargetPerPass(t *testing.T) {
+	// Atomicity, as measured from the other side: op-main was handed three messages
+	// inside a single second (13:03:37), because one pass pasted them back to back.
+	// Nothing verifies that the first message left the composer within one pass —
+	// only the NEXT pass's capture and witness can — so a pass delivers once per
+	// target and the rest of the line waits, with a reason that says so.
+	clock := time.Date(2026, 8, 17, 13, 3, 37, 0, time.Local)
+	q := fifoQueue(t, &clock)
+	first, err := q.Enqueue("target", "sender", "[server-main] birinci mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Second)
+	second, err := q.Enqueue("target", "sender", "[server-main] ikinci mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A third message for a DIFFERENT target proves the rule is per target, not a
+	// global one-message-per-pass throttle.
+	clock = clock.Add(time.Second)
+	if _, err = q.Enqueue("other", "sender", "[server-main] baska hedefe"); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 2 {
+		t.Fatalf("want one delivery per target in one pass, got %v", target.sent)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), first+".json")); err != nil {
+		t.Fatalf("the head of the line was not delivered: %v", err)
+	}
+	waiting, err := read(filepath.Join(q.pending(), second+".json"))
+	if err != nil {
+		t.Fatalf("the second message did not stay pending: %v", err)
+	}
+	if !strings.Contains(waiting.Reason, first) {
+		t.Fatalf("reason=%q, want it to name %s", waiting.Reason, first)
+	}
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 3 || !strings.Contains(target.sent[2], "ikinci mesaj") {
+		t.Fatalf("the next pass did not deliver the second message: %v", target.sent)
+	}
+}
+
+func TestDispatchKeepsAYoungMessageBehindABlockedHead(t *testing.T) {
+	// The head of the line could not be delivered (a proven failure put it in
+	// backoff), and the composer is wide open. Nothing younger may overtake it: an
+	// instruction and its correction arriving in the wrong order is worse than both
+	// arriving late.
+	clock := time.Date(2026, 8, 17, 10, 43, 0, 0, time.Local)
+	q := fifoQueue(t, &clock)
+	head, err := q.Enqueue("target", "sender", "[probot-business] birinci talimat: kosuyu baslat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(12 * time.Second)
+	young, err := q.Enqueue("target", "sender", "[probot-business] DUR, onceki talimati IPTAL ET")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: fmt.Errorf("%w: login expired", bptmux.ErrNotReady)}
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	// One attempt only: the head's. The young record was not even offered to Send.
+	if target.calls != 1 {
+		t.Fatalf("a young record was pasted past a blocked head: %d attempts", target.calls)
+	}
+	waiting, err := read(filepath.Join(q.pending(), young+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Reason != headOfLineReason(head) {
+		t.Fatalf("reason=%q, want %q", waiting.Reason, headOfLineReason(head))
+	}
+	// The pane recovers and the backoff expires: the order still holds, one per pass.
+	target.sendErr = nil
+	clock = clock.Add(2 * time.Minute)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 2 || !strings.Contains(target.sent[0], "birinci talimat") || !strings.Contains(target.sent[1], "IPTAL") {
+		t.Fatalf("sent=%v", target.sent)
+	}
+}
+
+func TestWitnessClosesAYoungRecordWhileTheHeadWaits(t *testing.T) {
+	// The head-of-line rule governs ACTIONS, never proof. The witness reports a
+	// delivery that already happened, so closing a young record with it cannot
+	// reorder anything — and refusing to would leave records open for messages the
+	// agent demonstrably has.
+	clock := time.Date(2026, 8, 17, 10, 43, 0, 0, time.Local)
+	q := fifoQueue(t, &clock)
+	head, err := q.Enqueue("target", "sender", "[server-main] beklemede kalacak olan mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(time.Minute)
+	young, err := q.Enqueue("target", "sender", stuckText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Witness = func(_, text string, _ time.Time) bool { return text == stuckText }
+	// A working pane: the head cannot move at all this pass.
+	target := &fakeTarget{alive: true, pane: "✻ Working… (23s · Esc to interrupt)\n" + composerPane("")}
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 0 {
+		t.Fatalf("something was pasted into a working pane: %v", target.sent)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), young+".json")); err != nil {
+		t.Fatalf("the witness could not close a young record: %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(q.pending(), head+".json")); err != nil {
+		t.Fatalf("the head was not left pending: %v", err)
+	}
+}
+
+func TestWitnessKeepsTheRecordUntilTheHangingCopyIsCleared(t *testing.T) {
+	// The last link of the duplicate chain (op-main, 2026-08-17: the same 441
+	// characters at 13:03:37 and 13:07:27). The transcript proves the message
+	// arrived, so the record used to close on the spot — and the copy still hanging
+	// in the composer was then unattributable, so the agent's next turn submitted
+	// it. Now the cleanup comes FIRST: a copy that could not be cleared keeps the
+	// record open, which is the only thing that can still identify that text as ours.
+	clock := time.Date(2026, 8, 17, 13, 3, 37, 0, time.Local)
+	q := fifoQueue(t, &clock)
+	id, err := q.Enqueue("target", "sender", stuckText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Witness = func(_, text string, _ time.Time) bool { return text == stuckText }
+	target := &fakeTarget{alive: true, pane: composerPane(stuckText), clearErr: bptmux.ErrBusy}
+	var reports []string
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+		t.Fatal(err)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatalf("record was closed while its copy was still hanging: %v", err)
+	}
+	if !record.Cleanup || record.Reason != cleanupReason {
+		t.Fatalf("record=%+v", record)
+	}
+	if !strings.Contains(strings.Join(reports, "\n"), "temizlenemedi") {
+		t.Fatalf("reports=%v", reports)
+	}
+	// While in that state the record is invisible to the send path: its text must
+	// never be submitted again, so nothing may press Enter on the copy.
+	if texts := q.PendingFor("target"); len(texts) != 0 {
+		t.Fatalf("a delivered copy was offered to the send path: %v", texts)
+	}
+	status, err := q.Status(id)
+	if err != nil || !strings.Contains(status, "temizlik bekliyor") {
+		t.Fatalf("status=%q err=%v", status, err)
+	}
+
+	// The pane frees up: the copy is erased and the record closes for real.
+	target.clearErr = nil
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
+		t.Fatalf("record was not closed after the cleanup: %v", err)
+	}
+	if len(target.sent) != 0 || target.calls != 0 {
+		t.Fatalf("the delivered text was pasted again: %v", target.sent)
+	}
+	if bptmux.Typing(target.pane) {
+		t.Fatalf("the copy is still in the composer: %q", target.pane)
+	}
+}
+
+func TestWitnessStopsWaitingForACleanupThatNeverHappens(t *testing.T) {
+	// A record cannot be held forever either: if the pane never frees up, the
+	// witnessWindow ceiling closes the record and says so out loud, so the operator
+	// hears about a composer only a human can clear.
+	clock := time.Date(2026, 8, 17, 13, 0, 0, 0, time.Local)
+	q := fifoQueue(t, &clock)
+	id, err := q.Enqueue("target", "sender", stuckText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Witness = func(string, string, time.Time) bool { return true }
+	target := &fakeTarget{alive: true, pane: composerPane(stuckText), clearErr: bptmux.ErrBusy}
+	clock = clock.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(witnessWindow)
+	var reports []string
+	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
+		t.Fatalf("record was held past the ceiling: %v", err)
+	}
+	if !strings.Contains(strings.Join(reports, "\n"), "elle bak") {
+		t.Fatalf("the uncleared copy was not reported: %v", reports)
+	}
+}
+
+func TestRecentIdenticalOnlyMatchesTheSameTextInsideTheWindow(t *testing.T) {
+	// The lookup behind bp msg's duplicate guard. Same target, same bytes, recent
+	// enough: those three together mean "already on the way".
+	clock := time.Date(2026, 8, 17, 13, 3, 37, 0, time.Local)
+	q := fifoQueue(t, &clock)
+	text := "[probot-business] BUSINESS → OP-MAIN — ayni metin ucuncu kez gonderiliyor"
+	id, err := q.Enqueue("op-main", "probot-business", text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(33 * time.Second)
+	if found, ok := q.RecentIdentical("op-main", text, 10*time.Minute); !ok || found.ID != id {
+		t.Fatalf("found=%+v ok=%v", found, ok)
+	}
+	if _, ok := q.RecentIdentical("op-main", text+" (farkli)", 10*time.Minute); ok {
+		t.Fatal("a different text was reported as already in flight")
+	}
+	if _, ok := q.RecentIdentical("baska-hedef", text, 10*time.Minute); ok {
+		t.Fatal("another target's queue was consulted")
+	}
+	clock = clock.Add(11 * time.Minute)
+	if _, ok := q.RecentIdentical("op-main", text, 10*time.Minute); ok {
+		t.Fatal("a record older than the window still blocks a resend")
+	}
+}
+
+func TestDispatchWaitsWhenAnotherBpHoldsThePane(t *testing.T) {
+	// The cross-process half of the merge fix, from the queue's side. Another bp is
+	// inside the critical section for this pane (bp open flushing a digest, bp msg
+	// pasting a message), so the pass must not capture or type: it records the reason
+	// and leaves the message queued.
+	defer func(previous time.Duration) { bptmux.PaneLockWait = previous }(bptmux.PaneLockWait)
+	bptmux.PaneLockWait = 200 * time.Millisecond
+	q := New(t.TempDir())
+	q.Now = time.Now
+	id, err := q.Enqueue("target", "sender", "[server-main] kilit tutulurken gelen mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := bptmux.AcquirePaneLock(q.Root, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 0 || target.calls != 0 {
+		t.Fatalf("typed into a pane another bp was holding: %v", target.sent)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatalf("message was not kept: %v", err)
+	}
+	if record.Reason != bptmux.BlockedByPaneLock {
+		t.Fatalf("reason=%q, want %q", record.Reason, bptmux.BlockedByPaneLock)
+	}
+	// The other bp finishes: the very next pass delivers.
+	release()
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 {
+		t.Fatalf("sent=%v", target.sent)
+	}
+}

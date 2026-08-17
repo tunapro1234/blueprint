@@ -56,6 +56,14 @@ type Message struct {
 	// (exponential backoff after a proven failure). The transcript witness still
 	// runs on every pass — waiting to retry is not waiting to notice.
 	NextTry float64 `json:"nextTry,omitempty"`
+	// Cleanup marks a record the transcript has PROVEN delivered but whose copy is
+	// still hanging in the target's composer, unerased. Such a record is not closed
+	// and never pasted again: closing it would destroy the only evidence that the
+	// hanging text is ours, and the agent's next turn would submit it as a
+	// byte-identical duplicate (measured twice on op-main, 2026-08-17, 441
+	// characters each). Every later pass retries the clearing; the witnessWindow
+	// ceiling closes the record if the pane never frees up.
+	Cleanup bool `json:"cleanup,omitempty"`
 }
 
 type Queue struct {
@@ -100,7 +108,13 @@ const (
 	// a delivery and the transcript has not yet spoken. It is a WAIT, not a
 	// failure: the text may well be in the agent already, which is exactly why
 	// nothing pastes it again.
-	unverifiedReason = "teslimat belirsiz: ekran dogrulayamadi; transcript tanigi bekleniyor"
+	//
+	// It says PASTE YAPILDI first, because this sentence is now read by a sender
+	// that has just been refused a retry (bp msg's duplicate guard quotes the
+	// record's status). "teslimat belirsiz" alone left the honest question — did the
+	// text reach the pane at all? — unanswered, and a sender who cannot answer it
+	// repeats itself somewhere bp cannot see.
+	unverifiedReason = "paste yapildi, ekran dogrulayamadi; tekrar paste edilmeyecek, transcript tanigi bekleniyor"
 	// exhaustedReason is the other way into the same waiting state: the screen
 	// kept claiming a proven failure and three pastes could not be verified.
 	// Continuing would only produce more copies of a message that may already
@@ -122,7 +136,27 @@ const (
 	// noticeHeadRunes is how much of the message the sender's notice quotes —
 	// enough to recognise WHICH message, not enough to re-deliver it by accident.
 	noticeHeadRunes = 60
+	// cleanupReason is what a record says while it is delivered-but-uncleared: the
+	// transcript proved the text arrived, and a copy of it is still hanging in the
+	// composer where nothing but bp may erase it.
+	cleanupReason = "teslim edildi (transcript); composer'da asili kopya temizlenemedi, temizlik bekleniyor"
 )
+
+// headOfLineReason names the record a waiting message is queued BEHIND. It is the
+// reason a young message does not overtake an old one any more, said in words the
+// operator can act on (`bp qcancel` the blocker, or clear its pane).
+func headOfLineReason(head string) string {
+	return fmt.Sprintf("sirada: onunde %s var", head)
+}
+
+// deliveredThisPassReason is the other half of the ordering rule: this target
+// already took a message in this pass, so the next one waits for the pass after.
+// Two pastes in one pass is how an agent received three messages inside a single
+// second (op-main, 2026-08-17 13:03:37) — the second paste goes in before anything
+// can witness the first one leaving the composer.
+func deliveredThisPassReason(id string) string {
+	return fmt.Sprintf("sirada: bu pass'te %s teslim edildi; sonraki pass bekleniyor", id)
+}
 
 // Enqueue records a message with no reason attached (the caller does not know why
 // the target could not take it, or there is nothing to say).
@@ -248,19 +282,68 @@ func englishStatus(status string) string {
 	}
 }
 
-func (q *Queue) List() ([]Message, error) {
+// record is one pending queue file together with the message inside it.
+type record struct {
+	path string
+	Message
+}
+
+// badRecord is a pending file that could not be read. It is carried out of
+// pendingRecords rather than swallowed, because the callers disagree about it:
+// List refuses to show a half-known queue, while Dispatch reports the file and
+// keeps delivering everything else.
+type badRecord struct {
+	path string
+	err  error
+}
+
+// pendingRecords reads every pending record and returns them in DELIVERY ORDER:
+// oldest send time first, the channel id breaking a tie.
+//
+// The file NAME is deliberately not the sort key any more, and dropping it fixed
+// a delivery bug rather than a style problem. Ids are minted as
+// q<nanoseconds-WITHIN-the-second> (see enqueueLocked), so "q950734611" is a
+// fraction of a second, not a moment in time: sorted as strings, a message sent at
+// 12:55 came out of the queue BEFORE two sent at 10:43 (probot-outreach,
+// 2026-08-17), which delivered a "DUR/IPTAL" correction after the instruction it
+// was cancelling. TS is the moment the message was queued and is what ordering
+// must follow; the id decides only ties — the same nanosecond, or a legacy record
+// with no usable TS, where the id at least keeps the order stable between passes.
+func (q *Queue) pendingRecords() ([]record, []badRecord, error) {
 	paths, err := filepath.Glob(filepath.Join(q.pending(), "*.json"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	sort.Strings(paths)
-	messages := make([]Message, 0, len(paths))
+	records := make([]record, 0, len(paths))
+	var bad []badRecord
 	for _, path := range paths {
 		message, readErr := read(path)
 		if readErr != nil {
-			return nil, fmt.Errorf("%s: %w", path, readErr)
+			bad = append(bad, badRecord{path: path, err: readErr})
+			continue
 		}
-		messages = append(messages, message)
+		records = append(records, record{path: path, Message: message})
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].TS != records[j].TS {
+			return records[i].TS < records[j].TS
+		}
+		return records[i].ID < records[j].ID
+	})
+	return records, bad, nil
+}
+
+func (q *Queue) List() ([]Message, error) {
+	records, bad, err := q.pendingRecords()
+	if err != nil {
+		return nil, err
+	}
+	if len(bad) > 0 {
+		return nil, fmt.Errorf("%s: %w", bad[0].path, bad[0].err)
+	}
+	messages := make([]Message, 0, len(records))
+	for _, rec := range records {
+		messages = append(messages, rec.Message)
 	}
 	return messages, nil
 }
@@ -270,6 +353,13 @@ func (q *Queue) Status(id string) (string, error) {
 		seconds := int(q.Now().Sub(time.Unix(0, int64(message.TS*1e9))).Seconds())
 		if seconds < 0 {
 			seconds = 0
+		}
+		// Delivered, but still holding the pane: the queue is not waiting to send
+		// this one, it is waiting to CLEAN UP after it. Saying "PENDING" alone here
+		// would send the operator looking for a delivery that already happened.
+		if message.Cleanup {
+			return fmt.Sprintf("DELIVERED (transcript), temizlik bekliyor: %s — %s (%d seconds queued); bak: bp peek %s",
+				message.To, message.Reason, seconds, message.To), nil
 		}
 		// A record nobody will paste again must SAY so. Reporting it as an
 		// ordinary "PENDING" would suggest the queue is still trying, and the
@@ -322,18 +412,61 @@ type Target interface {
 func (q *Queue) PendingFor(to string) []string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	paths, err := filepath.Glob(filepath.Join(q.pending(), "*.json"))
+	records, _, err := q.pendingRecords()
 	if err != nil {
 		return nil
 	}
-	sort.Strings(paths)
 	var texts []string
-	for _, path := range paths {
-		if message, readErr := read(path); readErr == nil && message.To == to {
-			texts = append(texts, message.Msg)
+	for _, rec := range records {
+		if rec.To != to {
+			continue
 		}
+		// A delivered-but-uncleared record is deliberately NOT offered here. The
+		// caller uses these texts to decide what it may press ENTER on, and this
+		// one has already been delivered: submitting the copy hanging in the
+		// composer would produce the duplicate the Cleanup state exists to prevent.
+		// It stays invisible to the send path and is erased by Dispatch instead,
+		// which pushes the new message into the queue behind it — the right order.
+		if rec.Cleanup {
+			continue
+		}
+		texts = append(texts, rec.Msg)
 	}
 	return texts
+}
+
+// RecentIdentical returns the newest pending record for `to` whose text is
+// byte-identical to text and which was queued within the last `within`.
+//
+// It is the sender-side duplicate guard, and it exists because the two other
+// guards cannot see the case that produced measured duplicates: an agent whose
+// first `bp msg` came back "TESLIMAT BELIRSIZ" simply sent the same text twice
+// more within 33 seconds (probot-business -> op-main, 2026-08-17). All three
+// pastes went into a pane that was streaming, so the screen could not confirm
+// them and the transcript had not recorded them yet — every copy landed in Claude
+// Code's own input queue and the recipient read the same 441 characters three
+// times. Nothing downstream can undo that; only refusing to produce the second
+// copy can.
+func (q *Queue) RecentIdentical(to, text string, within time.Duration) (Message, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	records, _, err := q.pendingRecords()
+	if err != nil {
+		return Message{}, false
+	}
+	cutoff := q.Now().Add(-within)
+	var newest Message
+	found := false
+	for _, rec := range records {
+		if rec.To != to || rec.Msg != text {
+			continue
+		}
+		if time.Unix(0, int64(rec.TS*1e9)).Before(cutoff) {
+			continue
+		}
+		newest, found = rec.Message, true
+	}
+	return newest, found
 }
 
 // Reason returns the recorded reason a pending message is still waiting, or ""
@@ -356,20 +489,20 @@ func (q *Queue) Reason(id string) string {
 func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	paths, err := filepath.Glob(filepath.Join(q.pending(), "*.json"))
+	records, _, err := q.pendingRecords()
 	if err != nil {
 		return "", false
 	}
-	sort.Strings(paths)
-	for _, path := range paths {
-		message, readErr := read(path)
-		if readErr != nil || message.To != to || message.Msg != text {
+	// "Oldest" now really means oldest: the records arrive in send-time order, not
+	// in the order of a file name that carries a fraction of a second.
+	for _, rec := range records {
+		if rec.To != to || rec.Msg != text {
 			continue
 		}
-		if err := q.finish(path, message, status); err != nil {
+		if err := q.finish(rec.path, rec.Message, status); err != nil {
 			return "", false
 		}
-		return message.ID, true
+		return rec.ID, true
 	}
 	return "", false
 }
@@ -460,9 +593,13 @@ func whyNotDelivered(err error) string {
 // Telling the sender is the point. Both roads into this state end in "we do not
 // know", and an unknown that nobody hears about is how a message goes missing in
 // silence — the failure mode this queue keeps rediscovering.
-func (q *Queue) settleUnrepasted(path string, message Message, report func(string)) {
+//
+// It reports whether the record was CLOSED, because a record still waiting keeps
+// its target's line shut: nothing younger may overtake a message whose fate is
+// undecided.
+func (q *Queue) settleUnrepasted(path string, message Message, report func(string)) bool {
 	if q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
-		return
+		return false
 	}
 	// Which of the two roads got here decides the wording: an injection nobody
 	// could confirm may well have landed, while an attempt that never got past a
@@ -490,12 +627,13 @@ func (q *Queue) settleUnrepasted(path string, message Message, report func(strin
 		if report != nil {
 			report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
 		}
-		return
+		return false
 	}
 	if report != nil {
 		report(fmt.Sprintf("%s: %s -> %s (transcript tanigi %s icinde bulamadi); bak: bp peek %s",
 			strings.ToUpper(status), message.ID, message.To, witnessWindow, message.To))
 	}
+	return true
 }
 
 // shouldNotify keeps the notice from becoming noise or a loop: it goes out once
@@ -574,7 +712,61 @@ func (q *Queue) finish(path string, message Message, status string) error {
 	return os.Remove(path)
 }
 
-// Dispatch makes one sorted pass. Busy or typed composers remain pending.
+// lineState is what one pass remembers about ONE target: its queue is a LINE, not
+// a set, and both fields exist to keep it that way.
+type lineState struct {
+	// blockedBy is the id of the oldest record for this target that the pass could
+	// not finish. While it is set, nothing younger for the same target is acted on
+	// — that is the head-of-line rule.
+	blockedBy string
+	// delivered is the id of the record pasted into this target during THIS pass.
+	// At most one paste per target per pass: the next record waits for a pass whose
+	// own capture and witness can see the previous message leave the composer.
+	delivered string
+}
+
+// block records that this record is holding the line. The FIRST blocker wins, so
+// every message behind it names the head rather than its immediate neighbour: the
+// head is the one an operator has to do something about.
+func (l *lineState) block(id string) {
+	if l.blockedBy == "" {
+		l.blockedBy = id
+	}
+}
+
+// hold reports why this record may not be acted on yet, or "" when it is the head
+// of a line that has not moved in this pass.
+func (l *lineState) hold() string {
+	if l.delivered != "" {
+		return deliveredThisPassReason(l.delivered)
+	}
+	if l.blockedBy != "" {
+		return headOfLineReason(l.blockedBy)
+	}
+	return ""
+}
+
+// paneLockReason turns a failed lock acquisition into the words a queue record
+// carries. A contended lock is the ordinary case and has its own sentence; a
+// broken one (the directory could not be created) is reported verbatim, because
+// then bp is not waiting for anything — it is misconfigured.
+func paneLockReason(err error) string {
+	if errors.Is(err, bptmux.ErrPaneLocked) {
+		return bptmux.BlockedByPaneLock
+	}
+	return err.Error()
+}
+
+// lockPane takes the cross-process pane lock for a target. The lock file lives
+// under the queue root, which is the same directory the CLI resolves it from, so
+// `bp msg`, `bp open`'s digest flush and this loop cannot type into one composer
+// at the same time.
+func (q *Queue) lockPane(session string) (func(), error) {
+	return bptmux.AcquirePaneLock(q.Root, session)
+}
+
+// Dispatch makes one pass in send-time order. Busy or typed composers remain
+// pending, and a target's queue is drained strictly in order: see dispatchRecord.
 func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -593,168 +785,281 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 		return err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	paths, err := filepath.Glob(filepath.Join(q.pending(), "*.json"))
+	records, bad, err := q.pendingRecords()
 	if err != nil {
 		return err
 	}
-	sort.Strings(paths)
-	for _, path := range paths {
-		message, readErr := read(path)
-		if readErr != nil {
-			if report != nil {
-				report(fmt.Sprintf("msgq: could not read %s: %v", path, readErr))
-			}
-			continue
-		}
-		if !target.HasSession(ctx, message.To) {
-			if err := q.finish(path, message, "canceled (target closed)"); err != nil {
-				if report != nil {
-					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
-				}
-			}
-			continue
-		}
-		pane, captureErr := target.Capture(ctx, message.To)
-		paneAnsi, ansiErr := target.CaptureAnsi(ctx, message.To)
-		if captureErr != nil || ansiErr != nil {
-			continue
-		}
-		// The transcript is the witness, and it is asked FIRST — before the pane is
-		// allowed to block anything. Whether the message already arrived has nothing
-		// to do with what the composer looks like now, and a target whose composer
-		// is stuck must still be able to close records for messages it did receive.
-		if q.Witness != nil && q.Witness(message.To, message.Msg, time.Unix(0, int64(message.TS*1e9))) {
-			if err := q.finish(path, message, "delivered (found in transcript)"); err != nil {
-				if report != nil {
-					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
-				}
-				continue
-			}
-			if report != nil {
-				report(fmt.Sprintf("delivered earlier: %s -> %s (transcript'te bulundu, tekrar yazilmadi)", message.ID, message.To))
-			}
-			// Two proofs meeting: the transcript says this text was delivered, and
-			// the composer may still be holding it from the paste whose Enter never
-			// registered. Closing the record destroys the only evidence that the
-			// hanging text is ours, so it would read as foreign from now on and block
-			// the target forever. Clear it here, while the proof is still in hand —
-			// and say so, because bp erasing a composer is never a silent act.
-			cleared, clearErr := target.ClearDelivered(ctx, message.To, []string{message.Msg})
-			if report != nil {
-				switch {
-				case cleared:
-					report(fmt.Sprintf("msgq: %s composer'inda asili duran teslim edilmis metin C-u ile temizlendi (%s)", message.To, message.ID))
-				case clearErr != nil:
-					report(fmt.Sprintf("msgq: %s composer'i temizlenemedi (%v); elle bak: bp peek %s", message.To, clearErr, message.To))
-				}
-			}
-			continue
-		}
-		// A record that may never be pasted again gets no further than this. The
-		// witness above is its only way to a "delivered" close; everything below
-		// this line exists to put text into a pane, and for this record that is
-		// precisely what must not happen.
-		if message.NoRepaste {
-			q.settleUnrepasted(path, message, report)
-			continue
-		}
-		// Two gates, one verdict. The screen is asked first because it is free and
-		// answers for every pane type; the transcript is asked only when the screen
-		// says idle, and it is the one that sees a streaming turn. Both produce the
-		// SAME record reason: from the queue's side there is no difference between
-		// the two kinds of busy, and the reason a human reads should not depend on
-		// which gate happened to catch it.
-		if bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(message.To)) {
-			q.remember(path, message, bptmux.BlockedByBusyPane, report)
-			continue
-		}
-		// A non-empty composer used to end the attempt right here, and that is how
-		// the queue blocked itself: our OWN unsubmitted paste of this very message
-		// looked exactly like a busy human. Now the pane is asked WHY it cannot take
-		// the message, and an empty answer means Send may proceed — including when
-		// the composer holds text provably ours, which Send knows how to finish.
-		// Every other answer is recorded on the queue record, so a message that
-		// waits does not wait silently.
-		if reason := bptmux.ComposerBlockReason(paneAnsi, []string{message.Msg}); reason != "" {
-			q.remember(path, message, reason, report)
-			continue
-		}
-		// Backing off after a proven failure. The witness above already ran, so a
-		// message that did arrive still closes on time; only the PASTE waits.
-		if message.NextTry > 0 && q.Now().Before(time.Unix(0, int64(message.NextTry*1e9))) {
-			continue
-		}
-		// The pane is free: drop any stale reason before handing over to Send.
-		q.remember(path, message, "", report)
-		if err := target.Send(ctx, message.To, message.Msg); err != nil {
-			if errors.Is(err, bptmux.ErrNotAgent) {
-				// The target dropped to a shell: leave the message PENDING (never
-				// lose it, never type into the shell) and report the skip. A later
-				// pass delivers it if the target becomes an agent again.
-				if report != nil {
-					report(fmt.Sprintf("msgq: %s -> %s skipped: target not an agent", message.ID, message.To))
-				}
-				continue
-			}
-			if errors.Is(err, bptmux.ErrTyping) {
-				continue
-			}
-			if errors.Is(err, bptmux.ErrBusy) {
-				// The pane started a turn between the capture above and the
-				// paste. Nothing was injected — this is the ordinary busy wait,
-				// recorded under the same reason the capture would have given.
-				q.remember(path, message, bptmux.BlockedByBusyPane, report)
-				continue
-			}
-			if errors.Is(err, bptmux.ErrNotReady) {
-				// PROVEN non-delivery (expired login, foreign composer): the
-				// message stays PENDING, but not unconditionally and not forever.
-				q.retryLater(path, message, err, report)
-				continue
-			}
-			if errors.Is(err, bptmux.ErrUnverified) {
-				// Injected and submitted, but nothing confirmed it either way.
-				// Closing the record here — the old behavior — is honest only
-				// when nobody could ever settle it: if the text never landed the
-				// message is silently LOST, and if it did land the transcript
-				// witness would have closed the record by itself. So whenever the
-				// witness could recognise this text, the record is KEPT OPEN and
-				// marked never-paste-again: no copy can come out of it, and the
-				// only remaining source of truth gets its chance.
-				if q.CanWitness != nil && q.CanWitness(message.Msg) {
-					message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
-					q.update(path, message, report)
-					if report != nil {
-						report(fmt.Sprintf("delivery UNVERIFIED: %s -> %s; tekrar paste edilmeyecek, transcript tanigi bekleniyor", message.ID, message.To))
-					}
-					continue
-				}
-				// Too short for the witness to identify (a slash command): nothing
-				// will ever settle it, so waiting would only mean waiting forever.
-				if err := q.finish(path, message, "delivered (unverified)"); err != nil && report != nil {
-					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
-				}
-				if report != nil {
-					report(fmt.Sprintf("delivered (UNVERIFIED): %s -> %s; check with bp peek %s", message.ID, message.To, message.To))
-				}
-				continue
-			}
-			if report != nil {
-				report(fmt.Sprintf("msgq: could not send %s: %v", message.ID, err))
-			}
-			continue
-		}
-		if err := q.finish(path, message, "delivered"); err != nil {
-			if report != nil {
-				report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
-			}
-			continue
-		}
+	for _, broken := range bad {
 		if report != nil {
-			report(fmt.Sprintf("delivered: %s -> %s", message.ID, message.To))
+			report(fmt.Sprintf("msgq: could not read %s: %v", broken.path, broken.err))
 		}
 	}
+	// One line per target, built as the pass walks the records in send-time order.
+	lines := make(map[string]*lineState, len(records))
+	for _, rec := range records {
+		line, ok := lines[rec.To]
+		if !ok {
+			line = &lineState{}
+			lines[rec.To] = line
+		}
+		q.dispatchRecord(ctx, target, rec, line, report)
+	}
 	return q.Cleanup()
+}
+
+// dispatchRecord decides what happens to ONE pending record in this pass.
+//
+// The head-of-line rule lives here, and it is what makes the queue a queue. Every
+// record for one target sits in a line ordered by send time. The transcript
+// WITNESS still runs for each of them — a witness is proof of a past delivery, not
+// a new one, so letting it close a young record cannot reorder anything — but every
+// ACTION that touches the pane (Send, the never-paste-again settlement, a backoff
+// retry, erasing a delivered copy) is applied only to the record at the HEAD. While
+// the head stays pending, the records behind it are skipped with a reason that
+// names it.
+//
+// The cost is bounded and deliberate: a NoRepaste head can hold its line for up to
+// witnessWindow (15 minutes) while the transcript is given its chance. In
+// instruction traffic ORDER beats latency — the 2026-08-17 incident delivered a
+// "DUR/IPTAL" correction after the instruction it cancelled, and fifteen minutes of
+// silence would have been the cheaper failure by far.
+func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
+	if !target.HasSession(ctx, rec.To) {
+		// A closed target cancels the record without touching any pane, so it is
+		// neither an action nor a reason to hold the line.
+		if err := q.finish(rec.path, rec.Message, "canceled (target closed)"); err != nil && report != nil {
+			report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
+		}
+		return
+	}
+	// The transcript is the witness, and it is asked FIRST — before the pane, before
+	// the line. Whether the message already arrived has nothing to do with what the
+	// composer looks like now or with whose turn it is to be delivered.
+	witnessed := q.Witness != nil && q.Witness(rec.To, rec.Msg, time.Unix(0, int64(rec.TS*1e9)))
+	if witnessed || rec.Cleanup {
+		q.settleDelivered(ctx, target, rec, line, report)
+		return
+	}
+	if held := line.hold(); held != "" {
+		q.remember(rec.path, rec.Message, held, report)
+		return
+	}
+	// A record that may never be pasted again gets no further than this. The witness
+	// above is its only way to a "delivered" close; everything below exists to put
+	// text into a pane, and for this record that is precisely what must not happen.
+	if rec.NoRepaste {
+		if !q.settleUnrepasted(rec.path, rec.Message, report) {
+			line.block(rec.ID)
+		}
+		return
+	}
+	// From here on the pane is touched, so the pane belongs to this process alone:
+	// capture, verify, paste, submit and verify are one critical section. Without it
+	// another bp pasting into the same composer turns two messages into one (the
+	// digest/instruction merge of 2026-08-17).
+	release, err := q.lockPane(rec.To)
+	if err != nil {
+		q.remember(rec.path, rec.Message, paneLockReason(err), report)
+		line.block(rec.ID)
+		return
+	}
+	defer release()
+	pane, captureErr := target.Capture(ctx, rec.To)
+	paneAnsi, ansiErr := target.CaptureAnsi(ctx, rec.To)
+	if captureErr != nil || ansiErr != nil {
+		// Nothing is known about this pane, so nothing younger may pass it either.
+		line.block(rec.ID)
+		return
+	}
+	// Two gates, one verdict. The screen is asked first because it is free and
+	// answers for every pane type; the transcript is asked only when the screen says
+	// idle, and it is the one that sees a streaming turn. Both produce the SAME
+	// record reason: from the queue's side there is no difference between the two
+	// kinds of busy, and the reason a human reads should not depend on which gate
+	// happened to catch it.
+	if bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(rec.To)) {
+		q.remember(rec.path, rec.Message, bptmux.BlockedByBusyPane, report)
+		line.block(rec.ID)
+		return
+	}
+	// A non-empty composer used to end the attempt right here, and that is how the
+	// queue blocked itself: our OWN unsubmitted paste of this very message looked
+	// exactly like a busy human. Now the pane is asked WHY it cannot take the
+	// message, and an empty answer means Send may proceed — including when the
+	// composer holds text provably ours, which Send knows how to finish. Every other
+	// answer is recorded on the queue record, so a message that waits does not wait
+	// silently.
+	if reason := bptmux.ComposerBlockReason(paneAnsi, []string{rec.Msg}); reason != "" {
+		q.remember(rec.path, rec.Message, reason, report)
+		line.block(rec.ID)
+		return
+	}
+	// Backing off after a proven failure. The witness above already ran, so a
+	// message that did arrive still closes on time; only the PASTE waits.
+	if rec.NextTry > 0 && q.Now().Before(time.Unix(0, int64(rec.NextTry*1e9))) {
+		line.block(rec.ID)
+		return
+	}
+	// The pane is free: drop any stale reason before handing over to Send.
+	q.remember(rec.path, rec.Message, "", report)
+	message := rec.Message
+	if err := target.Send(ctx, rec.To, message.Msg); err != nil {
+		line.block(rec.ID)
+		if errors.Is(err, bptmux.ErrNotAgent) {
+			// The target dropped to a shell: leave the message PENDING (never lose
+			// it, never type into the shell) and report the skip. A later pass
+			// delivers it if the target becomes an agent again.
+			if report != nil {
+				report(fmt.Sprintf("msgq: %s -> %s skipped: target not an agent", message.ID, message.To))
+			}
+			return
+		}
+		if errors.Is(err, bptmux.ErrTyping) {
+			return
+		}
+		if errors.Is(err, bptmux.ErrBusy) {
+			// The pane started a turn between the capture above and the paste.
+			// Nothing was injected — this is the ordinary busy wait, recorded under
+			// the same reason the capture would have given.
+			q.remember(rec.path, message, bptmux.BlockedByBusyPane, report)
+			return
+		}
+		if errors.Is(err, bptmux.ErrNotReady) {
+			// PROVEN non-delivery (expired login, foreign composer): the message
+			// stays PENDING, but not unconditionally and not forever.
+			q.retryLater(rec.path, message, err, report)
+			return
+		}
+		if errors.Is(err, bptmux.ErrUnverified) {
+			// Injected and submitted, but nothing confirmed it either way. Closing
+			// the record here — the old behavior — is honest only when nobody could
+			// ever settle it: if the text never landed the message is silently LOST,
+			// and if it did land the transcript witness would have closed the record
+			// by itself. So whenever the witness could recognise this text, the
+			// record is KEPT OPEN and marked never-paste-again: no copy can come out
+			// of it, and the only remaining source of truth gets its chance.
+			//
+			// It also counts as a DELIVERY for this pass: something went into that
+			// composer, and nothing else may follow it until a later pass has seen
+			// the composer clear.
+			line.delivered = message.ID
+			if q.CanWitness != nil && q.CanWitness(message.Msg) {
+				message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
+				q.update(rec.path, message, report)
+				if report != nil {
+					report(fmt.Sprintf("delivery UNVERIFIED: %s -> %s; tekrar paste edilmeyecek, transcript tanigi bekleniyor", message.ID, message.To))
+				}
+				return
+			}
+			// Too short for the witness to identify (a slash command): nothing will
+			// ever settle it, so waiting would only mean waiting forever.
+			if err := q.finish(rec.path, message, "delivered (unverified)"); err != nil && report != nil {
+				report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+			}
+			if report != nil {
+				report(fmt.Sprintf("delivered (UNVERIFIED): %s -> %s; check with bp peek %s", message.ID, message.To, message.To))
+			}
+			return
+		}
+		if report != nil {
+			report(fmt.Sprintf("msgq: could not send %s: %v", message.ID, err))
+		}
+		return
+	}
+	// Delivered. The line is closed for the rest of this pass even though this
+	// record is gone: the next message must be pasted by a pass whose own capture
+	// and witness have seen this one leave the composer. Two pastes in one pass is
+	// how one agent was handed three messages inside a single second.
+	line.delivered = message.ID
+	if err := q.finish(rec.path, message, "delivered"); err != nil {
+		if report != nil {
+			report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+		}
+		return
+	}
+	if report != nil {
+		report(fmt.Sprintf("delivered: %s -> %s", message.ID, message.To))
+	}
+}
+
+// settleDelivered closes a record the transcript has PROVEN delivered — but not
+// before the composer is clean.
+//
+// The order of those two steps is the fix. It used to close the record first and
+// then ask the pane to drop the copy that may still be hanging in the composer from
+// a paste whose Enter never registered; when that clearing could not run — a pane
+// that had begun a turn answers ErrBusy — the record was already gone, so nothing
+// could recognise the text as ours any more, and the agent's next turn submitted
+// it: a byte-identical duplicate (op-main, 2026-08-17, the same 441 characters at
+// 13:03:37 and 13:07:27). So the copy is dealt with FIRST. A record whose copy
+// could not be cleared stays PENDING under the Cleanup flag — never pasted again,
+// retried every pass, holding its line — and the witnessWindow ceiling closes it if
+// the pane never frees up, because a record must not wait forever either.
+func (q *Queue) settleDelivered(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
+	if line.delivered != "" {
+		// A paste went into this composer earlier in this pass. Pressing C-u on it
+		// now could erase that message instead of the delivered copy, so the
+		// cleanup — and with it the close — waits for the next pass.
+		q.remember(rec.path, rec.Message, deliveredThisPassReason(line.delivered), report)
+		line.block(rec.ID)
+		return
+	}
+	release, err := q.lockPane(rec.To)
+	if err != nil {
+		q.remember(rec.path, rec.Message, paneLockReason(err), report)
+		line.block(rec.ID)
+		return
+	}
+	cleared, clearErr := target.ClearDelivered(ctx, rec.To, []string{rec.Msg})
+	release()
+	if clearErr == nil {
+		// Either the hanging copy was erased, or there was nothing of ours in the
+		// composer at all. Both mean the record can be closed without leaving an
+		// unattributable copy behind.
+		if err := q.finish(rec.path, rec.Message, "delivered (found in transcript)"); err != nil {
+			if report != nil {
+				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
+			}
+			line.block(rec.ID)
+			return
+		}
+		if report != nil {
+			report(fmt.Sprintf("delivered earlier: %s -> %s (transcript'te bulundu, tekrar yazilmadi)", rec.ID, rec.To))
+			if cleared {
+				report(fmt.Sprintf("msgq: %s composer'inda asili duran teslim edilmis metin C-u ile temizlendi (%s)", rec.To, rec.ID))
+			}
+		}
+		return
+	}
+	// The copy could not be cleared, and the pane would not even say what it is
+	// holding (ErrBusy is answered before the composer is read). Assume the worst —
+	// a copy of a delivered message sitting in the composer — and keep the record,
+	// which is the only thing that can still identify that text as ours.
+	if q.Now().Sub(time.Unix(0, int64(rec.TS*1e9))) >= witnessWindow {
+		if err := q.finish(rec.path, rec.Message, "delivered (found in transcript)"); err != nil {
+			if report != nil {
+				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
+			}
+			line.block(rec.ID)
+			return
+		}
+		if report != nil {
+			report(fmt.Sprintf("msgq: %s teslim edildi ama composer'daki kopya %s icinde temizlenemedi (%v); elle bak: bp peek %s",
+				rec.ID, witnessWindow, clearErr, rec.To))
+		}
+		return
+	}
+	message := rec.Message
+	message.Cleanup, message.NextTry = true, 0
+	message.Reason = cleanupReason
+	q.update(rec.path, message, report)
+	if !rec.Cleanup && report != nil {
+		// Said once, when the state is entered: every later pass repeats the attempt
+		// silently until it works or the ceiling closes the record.
+		report(fmt.Sprintf("msgq: %s teslim edildi (transcript) ama %s composer'indaki kopya temizlenemedi (%v); kayit temizlik icin acik tutuluyor",
+			rec.ID, rec.To, clearErr))
+	}
+	line.block(rec.ID)
 }
 
 func (q *Queue) Cleanup() error {

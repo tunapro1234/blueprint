@@ -1699,6 +1699,242 @@ func TestOpenFlagsRequireValues(t *testing.T) {
 	}
 }
 
+// openTestTmux stands in for tmux during `bp open`. It differs from fakeTmux in
+// the two things the open flow turns on: has-session answers from a marker file
+// that new-session creates, so the fake gains and reports real session state,
+// and new-session copies the agentbook aside first, which is the only way to see
+// what the book said at the moment the session came up.
+//
+// newSessionFails makes new-session refuse without leaving a session behind.
+func openTestTmux(t *testing.T, bookPath, pane string, newSessionFails bool) (*bptmux.Client, string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux")
+	session := filepath.Join(dir, "session")
+	snapshot := filepath.Join(dir, "book-at-new-session.json")
+	newSession := "cp " + bookPath + " " + snapshot + "; touch " + session + "; exit 0"
+	if newSessionFails {
+		newSession = "cp " + bookPath + " " + snapshot + "; exit 1"
+	}
+	script := "#!/bin/sh\ncase \"$1\" in\n" +
+		"has-session) if [ -f " + session + " ]; then exit 0; fi; exit 1 ;;\n" +
+		"new-session) " + newSession + " ;;\n" +
+		"capture-pane) printf '" + pane + "\\n' ;;\n" +
+		"display-message) echo claude ;;\n" +
+		"*) : ;;\nesac\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}, session, snapshot
+}
+
+func openTestBook(t *testing.T, dir, status string) string {
+	t.Helper()
+	t.Setenv("AGENTBOOK", "")
+	path := filepath.Join(dir, "agentbook.json")
+	content := fmt.Sprintf("{\"agents\":[{\"name\":\"server-main\",\"folder\":\"%s\"},"+
+		"{\"name\":\"ghost\",\"folder\":\"%s\",\"parent\":\"server-main\",\"status\":\"%s\"}]}\n", dir, dir, status)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func bookStatus(t *testing.T, path, name string) string {
+	t.Helper()
+	file, err := book.Load(path)
+	if err != nil {
+		t.Fatalf("load %s: %v", path, err)
+	}
+	for _, agent := range file.Agents {
+		if agent.Name == name {
+			return agent.Status
+		}
+	}
+	t.Fatalf("%s is not in %s", name, path)
+	return ""
+}
+
+func openTestApp(t *testing.T, bookPath string, client *bptmux.Client) *app {
+	t.Helper()
+	return &app{
+		ctx:    context.Background(),
+		config: bpconfig.Config{Agentbooks: []string{bookPath}, StateDir: t.TempDir()},
+		tmux:   client,
+		out:    testOutput(t),
+		err:    testOutput(t),
+	}
+}
+
+// The gap between "tmux session is up" and "the book knows" is where two agents
+// were lost: the book still said closed, so bp status hid a running agent. The
+// book must say "opening" for the whole of that gap, and only then "open".
+func TestOpenRecordsOpeningBeforeTheSessionExists(t *testing.T) {
+	dir := t.TempDir()
+	bookPath := openTestBook(t, dir, "closed")
+	client, session, snapshot := openTestTmux(t, bookPath, "  ›  ", false)
+	a := openTestApp(t, bookPath, client)
+
+	if err := a.open([]string{"ghost", dir, "--codex", "--no-prompt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(session); err != nil {
+		t.Fatalf("no session was started: %v", err)
+	}
+	if got := bookStatus(t, snapshot, "ghost"); got != "opening" {
+		t.Fatalf("book said %q when the session came up, want opening", got)
+	}
+	if got := bookStatus(t, bookPath, "ghost"); got != "open" {
+		t.Fatalf("book=%q after a finished open, want open", got)
+	}
+}
+
+// A refused open must not leave "opening" behind forever: with tmux reachable and
+// no session to show for it, "closed" is a fact again.
+func TestOpenRollsBackToClosedWhenTmuxRefuses(t *testing.T) {
+	dir := t.TempDir()
+	bookPath := openTestBook(t, dir, "closed")
+	client, session, snapshot := openTestTmux(t, bookPath, "  ›  ", true)
+	a := openTestApp(t, bookPath, client)
+
+	if err := a.open([]string{"ghost", dir, "--codex", "--no-prompt"}); err == nil {
+		t.Fatal("open succeeded although new-session failed")
+	}
+	if _, err := os.Stat(session); err == nil {
+		t.Fatal("a session was started after all")
+	}
+	// The snapshot proves the rollback undid a real write rather than nothing.
+	if got := bookStatus(t, snapshot, "ghost"); got != "opening" {
+		t.Fatalf("book=%q at new-session time, want opening", got)
+	}
+	if got := bookStatus(t, bookPath, "ghost"); got != "closed" {
+		t.Fatalf("book=%q after a refused open, want closed", got)
+	}
+}
+
+// The measured failure: `bp open` is interrupted after the session exists. The
+// entry has to stay "opening" — the honest "I do not know" — and bp status has to
+// show it, because "closed" here is the lie that hid a running agent for weeks.
+func TestInterruptedOpenLeavesOpeningVisibleInStatus(t *testing.T) {
+	dir := t.TempDir()
+	bookPath := openTestBook(t, dir, "closed")
+	// A pane that never looks ready keeps Open in its wait loop, where the
+	// interruption lands — the same place a timeout or a Ctrl-C would.
+	client, session, _ := openTestTmux(t, bookPath, "  starting up  ", false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.Sleep = func(time.Duration) { cancel() }
+	a := openTestApp(t, bookPath, client)
+	a.ctx = ctx
+
+	if err := a.open([]string{"ghost", dir, "--codex", "--no-prompt"}); err == nil {
+		t.Fatal("interrupted open reported success")
+	}
+	if _, err := os.Stat(session); err != nil {
+		t.Fatalf("the session should have survived the interruption: %v", err)
+	}
+	if got := bookStatus(t, bookPath, "ghost"); got != "opening" {
+		t.Fatalf("book=%q after an interrupted open, want opening", got)
+	}
+
+	fleet, err := book.LoadFleet([]string{bookPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := testOutput(t)
+	status := &app{
+		out: out,
+		loadFleet: func() (book.Fleet, map[string]book.State, error) {
+			return fleet, map[string]book.State{"ghost": {Alive: true}}, nil
+		},
+		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+	}
+	if err := status.status(nil); err != nil {
+		t.Fatal(err)
+	}
+	// Plain "opening": an admitted intermediate state is not a mismatch.
+	want := fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost", "idle", "-", "-", "opening", "")
+	if got := readTestOutput(t, out); !strings.Contains(got, want) {
+		t.Fatalf("status output:\n%s\nwant line:\n%q", got, want)
+	}
+}
+
+func mismatchStatusApp(t *testing.T) *app {
+	t.Helper()
+	fleet := book.Fleet{
+		Root:  "server-main",
+		Order: []string{"server-main", "ghost-running", "ghost-gone", "half-open"},
+		Agents: map[string]book.Agent{
+			"server-main": {Name: "server-main", Status: "open"},
+			// The kitap-manufacturing case: alive for weeks behind a closed entry.
+			"ghost-running": {Name: "ghost-running", Status: "closed"},
+			"ghost-gone":    {Name: "ghost-gone", Status: "open"},
+			"half-open":     {Name: "half-open", Status: "opening"},
+		},
+		Parents: map[string]string{"server-main": "", "ghost-running": "server-main", "ghost-gone": "server-main", "half-open": "server-main"},
+	}
+	states := map[string]book.State{
+		"server-main":   {Alive: true},
+		"ghost-running": {Alive: true},
+		"half-open":     {Alive: true},
+	}
+	return &app{
+		out:       testOutput(t),
+		loadFleet: func() (book.Fleet, map[string]book.State, error) { return fleet, states, nil },
+		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+	}
+}
+
+// Both directions of tmux-versus-book disagreement have to be visible on the row
+// itself; a reader who has to cross-check two columns will not.
+func TestStatusMarksBothDirectionsOfMismatch(t *testing.T) {
+	a := mismatchStatusApp(t)
+	if err := a.status(nil); err != nil {
+		t.Fatal(err)
+	}
+	got := readTestOutput(t, a.out)
+	for _, want := range []string{
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost-gone", "closed", "-", "-", "open", " !TMUX YOK"),
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost-running", "idle", "-", "-", "closed", " !TMUX ACIK"),
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "half-open", "idle", "-", "-", "opening", ""),
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "server-main", "idle", "-", "-", "open", ""),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status output:\n%s\nwant line:\n%q", got, want)
+		}
+	}
+}
+
+// Scripts read --json, so the alarm has to reach them too: the field appears only
+// when the two sides disagree, which is what makes its presence meaningful.
+func TestStatusJSONReportsMismatch(t *testing.T) {
+	a := mismatchStatusApp(t)
+	if err := a.status([]string{"--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Agents []map[string]any `json:"agents"`
+	}
+	raw := readTestOutput(t, a.out)
+	if err := json.Unmarshal([]byte(raw), &report); err != nil {
+		t.Fatalf("not one JSON object: %v\n%s", err, raw)
+	}
+	want := map[string]string{
+		"ghost-gone":    "tmux-closed-book-open",
+		"ghost-running": "tmux-open-book-closed",
+	}
+	seen := map[string]string{}
+	for _, agent := range report.Agents {
+		name, _ := agent["name"].(string)
+		if mismatch, ok := agent["mismatch"]; ok {
+			seen[name], _ = mismatch.(string)
+		}
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("mismatch fields=%v, want %v", seen, want)
+	}
+}
+
 // fakeTmux writes a shell script that stands in for the tmux binary, so delivery
 // can be exercised end to end (pane checks, queue records, printed lines) without
 // ever touching a live session. Every pane capture returns paneScript's output.

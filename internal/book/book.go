@@ -508,6 +508,13 @@ type Registration struct {
 	Role   string
 }
 
+// SetStatus records an agent's status in whichever book holds it, creating the
+// entry when no book does. The status is stored as written and never validated
+// here: readers display whatever they find and only ever compare it, so the
+// vocabulary can grow without a migration. Today it is "open", "closed" and
+// "opening" — the last one meaning a `bp open` that started but has not been
+// confirmed, which is why an unknown status must stay harmless to old readers
+// rather than be rejected by new ones.
 func SetStatus(paths []string, name, status, folder string, reg Registration) error {
 	paths = Paths(paths)
 	if len(paths) == 0 {

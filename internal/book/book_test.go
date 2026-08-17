@@ -44,6 +44,40 @@ func TestSetStatusNoopAndPreservesFields(t *testing.T) {
 	}
 }
 
+// The status vocabulary is open: "opening" (a bp open in flight) has to round
+// trip like any other, and a status this binary has never heard of must survive
+// a write untouched — that is the same guarantee read from the other side, and it
+// is what keeps a book written by a newer bp readable by an older one.
+func TestSetStatusCarriesOpeningAndUnknownStatuses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentbook.json")
+	writeBookFile(t, path, map[string]any{"agents": []any{
+		map[string]any{"name": "ada", "folder": "/srv/ada", "status": "closed"},
+		map[string]any{"name": "future", "folder": "/srv/future", "status": "hibernating"},
+	}})
+
+	if err := SetStatus([]string{path}, "ada", "opening", "/srv/ada", Registration{Sender: "server-main"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := findAgent(t, path, "ada"); got.Status != "opening" {
+		t.Fatalf("ada=%+v, want status opening", got)
+	}
+	if got := findAgent(t, path, "future"); got.Status != "hibernating" {
+		t.Fatalf("unknown status was rewritten: %+v", got)
+	}
+
+	// A second write settles it, so "opening" is a passing state and not a trap.
+	if err := SetStatus([]string{path}, "ada", "open", "/srv/ada", Registration{Sender: "server-main"}); err != nil {
+		t.Fatal(err)
+	}
+	fleet, err := LoadFleet([]string{path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fleet.Agents["ada"].Status != "open" || fleet.Agents["future"].Status != "hibernating" {
+		t.Fatalf("fleet=%+v, want ada open and future hibernating", fleet.Agents)
+	}
+}
+
 func TestSetStatusNewRecordGetsParent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agentbook.json")
 	if err := os.WriteFile(path, []byte("{\"agents\":[]}\n"), 0644); err != nil {

@@ -1088,7 +1088,7 @@ func statusTestApp(t *testing.T) *app {
 		},
 		Parents: map[string]string{"server-main": "", "alpha": "server-main", "closed-agent": "alpha"},
 	}
-	states := map[string]book.State{"server-main": {Alive: true}, "alpha": {Alive: true, Busy: true}}
+	states := map[string]book.State{"server-main": {Alive: true}, "alpha": {Alive: true, Busy: true, ScreenBusy: true}}
 	cacheStates := map[string]bpcache.State{
 		"alpha": {Known: true, Age: 90 * time.Second, CtxTokens: 312_000, LastHumanAge: 25 * time.Hour, Model: "claude-opus-5"},
 		// Unknown transcript: no numbers may be invented for it.
@@ -1138,6 +1138,10 @@ func TestStatusJSON(t *testing.T) {
 		"name": "alpha", "tmux": "working", "status": "open", "folder": "/srv/alpha", "parent": "server-main",
 		"ctx_tokens": float64(312_000), "cache_age_seconds": float64(90), "last_human_age_seconds": float64(90_000),
 		"model": "claude-opus-5",
+		// The composite's two components, exposed so "which gate spoke?" is
+		// answerable from outside (2026-08-18): alpha's verdict came from the
+		// screen, and the transcript gate's silence is a fact, not an omission.
+		"busy_screen": true, "busy_turnopen": false,
 	}
 	if !reflect.DeepEqual(alpha, want) {
 		t.Fatalf("alpha=%+v\nwant=%+v", alpha, want)

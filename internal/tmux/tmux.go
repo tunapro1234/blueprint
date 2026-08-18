@@ -380,9 +380,13 @@ func busyRegion(pane string) []string {
 // on top of it (compact, the queue's "do not type into a working pane", the send
 // path's pre-flight check) silently became a no-op. That is the failure mode this
 // function must be read against — a detector that goes quiet is worse than one that
-// is wrong, so the daemon's "busy-sanity" loop now watches for exactly this shape
-// of drift (panes changing for a day while Busy never once fires) and files a
-// message instead of letting the next signature change go unnoticed for weeks.
+// is wrong, so the daemon's "busy-sanity" loop now measures THIS function against
+// the transcript gate (book.TurnOpen): panes the transcript proves mid-turn should
+// also read busy here at least occasionally, and a dozen proven-busy samples with
+// zero screen agreement means the signature has drifted again. (The first version
+// watched "panes changing for a day while Busy never fires" and false-alarmed on
+// a quiet night of point-sampling, 2026-08-18 — activity between sweeps is not
+// evidence about the instant a sweep looks.)
 //
 // What this function CANNOT see, and is not asked to: while a long assistant
 // message is being streamed, the TUI draws no spinner and no affordance at all —

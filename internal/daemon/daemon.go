@@ -392,34 +392,110 @@ func (s *Service) keepalive(ctx context.Context) error {
 // Deliberately dull about everything else: it presses nothing, touches no pane,
 // and its verdict is one message per day at most.
 //
-// It watches tmux.Busy ALONE and must keep doing so, even though the queue and
-// bp status now also consult book.TurnOpen. The transcript gate would answer
-// "busy" for the very panes whose screen signature had drifted, so folding it in
-// here would hide the drift from the one loop whose entire job is to see it: the
-// detector under test must stay the detector being read.
+// WHAT IT MEASURES, and why that changed on 2026-08-18. The first version judged
+// Busy against pane CONTENT CHANGE: "agent panes moved for a whole day while Busy
+// never said yes" raised the alarm. That rule fired on 2026-08-18 with the screen
+// signature perfectly intact — a live capture that day read
+// "* Zigzagging… (37s · ↓ 1.3k tokens)" (plain ASCII star, a two-line Tip block
+// wedged between it and the composer) and Busy returned true on it inside the
+// 8-row window. Three structural reasons, none of them drift:
+//
+//   - an hourly sweep is POINT sampling. Short turns on a quiet night are simply
+//     not there at the second the sweep looks, so LastBusySeen ages out;
+//   - the activity side has no such problem — hashes differ if the pane moved at
+//     ANY point BETWEEN two sweeps, so it keeps filling from turns the busy side
+//     could never have caught. The two observations are not sampled alike, and
+//     comparing them compares sampling rates as much as detectors;
+//   - the screen is blind for a whole phase by design (a streaming answer draws no
+//     indicator at all — see book.TurnOpen), so a stream-heavy day makes an
+//     entirely healthy screen gate look mute.
+//
+// So "activity without busy" is structurally open to false alarms, and a watchdog
+// that cries wolf is one nobody reads. What replaces it is CROSS-GATE COHERENCE.
+// There are two independent busy gates — the screen (bptmux.Busy) and the
+// transcript (book.TurnOpen) — and in a healthy fleet they largely overlap. Every
+// sweep in which some pane reads TurnOpen=true is a sample of "this agent is
+// mid-turn", i.e. evidence that the SCREEN should have been showing something too
+// at some point; the loop counts those samples and waits for a sweep in which one
+// pane satisfies BOTH gates at once. When that agreement stops happening while the
+// samples pile up, the screen signature has drifted — and this is provable in
+// hours rather than assumed from a day of silence.
+//
+// The counter is what makes the two failure modes separable. A genuinely quiet
+// fleet accumulates no TurnOpen samples at all, so there is no evidence, and no
+// alarm: exactly the false-alarm class above, gone. The streaming blind window
+// explains single samples but cannot explain twelve — tool and thinking phases are
+// the bulk of every turn and both draw the spinner, so twelve independent mid-turn
+// samples without one agreement is a signature change, not a statistic.
+//
+// The screen gate remains the detector UNDER TEST: TurnOpen is read only as the
+// witness that work existed, never as an answer to "is Busy working". LastBusySeen
+// and LastActivitySeen are still recorded because they are worth having in hand
+// during an incident, but nothing alarms on them any more.
 const (
 	// busySanityFile lives under StateDir next to jobs.json.
 	busySanityFile = "busy-sanity.json"
-	// busySanityWindow is both the "recent enough" span for the two observations
-	// and the alarm's own cooldown: a day is long enough that an ordinary quiet
-	// night (or a fleet-wide compact) can never look like drift.
+	// busySanityWindow is the alarm's cooldown: say it once a day, not hourly.
 	busySanityWindow = 24 * time.Hour
-	// busySanityMessage is written for a human, so it names the suspicion, the
-	// thing that is now untrustworthy, and where to look.
-	busySanityMessage = "bp: Busy() 24 saattir hic true donmedi ama pane'ler aktif — busy imzasi muhtemelen yine sessizce kaydi (Claude Code guncellemesi?). bp status Busy sutununa guvenme, internal/tmux Busy() imzalarini kontrol et."
+	// busySanityGateSamples is how much mid-turn evidence must go unmatched by the
+	// screen before the loop calls it drift. Twelve is chosen against the one thing
+	// that innocently produces unmatched samples — the streaming blind window —
+	// where a single sample is unremarkable and twelve in a row is not: streaming is
+	// a minority of a turn's wall clock, and these samples come from different
+	// sweeps and usually different panes.
+	busySanityGateSamples = 12
+	// busySanityGateSweepCap is the most one sweep may contribute to that count, and
+	// it is what makes the samples INDEPENDENT rather than merely numerous. A sweep
+	// reads every pane in one instant, so a twenty-agent fleet could in principle
+	// hand over twelve samples in a single frame — and a single frame is exactly what
+	// the streaming blind window can cover. A quarter of the threshold means at least
+	// four sweeps must speak before the count is full. It costs nothing in practice
+	// (a healthy hourly loop cannot reach twelve inside the silence clause anyway,
+	// and a drifted fleet keeps producing samples every hour) and it covers the two
+	// cases where sweeps are not an hour apart: repeated daemon restarts, and the
+	// first sweeps after this measure ships onto a state file that already carries an
+	// old observation start and no agreement.
+	busySanityGateSweepCap = busySanityGateSamples / 4
+	// busySanityGateSilence is how long the agreement must have been missing on top
+	// of that. It is the second, independent axis: the counter can fill quickly on a
+	// busy fleet, and this keeps a burst of samples inside one working hour from
+	// standing in for a lasting divergence. It also covers the fresh install, where
+	// there is no agreement yet and the observation start is measured from instead.
+	busySanityGateSilence = 6 * time.Hour
 )
+
+// busySanityMessage is written for a human, so it names the suspicion, the thing
+// that is now untrustworthy, where to look — and, just as important during an
+// incident, what still works: the queue and `bp status` OR both gates, so the
+// transcript gate is holding the fleet's busy verdicts up while the screen one is
+// suspect.
+func busySanityMessage(samples int) string {
+	return fmt.Sprintf("bp: ekran mesguliyet imzasi ile transcript gecidi %d ornektir ortusmuyor — ekran imzasi kaymis olabilir (Claude Code guncellemesi?); internal/tmux Busy() imzalarini kontrol et. bp status guvenilir (TurnOpen calisiyor).", samples)
+}
 
 // busySanityState is the whole memory of the loop. Timestamps are RFC3339 so the
 // file can be read by a human during an incident.
 type busySanityState struct {
 	// Since is when observation started (first run, or the run after an
-	// unreadable file). No alarm may fire before a full window has passed since
-	// then — on a fresh install there is simply not enough evidence yet.
+	// unreadable file). It stands in for LastGateAgree until the two gates have
+	// agreed once, so a fresh install cannot alarm out of its first hour.
 	Since string `json:"since,omitempty"`
-	// LastBusySeen: the last time ANY agent pane read as busy.
+	// TurnOpenSamples counts, since the last screen agreement, the panes seen
+	// mid-turn by the transcript gate. It is one running total for the fleet
+	// rather than a tally per pane: what is being counted is evidence that the
+	// screen had something to show, and any pane's turn is that evidence.
+	TurnOpenSamples int `json:"turn_open_samples,omitempty"`
+	// LastGateAgree: the last time ONE pane satisfied BOTH gates in ONE sweep.
+	// This is the fact whose absence is the alarm, and seeing it resets the count.
+	LastGateAgree string `json:"last_gate_agree,omitempty"`
+	// LastBusySeen: the last time ANY agent pane read as busy. Diagnostic only
+	// since 2026-08-18 — kept because it is the first thing worth knowing when the
+	// alarm does fire, but no longer able to raise one.
 	LastBusySeen string `json:"last_busy_seen,omitempty"`
 	// LastActivitySeen: the last time an agent pane's content DIFFERED from the
-	// previous sweep. This is the ground truth Busy is judged against.
+	// previous sweep. Also diagnostic only: it is sampled between sweeps while the
+	// busy side is sampled at them, which is what made the old rule fire on a
+	// healthy detector.
 	LastActivitySeen string `json:"last_activity_seen,omitempty"`
 	// LastAlarm enforces the one-per-window cooldown.
 	LastAlarm string `json:"last_alarm,omitempty"`
@@ -448,10 +524,20 @@ func (s *Service) busySanity(ctx context.Context) error {
 		return err
 	}
 	now := time.Now()
+	// The transcript gate needs each agent's folder, and the fleet changes under a
+	// long-running daemon, so the agentbooks are re-read every sweep — the same
+	// reason book.TurnOpenProbe re-reads them per call. TurnOpen is called directly
+	// instead of through the probe so one load serves the whole sweep. An
+	// unreadable book leaves an empty fleet, which resolves no folder, which yields
+	// no samples: the loop goes quiet rather than guessing, which is the only safe
+	// direction for a watchdog.
+	fleet, _ := book.LoadFleet(book.Paths(s.config.Agentbooks))
+	projects := bptmux.ClaudeProjectsRoot()
 	hashes := make(map[string]string, len(sessions))
-	busy, moved := false, false
+	busy, moved, agreed := false, false, false
+	samples := 0
 	for _, session := range sessions {
-		// Only agent panes count, on BOTH signals. A plain shell tailing a log
+		// Only agent panes count, on every signal. A plain shell tailing a log
 		// changes every second and can never be busy, and letting it feed the
 		// activity side would eventually raise an alarm about nothing — which is
 		// the one way a watchdog like this gets ignored.
@@ -465,8 +551,19 @@ func (s *Service) busySanity(ctx context.Context) error {
 		}
 		hash := paneHash(pane)
 		hashes[session] = hash
-		if bptmux.Busy(pane) {
+		screen := bptmux.Busy(pane)
+		if screen {
 			busy = true
+		}
+		// The two gates are read on the SAME pane in the SAME sweep, which is what
+		// makes agreement mean anything: a Codex pane (no session file) or an agent
+		// missing from the book answers false here and simply contributes nothing
+		// in either direction.
+		if book.TurnOpen(projects, fleet.Agents[session].Folder, session, now) {
+			samples++
+			if screen {
+				agreed = true
+			}
 		}
 		if previous, seen := state.PaneHashes[session]; seen && previous != hash {
 			moved = true
@@ -482,11 +579,13 @@ func (s *Service) busySanity(ctx context.Context) error {
 	if moved {
 		state.LastActivitySeen = now.Format(time.RFC3339)
 	}
+	state.observeGates(now, samples, agreed)
 	if state.alarmDue(now) {
 		state.LastAlarm = now.Format(time.RFC3339)
-		s.log.Print(busySanityMessage)
+		message := busySanityMessage(state.TurnOpenSamples)
+		s.log.Print(message)
 		if s.queue != nil {
-			if _, err := s.queue.Enqueue("server-main", "bp", busySanityMessage); err != nil {
+			if _, err := s.queue.Enqueue("server-main", "bp", message); err != nil {
 				s.log.Printf("busy-sanity: alarm could not be queued: %v", err)
 			}
 		}
@@ -499,28 +598,63 @@ func (s *Service) busySanity(ctx context.Context) error {
 	return writeBusySanity(path, state)
 }
 
-// alarmDue is the whole decision, kept apart from the sweep so it can be read —
-// and tested — without tmux. All four clauses must hold:
+// observeGates folds one sweep's readings into the running measure, and is kept
+// apart from the sweep for the same reason alarmDue is: it can then be read, and
+// tested, without tmux.
 //
-//   - a full window of observation has passed (never on a fresh install);
-//   - agent panes moved within the window (there was work to detect);
-//   - Busy has NOT been true within the window (the detector said nothing);
-//   - no alarm was raised within the window (say it once a day, not hourly).
-//
-// A missing or unreadable timestamp always reads as "not recent", which keeps the
-// two directions honest: an absent LastBusySeen is exactly the drift being looked
-// for, while an absent activity stamp cannot raise an alarm on its own.
-func (b busySanityState) alarmDue(now time.Time) bool {
-	started, err := time.Parse(time.RFC3339, b.Since)
-	if err != nil || now.Sub(started) < busySanityWindow {
-		return false
+// One agreement anywhere in the fleet clears the whole count, including samples
+// taken from other panes in the same sweep. The question the counter asks is
+// whether the screen signature still matches ANY live turn, and one match answers
+// it — carrying a remainder forward would only make the next alarm fire early on
+// evidence that has already been contradicted.
+func (b *busySanityState) observeGates(now time.Time, samples int, agreed bool) {
+	if agreed {
+		b.LastGateAgree = now.Format(time.RFC3339)
+		b.TurnOpenSamples = 0
+		return
 	}
-	return recentStamp(b.LastActivitySeen, now) && !recentStamp(b.LastBusySeen, now) && !recentStamp(b.LastAlarm, now)
+	if samples > busySanityGateSweepCap {
+		samples = busySanityGateSweepCap
+	}
+	b.TurnOpenSamples += samples
 }
 
-// recentStamp reports whether an RFC3339 stamp lies within the window before now.
-// A stamp in the FUTURE (a clock step) counts as recent: that direction only ever
-// delays an alarm, never invents one.
+// alarmDue is the whole decision, kept apart from the sweep so it can be read —
+// and tested — without tmux. Three clauses, all of them required:
+//
+//   - enough unmatched mid-turn evidence has piled up (there was something for
+//     the screen to show, repeatedly, and it never showed it);
+//   - the gates have not agreed for busySanityGateSilence — measured from the last
+//     agreement, or from the start of observation when there has never been one;
+//   - no alarm was raised within the cooldown (say it once a day, not hourly).
+//
+// The counter alone is not the verdict and neither is the elapsed time: samples
+// say the evidence exists, hours say the divergence has lasted. A quiet fleet
+// fails the first clause, a busy morning of one drifted hour fails the second.
+//
+// An unparsable or missing timestamp reads as "cannot tell", and cannot-tell never
+// alarms: with no observation start and no agreement on record there is nothing to
+// measure the silence against. A stamp in the FUTURE (a clock step) only delays.
+func (b busySanityState) alarmDue(now time.Time) bool {
+	if b.TurnOpenSamples < busySanityGateSamples || recentStamp(b.LastAlarm, now) {
+		return false
+	}
+	// Since is the fallback rather than a separate clause: before the first
+	// agreement it IS the moment from which the gates have been out of step.
+	agreed := b.LastGateAgree
+	if agreed == "" {
+		agreed = b.Since
+	}
+	when, err := time.Parse(time.RFC3339, agreed)
+	if err != nil {
+		return false
+	}
+	return now.Sub(when) >= busySanityGateSilence
+}
+
+// recentStamp reports whether an RFC3339 stamp lies within the cooldown window
+// before now. A stamp in the FUTURE (a clock step) counts as recent: that
+// direction only ever delays an alarm, never invents one.
 func recentStamp(value string, now time.Time) bool {
 	when, err := time.Parse(time.RFC3339, value)
 	if err != nil {

@@ -653,7 +653,14 @@ type statusAgent struct {
 	Tmux string `json:"tmux"`
 	// Mismatch is written only when tmux and the book disagree, so a consumer can
 	// treat the field's presence as the alarm.
-	Mismatch            string `json:"mismatch,omitempty"`
+	Mismatch string `json:"mismatch,omitempty"`
+	// BusyScreen and BusyTurnOpen decompose the busy verdict into its two gates
+	// (the pane's spinner row and the transcript's open turn), present only for
+	// live sessions. They exist so the next "has the screen signature drifted?"
+	// question can be answered from outside with one `bp status --json` instead
+	// of by measuring the composite and guessing which gate spoke (2026-08-18).
+	BusyScreen          *bool  `json:"busy_screen,omitempty"`
+	BusyTurnOpen        *bool  `json:"busy_turnopen,omitempty"`
 	Status              string `json:"status,omitempty"`
 	Folder              string `json:"folder,omitempty"`
 	Parent              string `json:"parent,omitempty"`
@@ -683,6 +690,10 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 			Status:   agent.Status,
 			Folder:   agent.Folder,
 			Parent:   fleet.Parents[name],
+		}
+		if alive {
+			screen, turn := state.ScreenBusy, state.TurnBusy
+			row.BusyScreen, row.BusyTurnOpen = &screen, &turn
 		}
 		if cacheState, ok := cacheStates[name]; ok {
 			if cacheState.Known {

@@ -621,6 +621,16 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 type State struct {
 	Alive bool
 	Busy  bool
+	// ScreenBusy and TurnBusy are the two gates Busy is composed of, kept
+	// separately because a composite that hides its components cannot be
+	// diagnosed from outside. On 2026-08-18 an operator measured `bp status`
+	// saying "working", attributed the answer to the SCREEN gate, and reported
+	// the screen signature as drifted — when the answer had come from the
+	// transcript gate all along. Exposing both lets anyone run the
+	// distinguishing test themselves instead of measuring the composite and
+	// guessing which component spoke.
+	ScreenBusy bool
+	TurnBusy   bool
 	// Dead: the tmux session is up but its pane no longer runs an agent —
 	// the CLI exited and left a bare shell behind. Not the same as idle.
 	Dead bool
@@ -649,10 +659,17 @@ func LiveStates(ctx context.Context, client *bptmux.Client, fleet *Fleet) (map[s
 		// is one stat per idle agent, and a bounded tail read only for the ones
 		// whose session file was touched in the last quarter of an hour.
 		screenBusy := captureErr == nil && bptmux.Busy(pane)
+		// Both gates are evaluated even when the screen already said busy: the
+		// per-gate fields in `bp status --json` exist precisely so the two can be
+		// compared from outside, and a short-circuited TurnOpen would make the
+		// comparison lie for every screen-busy row. The extra cost is one stat.
+		turnBusy := TurnOpen(projectsRoot, fleet.Agents[name].Folder, name, now)
 		states[name] = State{
-			Alive: true,
-			Busy:  screenBusy || TurnOpen(projectsRoot, fleet.Agents[name].Folder, name, now),
-			Dead:  commands != nil && !bptmux.IsAgentCommand(commands[name]),
+			Alive:      true,
+			Busy:       screenBusy || turnBusy,
+			ScreenBusy: screenBusy,
+			TurnBusy:   turnBusy,
+			Dead:       commands != nil && !bptmux.IsAgentCommand(commands[name]),
 		}
 	}
 	return states, nil

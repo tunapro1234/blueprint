@@ -62,20 +62,34 @@ const (
 // with its first two characters eaten.
 var truncatedEnvelope = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,23}\] `)
 
-// envelopeLine matches a whole bp envelope at the beginning of a line. Lower case
-// only: agent names are lower case, and the restriction keeps quoted prose from
-// counting.
-var envelopeLine = regexp.MustCompile(`(?m)^\[[a-z0-9._-]{1,24}\] `)
+// envelopeLine matches what could be a bp envelope at the beginning of a line:
+// a letter-first name of at least three characters. The first version accepted
+// `[a-z0-9._-]{1,24}` — digits included — and its first real output was a false
+// alarm: a sender writing a NUMBERED LIST ("[1] WIREFRAME ... [2] ...") was read
+// as a record with five envelopes (probot-studio, 2026-08-20). Agent names are
+// never bare digits, and itemized reports are everyday traffic on this fleet.
+//
+// The pattern alone is still not the verdict: a candidate only COUNTS as an
+// envelope when its name exists in the agentbook (see mergedShape). "[not]" or
+// "[ok]" in prose match the shape but no agent answers to them, and the false
+// alarm they would raise is the expensive kind — a watchdog whose alarms get
+// waved off as "list numbers again" has already stopped guarding the real merge.
+var envelopeLine = regexp.MustCompile(`(?m)^\[([a-z][a-z0-9._-]{2,23})\] `)
 
 // mergedShape names the delivery defect in a received text, or "" when the text
-// looks like one message.
+// looks like one message. known is the set of agent names the fleet answers to:
+// an envelope candidate whose name is not in it is prose, not a delivery.
+//
+// The truncated-envelope shape deliberately does NOT consult known — a clipped
+// name ("t-business") is by definition not in the book, and requiring membership
+// would blind the detector to exactly the damage it exists to see.
 //
 // Carriage returns are folded into newlines first, because that is how a bracketed
 // paste's line breaks are RECORDED: the transcript stores "...Agu]\r1) (16 Agu..."
 // for a message that held newlines (measured on q163159804 and again here). Without
 // the folding, every multi-line delivery would look like a single line and neither
 // shape could be seen at all.
-func mergedShape(text string) string {
+func mergedShape(text string, known map[string]bool) string {
 	normalized := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	// A leading newline is part of the measured damage rather than a reason to look
 	// elsewhere: the record began "\nt-business] ...".
@@ -87,7 +101,13 @@ func mergedShape(text string) string {
 	if truncatedEnvelope.MatchString(first) {
 		return "kirpik zarf (ilk satir '[' olmadan ']' ile aciliyor)"
 	}
-	if len(envelopeLine.FindAllStringIndex(normalized, 3)) >= 2 {
+	count := 0
+	for _, match := range envelopeLine.FindAllStringSubmatch(normalized, -1) {
+		if known[match[1]] {
+			count++
+		}
+	}
+	if count >= 2 {
 		return "tek kayitta iki [gonderen] zarfi"
 	}
 	return ""
@@ -104,6 +124,10 @@ func (s *Service) mergeScan(sessions []string, state *busySanityState, now time.
 	fleet, err := book.LoadFleet(book.Paths(s.config.Agentbooks))
 	if err != nil {
 		return
+	}
+	known := make(map[string]bool, len(fleet.Agents))
+	for name := range fleet.Agents {
+		known[name] = true
 	}
 	seen := make(map[string]bool, len(state.MergeSeen))
 	for _, key := range state.MergeSeen {
@@ -142,7 +166,7 @@ func (s *Service) mergeScan(sessions []string, state *busySanityState, now time.
 			continue
 		}
 		for _, record := range book.RecentUserTexts(bptmux.ClaudeProjectsRoot(), folder, session, since) {
-			shape := mergedShape(record.Text)
+			shape := mergedShape(record.Text, known)
 			if shape == "" {
 				continue
 			}

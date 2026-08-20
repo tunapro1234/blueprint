@@ -33,6 +33,7 @@ const (
 )
 
 func TestMergedShapeCatchesOnlyMeasuredDamage(t *testing.T) {
+	known := map[string]bool{"probot-business": true, "server-main": true, "probot-tracking": true, "ada": true}
 	cases := []struct {
 		name  string
 		text  string
@@ -45,10 +46,17 @@ func TestMergedShapeCatchesOnlyMeasuredDamage(t *testing.T) {
 		{"bare slash command", "/compact", false},
 		{"prose with a bracket in it", "3] maddesini de ekledim, listeye bak", false},
 		{"quoted envelope inside a line", "sana gelen mesaj soyleydi: [ada] bunu yap", false},
+		// The detector's first real output was a false alarm on this shape
+		// (probot-studio, 2026-08-20): a sender writing a numbered list. "[1]"
+		// is not an agent, and itemized reports are everyday traffic.
+		{"numbered list is not a second envelope", "[probot-tracking] probot-studio: TUNA ONAYI GELDI - UYGULAMA PAKETI (4 parca). Oncelik sirasiyla:\n[1] WIREFRAME-ADA KAYIT akisi\n[2] olcum paneli\n[3] geri bildirim\n[4] yayina alma", false},
+		// A shape-valid name nobody answers to is prose, not a delivery: only
+		// agentbook membership makes a candidate an envelope.
+		{"unknown name is not an envelope", "[server-main] mesaj govdesi\n[not] bu bir uyari etiketi\n[ornek] bu da prose", false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			shape := mergedShape(testCase.text)
+			shape := mergedShape(testCase.text, known)
 			if (shape != "") != testCase.alarm {
 				t.Fatalf("mergedShape = %q, want alarm=%v", shape, testCase.alarm)
 			}

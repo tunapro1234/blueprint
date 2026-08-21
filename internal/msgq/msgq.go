@@ -683,7 +683,30 @@ func whyNotDelivered(err error) string {
 // It reports whether the record was CLOSED, because a record still waiting keeps
 // its target's line shut: nothing younger may overtake a message whose fate is
 // undecided.
-func (q *Queue) settleUnrepasted(path string, message Message, report func(string)) bool {
+// noticeHomes maps a PLUMBING identity to the tmux session its notices can
+// actually reach. The identities the force-busy allowlist accepts are labels,
+// not sessions: the WhatsApp bridge signs as "whatsapp" (bridge.js pins
+// AGENT=whatsapp) while its agent's session is "server-whatsapp" — so a notice
+// queued to "whatsapp" targets a session that does not exist and is silently
+// cancelled on the next pass as "target closed". An undeliverable notification
+// is not a notification (server-whatsapp, 2026-08-21, who found this before the
+// first notice was ever lost). The set is closed and small on purpose: it
+// mirrors the allowlist, and ordinary agents sign with their session name and
+// need no mapping.
+var noticeHomes = map[string]string{
+	"whatsapp": "server-whatsapp",
+	"bp":       "server-main",
+}
+
+// noticeHome resolves where a sender's notices should go.
+func noticeHome(from string) string {
+	if home, ok := noticeHomes[from]; ok {
+		return home
+	}
+	return from
+}
+
+func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string, message Message, report func(string)) bool {
 	if q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
 		return false
 	}
@@ -701,12 +724,26 @@ func (q *Queue) settleUnrepasted(path string, message Message, report func(strin
 		// this change exists to end.
 		message.Notified = true
 		q.update(path, message, report)
-		if _, err := q.enqueueLocked(message.From, "bp", noticeText(message), enqueueOptions{}); err != nil {
+		home := noticeHome(message.From)
+		switch {
+		case target != nil && !target.HasSession(ctx, home):
+			// A notice queued to a session that does not exist would be silently
+			// cancelled as "target closed" on the next pass — the notification
+			// channel swallowing its own notifications. Say it LOUDLY instead of
+			// queueing it into the void; the record's own closing line below still
+			// carries the failed delivery.
 			if report != nil {
-				report(fmt.Sprintf("msgq: %s icin gonderene haber verilemedi: %v", message.ID, err))
+				report(fmt.Sprintf("msgq: %s icin gonderene haber TESLIM EDILEMIYOR — %q icin oturum yok (from=%q); teslimat sonucu yalnizca bu log'da",
+					message.ID, home, message.From))
 			}
-		} else if report != nil {
-			report(fmt.Sprintf("msgq: %s teslimati dogrulanamadi; gonderen %s haberdar edildi", message.ID, message.From))
+		default:
+			if _, err := q.enqueueLocked(home, "bp", noticeText(message), enqueueOptions{}); err != nil {
+				if report != nil {
+					report(fmt.Sprintf("msgq: %s icin gonderene haber verilemedi: %v", message.ID, err))
+				}
+			} else if report != nil {
+				report(fmt.Sprintf("msgq: %s teslimati dogrulanamadi; gonderen %s haberdar edildi (%s)", message.ID, message.From, home))
+			}
 		}
 	}
 	if err := q.finish(path, message, status); err != nil {
@@ -1004,7 +1041,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// above is its only way to a "delivered" close; everything below exists to put
 	// text into a pane, and for this record that is precisely what must not happen.
 	if rec.NoRepaste {
-		if !q.settleUnrepasted(rec.path, rec.Message, report) {
+		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {
 			line.block(rec.ID)
 			if rec.ForceBusy {
 				// A forced message whose paste could not be confirmed holds the line

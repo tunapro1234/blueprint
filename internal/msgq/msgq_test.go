@@ -25,9 +25,19 @@ type fakeTarget struct {
 	// forced lists the deliveries that came through SendForce — the door that may
 	// type into a working pane.
 	forced []string
+	// sessions, when non-nil, overrides alive per session name.
+	sessions map[string]bool
 }
 
-func (f *fakeTarget) HasSession(context.Context, string) bool         { return f.alive }
+func (f *fakeTarget) HasSession(_ context.Context, name string) bool {
+	// sessions, when set, answers per name — the notice-home tests need a world
+	// where the TARGET exists but the sender's label does not (the real shape:
+	// the bridge signs "whatsapp", its session is "server-whatsapp").
+	if f.sessions != nil {
+		return f.sessions[name]
+	}
+	return f.alive
+}
 func (f *fakeTarget) Capture(context.Context, string) (string, error) { return f.pane, nil }
 func (f *fakeTarget) Send(_ context.Context, to, text string) error {
 	// calls counts every ATTEMPT, including the failing ones: the retry bounds and
@@ -595,6 +605,58 @@ func TestDispatchKeepsProvenFailurePendingAndClosesUnverified(t *testing.T) {
 // which is the condition for holding an unconfirmed delivery open instead of
 // closing it blind.
 const witnessable = "[ders-main] tek mesaj uc kere teslim edildi; bu kaydin kapanmasi transcript tanigina bagli"
+
+// The bridge signs its messages "whatsapp" but lives in the session
+// "server-whatsapp": a notice queued to the LABEL targets a session that does
+// not exist and would be cancelled as "target closed" on the next pass — the
+// notification channel swallowing its own notifications. Found by
+// server-whatsapp on 2026-08-21, before the first notice was ever lost.
+func TestNoticeFromThePlumbingReachesItsHome(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	q := New(t.TempDir())
+	q.Now = func() time.Time { return now }
+	id, err := q.EnqueueUnverified("target", "whatsapp", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(witnessWindow + time.Minute)
+	target := &fakeTarget{pane: "❯  ", sessions: map[string]bool{"target": true, "server-whatsapp": true}}
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := q.List()
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("messages=%v err=%v", messages, err)
+	}
+	if messages[0].To != "server-whatsapp" || !strings.Contains(messages[0].Msg, id) {
+		t.Fatalf("notice went to %q, want the plumbing's HOME session: %+v", messages[0].To, messages[0])
+	}
+}
+
+// A sender whose label resolves to NO session gets its warning in the LOG, not
+// as a record queued into the void: an undeliverable notification is not a
+// notification, and pretending otherwise hides exactly the failures the notice
+// channel exists to surface.
+func TestUndeliverableNoticeIsLoudInsteadOfQueued(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	q := New(t.TempDir())
+	q.Now = func() time.Time { return now }
+	if _, err := q.EnqueueUnverified("target", "ghost-sender", witnessable); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(witnessWindow + time.Minute)
+	target := &fakeTarget{pane: "❯  ", sessions: map[string]bool{"target": true}}
+	var reports []string
+	if err := q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+		t.Fatal(err)
+	}
+	if messages, err := q.List(); err != nil || len(messages) != 0 {
+		t.Fatalf("a doomed notice was queued anyway: %v (err=%v)", messages, err)
+	}
+	if joined := strings.Join(reports, "\n"); !strings.Contains(joined, "TESLIM EDILEMIYOR") {
+		t.Fatalf("no loud line about the undeliverable notice:\n%s", joined)
+	}
+}
 
 // heldQueue is a queue whose transcript witness can identify long messages but
 // finds nothing yet — the state every unconfirmed delivery starts in.

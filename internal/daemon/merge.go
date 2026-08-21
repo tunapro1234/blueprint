@@ -101,9 +101,20 @@ func mergedShape(text string, known map[string]bool) string {
 	if truncatedEnvelope.MatchString(first) {
 		return "kirpik zarf (ilk satir '[' olmadan ']' ile aciliyor)"
 	}
+	// Envelopes BELOW a quotation marker do not count. Agents legitimately hand
+	// history over verbatim — "DEVIR: ... --- ORIJINAL METIN (17 Agu) ---
+	// [probot-business] ..." — and the quoted original naturally begins with its
+	// own bp envelope. Nine such handovers fired this alarm in one day
+	// (2026-08-21, ada), and a detector that accumulates false positives teaches
+	// its reader to silence it, which is worse than a silent detector. The real
+	// merge class is not lost: a paste race clips or interleaves (shape one), and
+	// a raw two-message merge carries no separator line between the envelopes.
 	count := 0
-	for _, match := range envelopeLine.FindAllStringSubmatch(normalized, -1) {
-		if known[match[1]] {
+	for _, line := range strings.Split(normalized, "\n") {
+		if quoteSeparator.MatchString(line) {
+			break
+		}
+		if match := envelopeLine.FindStringSubmatch(line); match != nil && known[match[1]] {
 			count++
 		}
 	}
@@ -112,6 +123,13 @@ func mergedShape(text string, known map[string]bool) string {
 	}
 	return ""
 }
+
+// quoteSeparator marks the start of quoted material: a horizontal rule of three
+// or more dashes/equals at line start, a ">"-quoted line, or a titled rule
+// anywhere in the line ("... --- ORIJINAL METIN (17 Agu) --- ..." — the
+// measured handover shape flows it mid-line). Everything below the first such
+// line is somebody's history, not this delivery.
+var quoteSeparator = regexp.MustCompile(`^\s*(?:[-=]{3,}|>)|---.+---`)
 
 // mergeScan reads the last day of deliveries for every open agent and reports each
 // damaged record ONCE, to the log and to server-main.

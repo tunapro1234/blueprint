@@ -219,13 +219,18 @@ type sendHarness struct {
 	captures   []string
 	activities []string
 	mutations  []string
+	// payloads records the exact stdin bytes handed to each load-buffer call, so
+	// a test can assert the paste is ATOMIC: one buffer, carrying the whole
+	// message, however large (the WhatsApp bridge measured single messages of
+	// 15,084 characters).
+	payloads [][]byte
 	// command is what display-message reports for #{pane_current_command}. It
 	// defaults to "claude" so existing agent-path tests need not set it; set it
 	// to a shell name (e.g. "zsh") to exercise the non-agent guard.
 	command string
 }
 
-func (h *sendHarness) run(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+func (h *sendHarness) run(_ context.Context, stdin []byte, args ...string) ([]byte, error) {
 	switch args[0] {
 	case "display-message":
 		cmd := h.command
@@ -242,6 +247,9 @@ func (h *sendHarness) run(_ context.Context, _ []byte, args ...string) ([]byte, 
 		h.activities = h.activities[1:]
 		return []byte(value), nil
 	case "load-buffer", "paste-buffer", "send-keys", "delete-buffer":
+		if args[0] == "load-buffer" {
+			h.payloads = append(h.payloads, append([]byte(nil), stdin...))
+		}
 		h.mutations = append(h.mutations, strings.Join(args, " "))
 		return nil, nil
 	default:

@@ -2458,3 +2458,172 @@ func TestDeliverQueuesWhileAnotherBpHoldsThePane(t *testing.T) {
 		t.Fatalf("keys were sent into a pane another bp was holding:\n%s", log)
 	}
 }
+
+// --- bp msg --force-busy ------------------------------------------------------
+
+func TestCutForceBusyOnlyReadsTheFlagBeforeTheMessage(t *testing.T) {
+	// The flag may stand before or after the target name, and NEVER inside the
+	// message: an agent quoting the flag to another agent must not force itself.
+	tests := []struct {
+		name  string
+		args  []string
+		rest  []string
+		force bool
+	}{
+		{name: "leading", args: []string{"--force-busy", "ada", "selam"}, rest: []string{"ada", "selam"}, force: true},
+		{name: "after the name", args: []string{"ada", "--force-busy", "selam"}, rest: []string{"ada", "selam"}, force: true},
+		{name: "inside the message", args: []string{"ada", "sunu dene:", "--force-busy"}, rest: []string{"ada", "sunu dene:", "--force-busy"}},
+		{name: "absent", args: []string{"ada", "selam"}, rest: []string{"ada", "selam"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rest, force := cutForceBusy(test.args)
+			if force != test.force || strings.Join(rest, " ") != strings.Join(test.rest, " ") {
+				t.Fatalf("cutForceBusy(%v)=%v,%v want %v,%v", test.args, rest, force, test.rest, test.force)
+			}
+		})
+	}
+}
+
+// forceApp is a CLI with a real queue and no tmux: the force path must never
+// need a pane of its own, because it delivers through the dispatch pass.
+func forceApp(t *testing.T, out *os.File) *app {
+	t.Helper()
+	t.Setenv("TMUX", "")
+	t.Setenv("AGENTBOOK", "")
+	return &app{
+		ctx:           context.Background(),
+		config:        bpconfig.Config{StateDir: t.TempDir()},
+		queue:         msgq.New(t.TempDir()),
+		out:           out,
+		err:           testOutput(t),
+		sessionExists: func(string) bool { return true },
+	}
+}
+
+func TestForceBusyIsRefusedForAnOrdinaryAgent(t *testing.T) {
+	// The gate is habit control, not a security boundary (see allowForceBusy), and
+	// this is the habit it controls: an agent deciding its own message is urgent
+	// enough to interrupt a working colleague.
+	t.Setenv("AGENT", "ada")
+	out := testOutput(t)
+	a := forceApp(t, out)
+	delivered := 0
+	a.deliverMessage = func(string, string, string) (bool, string, error) {
+		delivered++
+		return false, "", nil
+	}
+	err := a.message([]string{"--force-busy", "alp", "acil bir sey"})
+	if err == nil || !strings.Contains(err.Error(), "force-busy tesisata ayrilmis") {
+		t.Fatalf("err=%v, want the refusal", err)
+	}
+	if delivered != 0 {
+		t.Fatal("a refused force-busy message was delivered anyway")
+	}
+	rows, listErr := a.queue.List()
+	if listErr != nil || len(rows) != 0 {
+		t.Fatalf("a refused force-busy message was queued: %v (%v)", rows, listErr)
+	}
+}
+
+func TestForceBusyQueuesAForcedRecordForThePlumbing(t *testing.T) {
+	// The WhatsApp bridge's own path: the message becomes a FORCED queue record
+	// and nothing types into a pane here. That is the whole change — the bridge
+	// used to paste into busy panes itself, as a second writer.
+	t.Setenv("AGENT", "wa")
+	out := testOutput(t)
+	a := forceApp(t, out)
+	delivered := 0
+	a.deliverMessage = func(string, string, string) (bool, string, error) {
+		delivered++
+		return false, "", nil
+	}
+	if err := a.message([]string{"--force-busy", "alp", "Tuna:", "acil bak"}); err != nil {
+		t.Fatal(err)
+	}
+	if delivered != 0 {
+		t.Fatal("the force path went through the ordinary delivery")
+	}
+	rows, err := a.queue.List()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	if !rows[0].ForceBusy || rows[0].To != "alp" || rows[0].Msg != "[wa] Tuna: acil bak" {
+		t.Fatalf("record=%+v", rows[0])
+	}
+	report := readTestOutput(t, out)
+	for _, want := range []string{"FORCE kuyrukta: alp", rows[0].ID, "bp qstat"} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("output=%q, want it to contain %q", report, want)
+		}
+	}
+}
+
+func TestForceBusySaysHowManyMessagesItIsJumping(t *testing.T) {
+	// Out-of-order delivery is a decision with a cost, so it is stated at the
+	// moment it is taken rather than discovered later in bp q.
+	t.Setenv("AGENT", "wa")
+	out := testOutput(t)
+	a := forceApp(t, out)
+	for _, text := range []string{"[ada] birinci", "[ada] ikinci"} {
+		if _, err := a.queue.EnqueueReason("alp", "ada", text, bptmux.BlockedByBusyPane); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err != nil {
+		t.Fatal(err)
+	}
+	if report := readTestOutput(t, out); !strings.Contains(report, "uyari: hedefte 2 bekleyen mesaj var") {
+		t.Fatalf("output=%q, want the warning naming the messages being jumped", report)
+	}
+}
+
+func TestForceBusyStillRefusesADuplicateInFlight(t *testing.T) {
+	// The duplicate guard runs BEFORE the flag is honoured. A forced repeat of a
+	// message already on its way is the measured 2026-08-17 burst with priority.
+	t.Setenv("AGENT", "wa")
+	out := testOutput(t)
+	a := forceApp(t, out)
+	id, err := a.queue.EnqueueReason("alp", "wa", "[wa] Tuna: acil bak", bptmux.BlockedByBusyPane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, listErr := a.queue.List()
+	if listErr != nil || len(rows) != 1 {
+		t.Fatalf("a duplicate was queued anyway: %v (%v)", rows, listErr)
+	}
+	if report := readTestOutput(t, out); !strings.Contains(report, "AYNI METIN ZATEN YOLDA") || !strings.Contains(report, id) {
+		t.Fatalf("output=%q", report)
+	}
+}
+
+func TestForceBusyIsRefusedForAFederatedAddress(t *testing.T) {
+	// A pane on another machine has a busy state this bp cannot see and a queue it
+	// does not own: there is nothing here to jump.
+	t.Setenv("AGENT", "wa")
+	a := forceApp(t, testOutput(t))
+	err := a.message([]string{"--force-busy", "ada@yigit", "acil"})
+	if err == nil || !strings.Contains(err.Error(), "federe adreste calismaz") {
+		t.Fatalf("err=%v, want the federated refusal", err)
+	}
+}
+
+func TestForceBusyRefusesAnUnestablishedSender(t *testing.T) {
+	// "server-main" is the label of last resort here: cron, a systemd unit, a root
+	// shell — nothing STATED who is calling. The label alone therefore buys
+	// nothing, and the gate asks for a sender that was established.
+	for _, key := range []string{"TMUX", "AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
+		t.Setenv(key, "")
+	}
+	a := forceApp(t, testOutput(t))
+	if got := a.sender(); got != "server-main" {
+		t.Fatalf("fixture is not the fallback case: sender()=%q", got)
+	}
+	err := a.message([]string{"--force-busy", "alp", "acil bir sey"})
+	if err == nil || !strings.Contains(err.Error(), "force-busy tesisata ayrilmis") {
+		t.Fatalf("err=%v, want the refusal", err)
+	}
+}

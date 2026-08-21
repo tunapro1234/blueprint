@@ -22,6 +22,9 @@ type fakeTarget struct {
 	// one of the texts, empties it — the way the real client's C-u loop does.
 	cleared  [][]string
 	clearErr error
+	// forced lists the deliveries that came through SendForce — the door that may
+	// type into a working pane.
+	forced []string
 }
 
 func (f *fakeTarget) HasSession(context.Context, string) bool         { return f.alive }
@@ -36,6 +39,14 @@ func (f *fakeTarget) Send(_ context.Context, to, text string) error {
 	}
 	f.sent = append(f.sent, to+":"+text)
 	return nil
+}
+
+// SendForce records the same way Send does, plus the fact that it was the FORCE
+// door: a test that expects a message to jump a working pane must be able to
+// prove it did not sneak in through the ordinary one.
+func (f *fakeTarget) SendForce(ctx context.Context, to, text string) error {
+	f.forced = append(f.forced, to+":"+text)
+	return f.Send(ctx, to, text)
 }
 
 func (f *fakeTarget) CaptureAnsi(ctx context.Context, session string) (string, error) {
@@ -1256,5 +1267,473 @@ func TestDispatchWaitsWhenAnotherBpHoldsThePane(t *testing.T) {
 	}
 	if len(target.sent) != 1 {
 		t.Fatalf("sent=%v", target.sent)
+	}
+}
+
+// --- forced delivery into a busy pane ----------------------------------------
+
+// forcedFollowUp is the SECOND forced message in a conversation: long enough for
+// the witness to identify, and sharing nothing with the first one, so a composer
+// holding one of them can never be mistaken for holding the other.
+const forcedFollowUp = "[wa] Tuna: ikinci mesaj — birincisini gorunce haber ver, bekliyorum burada"
+
+// busyForceQueue is the state a forced message exists for: a target whose turn is
+// open in its own transcript while the screen shows an idle, empty composer. That
+// is the window a WhatsApp message from Tuna used to sit out for a whole turn.
+func busyForceQueue(t *testing.T, clock *time.Time, busy *bool) *Queue {
+	t.Helper()
+	q := heldQueue(t, clock)
+	q.TurnOpen = func(string) bool { return *busy }
+	return q
+}
+
+func TestForcedRecordIsDeliveredWhileTheTargetIsBusy(t *testing.T) {
+	// The whole point of the flag: the busy gate is skipped for the forced record
+	// and for nothing else. The ordinary message queued a second EARLIER stays
+	// where it is.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	normal, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: acil, hemen bakar misin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "acil") {
+		t.Fatalf("sent=%v, want only the forced message", target.sent)
+	}
+	if _, err = os.Stat(filepath.Join(q.done(), forced+".json")); err != nil {
+		t.Fatalf("the forced record was not closed as delivered: %v", err)
+	}
+	waiting, err := read(filepath.Join(q.pending(), normal+".json"))
+	if err != nil {
+		t.Fatalf("the ordinary message did not stay pending: %v", err)
+	}
+	if !strings.Contains(waiting.Reason, forced) {
+		t.Fatalf("reason=%q, want it to name the forced record %s", waiting.Reason, forced)
+	}
+}
+
+func TestForcedRecordsKeepSendOrderAheadOfNormalTraffic(t *testing.T) {
+	// Priority is per LINE, not per message: forced records go to the front of
+	// their target's queue and keep send order among themselves, and one pass
+	// still pastes at most once into a pane.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	if _, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if _, err := q.EnqueueForce("target", "wa", "[wa] Tuna: birinci forced mesaj"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if _, err := q.EnqueueForce("target", "wa", "[wa] Tuna: ikinci forced mesaj"); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	now = now.Add(30 * time.Second)
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 {
+		t.Fatalf("a pass pasted more than once into one pane: %v", target.sent)
+	}
+	now = now.Add(30 * time.Second)
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The turn ends, so the ordinary message can finally move — behind both
+	// forced ones.
+	busy = false
+	now = now.Add(30 * time.Second)
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 3 {
+		t.Fatalf("sent=%v", target.sent)
+	}
+	for index, want := range []string{"birinci forced", "ikinci forced", "siradan mesaj"} {
+		if !strings.Contains(target.sent[index], want) {
+			t.Fatalf("delivery order=%v, want %q at %d", target.sent, want, index)
+		}
+	}
+	// And only the forced ones went through the door that may type into a working
+	// pane: the flag is a property of the record, not of the pass it rode in.
+	if len(target.forced) != 2 {
+		t.Fatalf("forced=%v, want exactly the two forced messages", target.forced)
+	}
+}
+
+func TestForcedRecordStillWaitsForSomeoneElsesComposer(t *testing.T) {
+	// The flag overrides "the agent is working", never "a human is in the middle
+	// of a line". Tuna's rule stands above it: what somebody typed is theirs.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: acil, hemen bakar misin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("elle yazilmis yarim satir, bitmedi")}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 0 {
+		t.Fatalf("a forced message was pasted on top of somebody's composer: %d attempts", target.calls)
+	}
+	record, err := read(filepath.Join(q.pending(), forced+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Reason != bptmux.BlockedByForeignText {
+		t.Fatalf("reason=%q, want %q", record.Reason, bptmux.BlockedByForeignText)
+	}
+	// And the status says both things: forced, and still waiting for a reason the
+	// operator can act on.
+	status, err := q.Status(forced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "PENDING (FORCE)") || !strings.Contains(status, bptmux.BlockedByForeignText) {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestFollowerForcedMessageWaitsForTheWitnessThenForTheCooldown(t *testing.T) {
+	// Two forced messages in a row is the dangerous shape: pasting the second into
+	// the same TUI window while the first may still be sitting there unsubmitted is
+	// the 2026-08-17 merge condition itself. So the follower waits for the witness —
+	// and, because the witness can stay silent forever, no longer than forceCooldown
+	// after the first text reached the pane.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	first, err := q.EnqueueForce("target", "wa", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	second, err := q.EnqueueForce("target", "wa", forcedFollowUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: bptmux.ErrUnverified}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	head, err := read(filepath.Join(q.pending(), first+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !head.NoRepaste || head.ForcedAt == 0 {
+		t.Fatalf("head=%+v, want a never-paste-again record that recorded when it reached the pane", head)
+	}
+	// Thirty seconds later the composer is clear again and the witness has said
+	// nothing. The follower still waits: nothing has confirmed that the first
+	// message actually reached the agent.
+	target.sendErr = nil
+	now = now.Add(30 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 1 {
+		t.Fatalf("the follower overtook an unconfirmed forced message: %d attempts", target.calls)
+	}
+	waiting, err := read(filepath.Join(q.pending(), second+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(waiting.Reason, first) {
+		t.Fatalf("reason=%q, want it to name the record it is behind (%s)", waiting.Reason, first)
+	}
+	// Past the ceiling: the follower goes. The first record is NOT abandoned — it
+	// stays in the witness channel with its own window.
+	now = now.Add(61 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "ikinci mesaj") {
+		t.Fatalf("sent=%v, want the follower delivered after the cooldown", target.sent)
+	}
+	if _, err = os.Stat(filepath.Join(q.pending(), first+".json")); err != nil {
+		t.Fatalf("the unconfirmed record was dropped instead of left to the witness: %v", err)
+	}
+}
+
+func TestFollowerForcedMessageGoesAsSoonAsTheWitnessSpeaks(t *testing.T) {
+	// The other end of the same rule: the ceiling is a fallback, not the schedule.
+	// Once the transcript proves the first message arrived, the follower does not
+	// wait out ninety seconds for nothing.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	if _, err := q.EnqueueForce("target", "wa", witnessable); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if _, err := q.EnqueueForce("target", "wa", forcedFollowUp); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: bptmux.ErrUnverified}
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	target.sendErr = nil
+	q.Witness = func(_, text string, _ time.Time) bool { return text == witnessable }
+	now = now.Add(30 * time.Second)
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "ikinci mesaj") {
+		t.Fatalf("sent=%v, want the follower delivered as soon as the witness settled the head", target.sent)
+	}
+}
+
+func TestFollowerForcedMessageStillRefusesAComposerHoldingTheEarlierPaste(t *testing.T) {
+	// The ceiling releases the WAIT, never the composer gates. Here the first
+	// forced message is still hanging in the composer when the ninety seconds are
+	// up: from this record's side that text is foreign (its own record is out of
+	// the way, so nothing offers it as ours), and foreign text is never pasted on
+	// top of. If this ever fails, the safety is what must be fixed — not the
+	// ceiling shortened.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	if _, err := q.EnqueueForce("target", "wa", witnessable); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	second, err := q.EnqueueForce("target", "wa", forcedFollowUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: bptmux.ErrUnverified}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The unconfirmed paste is exactly what it warned about: still in the box.
+	target.pane = composerPane(witnessable)
+	target.sendErr = nil
+	now = now.Add(91 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 1 {
+		t.Fatalf("the follower was pasted on top of the first forced message: %d attempts", target.calls)
+	}
+	waiting, err := read(filepath.Join(q.pending(), second+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Reason != bptmux.BlockedByForeignText {
+		t.Fatalf("reason=%q, want %q", waiting.Reason, bptmux.BlockedByForeignText)
+	}
+}
+
+func TestOrdinaryRecordNeverOvertakesAForcedOne(t *testing.T) {
+	// The ceiling is for forced records only. An ordinary message behind an
+	// unconfirmed forced one waits for it however long that takes, on an idle pane
+	// and with the cooldown long gone.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := true
+	q := busyForceQueue(t, &now, &busy)
+	forced, err := q.EnqueueForce("target", "wa", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	normal, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: bptmux.ErrUnverified}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	target.sendErr = nil
+	busy = false
+	now = now.Add(120 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 1 {
+		t.Fatalf("an ordinary message overtook an unsettled forced one: %d attempts", target.calls)
+	}
+	waiting, err := read(filepath.Join(q.pending(), normal+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(waiting.Reason, forced) {
+		t.Fatalf("reason=%q, want it to name the forced record %s", waiting.Reason, forced)
+	}
+}
+
+func TestForceFieldsAreOptionalOnDiskAndSurviveARoundTrip(t *testing.T) {
+	// Back-compat both ways: a record written before the flag existed reads as an
+	// ordinary one, and an ordinary record still writes neither key.
+	q := New(t.TempDir())
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	q.Now = func() time.Time { return now }
+	if err := os.MkdirAll(q.pending(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"id":"q1","to":"target","from":"sender","msg":"eski kayit, force alanlari yok","ts":1755255600.0}` + "\n"
+	if err := os.WriteFile(filepath.Join(q.pending(), "q1.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old, err := read(filepath.Join(q.pending(), "q1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.ForceBusy || old.ForcedAt != 0 {
+		t.Fatalf("legacy record did not read as ordinary: %+v", old)
+	}
+	plain, err := q.Enqueue("target", "sender", "siradan mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(q.pending(), plain+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "forceBusy") || strings.Contains(string(data), "forcedAt") {
+		t.Fatalf("an ordinary record wrote the force keys: %s", data)
+	}
+	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: acil")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := read(filepath.Join(q.pending(), forced+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.ForceBusy || record.Reason != forceReason {
+		t.Fatalf("record=%+v", record)
+	}
+	status, err := q.Status(forced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "PENDING (FORCE)") || !strings.Contains(status, forceReason) {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+// busyComposerPane is composerPane with the live spinner on the row just above
+// the box: a pane whose SCREEN says the agent is working, which is where a busy
+// agent spends most of its time (tool calls and thinking, not streaming).
+func busyComposerPane(text string) string {
+	return strings.Replace(composerPane(text), "  agent: onceki turdan kalan cikti",
+		"✻ Working… (23s · esc to interrupt)", 1)
+}
+
+func TestForcedRecordIsPastedIntoAPaneWhoseSpinnerIsRunning(t *testing.T) {
+	// The screen-busy plane of the same rule. The transcript gate (streaming) was
+	// never the whole story: a working agent shows its spinner most of the time,
+	// and a forced message that waited for the spinner to stop would be exactly
+	// the "late WhatsApp message" the flag exists to end.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := false // the transcript says nothing; the SCREEN is the busy signal here
+	q := busyForceQueue(t, &now, &busy)
+	forced, err := q.EnqueueForce("target", "wa", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: busyComposerPane("")}
+	if !bptmux.Busy(target.pane) {
+		t.Fatal("fixture is not a busy pane: the test would prove nothing")
+	}
+	// A working pane redraws, so the screen cannot confirm the paste. That is the
+	// ORDINARY outcome of a forced delivery, not a fault.
+	target.sendErr = bptmux.ErrUnverified
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.forced) != 1 {
+		t.Fatalf("the forced message did not go through the force door: forced=%v sent=%v", target.forced, target.sent)
+	}
+	record, err := read(filepath.Join(q.pending(), forced+".json"))
+	if err != nil {
+		t.Fatalf("the unconfirmed forced record was closed instead of held: %v", err)
+	}
+	if !record.NoRepaste || record.Reason != unverifiedReason || record.ForcedAt == 0 {
+		t.Fatalf("record=%+v, want it waiting for the transcript witness", record)
+	}
+}
+
+func TestOrdinaryRecordStillWaitsForASpinner(t *testing.T) {
+	// The screen gate is untouched for everything that is not forced.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := false
+	q := busyForceQueue(t, &now, &busy)
+	id, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: busyComposerPane("")}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 0 || len(target.forced) != 0 {
+		t.Fatalf("an ordinary message was typed into a working pane: calls=%d forced=%v", target.calls, target.forced)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Reason != bptmux.BlockedByBusyPane {
+		t.Fatalf("reason=%q, want %q", record.Reason, bptmux.BlockedByBusyPane)
+	}
+}
+
+func TestFollowerForcedMessageRefusesAHeldComposerOnAWorkingPaneToo(t *testing.T) {
+	// The interlock, on the screen-busy plane: the ninety second ceiling releases
+	// the WAIT, never the composer. Here the pane is working AND still holding the
+	// first forced paste — which is precisely the state a forced delivery into a
+	// redrawing screen can leave behind — so the follower stays out.
+	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
+	busy := false
+	q := busyForceQueue(t, &now, &busy)
+	if _, err := q.EnqueueForce("target", "wa", witnessable); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	second, err := q.EnqueueForce("target", "wa", forcedFollowUp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: busyComposerPane(""), sendErr: bptmux.ErrUnverified}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.forced) != 1 {
+		t.Fatalf("the first forced message did not reach the pane: %v", target.forced)
+	}
+	// Working pane, first paste still in the box, ceiling long past.
+	target.pane = busyComposerPane(witnessable)
+	target.sendErr = nil
+	now = now.Add(91 * time.Second)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.forced) != 1 {
+		t.Fatalf("the follower was pasted on top of the first forced message: %v", target.forced)
+	}
+	waiting, err := read(filepath.Join(q.pending(), second+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Reason != bptmux.BlockedByForeignText {
+		t.Fatalf("reason=%q, want %q", waiting.Reason, bptmux.BlockedByForeignText)
 	}
 }

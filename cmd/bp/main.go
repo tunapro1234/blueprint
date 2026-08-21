@@ -47,8 +47,10 @@ bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
 bp rename <old-name> <new-name> [--dry-run]
-bp msg <name> <message...>   # bp stamps a [sender] envelope; never write your own
+bp msg [--force-busy] <name> <message...>
+                             # bp stamps a [sender] envelope; never write your own
                              # a /slash command goes bare, and only down the hierarchy
+                             # --force-busy jumps the queue on a busy agent (root/bp/wa only)
 bp announce <message...> [--dry-run]
 bp compact [--idle-hours N] [--min-ctx N] [--apply]   # policy: idle+full claude agents
 bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]
@@ -1310,10 +1312,17 @@ func (a *app) close(args []string) error {
 //     every agent sees on messages that carry orders. WhatsApp is the opposite
 //     case and keeps no such default.
 func (a *app) sender() string {
+	return a.senderIdentity().Label
+}
+
+// senderIdentity is sender() with the confidence kept. Only one caller needs it
+// — the --force-busy gate, which must know whether the label was STATED (a tmux
+// session, --from, AGENT, a login name) or merely fallen back to.
+func (a *app) senderIdentity() identity.Identity {
 	return identity.Resolve(a.ctx, a.session(), identity.Options{
 		Known:    a.knownAgent,
 		Fallback: "server-main",
-	}).Label
+	})
 }
 
 // session hands the resolver a tmux client, or a genuinely nil interface when
@@ -1461,9 +1470,34 @@ func shortAge(value time.Duration) string {
 	}
 }
 
+// forceBusyFlag asks for a delivery that does not wait for the target to be
+// free. It is spelled out rather than abbreviated because it is meant to be
+// typed deliberately.
+const forceBusyFlag = "--force-busy"
+
+// cutForceBusy takes the flag out of msg's arguments, wherever it stands BEFORE
+// the message text begins.
+//
+// The window closes after the target name: the first non-flag argument is the
+// name, the second is the first word of the message, and from there on nothing
+// is read as an option. So `bp msg ada su komutu dene: --force-busy` delivers
+// those words verbatim instead of quietly forcing itself.
+func cutForceBusy(args []string) ([]string, bool) {
+	rest, force := make([]string, 0, len(args)), false
+	for _, arg := range args {
+		if len(rest) < 2 && arg == forceBusyFlag {
+			force = true
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	return rest, force
+}
+
 func (a *app) message(args []string) error {
+	args, force := cutForceBusy(args)
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp msg <name> <message...>")
+		return fmt.Errorf("usage: bp msg [--force-busy] <name> <message...>")
 	}
 	name, message := args[0], strings.TrimSpace(strings.Join(args[1:], " "))
 	if err := rejectFlag("msg", name); err != nil {
@@ -1473,13 +1507,25 @@ func (a *app) message(args []string) error {
 		return fmt.Errorf("empty message")
 	}
 	if strings.Contains(name, "@") {
+		if force {
+			// A federated target is a pane on somebody else's machine: its busy
+			// state is not visible from here and its queue is not this queue, so
+			// there is nothing here that could jump it.
+			return fmt.Errorf("%s federe adreste calismaz: uzak pane'in mesguliyeti buradan gorulmuyor", forceBusyFlag)
+		}
 		target, peer, _, err := fed.ParseAddress(name)
 		if err != nil {
 			return err
 		}
 		return a.federatedMessage(target, peer, message)
 	}
-	sender := a.sender()
+	who := a.senderIdentity()
+	sender := who.Label
+	if force {
+		if err := a.allowForceBusy(who); err != nil {
+			return err
+		}
+	}
 	if strings.HasPrefix(message, "/") {
 		// A bare slash command executes in the target CLI with no envelope and
 		// no visible origin (a prefix would break the command). The only
@@ -1540,6 +1586,9 @@ func (a *app) message(args []string) error {
 	if existing, ok := a.identicalInFlight(name, message); ok {
 		a.reportInFlight(existing)
 		return nil
+	}
+	if force {
+		return a.forceMessage(name, sender, message, attachPending && len(entries) > 0)
 	}
 	queued, channelID, err := a.deliver(name, sender, message)
 	notReady, unverified := errors.Is(err, bptmux.ErrNotReady), errors.Is(err, bptmux.ErrUnverified)
@@ -1604,6 +1653,104 @@ func (a *app) message(args []string) error {
 		fmt.Fprintf(a.out, "BEKLEME SEBEBI: %s — bak: bp peek %s\n", why, name)
 	}
 	return nil
+}
+
+// allowForceBusy decides who may put a message in front of a busy agent.
+//
+// The honest description of this gate: it is not a security boundary and cannot
+// be one. The primary identity signal is the caller's tmux session name, which
+// the tmux server states and the caller cannot forge — but --from and AGENT are
+// self-declared, and on a single-root machine every agent can set them, skip bp
+// altogether and type into any pane with tmux send-keys. So this stops habit and
+// accident (an agent reaching for --force-busy because its message feels urgent),
+// not an adversary. An unforgeable answer would need a daemon socket and
+// SO_PEERCRED, and even that, on a machine where everything runs as root, would
+// be open to exactly the same agents.
+//
+// What it protects is the property that makes the flag safe at all: forced
+// messages are RARE. The plumbing that carries Tuna's own words (the WhatsApp
+// bridge, root, bp itself) may interrupt a working agent; ordinary agent-to-agent
+// traffic queues like everything else, or the queue's ordering guarantees mean
+// nothing.
+func (a *app) allowForceBusy(who identity.Identity) error {
+	// Only the agentbook is read here, never the live fleet: the gate needs the
+	// root's NAME, and asking tmux for states would make a refusal depend on which
+	// panes happen to be open.
+	root := "server-main"
+	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil && fleet.Root != "" {
+		root = fleet.Root
+	}
+	if who.Certain {
+		for _, allowed := range []string{root, "bp", "wa"} {
+			if who.Label == allowed {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("force-busy tesisata ayrilmis (root/bp/wa); gerekceni server-main'e yaz (kimlik: %s, kaynak: %s)",
+		who.Label, who.Source)
+}
+
+// forceMessage queues a forced message and then makes the queue look at it at
+// once, instead of waiting up to 30 seconds for the daemon's next pass.
+//
+// It goes through the QUEUE on purpose. Everything that keeps two writers out of
+// one composer — the pane lock, the duplicate guard, one paste per pass, the
+// transcript witness — lives in the dispatch path, and the bridge that used to
+// paste into busy panes by hand had none of it. Forcing is therefore a flag on a
+// record, never a shortcut around the delivery.
+func (a *app) forceMessage(name, sender, message string, clearPending bool) error {
+	waiting := 0
+	if rows, err := a.queue.List(); err == nil {
+		for _, row := range rows {
+			// Forced records already in the line are not "in the way": the new one
+			// falls in behind them, in send order.
+			if row.To == name && !row.ForceBusy {
+				waiting++
+			}
+		}
+	}
+	channelID, err := a.queue.EnqueueForce(name, sender, message)
+	if err != nil {
+		return err
+	}
+	// The digest travelled inside this message, so the spool is cleared exactly as
+	// on the ordinary path — leaving it would repeat every announcement.
+	if clearPending {
+		if err := pending.Clear(a.config.StateDir, name); err != nil {
+			return err
+		}
+	}
+	if waiting > 0 {
+		fmt.Fprintf(a.out, "uyari: hedefte %d bekleyen mesaj var; force sira disi teslim edilecek\n", waiting)
+	}
+	fmt.Fprintf(a.out, "FORCE kuyrukta: %s (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
+	a.dispatchNow()
+	return nil
+}
+
+// dispatchNow runs one dispatch pass from the CLI so a forced message does not
+// wait for the daemon's tick.
+//
+// The pass is the daemon's own, probes included: without the transcript witness
+// and the turn probe this pass would be a WEAKER writer than the daemon — it
+// would paste into a streaming agent and re-paste a message the transcript has
+// already seen. The dispatch lock is non-blocking, so if the daemon happens to be
+// mid-pass this call does nothing at all and the daemon delivers within its
+// tick; that race needs no coordination beyond the lock itself.
+func (a *app) dispatchNow() {
+	if a.queue == nil || a.tmux == nil {
+		return
+	}
+	if len(a.config.Agentbooks) > 0 {
+		projects := bptmux.ClaudeProjectsRoot()
+		a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
+		a.queue.CanWitness = book.CanWitness
+		a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
+	}
+	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
+		fmt.Fprintf(a.err, "WARNING: teslim pass'i calistirilamadi: %v\n", err)
+	}
 }
 
 // dedupWindow is how long an identical message to the same target counts as still

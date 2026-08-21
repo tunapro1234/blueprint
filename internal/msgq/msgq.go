@@ -64,6 +64,24 @@ type Message struct {
 	// characters each). Every later pass retries the clearing; the witnessWindow
 	// ceiling closes the record if the pane never frees up.
 	Cleanup bool `json:"cleanup,omitempty"`
+	// ForceBusy marks a record whose sender KNOWS the target is busy and wants it
+	// delivered anyway (bp msg --force-busy). It is a queue flag and nothing else:
+	// the record is delivered by the ordinary dispatch pass, under the ordinary
+	// pane lock, so the plumbing that needs to jump a busy agent — the WhatsApp
+	// bridge carrying Tuna's own messages — no longer has to become a second
+	// writer into the pane, which is what it was doing before.
+	//
+	// What the flag buys is exactly one gate: the busy refusal. Every other
+	// protection still applies to it, because those protect what is in the
+	// COMPOSER (somebody's half-written line, an unreadable paste chip, our own
+	// hanging text) rather than the agent's concentration.
+	ForceBusy bool `json:"forceBusy,omitempty"`
+	// ForcedAt is the unix time a force record's text reached the pane. It exists
+	// for the record BEHIND it: a second forced message must not be pasted into
+	// the same TUI window while the first one may still be sitting there
+	// unsubmitted, so a follower waits for the witness or, failing that, for
+	// forceCooldown measured from this moment.
+	ForcedAt float64 `json:"forcedAt,omitempty"`
 }
 
 type Queue struct {
@@ -140,6 +158,20 @@ const (
 	// transcript proved the text arrived, and a copy of it is still hanging in the
 	// composer where nothing but bp may erase it.
 	cleanupReason = "teslim edildi (transcript); composer'da asili kopya temizlenemedi, temizlik bekleniyor"
+	// forceReason is what a --force-busy record says while it waits. It is written
+	// at enqueue time so a force record is never the uninformative "still busy":
+	// the whole point of the flag is that busy was expected.
+	forceReason = "force: mesgul pane'e oncelikli teslim bekliyor"
+	// forceCooldown bounds how long a forced message waits for the forced message
+	// before it. Two WhatsApp messages pasted into one TUI window back to back is
+	// the 2026-08-17 merge condition itself, so the normal answer is "wait for the
+	// witness"; but the witness can stay silent forever (a text too short to
+	// recognise, a session file that never flushes) and a forced message exists
+	// because somebody is waiting for it. Ninety seconds is long enough for a
+	// transcript to be written and short enough that a phone conversation does not
+	// stall. It is a ceiling on the WAIT, not a licence to paste: the composer
+	// gates below still refuse a window that still holds the earlier text.
+	forceCooldown = 90 * time.Second
 )
 
 // headOfLineReason names the record a waiting message is queued BEHIND. It is the
@@ -170,7 +202,21 @@ func (q *Queue) Enqueue(to, from, text string) (string, error) {
 func (q *Queue) EnqueueReason(to, from, text, reason string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.enqueueLocked(to, from, text, reason, false)
+	return q.enqueueLocked(to, from, text, enqueueOptions{reason: reason})
+}
+
+// EnqueueForce records a message that must go in FRONT of its target's line and
+// may be delivered into a busy pane (bp msg --force-busy).
+//
+// It is deliberately an ordinary queue record: delivery still happens in the
+// dispatch pass, holding the pane lock, one paste per pass, with every composer
+// gate in force. The alternative — the caller typing into the pane itself — is
+// what the WhatsApp bridge used to do, and a second writer in a composer is how
+// two messages became one on 2026-08-17.
+func (q *Queue) EnqueueForce(to, from, text string) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.enqueueLocked(to, from, text, enqueueOptions{reason: forceReason, force: true})
 }
 
 // EnqueueUnverified records a message that was ALREADY injected into the pane
@@ -181,14 +227,23 @@ func (q *Queue) EnqueueReason(to, from, text, reason string) (string, error) {
 func (q *Queue) EnqueueUnverified(to, from, text string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.enqueueLocked(to, from, text, unverifiedReason, true)
+	return q.enqueueLocked(to, from, text, enqueueOptions{reason: unverifiedReason, noRepaste: true})
+}
+
+// enqueueOptions are the bookkeeping bits an enqueue may put on the new record
+// besides the message itself. A struct rather than a row of bare booleans,
+// because at the call site "true, false" says nothing about which flag is which.
+type enqueueOptions struct {
+	reason    string
+	noRepaste bool
+	force     bool
 }
 
 // enqueueLocked is the body of every enqueue, WITHOUT taking q.mu. It exists
 // because Dispatch already holds the mutex and must be able to queue a message
 // of its own (the notice to a sender whose delivery could not be verified);
 // calling the exported entry point from there would deadlock against itself.
-func (q *Queue) enqueueLocked(to, from, text, reason string, noRepaste bool) (string, error) {
+func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (string, error) {
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
 		return "", err
 	}
@@ -204,7 +259,8 @@ func (q *Queue) enqueueLocked(to, from, text, reason string, noRepaste bool) (st
 		_ = tmp.Close()
 		return "", err
 	}
-	message := Message{ID: base, To: to, From: from, Msg: text, TS: float64(now.UnixNano()) / 1e9, Reason: reason, NoRepaste: noRepaste}
+	message := Message{ID: base, To: to, From: from, Msg: text, TS: float64(now.UnixNano()) / 1e9,
+		Reason: opts.reason, NoRepaste: opts.noRepaste, ForceBusy: opts.force}
 	if err = json.NewEncoder(tmp).Encode(message); err == nil {
 		err = tmp.Sync()
 	}
@@ -369,6 +425,17 @@ func (q *Queue) Status(id string) (string, error) {
 			return fmt.Sprintf("PENDING (yeniden paste edilmeyecek): %s — %s (%d seconds queued); bak: bp peek %s",
 				message.To, message.Reason, seconds, message.To), nil
 		}
+		// A forced record says that it is forced. Plain "PENDING" would read as an
+		// ordinary wait, and this one is deliberately out of order: somebody asked
+		// for it to jump a busy pane and is waiting to hear whether it did.
+		if message.ForceBusy {
+			why := message.Reason
+			if why == "" {
+				why = forceReason
+			}
+			return fmt.Sprintf("PENDING (FORCE): %s — %s (%d seconds queued); bak: bp peek %s",
+				message.To, why, seconds, message.To), nil
+		}
 		if wait := int(time.Unix(0, int64(message.NextTry*1e9)).Sub(q.Now()).Seconds()); message.NextTry > 0 && wait > 0 {
 			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued; %d. deneme, sonraki deneme ~%ds); bak: bp peek %s",
 				message.To, message.Reason, seconds, message.Attempts+1, wait, message.To), nil
@@ -394,6 +461,13 @@ type Target interface {
 	Capture(context.Context, string) (string, error)
 	CaptureAnsi(context.Context, string) (string, error)
 	Send(context.Context, string, string) error
+	// SendForce is Send into a pane that is MID-TURN. It is used for exactly one
+	// kind of record — a --force-busy one — and it drops exactly one refusal, the
+	// busy pane's. Composer safety is unchanged, and so is the verification: a
+	// redrawing screen cannot confirm a paste, so this normally answers
+	// ErrUnverified and the record goes to the transcript witness rather than
+	// being reported as sent.
+	SendForce(context.Context, string, string) error
 	// ClearDelivered erases a composer that provably holds one of texts, and
 	// nothing else. Dispatch calls it in exactly one situation: the transcript
 	// proved a message already arrived, and the same text is STILL hanging in the
@@ -615,7 +689,7 @@ func (q *Queue) settleUnrepasted(path string, message Message, report func(strin
 		// this change exists to end.
 		message.Notified = true
 		q.update(path, message, report)
-		if _, err := q.enqueueLocked(message.From, "bp", noticeText(message), "", false); err != nil {
+		if _, err := q.enqueueLocked(message.From, "bp", noticeText(message), enqueueOptions{}); err != nil {
 			if report != nil {
 				report(fmt.Sprintf("msgq: %s icin gonderene haber verilemedi: %v", message.ID, err))
 			}
@@ -723,6 +797,12 @@ type lineState struct {
 	// At most one paste per target per pass: the next record waits for a pass whose
 	// own capture and witness can see the previous message leave the composer.
 	delivered string
+	// forceHeld is the id of a FORCE record whose paste reached the pane and could
+	// not be verified, and forceHeldFrom the moment it did (Message.ForcedAt). They
+	// are the only hold a later record may ever step over, and only a FORCE record
+	// may do it, and only after forceCooldown — see forceReleased.
+	forceHeld     string
+	forceHeldFrom float64
 }
 
 // block records that this record is holding the line. The FIRST blocker wins, so
@@ -731,6 +811,16 @@ type lineState struct {
 func (l *lineState) block(id string) {
 	if l.blockedBy == "" {
 		l.blockedBy = id
+	}
+}
+
+// holdForce remembers that the record now holding this line is a FORCE record
+// whose text may be sitting in the composer unsubmitted. Like block, the first
+// one wins: the ceiling below is measured from the earliest such record, not from
+// whichever one the walk saw last.
+func (l *lineState) holdForce(id string, forcedAt float64) {
+	if l.forceHeld == "" {
+		l.forceHeld, l.forceHeldFrom = id, forcedAt
 	}
 }
 
@@ -744,6 +834,33 @@ func (l *lineState) hold() string {
 		return headOfLineReason(l.blockedBy)
 	}
 	return ""
+}
+
+// forceReleased reports whether this FORCE record may stop waiting behind the
+// forced message in front of it.
+//
+// The wait is the safety, not an accident: a follower normally waits until the
+// transcript confirms that the message before it actually reached the agent,
+// because two forced messages pasted into one TUI window back to back is the
+// merge condition of 2026-08-17 itself. But the witness can stay silent, and a
+// forced message is by definition one somebody is waiting for — so the wait has
+// a ceiling of forceCooldown from the moment the earlier text reached the pane.
+// The earlier record is not abandoned when the ceiling passes: it stays in the
+// witness channel and closes on its own witnessWindow.
+//
+// Three things it deliberately does NOT release: a normal record (it is behind
+// every force record by construction and stays there), a line that has already
+// taken a paste in THIS pass, and a hold that comes from anything other than a
+// force record's unverified paste — a pane lock, a foreign composer or a backoff
+// means nothing went into the pane, so overtaking would only reorder messages.
+func (q *Queue) forceReleased(rec record, line *lineState) bool {
+	if !rec.ForceBusy || line.delivered != "" {
+		return false
+	}
+	if line.forceHeld == "" || line.forceHeld != line.blockedBy || line.forceHeldFrom == 0 {
+		return false
+	}
+	return !q.Now().Before(time.Unix(0, int64(line.forceHeldFrom*1e9)).Add(forceCooldown))
 }
 
 // paneLockReason turns a failed lock acquisition into the words a queue record
@@ -794,17 +911,44 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 			report(fmt.Sprintf("msgq: could not read %s: %v", broken.path, broken.err))
 		}
 	}
-	// One line per target, built as the pass walks the records in send-time order.
-	lines := make(map[string]*lineState, len(records))
-	for _, rec := range records {
-		line, ok := lines[rec.To]
-		if !ok {
-			line = &lineState{}
-			lines[rec.To] = line
+	// One line per target, walked target by target: a line is a queue and the
+	// records in it are only comparable with each other.
+	targets, byTarget := lines(records)
+	for _, to := range targets {
+		line := &lineState{}
+		for _, rec := range byTarget[to] {
+			q.dispatchRecord(ctx, target, rec, line, report)
 		}
-		q.dispatchRecord(ctx, target, rec, line, report)
 	}
 	return q.Cleanup()
+}
+
+// lines groups a pass's records into one line per target — the targets in the
+// order their oldest message was sent, so the pass keeps walking the fleet in
+// send-time order — and puts each line in DELIVERY order.
+//
+// Delivery order inside a line is (force, send time, id). The force part is the
+// only new thing and it is what --force-busy buys: a message someone deliberately
+// put in front of the queue is delivered before the ordinary traffic waiting for
+// the same agent, and forced messages keep send order among themselves, because
+// two of them are usually one conversation.
+func lines(records []record) ([]string, map[string][]record) {
+	order := make([]string, 0, len(records))
+	byTarget := make(map[string][]record, len(records))
+	for _, rec := range records {
+		if _, seen := byTarget[rec.To]; !seen {
+			order = append(order, rec.To)
+		}
+		byTarget[rec.To] = append(byTarget[rec.To], rec)
+	}
+	for _, to := range order {
+		line := byTarget[to]
+		// A STABLE partition: the records arrive in (TS, id) order already, so
+		// moving the force records to the front is the whole of the reordering and
+		// send order survives inside both groups.
+		sort.SliceStable(line, func(i, j int) bool { return line[i].ForceBusy && !line[j].ForceBusy })
+	}
+	return order, byTarget
 }
 
 // dispatchRecord decides what happens to ONE pending record in this pass.
@@ -840,7 +984,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		q.settleDelivered(ctx, target, rec, line, report)
 		return
 	}
-	if held := line.hold(); held != "" {
+	if held := line.hold(); held != "" && !q.forceReleased(rec, line) {
 		q.remember(rec.path, rec.Message, held, report)
 		return
 	}
@@ -850,6 +994,11 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	if rec.NoRepaste {
 		if !q.settleUnrepasted(rec.path, rec.Message, report) {
 			line.block(rec.ID)
+			if rec.ForceBusy {
+				// A forced message whose paste could not be confirmed holds the line
+				// like any other, but with a ceiling: see forceReleased.
+				line.holdForce(rec.ID, rec.ForcedAt)
+			}
 		}
 		return
 	}
@@ -877,7 +1026,15 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// record reason: from the queue's side there is no difference between the two
 	// kinds of busy, and the reason a human reads should not depend on which gate
 	// happened to catch it.
-	if bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(rec.To)) {
+	//
+	// A forced record is the one thing that walks past this, in BOTH its forms: the
+	// spinner on the screen and the open turn only the transcript can see. That is
+	// what the flag is for — a message from Tuna's phone must not sit out a tool
+	// phase, which is most of a busy agent's time. It goes in through SendForce
+	// below, so the delivery keeps the pane lock, the composer refusals and the
+	// verification; what it gives up is the screen's ability to CONFIRM it, which
+	// is why such a record usually ends up in the transcript witness's hands.
+	if !rec.ForceBusy && (bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(rec.To))) {
 		q.remember(rec.path, rec.Message, bptmux.BlockedByBusyPane, report)
 		line.block(rec.ID)
 		return
@@ -889,7 +1046,14 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// composer holds text provably ours, which Send knows how to finish. Every other
 	// answer is recorded on the queue record, so a message that waits does not wait
 	// silently.
-	if reason := bptmux.ComposerBlockReason(paneAnsi, []string{rec.Msg}); reason != "" {
+	// A forced record asks the composer-only question: it overrides the working
+	// agent, never the contents of the box. Everything the ordinary gate refuses
+	// for — a paste chip, somebody's half-written line — refuses it too.
+	blocked := bptmux.ComposerBlockReason
+	if rec.ForceBusy {
+		blocked = bptmux.ComposerContentBlockReason
+	}
+	if reason := blocked(paneAnsi, []string{rec.Msg}); reason != "" {
 		q.remember(rec.path, rec.Message, reason, report)
 		line.block(rec.ID)
 		return
@@ -903,7 +1067,24 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// The pane is free: drop any stale reason before handing over to Send.
 	q.remember(rec.path, rec.Message, "", report)
 	message := rec.Message
-	if err := target.Send(ctx, rec.To, message.Msg); err != nil {
+	// Forced records go in through the door that may type into a working pane.
+	// Everything else about the delivery is identical — same lock, same
+	// verification, same error contract.
+	deliver := target.Send
+	if message.ForceBusy {
+		deliver = target.SendForce
+	}
+	err = deliver(ctx, rec.To, message.Msg)
+	// The moment a forced text reached the pane, recorded whatever the verdict on it
+	// was: delivered, unconfirmed, or provably broken all mean keystrokes went in,
+	// and it is the keystrokes the record behind this one has to wait out. The
+	// refusals (a working pane, someone typing, a shell) injected nothing and start
+	// no clock — a zero ForcedAt is what stops forceReleased from ever letting a
+	// follower through on a record that never touched the composer.
+	if message.ForceBusy && (err == nil || errors.Is(err, bptmux.ErrUnverified) || errors.Is(err, bptmux.ErrNotReady)) {
+		message.ForcedAt = float64(q.Now().UnixNano()) / 1e9
+	}
+	if err != nil {
 		line.block(rec.ID)
 		if errors.Is(err, bptmux.ErrNotAgent) {
 			// The target dropped to a shell: leave the message PENDING (never lose

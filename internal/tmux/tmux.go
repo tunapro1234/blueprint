@@ -1069,6 +1069,41 @@ func (c *Client) Send(ctx context.Context, session, message string) error {
 // those queue records and must close them; leaving them open is what let a
 // hand-delivered message be pasted a second time.
 func (c *Client) SendWithPending(ctx context.Context, session, message string, pending []string) (finished []string, err error) {
+	return c.send(ctx, session, message, pending, false)
+}
+
+// SendForce delivers a message into a pane that is MID-TURN, and it is the only
+// entry point that may.
+//
+// Exactly one refusal is dropped: the pre-send gate's "this pane is working, do
+// not touch it". Everything else stands — a target that is not an agent CLI, an
+// expired login, a composer holding somebody's text, a keyboard that was in use
+// a moment ago, our own hanging paste and its repair, and every verification
+// step after the paste. What is being overridden is the agent's concentration,
+// never anybody's input.
+//
+// The caller must expect ErrUnverified here, and must treat it as the ORDINARY
+// outcome rather than a fault: a redrawing pane hands back torn frames, so the
+// screen cannot confirm a paste it is in the middle of repainting (that is why
+// provenFailure downgrades every verdict read off a busy pane). In force mode the
+// screen is therefore not the decider — the transcript witness is. The queue
+// record stays open, never pasted again, until the witness settles it. A "sent"
+// that the screen cannot back up is precisely the claim this package refuses to
+// make.
+//
+// It exists because the alternative was measurably worse. The WhatsApp bridge
+// carried Tuna's own messages into busy panes by typing into them directly, with
+// no pane lock, no duplicate guard, no witness and no cooldown; two writers in
+// one composer is how two messages became one on 2026-08-17. Doing the same
+// delivery HERE puts it back under all of that.
+func (c *Client) SendForce(ctx context.Context, session, message string) error {
+	_, err := c.send(ctx, session, message, nil, true)
+	return err
+}
+
+// send is the body of every delivery. force drops the busy refusal and nothing
+// else; see SendForce.
+func (c *Client) send(ctx context.Context, session, message string, pending []string, force bool) (finished []string, err error) {
 	// Guard first: never inject keystrokes into a pane that is not running an
 	// agent CLI. A session that dropped to a root shell (zsh) would otherwise
 	// receive the message text at its shell prompt. Send is the single delivery
@@ -1082,7 +1117,7 @@ func (c *Client) SendWithPending(ctx context.Context, session, message string, p
 		return nil, ErrNotAgent
 	}
 	target := "=" + session + ":"
-	finished, firstPane, outcome, err := c.resolveStuckPaste(ctx, target, session, message, pending)
+	finished, firstPane, outcome, err := c.resolveStuckPaste(ctx, target, session, message, pending, force)
 	if err != nil {
 		return finished, err
 	}
@@ -1248,12 +1283,12 @@ const (
 // The returned pane is the capture this gate took, handed on to readyToSend as
 // its first pass so an untouched pane is never captured twice; it is empty
 // whenever a key was pressed and the capture is therefore stale.
-func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message string, pending []string) ([]string, string, stuckOutcome, error) {
+func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message string, pending []string, force bool) ([]string, string, stuckOutcome, error) {
 	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
 		return nil, "", stuckAbsent, err
 	}
-	if Busy(pane) {
+	if Busy(pane) && !force {
 		// A pane mid-turn is refused HERE, before anything is pasted. It used to
 		// fall through as stuckAbsent into readyToSend, which asks about typing,
 		// credentials and client activity but never about BUSY — so a message was
@@ -1262,6 +1297,15 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 		// non-delivery. That is the loop measured on q163159804 (2026-08-15): one
 		// message delivered three times. The caller queues it, exactly as it does
 		// for a busy composer.
+		//
+		// force is the single exception, and it is narrow on purpose: it says the
+		// sender already knows the agent is working and wants the message in the
+		// pane anyway (SendForce). The verification below still runs and will still
+		// read torn frames off the redrawing screen — which is why a forced
+		// delivery normally comes back ErrUnverified and is settled by the
+		// transcript rather than by the screen. The gates BELOW this one are not
+		// touched by force: a filled composer, a keyboard in use and an expired
+		// login refuse a forced message exactly as they refuse any other.
 		return nil, "", stuckAbsent, ErrBusy
 	}
 	// An empty composer is the overwhelmingly common case and needs nothing from

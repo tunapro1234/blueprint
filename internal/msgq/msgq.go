@@ -581,6 +581,18 @@ func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
 	return "", false
 }
 
+// Finished reports whether a record has been closed, and with what status. It
+// exists for the CLI's machine-readable outcome line: after a forced message's
+// immediate dispatch pass, "did it actually go?" is answered by the record, not
+// by parsing the pass's report text.
+func (q *Queue) Finished(id string) (string, bool) {
+	message, err := read(filepath.Join(q.done(), id+".json"))
+	if err != nil {
+		return "", false
+	}
+	return message.Status, true
+}
+
 // Cancel removes a pending message by channel id, archiving it as canceled.
 func (q *Queue) Cancel(id string) error {
 	q.mu.Lock()

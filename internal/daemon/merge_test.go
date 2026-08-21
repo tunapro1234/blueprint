@@ -53,6 +53,16 @@ func TestMergedShapeCatchesOnlyMeasuredDamage(t *testing.T) {
 		// A shape-valid name nobody answers to is prose, not a delivery: only
 		// agentbook membership makes a candidate an envelope.
 		{"unknown name is not an envelope", "[server-main] mesaj govdesi\n[not] bu bir uyari etiketi\n[ornek] bu da prose", false},
+		// The measured handover shape (probot-business 15:15, 2026-08-21): an
+		// agent forwarding history verbatim, the quoted original starting with
+		// its own envelope. Nine of these fired the alarm in one day; envelopes
+		// below a quotation marker are somebody's history, not this delivery.
+		{"handover quoting an original message", "[server-whatsapp] DEVIR: kartvizit isi sana geciyor.\n--- ORIJINAL METIN (17 Agu) ---\n[probot-business] probot-main PLAN: kartvizitler cuma basilacak", false},
+		{"handover with the rule flowed mid-line", "[server-whatsapp] DEVIR ozeti --- ORIJINAL METIN (17 Agu) ---\n[probot-business] plan metni burada", false},
+		{"quoted lines are history too", "[server-main] su mesaji degerlendir:\n> [probot-business] eski talimat metni", false},
+		// A raw two-message merge carries no separator between the envelopes —
+		// the suppression must not blind the detector to it.
+		{"two envelopes with no separator still alarm", "[probot-business] birinci mesajin govdesi\n\n[server-main] ikincisi ustune yapismis", true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

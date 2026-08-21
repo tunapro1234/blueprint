@@ -905,3 +905,112 @@ func TestComposerBoxAgainstLiveCaptures(t *testing.T) {
 			"match/damaged/foreign decision is dead code again", readable, total)
 	}
 }
+
+// --- forced delivery into a working pane -------------------------------------
+
+func TestSendForceDeliversIntoAWorkingPane(t *testing.T) {
+	// The one refusal force drops. The pane is mid-turn with an empty composer —
+	// the state TestSendRefusesToPasteIntoAWorkingPane pins for the ordinary path —
+	// and here the message goes in, is watched being held, and is submitted with a
+	// single Enter. On a working Claude Code that Enter puts the message into the
+	// CLI's own input queue, which is what the operator asked for: seen at the end
+	// of this turn instead of after the next thirty-second dispatch tick.
+	h := &sendHarness{
+		captures: []string{
+			busyPane(emptyRow),            // pre-send gate: working, empty composer
+			busyPane(emptyRow),            // readyToSend pass 2
+			busyPane("❯ " + stuckMessage), // post-paste: our text is in the box
+			busyPane(emptyRow),            // Enter took it
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).SendForce(context.Background(), "target", stuckMessage); err != nil {
+		t.Fatalf("err=%v, want the forced delivery to go through", err)
+	}
+	if got := countInjections(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 paste, got %d: %v", got, h.mutations)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
+	}
+	assertNoEscape(t, h.mutations)
+}
+
+func TestSendForceReportsUnverifiedWhenTheWorkingScreenCannotShowThePaste(t *testing.T) {
+	// The expected shape of most forced deliveries: a redrawing pane hands back a
+	// frame that does not show the paste, so nothing may be claimed. It must come
+	// back UNVERIFIED — never "sent", and never the ErrNotReady that would make a
+	// caller paste the message a second time (the q163159804 loop). The record
+	// then waits for the transcript, which is the only witness a moving screen
+	// leaves standing.
+	h := &sendHarness{
+		captures: []string{
+			busyPane(emptyRow), // gate
+			busyPane(emptyRow), // readyToSend pass 2
+			busyPane(emptyRow), // post-paste: the frame shows nothing of ours
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	err := testClient(h).SendForce(context.Background(), "target", stuckMessage)
+	if !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want ErrUnverified", err)
+	}
+	if errors.Is(err, ErrNotReady) {
+		t.Fatal("a torn frame off a working pane was reported as proof of non-delivery")
+	}
+	if got := countInjections(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 paste, got %d: %v", got, h.mutations)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("Enter was pressed on a composer nothing had been seen in: %v", h.mutations)
+	}
+}
+
+func TestSendForceStillRefusesSomeoneElsesComposer(t *testing.T) {
+	// Force overrides the agent's concentration, never a human's input. A working
+	// pane whose composer holds somebody's half-written line is left exactly as it
+	// is — no paste, no keys — and the caller queues.
+	h := &sendHarness{
+		captures:   []string{busyPane("❯ /rename wor")},
+		activities: []string{"target\t900\n"},
+	}
+	err := testClient(h).SendForce(context.Background(), "target", stuckMessage)
+	if !errors.Is(err, ErrTyping) {
+		t.Fatalf("err=%v, want ErrTyping", err)
+	}
+	if len(h.mutations) != 0 {
+		t.Fatalf("a forced message touched a composer holding foreign text: %v", h.mutations)
+	}
+}
+
+func TestSendForceStillRefusesANonAgentPane(t *testing.T) {
+	// The chokepoint guard is not a busy-pane rule and force does not reach it:
+	// a session that dropped to a shell would receive the message at a root
+	// prompt.
+	h := &sendHarness{command: "zsh"}
+	if err := testClient(h).SendForce(context.Background(), "target", stuckMessage); !errors.Is(err, ErrNotAgent) {
+		t.Fatalf("err=%v, want ErrNotAgent", err)
+	}
+	if len(h.mutations) != 0 {
+		t.Fatalf("keys went into a shell: %v", h.mutations)
+	}
+}
+
+func TestSendForceStillRefusesAnExpiredLogin(t *testing.T) {
+	// Nothing can be delivered to an agent that is not logged in, however urgent
+	// the sender is. The verdict is a PROVEN non-delivery, so the queue keeps the
+	// message and retries it — the one thing a forced record must not do is
+	// disappear here.
+	expired := busyPane(emptyRow) + "\x1b[2m● Login expired · Please run /login\x1b[0m\n"
+	h := &sendHarness{
+		captures:   []string{expired},
+		activities: []string{"target\t900\n"},
+	}
+	err := testClient(h).SendForce(context.Background(), "target", stuckMessage)
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("err=%v, want ErrNotReady", err)
+	}
+	if len(h.mutations) != 0 {
+		t.Fatalf("a forced message was typed at a login prompt: %v", h.mutations)
+	}
+}

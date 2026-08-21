@@ -390,6 +390,20 @@ func ComposerBlockReason(pane string, texts []string) string {
 	if Busy(pane) {
 		return BlockedByBusyPane
 	}
+	return ComposerContentBlockReason(pane, texts)
+}
+
+// ComposerContentBlockReason is ComposerBlockReason WITHOUT the busy question:
+// it names only what the composer itself is holding.
+//
+// It exists for forced delivery (see Client.SendForce), which overrides "the
+// agent is working" and nothing else. The split is the whole point: reading a
+// busy pane through ComposerBlockReason answers "pane calisiyor" and never gets
+// as far as the box, so a forced message would either wait on the one state it
+// is meant to override, or — if the caller ignored the verdict wholesale — paste
+// over somebody's half-written line. Callers that force ask this one instead and
+// keep every composer refusal intact.
+func ComposerContentBlockReason(pane string, texts []string) string {
 	if !composerFilled(pane) {
 		return ""
 	}

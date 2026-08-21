@@ -50,6 +50,24 @@ same text is still hanging in the composer, bp clears it (with Ctrl-u, never
 Enter) and says so, because the closed record would otherwise be the last thing
 able to recognise it.
 
+### Machine-readable outcome and --force-busy (plumbing only)
+
+Every `bp msg` run ends with one STABLE line for scripts:
+`RESULT=delivered|queued|unverified|duplicate` plus ` CHANNEL=<id>` when a queue
+record exists. The keys and verdict words never change; new information arrives
+as new keys. Errors keep signalling through the exit code.
+
+`bp msg --force-busy <name> <message>` delivers even to a WORKING pane (the
+message lands in Claude Code's own input queue). It is reserved for plumbing —
+the sender identity must be certain and one of `root`, `bp`, `wa`, `whatsapp`.
+**The WhatsApp bridge's identity is `whatsapp` (bridge.js pins
+`AGENT=whatsapp`); do NOT change the bridge to any other value** — earlier
+instruction text saying "AGENT=wa" was written before the allowlist was fixed
+and is void (ada, 2026-08-21). Force skips only the busy gate: a composer
+holding anyone's text, a typing human, an expired login and a shell pane all
+still refuse, and on a working screen the delivery is verified by the
+transcript witness, never claimed from the pane.
+
 A message that waits says WHY it waits. `bp q` prints a `!` line under it and
 `bp qstat` names the cause instead of a bare "is still busy" — `composer'da
 okunamayan bir paste var (chip)` (only a human can clear that one),

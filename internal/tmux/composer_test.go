@@ -936,6 +936,38 @@ func TestSendForceDeliversIntoAWorkingPane(t *testing.T) {
 	assertNoEscape(t, h.mutations)
 }
 
+// The measured worst case on the WhatsApp side: single messages up to 15,084
+// characters (a whole jury-day transcript in one piece), multi-line and full of
+// Unicode. The paste must be ATOMIC — one load-buffer carrying every byte, one
+// paste-buffer — because a payload split across writes is how a message goes out
+// half-delivered.
+func TestSendForceCarriesAJuryDaySizedPayloadWhole(t *testing.T) {
+	piece := "Tuna'nin juri gunu konusmasi — çok satırlı bölüm №7:\nkarar: […] devam.\n"
+	payload := strings.Repeat(piece, 1+15084/len(piece))[:15084]
+	h := &sendHarness{
+		captures: []string{
+			busyPane(emptyRow), // pre-send gate: working, empty composer
+			busyPane(emptyRow), // readyToSend pass 2
+			busyPane(emptyRow), // post-paste frame does not show it: unverified
+			busyPane(emptyRow),
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	err := testClient(h).SendForce(context.Background(), "target", payload)
+	if err != nil && !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want nil or ErrUnverified", err)
+	}
+	if len(h.payloads) != 1 {
+		t.Fatalf("expected exactly 1 load-buffer, got %d", len(h.payloads))
+	}
+	if got := string(h.payloads[0]); got != payload {
+		t.Fatalf("payload arrived damaged: %d bytes of %d", len(got), len(payload))
+	}
+	if got := countInjections(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 paste, got %d: %v", got, h.mutations)
+	}
+}
+
 func TestSendForceReportsUnverifiedWhenTheWorkingScreenCannotShowThePaste(t *testing.T) {
 	// The expected shape of most forced deliveries: a redrawing pane hands back a
 	// frame that does not show the paste, so nothing may be claimed. It must come

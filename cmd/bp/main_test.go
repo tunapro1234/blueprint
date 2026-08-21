@@ -2529,6 +2529,23 @@ func TestForceBusyIsRefusedForAnOrdinaryAgent(t *testing.T) {
 	}
 }
 
+// The identity the bridge ACTUALLY pins is AGENT=whatsapp (bridge.js:86), not
+// "wa" — the first allowlist shipped without it, and the feature would have
+// looked live while every bridge call silently fell back to the ordinary queue
+// (ada's pre-deploy catch, 2026-08-21).
+func TestForceBusyAcceptsTheBridgeIdentity(t *testing.T) {
+	t.Setenv("AGENT", "whatsapp")
+	out := testOutput(t)
+	a := forceApp(t, out)
+	if err := a.message([]string{"--force-busy", "alp", "Tuna:", "acil bak"}); err != nil {
+		t.Fatalf("bridge identity was refused: %v", err)
+	}
+	rows, err := a.queue.List()
+	if err != nil || len(rows) != 1 || !rows[0].ForceBusy {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+}
+
 func TestForceBusyQueuesAForcedRecordForThePlumbing(t *testing.T) {
 	// The WhatsApp bridge's own path: the message becomes a FORCED queue record
 	// and nothing types into a pane here. That is the whole change — the bridge

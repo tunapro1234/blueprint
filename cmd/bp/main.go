@@ -1632,16 +1632,20 @@ func (a *app) message(args []string) error {
 			}
 			if channelID, enqueueErr := a.queue.EnqueueUnverified(name, sender, message); enqueueErr == nil {
 				fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s — pane'de dogrulanamadi, tekrar gonderilmeyecek; transcript tanigi kontrol edecek (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
+				a.resultLine("unverified", channelID)
 				return errReported
 			}
 		}
 		fmt.Fprintf(a.out, "gonderildi ama DOGRULANAMADI: %s — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek %s ile bak\n", name, name)
+		a.resultLine("unverified", "")
 		return errReported
 	case notReady:
 		fmt.Fprintf(a.out, "GONDERILEMEDI: %s — %s; mesaj kuyruga alindi (channel: %s). Durum: bp qstat %s\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID, channelID)
+		a.resultLine("queued", channelID)
 		return nil
 	case !queued:
 		fmt.Fprintln(a.out, "sent")
+		a.resultLine("delivered", "")
 		return nil
 	}
 	fmt.Fprintf(a.out, "BUSY: queued (channel: %s). Check: bp qstat %s\n", channelID, channelID)
@@ -1652,6 +1656,7 @@ func (a *app) message(args []string) error {
 	if why := a.queue.Reason(channelID); why != "" {
 		fmt.Fprintf(a.out, "BEKLEME SEBEBI: %s — bak: bp peek %s\n", why, name)
 	}
+	a.resultLine("queued", channelID)
 	return nil
 }
 
@@ -1681,13 +1686,16 @@ func (a *app) allowForceBusy(who identity.Identity) error {
 		root = fleet.Root
 	}
 	if who.Certain {
-		for _, allowed := range []string{root, "bp", "wa"} {
+		// "whatsapp" is the identity the bridge actually pins (bridge.js sets
+		// AGENT=whatsapp so it never falls through to a DisplaySession guess);
+		// "wa" stays for the shell alias and hand runs.
+		for _, allowed := range []string{root, "bp", "wa", "whatsapp"} {
 			if who.Label == allowed {
 				return nil
 			}
 		}
 	}
-	return fmt.Errorf("force-busy tesisata ayrilmis (root/bp/wa); gerekceni server-main'e yaz (kimlik: %s, kaynak: %s)",
+	return fmt.Errorf("force-busy tesisata ayrilmis (root/bp/wa/whatsapp); gerekceni server-main'e yaz (kimlik: %s, kaynak: %s)",
 		who.Label, who.Source)
 }
 
@@ -1726,6 +1734,15 @@ func (a *app) forceMessage(name, sender, message string, clearPending bool) erro
 	}
 	fmt.Fprintf(a.out, "FORCE kuyrukta: %s (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
 	a.dispatchNow()
+	// The verdict is read back from the record itself, not from the pass's report
+	// lines: the pass may have been a no-op (daemon held the dispatch lock) and
+	// the record then delivers within the daemon's next tick. "queued" therefore
+	// means "in flight", never "failed".
+	if status, done := a.queue.Finished(channelID); done && strings.HasPrefix(status, "delivered") {
+		a.resultLine("delivered", channelID)
+		return nil
+	}
+	a.resultLine("queued", channelID)
 	return nil
 }
 
@@ -1791,6 +1808,26 @@ func (a *app) reportInFlight(existing msgq.Message) {
 	}
 	fmt.Fprintf(a.out, "AYNI METIN ZATEN YOLDA — kanal %s. Durum: %s\n", existing.ID, status)
 	fmt.Fprintf(a.out, "Bekle ya da israr icin: bp qcancel %s && bp msg ...\n", existing.ID)
+	a.resultLine("duplicate", existing.ID)
+}
+
+// resultLine is the STABLE machine-readable outcome of a `bp msg` run, printed
+// as the LAST line of output. It exists under a contract (server-whatsapp,
+// 2026-08-21): the bridge used to branch on the Turkish prose above it with
+// regexes, and a rewording would have silently sent it down the wrong path.
+//
+// The contract: the final line is `RESULT=<verdict>` with an optional
+// ` CHANNEL=<id>`, verdict is one of delivered|queued|unverified|duplicate, and
+// neither the keys nor the verdict words ever change — new information arrives
+// as NEW keys appended to the line, never by renaming these. Failures that
+// return an error (unknown target, refused flag) keep signalling through the
+// exit code, as they always have.
+func (a *app) resultLine(verdict, channel string) {
+	if channel != "" {
+		fmt.Fprintf(a.out, "RESULT=%s CHANNEL=%s\n", verdict, channel)
+		return
+	}
+	fmt.Fprintf(a.out, "RESULT=%s\n", verdict)
 }
 
 func (a *app) federatedMessage(target, peer, message string) error {

@@ -1996,7 +1996,10 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		if err := a.message([]string{"alp", "hello"}); err != nil {
 			t.Fatal(err)
 		}
-		if got := readTestOutput(t, out); got != "sent\n" {
+		// The RESULT line is a STABLE CONTRACT (server-whatsapp branches on it
+		// instead of regexing the Turkish prose): last line, fixed keys, fixed
+		// verdict words. Changing it breaks the bridge silently.
+		if got := readTestOutput(t, out); got != "sent\nRESULT=delivered\n" {
 			t.Fatalf("output=%q", got)
 		}
 	})
@@ -2064,7 +2067,7 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		if !errors.Is(err, errReported) {
 			t.Fatalf("err=%v, want errReported (non-zero exit, no duplicate line)", err)
 		}
-		want := "gonderildi ama DOGRULANAMADI: alp — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek alp ile bak\n"
+		want := "gonderildi ama DOGRULANAMADI: alp — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek alp ile bak\nRESULT=unverified\n"
 		if got := readTestOutput(t, out); got != want {
 			t.Fatalf("output=%q, want %q", got, want)
 		}

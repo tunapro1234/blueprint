@@ -59,6 +59,28 @@ oynatıyor, en kırılgan varsayım bu.)
 anahtarla bir haftayı geçmiyor.** En ucuzu 6.3 gün. Yani soru "hangi model"den
 önce "hangi bütçe" — mevcut anahtar aylık değil, haftalık bir kaynak olur.
 
+## Birim olarak "gün" değil, "iş oturumu"
+
+"Günlük" rakamlar aslında 4.75 saatlik tek bir salvonun bedeli — gün, ölçüm
+penceresinin şekli, işin doğal birimi değil. Çağrıların %98.7'si 8 outreach
+oturumundan geldi, oturum başına ortalama **256 çağrı / 2.02M taze girdi /
+27.4M cache-read / 78k çıktı**. Aynı maliyetler oturum birimiyle:
+
+| model | iş oturumu başına | 20 USD kaç oturum |
+|---|---:|---:|
+| qwen3.7-flash / solar-pro4 | **0.40 $** | ~50 |
+| gpt-5-nano | 0.56 $ | ~36 |
+| deepseek-v4-flash | **0.77 $** | ~26 |
+| deepseek-v4-pro | 4.23 $ | ~5 |
+
+**Bu birim N=1 zaafını kısmen kapatır:** gelecekteki herhangi bir iş günü,
+"kaç Hermes oturumu koşacak" sorusuyla önceden fiyatlanabilir — ikinci bir
+ölçüm gününü beklemeye gerek kalmadan. Kırılan varsayım yalnızca "oturumlar
+birbirine benzer" olur; bugün oturumlar arası maliyet farkı **6 kat** (0.044 ↔
+0.27 USD) ve sebebi işin büyüklüğü değil, o oturumun ne kadar yedeğe düştüğü —
+yani Ox Alpha kapandıktan sonra bu fark daralmalı, çünkü herkes aynı lane'de
+olacak.
+
 ## Süpervizyon kaldıraçları (ayrı kalem — Claude kotası, USD değil)
 
 Bunlar model seçiminden bağımsız ve toplanmamalı:

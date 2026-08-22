@@ -128,7 +128,17 @@ var hermesBusyComposer = regexp.MustCompile(`^` + hermesCaduceus + `\s*[❯›]`
 // The percentage and the two separators are required so the transcript's own box
 // header ("╭─ ⚕ Hermes ───╮" — caduceus present, but never at the start of a row
 // and never followed by "· N% ·") cannot match.
-var hermesStatusRow = regexp.MustCompile(`^` + hermesCaduceus + `\s+\S.*·\s*\d+%\s*·`)
+//
+// THE CONTEXT FIELD IS NOT ALWAYS A PERCENTAGE. A pane that has not run a turn
+// yet draws "--" there ("⚕ x-preview-f-free · -- · 3s"), and the first version of
+// this pattern accepted only digits. That is the state EVERY agent is in for its
+// first message: `bp open --hermes` returns, the operator sends the task, and the
+// pane is unrecognisable — so the idle placeholder counts as somebody's typing and
+// the message queues forever. It cost probot-egitim a hand-delivery and me the
+// wrong root cause (2026-08-22: the queue record was made three hours AFTER the
+// ghost-text fix that supposedly covered it, which is what proved this was a
+// second, separate bug rather than a stale binary).
+var hermesStatusRow = regexp.MustCompile(`^` + hermesCaduceus + `\s+\S.*·\s*(?:\d+%|--)\s*·`)
 
 // hermesTailRows is how far up from the bottom of a capture the markers are
 // looked for. Same discipline as Busy/AuthExpired: a LIVE marker sits in the
@@ -166,6 +176,13 @@ func HermesPane(pane string) bool {
 			return true
 		}
 	}
+	// A structural marker for the composer row itself (prompt marker followed by
+	// an italic segment) was tried here and REMOVED the same hour: it matches a
+	// Claude pane holding italic text just as well — Claude draws the same "❯"
+	// prompt — and on a pane wrongly read as Hermes the italic strip would throw
+	// away a human's real input and paste over it. The status row already covers
+	// the case it was added for (a fresh pane showing "--"), so the marker bought
+	// nothing and risked the one direction this package never trades away.
 	return false
 }
 

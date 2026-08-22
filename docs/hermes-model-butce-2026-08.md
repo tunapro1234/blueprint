@@ -72,11 +72,31 @@ maliyeti, özet kaybı ve sonrasında cache'in yeniden yazılması düşülmeli.
 > bağlam-öncelikli olmalı: eşik aşıldığında **ilk boş ana** compact, 24 saat
 > beklemeden. Bu, model seçiminden bağımsız ve bende yapılacak iş.
 
-**4b. Tur sayısı (teslimat batch'leme) — tavan ≤%40.** Turların kaynağı:
+**4b. Tur sayısı (teslimat batch'leme) — tavan %5, ZAYIF.** Turların kaynağı:
 dış mesaj 417 tur (%40), **insan (Tuna'nın pane'e yazdıkları) 415 tur (%40)**,
-sistem/komut ekosu 210 tur (%20). Batch'leme yalnız ilk gruba dokunabilir;
-gerçek tavan, o mesajların kaçının birbirine yakın gelip birleştirilebileceğine
-bağlı _(ada'dan varış aralığı dağılımı istendi)_.
+sistem/komut ekosu 210 tur (%20). Batch'leme yalnız ilk gruba dokunabilir, ve
+orada da ancak birbirine yakın gelen mesajlar birleştirilebilir. Ölçüldü
+(ada, 23 Ağu 00:04): 59 dış mesaj → 417 tur (zincir başına 7.1 tur, medyan 6);
+60 saniyelik güvenli pencereyle birleştirilebilecek 8 mesaj = toplam turun
+**%5'i**. %21'e çıkmak için 5 dakika bekletmek gerekir — teslimatı ciddi
+geciktirir ve acil bildirimler için ayrı yol açmayı zorunlu kılar.
+
+> **Kendi hipotezimi düşürüyorum:** batch'lemeyi büyük kaldıraç sanmıştım;
+> ölçüm %5 dedi — üstelik bu, bp'nin BUGÜN yaptığı batch'lemeden (bekleyen
+> duyuruların piggyback'i, dispatch pass'ı başına hedefe tek paste) arta kalan
+> kazanç, yani gerçekte daha az. Karmaşıklık/kazanç oranı zayıf: sayfada
+> dipnot olarak kalıyor, iş listesine girmiyor.
+
+### Kaldıraçların yan yana tavanı
+
+| kaldıraç | tavan | teslimatı geciktirir mi | tekrarlanır mı |
+|---|---:|---|---|
+| bağlam-eşikli compact (4a) | ~%11 | hayır | her zincirde |
+| teslimat batch'leme (4b) | %5 | evet (60 sn) | yalnız yığılma anlarında |
+
+Sonuç: **4a, 4b'den değerli.** `bp compact` politikasını bağlam-öncelikliye
+çevirmek hem daha büyük hem gecikme yaratmıyor hem de her zincirde tekrar
+ediyor. (ada aynı sonuca bağımsız vardı.)
 
 > **Çerçeve düzeltmesi (ada, kendi önceki yorumunu çürüttü):** bu yanma
 > "otonom kaçak" değil — günün %40'ı doğrudan Tuna'nın yazdıklarından doğdu.

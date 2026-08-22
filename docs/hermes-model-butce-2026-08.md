@@ -1,116 +1,100 @@
 # Ox Alpha kapanırsa — model ve bütçe seçenekleri
 
-> **TASLAK — ölçüm devam ediyor.** Claude tarafı sayıları 22 Ağu 23:00 itibarıyla
-> ölçüldü (ada/server-main) ve **iş o sırada hâlâ sürüyordu** — canlı sayılar,
-> yarın büyümüş görünecekler. Hermes tarafı hacim çıkarımı ve çapa testi devam
-> ediyor; o bölümler dolunca bu not kalkacak. Teslim: 25 Ağu akşamı.
+**Ölçüm: 22 Ağu 15:20–22:46 (8 paralel Hermes agent, ~4.75 saat) + Claude tarafı
+23 Ağu 00:00. İş ölçüm sırasında sürüyordu — sayılar canlı.**
+Kaynaklar: `~/.hermes/state.db` (2070 çağrı), OpenRouter `/key` ve `/models`,
+`/srv/server-main/olcum/2026 0822-*.md` (ada).
 
-**Karar sorusu:** Ox Alpha (`x-preview-f-free`, OpenCode Free, anahtarsız bedava)
-~27 Ağustos'ta kapanabilir. Kapanırsa Hermes filosu hangi modelle çalışır ve
-bunun günlük bedeli nedir?
+**Karar sorusu:** Ox Alpha (`x-preview-f-free`, anahtarsız bedava) ~27 Ağustos'ta
+kapanabilir. Kapanırsa Hermes filosu neyle çalışır, günlük bedeli nedir?
 
-## Bugün ölçülen resim (22 Ağu)
+---
 
-İki ayrı maliyet var ve karıştırılmamalı:
+## Önce iki düzeltme (ikisi de benim önceki ifademi çürütüyor)
 
-| taraf | bugünkü bedel | ne için |
-|---|---|---|
-| Hermes (OpenRouter yedeği) | **1.05 USD** | Ox Alpha rate-limit yediğinde düşen ~%17'lik trafik |
-| Claude (süpervizyon) | **36.3M birim** (yalnız probot-outreach) | 8 bedava ajanı yöneten Claude agent'ı |
+**1. Yedeğe düşüren şey rate-limit DEĞİL, Ox Alpha'nın kararsızlığı.** Log'da tek
+bir gerçek HTTP 429 yok. Tetikleyiciler: 93× HTTP 503, 115× timeout, 36×
+bağlantı hatası. Yani bugünkü 1.05 USD **kota aşımının değil, uptime'ın bedeli**
+— ve paralı pay hacimle değil, Ox Alpha'nın o günkü sağlığıyla oynuyor. Dün
+"rate-limit yiyor" diye ilettiğim şey yanlıştı.
 
-Çağrıların %83'ü bedava kanaldan geçti (2164 Ox Alpha / 452 DeepSeek çağrısı),
-yani **1.05 USD tüm işin değil, yalnız taşan kısmın bedeli** — Ox Alpha
-kapanırsa çarpan 1x değildir.
+**2. Çapa testi %10.6 ıskaladı, sebebi bulundu.** Modelim 0.9478 USD dedi, gerçek
+1.0486. Neden: `deepseek-v4-flash` tek fiyat değil — OpenRouter 17 upstream'e
+dağıtıyor ve aralık **7.5 kat** (0.0587 → 0.44 $/M). Çapayı tutturan etkin fiyat
+0.0649 $/M. Aşağıdaki tüm rakamlara bu **×1.106 routing primi** uygulandı.
+(Prim deepseek'in dağılımından türedi; başka modele taşınması varsayımdır.)
 
-### Süpervizyonun şekli (ada ölçümü, 22 Ağu 23:00)
+## Bugünün ölçülmüş hacmi
 
-probot-outreach: 1042 tur, 36.3M birim, bunun **%73'ü cache_read** — üretim
-değil, bağlam yeniden-okuma. Tur başına ~254k bağlam, ~929 token çıktı.
-Kısa-tur ("sadece koordinasyon") payı yalnızca %17 — süpervizor gerçek iş
-yapıyor.
+| | çağrı | toplam prompt | bunun cache'i | çıktı |
+|---|---:|---:|---:|---:|
+| Ox Alpha (bedava) | 1 732 | 196.4M | %96.6 | 398k |
+| OpenRouter (paralı yedek) | 338 | 39.6M | %75.5 | 234k |
+| **toplam** | **2 070** | **236.0M** | **%93.1** | **633k** |
 
-> **Ölçümün ana bulgusu:** pahalı olan turun içeriği değil, **var olması**.
-> Her tur ~254k bağlamı yeniden okuyor; tur uzun da olsa kısa da olsa bu bedel
-> aynı. Bu yüzden "hangi model" sorusu tek başına maliyeti çözmez.
+Çağrıların %98.7'si 8 outreach oturumundan; en büyük tek prompt **308k token**
+(model seçiminde bağlam alt sınırı). Bu hacim **4.75 saatlik** — 8 saatlik iş
+gününe ölçeklenirse aşağıdaki rakamlar ×1.68.
+
+---
 
 ## Seçenekler
 
-Dört yol var; ilk üçü "Hermes hangi modelle koşar", dördüncüsü ötekilerden
-**bağımsız** ve muhtemelen en büyük kaldıraç.
+Günlük maliyetler **S2 senaryosu**: cache oranı olarak OpenRouter'da fiilen
+ölçülen %75.5 alındı. (Ox Alpha'nın %96.6'sı korunursa maliyet ~%35 düşer,
+cache hiç tutmazsa ~2.5 kat artar — bu tek parametre nihai rakamı 3.9 kat
+oynatıyor, en kırılgan varsayım bu.)
 
-### 1. DeepSeek V4 Flash birincil (bugünkü yedek, öne alınır)
-- Günlük maliyet: _ölçüm bekliyor_
-- Bozulan: _ölçüm bekliyor (araç çağırma davranışı, bağlam limiti)_
+| # | yol | günlük | 20 USD kaç günde | ne bozulur |
+|---|---|---:|---:|---|
+| 1 | deepseek-v4-flash birincil (bugünkü yedek) | **6.15 $** | 3.3 gün | bilinen davranış, sürpriz yok |
+| 2a | upstage/solar-pro4 | **3.19 $** | 6.3 gün | 524k ctx (308k prompt sığar, marj dar); kalite ölçülmedi |
+| 2b | qwen3.7-flash | **3.19 $** | 6.3 gün | 1M ctx; kalite ölçülmedi |
+| 2c | gpt-5-nano | 4.46 $ | 4.5 gün | 400k ctx — marj çok dar |
+| 3 | bedava + araçlı modeller (`:free`) | 0 $ | — | 3 aday 308k'yı kaldırıyor (nemotron-3.5-lightning, nemotron-3-ultra, dots-3-note-preview); **rate-limit kuralları API'den okunamadı, ölçülemedi** — Ox Alpha'nın yerine geçer ama aynı kararsızlık riski |
+| 4 | Claude subagent'a dönüş | Claude kotası | — | bugün süpervizyon tek başına 36.3M birim yaktı; Hermes'siz senaryoda **işin kendisi de üstüne biner** — bu rakam alt sınırdır (ada) |
+| 5 | deepseek-v4-pro | 33.84 $ | 0.6 gün | — |
 
-### 2. Başka bedava/ucuz kanal
-- Adaylar ve fiyatları: _ölçüm bekliyor_
-- Bozulan: bedava kanallar rate-limit ve bağlam sınırı getirir; Ox Alpha'nın
-  bugün yediği limitler zaten fallback'i tetikliyordu.
+**Kritik sayı:** bugünkü hacimde **hiçbir paralı seçenek 20 USD'lik aylık
+anahtarla bir haftayı geçmiyor.** En ucuzu 6.3 gün. Yani soru "hangi model"den
+önce "hangi bütçe" — mevcut anahtar aylık değil, haftalık bir kaynak olur.
 
-### 3. Claude subagent'a dönüş (Hermes'i bırakmak)
-- Maliyet tabanı: bugünkü 36.3M birim **ALT SINIR** olarak alınmalı — bu rakam
-  süpervizyonun yanında işin bir kısmını da içeriyor; Hermes olmasaydı IG/video
-  işi de üstüne binerdi (ada uyarısı).
-- Bozulan: filo kotası (limit baskısı zaten var), eşzamanlılık.
+## Süpervizyon kaldıraçları (ayrı kalem — Claude kotası, USD değil)
 
-### 4. Model değiştirmeden süpervizyon maliyetini düşürmek
-Maliyetin %73'ü bağlam yeniden-okuma olduğuna göre iki kaldıraç ölçüldü
-(ada, 23 Ağu 00:00). İkisinin de **tavanı** var ve ikisi de ilk üç seçenekten
-bağımsız uygulanabilir.
+Bunlar model seçiminden bağımsız ve toplanmamalı:
 
-**4a. Bağlam (compact) — tavan ~%11.** Bağlam steady-state değil: gün boyu
-monoton büyüyor, sadece 3 kez sıfırlanıyor (17:57, 21:02, 23:52) ve **605k
-zirve** yapıyor — resume eşiğimizin iki katı. Önceki "254k" gün ortalamasıydı,
-tavan değil (ada düzeltmesi). Bağlam hiç 300k'yı aşmasaydı okunan token 41M
-azalırdı ≈ bugünkü 36.3M'in %11'i. Bu bir **üst sınır**: compact'in kendi
-maliyeti, özet kaybı ve sonrasında cache'in yeniden yazılması düşülmeli.
-
-> **bp tarafında kusur (blueprint, doğrulandı):** `bp compact` politikası
-> **24 saat boşta + 200k bağlam** istiyor. Gün boyu çalışan bir agent bu
-> filtreden hiç geçmez — oysa pahalı olan tam da odur. probot-outreach bugün
-> 605k'ya çıkarken politika bir kez bile onu aday göstermedi. Doğru politika
-> bağlam-öncelikli olmalı: eşik aşıldığında **ilk boş ana** compact, 24 saat
-> beklemeden. Bu, model seçiminden bağımsız ve bende yapılacak iş.
-
-**4b. Tur sayısı (teslimat batch'leme) — tavan %5, ZAYIF.** Turların kaynağı:
-dış mesaj 417 tur (%40), **insan (Tuna'nın pane'e yazdıkları) 415 tur (%40)**,
-sistem/komut ekosu 210 tur (%20). Batch'leme yalnız ilk gruba dokunabilir, ve
-orada da ancak birbirine yakın gelen mesajlar birleştirilebilir. Ölçüldü
-(ada, 23 Ağu 00:04): 59 dış mesaj → 417 tur (zincir başına 7.1 tur, medyan 6);
-60 saniyelik güvenli pencereyle birleştirilebilecek 8 mesaj = toplam turun
-**%5'i**. %21'e çıkmak için 5 dakika bekletmek gerekir — teslimatı ciddi
-geciktirir ve acil bildirimler için ayrı yol açmayı zorunlu kılar.
-
-> **Kendi hipotezimi düşürüyorum:** batch'lemeyi büyük kaldıraç sanmıştım;
-> ölçüm %5 dedi — üstelik bu, bp'nin BUGÜN yaptığı batch'lemeden (bekleyen
-> duyuruların piggyback'i, dispatch pass'ı başına hedefe tek paste) arta kalan
-> kazanç, yani gerçekte daha az. Karmaşıklık/kazanç oranı zayıf: sayfada
-> dipnot olarak kalıyor, iş listesine girmiyor.
-
-### Kaldıraçların yan yana tavanı
-
-| kaldıraç | tavan | teslimatı geciktirir mi | tekrarlanır mı |
+| kaldıraç | tavan | gecikme | tekrar |
 |---|---:|---|---|
-| bağlam-eşikli compact (4a) | ~%11 | hayır | her zincirde |
-| teslimat batch'leme (4b) | %5 | evet (60 sn) | yalnız yığılma anlarında |
+| bağlam-eşikli compact | ~%11 | yok | her zincirde |
+| teslimat batch'leme | %5 | var (60 sn) | yığılmada |
 
-Sonuç: **4a, 4b'den değerli.** `bp compact` politikasını bağlam-öncelikliye
-çevirmek hem daha büyük hem gecikme yaratmıyor hem de her zincirde tekrar
-ediyor. (ada aynı sonuca bağımsız vardı.)
+`bp compact` bugün **24 saat boşta + 200k** istiyor; gün boyu çalışan agent bu
+filtreden hiç geçmiyor — probot-outreach 605k'ya çıktı, politika onu bir kez
+bile aday göstermedi. Düzeltmesi bende hazır, **Tuna onayı bekliyor** (filo
+geneline dokunur).
 
-> **Çerçeve düzeltmesi (ada, kendi önceki yorumunu çürüttü):** bu yanma
-> "otonom kaçak" değil — günün %40'ı doğrudan Tuna'nın yazdıklarından doğdu.
-> probot-outreach kaçak agent değil, **yoğun çalışan** agent. Ayrım sayfada
-> durmalı, yoksa yanlış kaldıraç seçilir: insanın mesajları optimize edilecek
-> bir israf değildir.
+## Ayrı anahtar
 
-## Ayrı anahtar meselesi (Tuna "sonra" dedi, kapanmadı)
+Kullanılan anahtar **kitap projesinin** (aylık 20 USD). Tavan dolarsa yalnız
+Hermes değil **kitap tarafı da durur**. Yukarıdaki "3–6 günde dolar" tablosuyla
+birlikte okununca: ayrı anahtar artık "sonra"ya bırakılabilir bir konu değil.
 
-Kullanılan OpenRouter anahtarı **kitap projesinin** (`/srv/kitap/.env`, aylık 20
-USD). İki yönlü risk: tavan dolarsa yalnız Hermes değil **kitap tarafı da
-durur** (server-main tespiti). Ayrı anahtar bu bağı keser.
+## blueprint görüşü (karar değil)
 
-## Kalan belirsizlikler
+Ox Alpha ölürse: **2b (qwen3.7-flash) birincil + deepseek-flash yedek**, ayrı
+anahtarla ve aylık tavanı 20 USD'nin üstünde. Bedava `:free` adaylar cazip ama
+ölçülemeyen rate-limit'leri bugün yaşadığımız kararsızlığın aynısını getirebilir
+— önce küçük bir yükle denenmeli, filo ona bağlanmadan.
 
-- Ox Alpha'nın kapanma tarihi kesin değil ("~27 Ağu" söylenti).
-- Bugünün hacmi tipik bir gün mü? Tek günlük ölçüm; filo Hermes'i yeni kullanıyor.
+## Bilinmeyenler
+
+- Cache oranının yeni sağlayıcıda korunup korunmayacağı (**3.9 kat** etki).
+- `:free` modellerin gerçek kotaları — API'den okunamıyor, tahmin edilmedi.
+- Ox Alpha'nın token muhasebesini doğrulayacak bağımsız çapa yok; hacmin %83'ü o.
+- 8 adet `google/gemini-3.6-flash` yardımcı çağrısı hiçbir yerde kayıtlı değil
+  (fiyatı deepseek'in 12–32 katı) — payı ölçülemedi.
+- **N=1.** Tek gün, tek salvo, tek iş tipi (outreach). %11/%5 tavanları ve
+  buradaki hacim ikinci bir yoğun gün ölçülmeden kural sayılmamalı.
+- Bu turda üç hipotez veriyle düştü: "çoğu tur koordinasyondur", "otonom kaçak
+  yanma" (ada) ve "batch'leme büyük kaldıraçtır" (blueprint). Sayılara güvenin
+  kaynağı bu — hiçbiri beklentiyi doğrulamak için seçilmedi.

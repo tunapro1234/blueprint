@@ -163,6 +163,42 @@ func claudeStyle(row string) string {
 	return "some transcript above\n" + row + "\n"
 }
 
+// The state every Hermes agent is in for its FIRST message, and the one that
+// cost probot-egitim a hand-delivery (2026-08-22): a pane that has not run a
+// turn draws "--" where the context percentage goes, and its placeholder is a
+// rotating suggestion no text matcher knows. Recognition has to survive both at
+// once, or the very first bp msg to a brand-new agent queues forever.
+func TestFreshHermesPaneIsRecognisedBeforeItsFirstTurn(t *testing.T) {
+	fresh := "\x1b[38;5;250m\x1b[48;5;234m ⚕ \x1b[1m\x1b[38;5;220mx-preview-f-free\x1b[0m\x1b[38;5;101m\x1b[48;5;234m · -- · 3s\x1b[38;5;250m \x1b[39m\x1b[49m\n" +
+		"────────────────────────────────────────\n" +
+		"\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136mResearch this topic and write me a brief\x1b[0m\n" +
+		"────────────────────────────────────────\n"
+	if !HermesPane(fresh) {
+		t.Fatal("a fresh Hermes pane was not recognised as Hermes")
+	}
+	if Typing(fresh) {
+		t.Fatalf("fresh-pane placeholder counted as typed text: %q", composerContent(fresh))
+	}
+	if reason := ComposerBlockReason(fresh, nil); reason != "" {
+		t.Fatalf("fresh Hermes pane blocked delivery with %q", reason)
+	}
+	// The status row alone must carry recognition too: the composer may be
+	// mid-redraw in the frame we captured.
+	statusOnly := "\x1b[38;5;250m ⚕ x-preview-f-free · -- · 3s\x1b[0m\n"
+	if !HermesPane(statusOnly) {
+		t.Fatal("the pre-first-turn status row did not identify the pane")
+	}
+	// And a human typing on that same fresh pane is still seen: measured, typed
+	// text carries no italic ("❯ \x1b[39minsan yazisi testi").
+	typed := "\x1b[38;5;250m ⚕ x-preview-f-free · -- · 9s\x1b[0m\n" +
+		"────────────────────────────────────────\n" +
+		"\x1b[38;5;230m❯ \x1b[39minsan yazisi testi\n" +
+		"────────────────────────────────────────\n"
+	if !Typing(typed) {
+		t.Fatal("a human's text on a fresh Hermes pane was discarded as ghost")
+	}
+}
+
 func TestBusyReadsTheHermesComposerRow(t *testing.T) {
 	tests := []struct {
 		name string

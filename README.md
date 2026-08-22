@@ -96,6 +96,15 @@ right before its `/compact`, and a target that has started working is skipped
 rather than queued. `--all` sweeps every descendant of the sender instead of the
 policy set.
 
+`bp open <name> <dir> --hermes` launches the Hermes Agent TUI instead of
+claude. A Hermes pane reports `python` as its command, so bp recognises it by
+command AND screen together; delivery is fully supported with one hard rule —
+a WORKING Hermes pane refuses even `--force-busy`, because in Hermes
+submitting text mid-turn CANCELS the running turn (the pane itself says
+`msg=interrupt` while busy). Messages to a busy Hermes queue normally and go
+in when the turn ends. Hermes keeps no Claude-style transcript, so delivery
+is screen-verified (`unverified` outcomes are possible, as with Codex).
+
 The fleet lives in one agentbook, `/srv/server-main/agentbook.json` (override
 with `AGENTBOOK`). `bp open` takes `--parent <name>` and `--role <text>` to
 write that entry correctly instead of guessing from the folder path; the parent

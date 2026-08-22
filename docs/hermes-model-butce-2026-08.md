@@ -54,12 +54,35 @@ Dört yol var; ilk üçü "Hermes hangi modelle koşar", dördüncüsü ötekile
 - Bozulan: filo kotası (limit baskısı zaten var), eşzamanlılık.
 
 ### 4. Model değiştirmeden süpervizyon maliyetini düşürmek
-Maliyetin %73'ü bağlam yeniden-okuma olduğuna göre iki kaldıraç:
-- **Tur başına bağlam**: compact sıklığı — 254k steady-state mi, gün içinde
-  büyüyüp compact ile mi düşüyor? _(ada'dan bağlam büyüme eğrisi istendi)_
-- **Tur sayısı**: turların kaçı dışarıdan gelen mesajla başlıyor? Teslimatları
-  batch'lemek süpervizor turunu azaltıyorsa iş bp tarafında. _(ada'dan kırılım
-  istendi)_
+Maliyetin %73'ü bağlam yeniden-okuma olduğuna göre iki kaldıraç ölçüldü
+(ada, 23 Ağu 00:00). İkisinin de **tavanı** var ve ikisi de ilk üç seçenekten
+bağımsız uygulanabilir.
+
+**4a. Bağlam (compact) — tavan ~%11.** Bağlam steady-state değil: gün boyu
+monoton büyüyor, sadece 3 kez sıfırlanıyor (17:57, 21:02, 23:52) ve **605k
+zirve** yapıyor — resume eşiğimizin iki katı. Önceki "254k" gün ortalamasıydı,
+tavan değil (ada düzeltmesi). Bağlam hiç 300k'yı aşmasaydı okunan token 41M
+azalırdı ≈ bugünkü 36.3M'in %11'i. Bu bir **üst sınır**: compact'in kendi
+maliyeti, özet kaybı ve sonrasında cache'in yeniden yazılması düşülmeli.
+
+> **bp tarafında kusur (blueprint, doğrulandı):** `bp compact` politikası
+> **24 saat boşta + 200k bağlam** istiyor. Gün boyu çalışan bir agent bu
+> filtreden hiç geçmez — oysa pahalı olan tam da odur. probot-outreach bugün
+> 605k'ya çıkarken politika bir kez bile onu aday göstermedi. Doğru politika
+> bağlam-öncelikli olmalı: eşik aşıldığında **ilk boş ana** compact, 24 saat
+> beklemeden. Bu, model seçiminden bağımsız ve bende yapılacak iş.
+
+**4b. Tur sayısı (teslimat batch'leme) — tavan ≤%40.** Turların kaynağı:
+dış mesaj 417 tur (%40), **insan (Tuna'nın pane'e yazdıkları) 415 tur (%40)**,
+sistem/komut ekosu 210 tur (%20). Batch'leme yalnız ilk gruba dokunabilir;
+gerçek tavan, o mesajların kaçının birbirine yakın gelip birleştirilebileceğine
+bağlı _(ada'dan varış aralığı dağılımı istendi)_.
+
+> **Çerçeve düzeltmesi (ada, kendi önceki yorumunu çürüttü):** bu yanma
+> "otonom kaçak" değil — günün %40'ı doğrudan Tuna'nın yazdıklarından doğdu.
+> probot-outreach kaçak agent değil, **yoğun çalışan** agent. Ayrım sayfada
+> durmalı, yoksa yanlış kaldıraç seçilir: insanın mesajları optimize edilecek
+> bir israf değildir.
 
 ## Ayrı anahtar meselesi (Tuna "sonra" dedi, kapanmadı)
 

@@ -29,6 +29,13 @@ const (
 	// leaves it in place. This byte string is the whole reason
 	// hermesPlaceholderOnly exists.
 	hermesIdleRowAnsi = "\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136mAsk anything, or type / for commands…\x1b[0m"
+	// hermesGhostRowAnsi is the placeholder's OTHER face, measured on
+	// probot-outreach-ig-error (2026-08-22): a rotating suggestion in the same
+	// italic wrapper. The first five real Hermes agents on this fleet all
+	// queued forever behind "composer'da yabanci metin var" because the text
+	// filter knew only the "Ask anything" sentence — the attribute, not the
+	// words, is the signature.
+	hermesGhostRowAnsi = "\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136mDraft a reply to the last email in my inbox\x1b[0m"
 	// hermesBusyRow is the busy composer with nothing typed into it: the
 	// "msg=interrupt · …" text is the BUSY PLACEHOLDER, not a fixed affordance.
 	hermesBusyRow = "⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel"
@@ -135,6 +142,25 @@ func TestHermesIdlePlaceholderIsNotTypedText(t *testing.T) {
 	if !Typing(hermesPane(hermesIdleTypedRow)) {
 		t.Fatal("real composer text on a Hermes pane was not seen")
 	}
+	// The rotating ghost suggestion is placeholder too — recognised by its
+	// italic wrapper, whatever sentence it happens to show.
+	ghost := hermesPane(hermesGhostRowAnsi)
+	if Typing(ghost) {
+		t.Fatalf("Hermes ghost suggestion counted as typed text: %q", composerContent(ghost))
+	}
+	if reason := ComposerBlockReason(ghost, nil); reason != "" {
+		t.Fatalf("Hermes ghost suggestion blocked delivery with %q", reason)
+	}
+	// The same sentence in a NON-Hermes pane must still count as somebody's
+	// text: italic is only Hermes' not-input marker, nowhere else's.
+	if !Typing(claudeStyle("❯ \x1b[3mDraft a reply to the last email in my inbox\x1b[0m")) {
+		t.Fatal("italic text in a non-Hermes pane was wrongly discarded")
+	}
+}
+
+// claudeStyle builds a minimal non-Hermes pane holding one composer row.
+func claudeStyle(row string) string {
+	return "some transcript above\n" + row + "\n"
 }
 
 func TestBusyReadsTheHermesComposerRow(t *testing.T) {

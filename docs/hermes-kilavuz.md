@@ -22,7 +22,8 @@ SÜREKLİ AÇIK sohbetle çalışır — headless (`hermes -z` / `-Q`) KULLANMA.
   `deepseek/deepseek-v4-flash`'a düşer — ÇOK ucuz ama PARALI (Tuna'nın kitap
   anahtarı, aylık 20 USD; 8-eşzamanlı koca batch fallback dahil ~0.13 USD tuttu,
   ölçüldü). Büyük batch sonrası endişen varsa blueprint'e sor, harcamayı
-  anahtardan ölçüyor.
+  anahtardan ölçüyor. **Tuna kararı (22 Ağu): fallback AÇIK KALIR** — kapatma
+  ya da eşik koyma önerisi getirme. Ayrı anahtar konusu ertelendi.
 
 ## Mesajlaşma — DEMİR KURALLAR
 

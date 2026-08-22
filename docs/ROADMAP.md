@@ -319,6 +319,13 @@ yerini almıyor.
 
 ## Reddedilenler (tekrar tartışılmasın diye)
 
+- **Hermes'e headless teslimat kanalı** (`hermes -p <bot> chat -Q` tek-tur sorgu /
+  Bot Mode `message_agent` / peer API — TUI paste yerine): **Tuna kararı 2026-08-22:
+  çalışan TÜM agentların tmux altında sohbeti SÜREKLİ AÇIK olacak, bugünkü Claude
+  Code mantığı gibi.** Headless kanal her mesajı ayrı görünmez oturumda koşturur,
+  tmux'taki açık sohbeti baypas eder — modele aykırı. Teslimat TUI paste'iyle kalır
+  (33ea080); Hermes'in ajan-arası araçları not olarak burada, tekrar açılmasın.
+
 - **Zamana dayalı OTOMATİK compaction** — bedeli peşin, boşta agent zaten maliyetsiz.
   Yerine teslim anında compact. (Reddedilen "otomatik" kısmı: zamanlayıcı. `bp compact`'in
   boşta-kalma eşiği bu maddeye girmez — elle çalıştırılır ve varsayılanı listelemektir;

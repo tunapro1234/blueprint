@@ -153,7 +153,7 @@ const hermesTailRows = 14
 // markers are colour- and italic-rendered, and StripDim would delete rows we
 // depend on.
 func hermesRegion(pane string) []string {
-	lines := strings.Split(pane, "\n")
+	lines := trimTrailingBlank(strings.Split(pane, "\n"))
 	start := len(lines) - hermesTailRows
 	if start < 0 {
 		start = 0
@@ -163,6 +163,24 @@ func hermesRegion(pane string) []string {
 		out = append(out, strings.TrimLeft(ansiSeq.ReplaceAllString(line, ""), " \t "))
 	}
 	return out
+}
+
+// trimTrailingBlank drops the empty rows at the END of a capture, so "the last N
+// rows" means the last N rows the TUI actually DREW.
+//
+// Hermes does not paint to the bottom of a fresh window: a just-opened pane put
+// its composer at row 19 of a 39-row capture and left 20 blank rows underneath
+// (measured 2026-08-22, blueprint-hermes-fresh). Every marker was therefore
+// outside the 14-row window and the pane read as "not Hermes" — the same visible
+// failure as the "--" status field, from a completely different cause, which is
+// why the first fix looked deployed and the bug kept happening. Claude fills its
+// window, which is why no path in this package had needed this before.
+func trimTrailingBlank(lines []string) []string {
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(ansiSeq.ReplaceAllString(lines[end-1], "")) == "" {
+		end--
+	}
+	return lines[:end]
 }
 
 // HermesPane reports whether the pane's live region shows the Hermes TUI. It is

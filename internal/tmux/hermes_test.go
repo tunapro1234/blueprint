@@ -182,6 +182,18 @@ func TestFreshHermesPaneIsRecognisedBeforeItsFirstTurn(t *testing.T) {
 	if reason := ComposerBlockReason(fresh, nil); reason != "" {
 		t.Fatalf("fresh Hermes pane blocked delivery with %q", reason)
 	}
+	// A FRESH window is not painted to the bottom: the measured capture put the
+	// composer at row 19 and left 20 blank rows under it, which pushed every
+	// marker out of the tail window and made the pane read "not Hermes" even
+	// after the "--" fix. Same symptom, second cause.
+	padded := fresh + strings.Repeat("\n", 20)
+	if !HermesPane(padded) {
+		t.Fatal("a fresh pane with unpainted rows below the composer was not recognised")
+	}
+	if reason := ComposerBlockReason(padded, nil); reason != "" {
+		t.Fatalf("unpainted-tail pane blocked delivery with %q", reason)
+	}
+
 	// The status row alone must carry recognition too: the composer may be
 	// mid-redraw in the frame we captured.
 	statusOnly := "\x1b[38;5;250m ⚕ x-preview-f-free · -- · 3s\x1b[0m\n"

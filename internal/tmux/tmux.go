@@ -43,6 +43,18 @@ func composerContent(pane string) string {
 	}
 	composer = StripDim(composer) // dim placeholder/ghost metni gercek yazi DEGIL (2026-07-10)
 	after := promptLine.ReplaceAllString(composer, "")
+	if hermesPlaceholderOnly(after) {
+		// Hermes renders its placeholder ITALIC (\x1b[3m), not dim, so StripDim
+		// above leaves it standing and it would count as typed text. Measured
+		// 2026-08-22 in blueprint-hermes-test: the idle composer captures as
+		// "\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136mAsk anything, or type / for
+		// commands…\x1b[0m". Without this branch every idle Hermes pane reads as
+		// "somebody is typing" and every message to it queues forever — the
+		// deadlock of 2026-08-01..08-11, re-created by a colour code. A
+		// placeholder is not input, whichever attribute a TUI happens to draw it
+		// with.
+		return ""
+	}
 	return stripSpace(after)
 }
 
@@ -402,6 +414,19 @@ func busyRegion(pane string) []string {
 // shell command, so it would add false-positive surface (its shape survives being
 // quoted much better) for no coverage.
 func Busy(pane string) bool {
+	// A THIRD signature, added 2026-08-22: Hermes' busy composer row
+	// ("⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel"). It is asked
+	// first because it is the cheapest and because on a Hermes pane neither of the
+	// two branches below can ever fire — Hermes draws no Claude spinner and never
+	// prints "esc to interrupt", so without this branch every working Hermes pane
+	// would read idle, which is exactly the silent-detector failure the 2026-08-15
+	// rewrite of this function was about. It is also the branch with the highest
+	// stakes on this fleet: on Hermes a message delivered into a working pane
+	// INTERRUPTS the turn (see hermesForceRefused), so a false "idle" here does not
+	// merge two messages, it cancels somebody's work.
+	if hermesBusy(pane) {
+		return true
+	}
 	for _, line := range busyRegion(pane) {
 		// Only ANSI colour is stripped, never dim segments: the spinner may well be
 		// dim-rendered, and StripDim would delete the very row being tested.
@@ -712,6 +737,15 @@ func statusFooter(pane string) []string {
 // "tmux", a bare "node", or the empty string — is NOT an agent and must never
 // receive a delivered message. The whitelist is deliberately a small, documented
 // set: only known agent runtimes are allowed.
+//
+// It stays a pure COMMAND test on purpose, and Hermes is the reason that is worth
+// saying out loud: a Hermes pane reports "python" (measured 2026-08-22 in
+// blueprint-hermes-test), which is far too generic to whitelist — every REPL,
+// script and long-running job on this machine would become a legal target. Hermes
+// is therefore recognised by command AND screen together, in IsAgentPane. Callers
+// holding a capture should use that one; callers holding only a command string
+// keep this function and simply do not see Hermes, which fails in the safe
+// direction.
 func IsAgentCommand(cmd string) bool {
 	switch cmd {
 	case "claude", "codex", "bwrap":
@@ -719,6 +753,43 @@ func IsAgentCommand(cmd string) bool {
 	default:
 		return false
 	}
+}
+
+// requireAgentPane is the single guard every keypress path starts with: it
+// answers "may bp type into this pane at all" and returns ErrNotAgent when it may
+// not.
+//
+// For claude/codex/bwrap it is exactly the old check — one display-message, no
+// capture, no behavior change. The extra capture happens ONLY for a pane whose
+// command could be Hermes (python/python3/hermes), where the command alone proves
+// nothing and the screen has to be consulted. Anything else is refused before a
+// capture is even attempted, so a shell pane costs no more than it used to.
+//
+// A capture that fails is a refusal, not a pass: we do not type into panes we
+// cannot see.
+//
+// hermes reports which kind of agent was recognised, because one delivery detail
+// depends on it: a Hermes paste must be BRACKETED or its newlines submit (see
+// Client.inject).
+func (c *Client) requireAgentPane(ctx context.Context, session string) (hermes bool, err error) {
+	cmd, err := c.PaneCommand(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if IsAgentCommand(cmd) {
+		return false, nil
+	}
+	if !IsHermesCommand(cmd) {
+		return false, ErrNotAgent
+	}
+	pane, err := c.Capture(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if !HermesPane(pane) {
+		return false, ErrNotAgent
+	}
+	return true, nil
 }
 
 // isShellCommand reports whether cmd is an interactive shell — the pane state
@@ -895,12 +966,8 @@ const (
 func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	// Same chokepoint discipline as Send: C-u at a shell prompt would erase
 	// whatever a human left typed there.
-	cmd, err := c.PaneCommand(ctx, session)
-	if err != nil {
+	if _, err := c.requireAgentPane(ctx, session); err != nil {
 		return err
-	}
-	if !IsAgentCommand(cmd) {
-		return ErrNotAgent
 	}
 	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
@@ -937,12 +1004,8 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 // Reports whether it actually cleared anything, so the caller can say so out
 // loud instead of clearing a human's composer in silence.
 func (c *Client) ClearDelivered(ctx context.Context, session string, texts []string) (bool, error) {
-	cmd, err := c.PaneCommand(ctx, session)
-	if err != nil {
+	if _, err := c.requireAgentPane(ctx, session); err != nil {
 		return false, err
-	}
-	if !IsAgentCommand(cmd) {
-		return false, ErrNotAgent
 	}
 	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
@@ -986,9 +1049,18 @@ func composerFilled(pane string) bool {
 // At least one press always happens, because that invisible state is the whole
 // reason ClearComposer exists — a composer that reads empty can still refuse the
 // next paste.
+// On a HERMES pane the bound is raised to fit what is actually on screen. C-u
+// kills one line there too (measured 2026-08-22 in blueprint-hermes-test), but
+// Hermes has no paste chip: a pasted message is rendered as raw continuation rows,
+// so an N-row paste genuinely needs N presses and the fixed bound of 8 would leave
+// the tail of anything longer sitting in the composer — blocking that agent's
+// queue behind text bp itself put there. The budget is recomputed from each fresh
+// capture (rows + hermesClearMargin, capped by hermesClearAttemptsMax) and only
+// ever GROWS the loop, never shrinks it below composerClearAttempts.
 func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []string) error {
 	target := "=" + session + ":"
-	for attempt := 0; attempt < composerClearAttempts; attempt++ {
+	budget := composerClearAttempts
+	for attempt := 0; attempt < budget; attempt++ {
 		if _, err := c.run(ctx, nil, "send-keys", "-t", target, "C-u"); err != nil {
 			return err
 		}
@@ -1007,6 +1079,9 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 		if _, ok := StuckPaste(pane, mine); !ok {
 			// What is left is not ours to erase.
 			return ErrTyping
+		}
+		if need := hermesClearBudget(pane); need > budget {
+			budget = need
 		}
 	}
 	return ErrTyping
@@ -1109,12 +1184,9 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 	// receive the message text at its shell prompt. Send is the single delivery
 	// chokepoint, so checking here covers every path (deliver->Send,
 	// msgq.Dispatch->Send). The check targets the exact pane keystrokes go to.
-	cmd, err := c.PaneCommand(ctx, session)
+	hermes, err := c.requireAgentPane(ctx, session)
 	if err != nil {
 		return nil, err
-	}
-	if !IsAgentCommand(cmd) {
-		return nil, ErrNotAgent
 	}
 	target := "=" + session + ":"
 	finished, firstPane, outcome, err := c.resolveStuckPaste(ctx, target, session, message, pending, force)
@@ -1139,7 +1211,7 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 	if !ready {
 		return finished, ErrTyping
 	}
-	if err := c.inject(ctx, target, message); err != nil {
+	if err := c.inject(ctx, target, message, hermes); err != nil {
 		return finished, err
 	}
 
@@ -1156,7 +1228,7 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		// submit would have reported after the same check.
 		return finished, ErrUnverified
 	}
-	pane, ok := c.checkPaste(ctx, target, session, message, pane)
+	pane, ok := c.checkPaste(ctx, target, session, message, pane, hermes)
 	if !ok {
 		return finished, c.provenFailure(ctx, session, pane, composerBrokenReason)
 	}
@@ -1226,12 +1298,27 @@ func composerSnapshot(pane string) string {
 // exactly how single-line federation messages arrived mangled. A paste is
 // inserted as text in any mode, and it is also what keeps external message
 // content data rather than keys.
-func (c *Client) inject(ctx context.Context, target, message string) error {
+// bracketed asks tmux to wrap the paste in bracketed-paste markers (-p). It is
+// set for HERMES targets only, and it is not cosmetic: without it Hermes reads
+// every newline in the buffer as a submit. Measured 2026-08-22 in
+// blueprint-hermes-test — a three-line message pasted unbracketed went out as
+// three separate messages, the second and third of them INTERRUPTING the turn the
+// first had just started ("⚡ Sending after interrupt: …"). With -p the same
+// message stayed in the composer as three rows and left on one Enter. tmux only
+// emits the markers when the application requested bracketed paste, so the flag
+// is inert elsewhere; it is still scoped to Hermes because Claude's paste-chip
+// thresholds and Codex's expand-then-submit behavior were both measured under the
+// unbracketed paste this package has always used.
+func (c *Client) inject(ctx context.Context, target, message string, bracketed bool) error {
 	buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
 	if _, err := c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
 		return err
 	}
-	if _, err := c.run(ctx, nil, "paste-buffer", "-b", buffer, "-d", "-t", target); err != nil {
+	paste := []string{"paste-buffer", "-b", buffer, "-d", "-t", target}
+	if bracketed {
+		paste = []string{"paste-buffer", "-b", buffer, "-d", "-p", "-t", target}
+	}
+	if _, err := c.run(ctx, nil, paste...); err != nil {
 		// A failed paste may leave the uniquely named buffer behind.
 		_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
 		return err
@@ -1288,7 +1375,7 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 	if err != nil {
 		return nil, "", stuckAbsent, err
 	}
-	if Busy(pane) && !force {
+	if Busy(pane) && (!force || hermesForceRefused(pane)) {
 		// A pane mid-turn is refused HERE, before anything is pasted. It used to
 		// fall through as stuckAbsent into readyToSend, which asks about typing,
 		// credentials and client activity but never about BUSY — so a message was
@@ -1306,6 +1393,18 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 		// transcript rather than by the screen. The gates BELOW this one are not
 		// touched by force: a filled composer, a keyboard in use and an expired
 		// login refuse a forced message exactly as they refuse any other.
+		//
+		// AND ONE PANE TYPE TAKES BACK THE EXCEPTION (2026-08-22). On a Hermes
+		// pane the busy gate is ABSOLUTE, force or not. Measured in
+		// blueprint-hermes-test: a working Hermes draws
+		// "⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel" — Enter
+		// while busy INTERRUPTS the turn rather than queueing behind it (Hermes'
+		// own queue needs a /queue prefix, i.e. rewriting the operator's message,
+		// which bp does not do). Everything --force-busy was designed around
+		// assumes the worst case is an awkwardly interleaved message; here the
+		// worst case is a cancelled turn, the same harm as pressing Escape, which
+		// bp has been forbidden from doing since 2026-08-11. So a forced message
+		// to a busy Hermes queues like any other and goes in when the turn ends.
 		return nil, "", stuckAbsent, ErrBusy
 	}
 	// An empty composer is the overwhelmingly common case and needs nothing from
@@ -1376,7 +1475,7 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 // accepted but drew differently are all invisible here — the box is evidence
 // about the screen, not about the composer's internal buffer. The final witness
 // for a delivery is still the agent's own transcript (see msgq reconciliation).
-func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string) (string, bool) {
+func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string, bracketed bool) (string, bool) {
 	switch c.pasteIntegrity(pane, message) {
 	case pasteIntact:
 		return pane, true
@@ -1387,7 +1486,7 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		if err := c.clearWithCtrlU(ctx, session, []string{message}); err != nil {
 			return pane, false
 		}
-		if err := c.inject(ctx, target, message); err != nil {
+		if err := c.inject(ctx, target, message, bracketed); err != nil {
 			return pane, false
 		}
 		c.Sleep(composerSettleWindow)
@@ -1622,8 +1721,15 @@ func (c *Client) recoverTrailingNewlines(ctx context.Context, target, session, w
 }
 
 type OpenOptions struct {
-	Resume   bool
-	Codex    bool
+	Resume bool
+	Codex  bool
+	// Hermes launches the Hermes Agent TUI (/usr/local/bin/hermes) instead of
+	// claude. It follows the Codex precedent exactly: a plain command override, no
+	// --resume (Hermes keeps no Claude-style session files, so there is no id to
+	// resume by), and none of the Claude-only slash commands afterwards —
+	// /rename and /remote-control would be typed into the composer as literal
+	// text. The onboarding brief is still sent, as it is for Codex.
+	Hermes   bool
 	NoPrompt bool
 	Legacy   bool
 }
@@ -1782,7 +1888,13 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		if err != nil {
 			return nil // unreadable pane: assume open rather than double-launch
 		}
-		if IsAgentCommand(process.Command) {
+		// The screen is consulted alongside the command because a live Hermes pane
+		// reports "python": on the command alone this branch would refuse to
+		// reopen it ("pane runs \"python\"") and, worse, an operator following that
+		// advice would `bp close` a working agent. A capture error leaves pane
+		// empty, which IsAgentPane treats as "command only" — the old answer.
+		pane, _ := c.Capture(ctx, session)
+		if IsAgentPane(process.Command, pane) {
 			return nil
 		}
 		if !isShellCommand(process.Command) {
@@ -1806,7 +1918,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
 	// hostname yerine agent adi gorunur).
 	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions"
-	if opts.Resume && !opts.Codex {
+	if opts.Resume && !opts.Codex && !opts.Hermes {
 		// Resume THIS agent's own conversation by id, not `claude -c` (which
 		// continues whichever conversation in the cwd is most recent and so
 		// grabs a co-located agent's session in a shared directory).
@@ -1818,6 +1930,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	if opts.Codex {
 		command = `codex -c model_reasoning_effort="high"`
+	}
+	if opts.Hermes {
+		command = hermesBin
 	}
 	if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", command, "Enter"); err != nil {
 		return err
@@ -1831,7 +1946,19 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		pane, err := c.Capture(ctx, session)
 		if err == nil {
 			lower := strings.ToLower(pane)
-			if opts.Codex {
+			if opts.Hermes {
+				// Readiness for Hermes is the idle composer placeholder: the one
+				// screen that proves the TUI has finished booting AND is not
+				// mid-turn, so the onboarding paste below lands in a composer that
+				// can take it. Nothing is pressed while waiting — Hermes showed no
+				// trust/permission modal at first launch (measured 2026-08-22 in
+				// blueprint-hermes-test), and a modal nobody has seen is not
+				// something to guess Enter at.
+				if HermesIdle(pane) {
+					ready = true
+					break
+				}
+			} else if opts.Codex {
 				if !trusted && strings.Contains(lower, "trust") && strings.Contains(lower, "directory") {
 					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
 					trusted = true
@@ -1868,7 +1995,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		warn("WARNING: agent did not appear ready; continuing anyway")
 	}
 	c.Sleep(time.Second)
-	if !opts.Codex {
+	if !opts.Codex && !opts.Hermes {
 		_ = c.Send(ctx, session, "/rename "+session)
 		c.Sleep(time.Second)
 		_ = c.Send(ctx, session, "/remote-control")

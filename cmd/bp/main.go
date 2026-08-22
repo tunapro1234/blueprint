@@ -41,7 +41,7 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp status [--json] | bp tree
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--no-prompt]
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-prompt]
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -983,7 +983,7 @@ func codexContext(usage *codexrpc.ThreadTokenUsage) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
 	for _, positional := range []string{name, dir} {
@@ -1001,6 +1001,12 @@ func (a *app) open(args []string) error {
 			opts.Resume = true
 		case "--codex":
 			opts.Codex = true
+		case "--hermes":
+			// Launches the Hermes Agent TUI instead of claude, on the Codex
+			// precedent: a command override and nothing else. Hermes keeps no
+			// Claude-style session files, so --resume has nothing to resume and is
+			// ignored for it (see OpenOptions.Hermes).
+			opts.Hermes = true
 		case "--no-prompt":
 			opts.NoPrompt = true
 		case "--worktree":
@@ -1047,7 +1053,12 @@ func (a *app) open(args []string) error {
 		// already open; a dead shell falls through to Open, which relaunches
 		// the agent in place (or errors if the pane runs something else).
 		process, perr := a.tmux.PaneProcess(a.ctx, name)
-		if perr != nil || bptmux.IsAgentCommand(process.Command) {
+		// The screen is part of the answer: a live Hermes pane reports "python"
+		// (measured 2026-08-22), and on the command alone `bp open` would decide the
+		// agent had crashed and try to relaunch a CLI on top of a working one. An
+		// unreadable pane leaves this exactly as it was.
+		pane, _ := a.tmux.Capture(a.ctx, name)
+		if perr != nil || bptmux.IsAgentPane(process.Command, pane) {
 			// Nothing to launch — but explicit --parent/--role is a correction
 			// of the agentbook entry, so it still applies to a running agent.
 			if reg.Parent != "" || reg.Role != "" {

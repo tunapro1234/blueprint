@@ -42,6 +42,14 @@ const (
 	// A tool result quoting the interrupt marker — this very package was written
 	// in a session whose transcript contains that string. It must not close a turn.
 	recQuotesInterrupt = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_02","type":"tool_result","content":"grep sonucu: [Request interrupted by user]"}]},"timestamp":"2026-08-15T17:40:00.000Z"}`
+	// What /compact leaves behind, measured in bp's own control session on
+	// 2026-08-22: a boundary, a continuation summary flagged isCompactSummary,
+	// and the slash command's local echoes — user records nobody is answering.
+	// They held that agent "working" for 6.5 minutes at an empty composer.
+	recCompactBoundary = `{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","level":"info","isSidechain":false,"timestamp":"2026-08-22T12:08:19.384Z"}`
+	recCompactSummary  = `{"type":"user","isSidechain":false,"isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion."},"timestamp":"2026-08-22T12:08:18.945Z"}`
+	recCommandName     = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>"},"timestamp":"2026-08-22T12:05:34.049Z"}`
+	recCommandStdout   = `{"type":"user","isSidechain":false,"message":{"role":"user","content":"<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>"},"timestamp":"2026-08-22T12:08:19.482Z"}`
 )
 
 var recordStamp = regexp.MustCompile(`"timestamp":"[^"]*"`)
@@ -177,6 +185,28 @@ func TestTurnOpenPhases(t *testing.T) {
 		age:     time.Minute,
 		records: append(append([]string{recPrompt}, idleTail...), recBridge, recQueueOp),
 		want:    false,
+	}, {
+		// The 2026-08-22 incident: a manual /compact on an IDLE agent. The last
+		// turn closed before the boundary; the compact's own user records must
+		// not reopen it, or every compacted agent waits out the ceiling.
+		name:    "manual compact on an idle agent",
+		age:     time.Minute,
+		records: append(append([]string{recPrompt}, idleTail...), recCommandName, recCompactBoundary, recCompactSummary, recCommandStdout),
+		want:    false,
+	}, {
+		// Any local slash command (/model, /rename) echoes the same way.
+		name:    "slash command echo is not a prompt",
+		age:     time.Minute,
+		records: append(append([]string{recPrompt}, idleTail...), recCommandName, recCommandStdout),
+		want:    false,
+	}, {
+		// An auto-compact MID-turn: the tool records before the boundary still
+		// know the phase, and skipping the compact records must not blind the
+		// gate to them.
+		name:    "auto-compact mid-turn stays open",
+		age:     time.Minute,
+		records: []string{recPrompt, recToolUse, recToolResult, recCompactBoundary, recCompactSummary},
+		want:    true,
 	}, {
 		name:    "unparsable tail",
 		age:     time.Minute,

@@ -193,6 +193,9 @@ type turnRecord struct {
 	// InterruptedMessageID is present ONLY on the record Claude Code writes when
 	// a turn is interrupted, which makes it the reliable half of that detection.
 	InterruptedMessageID string `json:"interruptedMessageId"`
+	// IsCompactSummary marks the "This session is being continued..." user record
+	// that /compact writes. It is not a prompt anyone is answering.
+	IsCompactSummary bool `json:"isCompactSummary"`
 	// Timestamp is when the record was RECORDED (not written — a streamed answer's
 	// records carry timestamps minutes apart and hit the disk together). It is
 	// what the ceiling measures against.
@@ -257,6 +260,19 @@ func classifyTurnRecord(line []byte) (int, string) {
 		if record.IsMeta {
 			return turnNone, ""
 		}
+		// /compact leaves user records nobody is answering, and they held this
+		// fleet's own control agent "working" for 6.5 measured minutes on
+		// 2026-08-22 (message 12:14, compact 12:08 — the queue waited on the
+		// ceiling while the pane sat at an empty composer). The continuation
+		// summary carries isCompactSummary; the slash-command echoes
+		// ("<command-name>...", "<local-command-stdout>...") carry no flag but
+		// no other record starts with those tags. None of them is a prompt: in
+		// a manual compact the turn-closing records before the boundary keep
+		// the verdict, and in an auto-compact mid-turn the surrounding tool
+		// records do — either way the record that knows the phase still wins.
+		if record.IsCompactSummary || localCommandEcho(record.Message.Content) {
+			return turnNone, ""
+		}
 		// A real prompt and a tool_result are the same thing to this gate: the
 		// agent has been handed something and no answer has been recorded yet.
 		return turnOpenVerdict, record.Timestamp
@@ -281,26 +297,54 @@ var turnEndingStop = map[string]bool{
 	"refusal":       true,
 }
 
-// interruptedText reports whether a user record's content is the interrupt
-// marker. The content is a list of text blocks in every interrupt record
-// measured, but older records store plain strings, so both shapes are read.
-func interruptedText(content json.RawMessage) bool {
+// localCommandEcho reports whether a user record is a slash command's local echo
+// rather than a prompt. Checked on the DECODED content for the same reason as
+// interruptedText: transcripts quote these tags constantly.
+func localCommandEcho(content json.RawMessage) bool {
+	for _, text := range contentTexts(content) {
+		trimmed := strings.TrimSpace(text)
+		if strings.HasPrefix(trimmed, "<command-name>") ||
+			strings.HasPrefix(trimmed, "<local-command-stdout>") ||
+			strings.HasPrefix(trimmed, "<local-command-caveat>") {
+			return true
+		}
+	}
+	return false
+}
+
+// contentTexts decodes a user record's content into its text pieces. Both
+// measured shapes are read: a plain string (older records) and a list of text
+// blocks.
+func contentTexts(content json.RawMessage) []string {
 	if len(content) == 0 {
-		return false
+		return nil
 	}
 	var text string
 	if json.Unmarshal(content, &text) == nil {
-		return strings.HasPrefix(strings.TrimSpace(text), interruptedPrefix)
+		return []string{text}
 	}
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
 	if json.Unmarshal(content, &blocks) != nil {
-		return false
+		return nil
 	}
+	texts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		if block.Type == "text" && strings.HasPrefix(strings.TrimSpace(block.Text), interruptedPrefix) {
+		if block.Type == "text" {
+			texts = append(texts, block.Text)
+		}
+	}
+	return texts
+}
+
+// interruptedText reports whether a user record's content is the interrupt
+// marker. The content is a list of text blocks in every interrupt record
+// measured, but older records store plain strings, so both shapes are read.
+func interruptedText(content json.RawMessage) bool {
+	for _, text := range contentTexts(content) {
+		if strings.HasPrefix(strings.TrimSpace(text), interruptedPrefix) {
 			return true
 		}
 	}

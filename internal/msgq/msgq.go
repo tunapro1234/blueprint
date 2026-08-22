@@ -1083,7 +1083,16 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// below, so the delivery keeps the pane lock, the composer refusals and the
 	// verification; what it gives up is the screen's ability to CONFIRM it, which
 	// is why such a record usually ends up in the transcript witness's hands.
-	if !rec.ForceBusy && (bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(rec.To))) {
+	// ...with ONE pane type excepted from the exception (2026-08-22): a busy
+	// HERMES pane. There, submitting text mid-turn INTERRUPTS the turn instead of
+	// queueing behind it — the pane says so itself, drawing
+	// "⚕ ❯ msg=interrupt · /queue · …" while it works (measured in
+	// blueprint-hermes-test). A forced record would therefore not jump the queue,
+	// it would cancel the work the sender wanted to reach. Client.SendForce
+	// refuses this too and is the real guarantee; the check is repeated here so the
+	// record gets the honest "pane calisiyor" reason a human can read in `bp q`
+	// instead of a delivery error.
+	if (!rec.ForceBusy || bptmux.HermesPane(pane)) && (bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(rec.To))) {
 		q.remember(rec.path, rec.Message, bptmux.BlockedByBusyPane, report)
 		line.block(rec.ID)
 		return

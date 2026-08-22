@@ -542,11 +542,20 @@ func (s *Service) busySanity(ctx context.Context) error {
 		// activity side would eventually raise an alarm about nothing — which is
 		// the one way a watchdog like this gets ignored.
 		process, err := s.tmux.PaneProcess(ctx, session)
-		if err != nil || !bptmux.IsAgentCommand(process.Command) {
+		if err != nil {
 			continue
 		}
 		pane, err := s.tmux.Capture(ctx, session)
 		if err != nil {
+			continue
+		}
+		// The capture is taken BEFORE the agent test rather than after it, because
+		// the test now needs it: a Hermes pane reports "python" and is only an agent
+		// pane when its screen says so (2026-08-22). The order change costs one
+		// capture per non-agent session in a sweep that already captures every agent
+		// one, and buys the watchdog its Hermes samples — a signature that drifts on
+		// a pane type nobody is sampling is a signature nobody finds out about.
+		if !bptmux.IsAgentPane(process.Command, pane) {
 			continue
 		}
 		hash := paneHash(pane)

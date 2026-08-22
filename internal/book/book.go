@@ -669,7 +669,14 @@ func LiveStates(ctx context.Context, client *bptmux.Client, fleet *Fleet) (map[s
 			Busy:       screenBusy || turnBusy,
 			ScreenBusy: screenBusy,
 			TurnBusy:   turnBusy,
-			Dead:       commands != nil && !bptmux.IsAgentCommand(commands[name]),
+			// Dead is decided on the command AND the screen. The screen half is
+			// there for Hermes, whose pane reports "python" (measured 2026-08-22 in
+			// blueprint-hermes-test): on the command alone every live Hermes agent
+			// would be listed as a dead shell, and `bp status` saying "dead" about a
+			// working agent is the kind of wrong that gets acted on. pane is empty
+			// when the capture failed, and IsAgentPane then falls back to the
+			// command — the answer this line used to give.
+			Dead: commands != nil && !bptmux.IsAgentPane(commands[name], pane),
 		}
 	}
 	return states, nil

@@ -1799,3 +1799,55 @@ func TestFollowerForcedMessageRefusesAHeldComposerOnAWorkingPaneToo(t *testing.T
 		t.Fatalf("reason=%q, want %q", waiting.Reason, bptmux.BlockedByForeignText)
 	}
 }
+
+// hermesBusyPane is the live BUSY screen of a Hermes Agent pane, measured
+// 2026-08-22 in the tmux session blueprint-hermes-test: a kaomoji spinner frame,
+// the status row (model · context% · turn age), and the composer prefixed with the
+// caduceus. "msg=interrupt" is Hermes stating what Enter does right now.
+func hermesBusyPane() string {
+	return strings.Join([]string{
+		"╭─ ⚕ Hermes ──────────────────────────────────────╮",
+		"onceki cevabin son satiri",
+		"╰─────────────────────────────────────────────────╯",
+		"  (¬_¬) processing...",
+		"",
+		" ⚕ x-preview-f-free · 2% · 12m               ─ Say ve /srv dizin...",
+		"────────────────────────────────────────────────────────────────────",
+		"⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel",
+		"────────────────────────────────────────────────────────────────────",
+		"",
+	}, "\n")
+}
+
+func TestForcedRecordStillWaitsForABusyHermes(t *testing.T) {
+	// The one pane type --force-busy may not jump. On Claude/Codex a forced
+	// message is typed into a working pane and interleaves with the turn; on
+	// Hermes the same keystrokes CANCEL it — the composer says so itself
+	// ("msg=interrupt"), and queueing there needs a /queue prefix, i.e. rewriting
+	// the operator's message, which bp does not do. So the record waits, with the
+	// ordinary busy reason a human can read in `bp q`.
+	now := time.Date(2026, 8, 22, 11, 0, 0, 0, time.Local)
+	busy := false // the transcript knows nothing about Hermes: no session file
+	q := busyForceQueue(t, &now, &busy)
+	forced, err := q.EnqueueForce("target", "wa", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: hermesBusyPane()}
+	if !bptmux.Busy(target.pane) {
+		t.Fatal("fixture is not a busy Hermes pane: the test would prove nothing")
+	}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if target.calls != 0 || len(target.forced) != 0 {
+		t.Fatalf("a forced message interrupted a working Hermes: calls=%d forced=%v", target.calls, target.forced)
+	}
+	record, err := read(filepath.Join(q.pending(), forced+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Reason != bptmux.BlockedByBusyPane || record.ForcedAt != 0 {
+		t.Fatalf("record=%+v, want it waiting like any other busy target", record)
+	}
+}

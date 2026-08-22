@@ -173,7 +173,22 @@ func composerBox(pane string) (string, bool) {
 
 // composerBoxAt is composerBox plus the row index of the box's TOP border, which
 // is what tells a complete view apart from a scrolling one (composerBoxScrolled).
+//
+// Two readers, tried in order. The Claude one (claudeComposerBoxAt) is unchanged
+// and still decides for every pane it recognises. Only when it finds nothing does
+// the Hermes reader get a look, and that one refuses outright unless the screen
+// is provably Hermes — so no existing verdict about a Claude or Codex pane can
+// change shape here. Hermes needs its own reader because it anchors its box the
+// other way round (status row ABOVE, no "-- INSERT --" footer at all); see
+// hermesComposerBox.
 func composerBoxAt(pane string) (string, int, bool) {
+	if box, top, ok := claudeComposerBoxAt(pane); ok {
+		return box, top, true
+	}
+	return hermesComposerBox(pane)
+}
+
+func claudeComposerBoxAt(pane string) (string, int, bool) {
 	lines := strings.Split(pane, "\n")
 	status := -1
 	for i, line := range lines {

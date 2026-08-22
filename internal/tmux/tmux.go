@@ -41,18 +41,31 @@ func composerContent(pane string) string {
 	if composer == "" {
 		return ""
 	}
+	if HermesPane(pane) {
+		// Hermes renders placeholder and ghost text ITALIC (\x1b[3m), not dim,
+		// so StripDim below leaves it standing and it would count as typed
+		// text. And the text ROTATES: the idle composer shows "Ask anything,
+		// or type / for commands…" on some panes and a suggestion like "Draft
+		// a reply to the last email in my inbox" on others (both measured
+		// 2026-08-22 — blueprint-hermes-test and probot-outreach-ig-error,
+		// same wrapper byte for byte: "\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136m…
+		// \x1b[0m"). A text allowlist therefore cannot work — the first
+		// version matched only the "Ask anything" sentence, and the first
+		// five real Hermes agents opened on this fleet all queued forever
+		// behind "composer'da yabanci metin var" over a suggestion nobody
+		// typed. The ATTRIBUTE is the signature: italic is Hermes' "this is
+		// not input", exactly as dim is Claude's, so italic segments are
+		// removed the same way — but only on a pane the screen proves is
+		// Hermes, because in a foreign TUI italic could be anybody's real
+		// text.
+		composer = hermesGhostSeg.ReplaceAllString(composer, "")
+	}
 	composer = StripDim(composer) // dim placeholder/ghost metni gercek yazi DEGIL (2026-07-10)
 	after := promptLine.ReplaceAllString(composer, "")
 	if hermesPlaceholderOnly(after) {
-		// Hermes renders its placeholder ITALIC (\x1b[3m), not dim, so StripDim
-		// above leaves it standing and it would count as typed text. Measured
-		// 2026-08-22 in blueprint-hermes-test: the idle composer captures as
-		// "\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136mAsk anything, or type / for
-		// commands…\x1b[0m". Without this branch every idle Hermes pane reads as
-		// "somebody is typing" and every message to it queues forever — the
-		// deadlock of 2026-08-01..08-11, re-created by a colour code. A
-		// placeholder is not input, whichever attribute a TUI happens to draw it
-		// with.
+		// The text fallback still matters: most captures in this package are
+		// PLAIN (capture-pane without -e), and there the italic wrapper is
+		// gone — the "Ask anything" sentence is all there is to recognise.
 		return ""
 	}
 	return stripSpace(after)

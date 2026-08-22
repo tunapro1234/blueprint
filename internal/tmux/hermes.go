@@ -215,6 +215,15 @@ func hermesForceRefused(pane string) bool {
 	return hermesBusy(pane) && HermesPane(pane)
 }
 
+// hermesGhostSeg matches one italic-rendered segment in an ANSI capture:
+// \x1b[3m up to the reset that ends it (\x1b[0m, or \x1b[23m = italic off).
+// Inner colour codes (the measured wrapper nests \x1b[38;5;136m inside the
+// italic) are consumed by the non-greedy body. It is the italic twin of
+// tmux.go's dimSeg, and it is applied ONLY to rows of a screen-confirmed
+// Hermes pane: Hermes marks everything that is not input — the idle
+// placeholder and the rotating ghost suggestions — with this one attribute.
+var hermesGhostSeg = regexp.MustCompile("\x1b\\[3m.*?\x1b\\[(?:0|23)m")
+
 // hermesPlaceholderOnly reports whether a composer row (prompt marker already
 // stripped, ANSI/dim already removed) is nothing but the Hermes placeholder.
 //
@@ -321,7 +330,10 @@ func hermesComposerBox(pane string) (string, int, bool) {
 	}
 	out := make([]string, 0, len(rows))
 	for k, row := range rows {
-		clean := StripDim(row)
+		// Ghost/placeholder text is italic-marked in ANSI captures; strip it
+		// before StripDim erases the attribute that identifies it (plain
+		// captures carry no italic wrapper and pass through unchanged).
+		clean := StripDim(hermesGhostSeg.ReplaceAllString(row, ""))
 		if k == 0 {
 			clean = promptLine.ReplaceAllString(clean, "")
 			if hermesPlaceholderOnly(clean) {

@@ -749,6 +749,14 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 	if message.Reason == exhaustedReason {
 		status = "not delivered (verification failed)"
 	}
+	// Ask the pane what is true NOW. A notice written from the failure's own
+	// memory describes a moment that has usually passed.
+	hanging := false
+	if target != nil {
+		if pane, err := target.CaptureAnsi(ctx, message.To); err == nil {
+			hanging = stillHolds(pane, message.Msg)
+		}
+	}
 	if q.shouldNotify(message) {
 		// Notified is persisted BEFORE the notice is queued. A crash in between
 		// costs one missing notice; the other order would risk sending the same
@@ -769,7 +777,7 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 					message.ID, home, message.From))
 			}
 		default:
-			if _, err := q.enqueueLocked(home, "bp", noticeText(message), enqueueOptions{}); err != nil {
+			if _, err := q.enqueueLocked(home, "bp", noticeText(message, hanging), enqueueOptions{}); err != nil {
 				if report != nil {
 					report(fmt.Sprintf("msgq: %s icin gonderene haber verilemedi: %v", message.ID, err))
 				}
@@ -802,13 +810,26 @@ func (q *Queue) shouldNotify(message Message) bool {
 // noticeText is what the sender reads: which message, to whom, how to look, and
 // enough of the opening to recognise it. It quotes the head only — a notice that
 // repeated the whole message would be indistinguishable from a re-delivery.
-func noticeText(message Message) string {
+// noticeText says what is true AT THE MOMENT THE NOTICE IS WRITTEN, not what was
+// true when the delivery failed — the two are usually different, because the
+// notice waits out the witness window first.
+//
+// stillHanging is the distinction probot-outreach asked for after receiving five
+// notices in one evening, four of which described situations they had already
+// fixed by hand (2026-08-23): "a signal that says something HAPPENED but not
+// whether it is still happening". Four stale notices hide the fifth real one, so
+// the state goes in the FIRST WORDS, where a glance finds it.
+func noticeText(message Message, stillHanging bool) string {
 	head := []rune(strings.TrimSpace(message.Msg))
 	if len(head) > noticeHeadRunes {
 		head = head[:noticeHeadRunes]
 	}
-	return fmt.Sprintf("bp: %s mesajinin (%s hedefine) teslimati dogrulanamadi; bp peek %s ile kontrol et. Bas: %s",
-		message.ID, message.To, message.To, string(head))
+	state := "SONRADAN COZULMUS OLABILIR: metin artik composer'da yok — ulastiysa islem gerekmez, ulasmadiysa yeniden gonderin"
+	if stillHanging {
+		state = "HALA ASILI: mesaj SU AN composer'da duruyor, gonderilmemis — pane bosken tek Enter yeter"
+	}
+	return fmt.Sprintf("bp: %s mesajinin (%s hedefine) teslimati dogrulanamadi. %s. bp peek %s ile bak. Bas: %s",
+		message.ID, message.To, state, message.To, string(head))
 }
 
 // writePending rewrites a pending record in place, atomically. The temp file is

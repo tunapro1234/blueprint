@@ -1908,3 +1908,34 @@ func TestUnverifiedRecordFinishesItsOwnHangingPaste(t *testing.T) {
 		t.Fatalf("a foreign composer was submitted: %v", foreign.submitted)
 	}
 }
+
+// Measured 2026-08-23: an unverified record whose text had LEFT the composer
+// held probot-outreach's queue for 200 seconds and told them to press Enter on
+// an empty composer. Nothing can finish such a record and the pane it guards is
+// free, so it must neither advise an action nor block the messages behind it.
+func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T) {
+	queue := New(t.TempDir())
+	if _, err := queue.EnqueueUnverified("kavram-main", "blueprint", "kaybolan mesaj"); err != nil {
+		t.Fatal(err)
+	}
+	later, err := queue.Enqueue("kavram-main", "blueprint", "arkadaki mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The composer is empty: the first record's text is nowhere.
+	target := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("")}
+	queue.Dispatch(context.Background(), target, nil)
+	rows, err := queue.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Reason == hangingPasteReason {
+			t.Fatalf("a vanished paste still advises an Enter: %+v", row)
+		}
+	}
+	// The message behind it must have been delivered rather than held.
+	if len(target.sent) == 0 || !strings.Contains(target.sent[len(target.sent)-1], "arkadaki mesaj") {
+		t.Fatalf("the queue stayed blocked behind a dead record: sent=%v (later=%s)", target.sent, later)
+	}
+}

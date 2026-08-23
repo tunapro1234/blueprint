@@ -133,6 +133,10 @@ const (
 	// text reach the pane at all? — unanswered, and a sender who cannot answer it
 	// repeats itself somewhere bp cannot see.
 	unverifiedReason = "paste yapildi, ekran dogrulayamadi; tekrar paste edilmeyecek, transcript tanigi bekleniyor"
+	// hangingPasteReason is the same record once the composer has been LOOKED at
+	// and still holds the text: the message never went in, and bp could not press
+	// Enter itself. This one names the action instead of the mechanism.
+	hangingPasteReason = "mesaj composer'da ASILI (gonderilmemis); bp bitiremedi — pane bosaldiginda tek Enter yeter"
 	// exhaustedReason is the other way into the same waiting state: the screen
 	// kept claiming a proven failure and three pastes could not be verified.
 	// Continuing would only produce more copies of a message that may already
@@ -676,6 +680,13 @@ func whyNotDelivered(err error) string {
 	return reason
 }
 
+// stillHolds reports whether a composer is STILL showing this record's text —
+// exact or damaged, both mean the message never went in.
+func stillHolds(pane, message string) bool {
+	_, ours := bptmux.StuckPaste(pane, []string{message})
+	return ours
+}
+
 // finishHangingPaste presses Enter on this record's own unsubmitted paste, when
 // the composer provably still holds it. Returns false for anything it may not
 // touch — a forced record (see the interlock note at the call site), a pane that
@@ -1074,6 +1085,23 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			if err := q.finish(rec.path, rec.Message, "delivered (asili paste tamamlandi)"); err != nil && report != nil {
 				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
 			}
+			return
+		} else if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil && !rec.ForceBusy && stillHolds(pane, rec.Msg) {
+			// bp could not finish it (a damaged box, a busy or asking pane, a
+			// forced record) but the text IS still sitting there — so the record
+			// must say what a PERSON should do. The old wording named the
+			// mechanism ("waiting for the transcript witness"), which is true and
+			// useless: the witness cannot settle a message that was never
+			// submitted, and probot-outreach found three of these by looking at
+			// panes rather than at bp (2026-08-23). A reason that suggests no
+			// action is the silent kind of stuck.
+			//
+			// Forced records skip this too: their held composer is the interlock
+			// doing its job, and it has its own ceiling below (holdForce). Two
+			// tests caught me changing that path tonight; the interlock stays
+			// exactly as ada and I built it.
+			q.remember(rec.path, rec.Message, hangingPasteReason, report)
+			line.block(rec.ID)
 			return
 		}
 		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {

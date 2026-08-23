@@ -1731,6 +1731,18 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 			// falling through to Enter.
 			continue
 		}
+		// A modal may have appeared AFTER the paste — the agent's own tool call
+		// can raise a permission prompt while our text sits in the composer, and
+		// with seven panes working at once that race is not rare (probot-outreach
+		// measured three of seven panes on a prompt during one salvo, 2026-08-23).
+		// Enter here would not submit the message: the dialog takes the key and
+		// answers ITSELF, selecting whatever line is highlighted — "Allow once" on
+		// a security prompt. The pre-paste gate (resolveStuckPaste) cannot see a
+		// dialog that did not exist yet, so the check is repeated here, where the
+		// key is actually pressed.
+		if hermesDialog(pane) {
+			return sendUnverified
+		}
 		switch classifyComposer(pane, want) {
 		case composerCleared:
 			// Empty composer. After we watched it hold our message this is the

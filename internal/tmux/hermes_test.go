@@ -211,6 +211,55 @@ func TestFreshHermesPaneIsRecognisedBeforeItsFirstTurn(t *testing.T) {
 	}
 }
 
+// The permission prompt measured 2026-08-23 on probot-outreach-ig-kuanta: an
+// agent's `curl | python3` heredoc tripped Hermes' security scanner. Every
+// ordinary signal here says IDLE — the composer is empty, there is no spinner —
+// and that is the trap: bp would have pasted onto the selection list and its
+// Enter would have answered "Allow once" on a security dialog.
+func TestHermesPermissionPromptIsNeverIdle(t *testing.T) {
+	dialog := strings.Join([]string{
+		"│ ❯ 1. Allow once                                                │",
+		"│   2. Allow for this session                                    │",
+		"│   3. Add to permanent allowlist                                │",
+		"│   4. Deny                                                      │",
+		"╰────────────────────────────────────────────────────────────────╯",
+		"  💻 sleep 30 + 27 commands  (04m22s · ↓ 960 tok)",
+		"  ↑/↓ to select, Enter to confirm  (62s)",
+		" ⚕ x-preview-f-free · 40% · 1.2d             ─ kuanta.md görev d...",
+		hermesRule,
+		"⚠ ❯",
+		hermesRule,
+		"",
+	}, "\n")
+	if !HermesPane(dialog) {
+		t.Fatal("the dialog screen was not recognised as Hermes")
+	}
+	if !hermesDialog(dialog) {
+		t.Fatal("permission prompt not detected")
+	}
+	if got := ComposerBlockReason(dialog, nil); got != BlockedByDialog {
+		t.Fatalf("reason = %q, want %q", got, BlockedByDialog)
+	}
+	// Forced delivery must be refused too: force overrides "the agent is
+	// working", never "a human is being asked something".
+	if got := ComposerContentBlockReason(dialog, nil); got != BlockedByDialog {
+		t.Fatalf("forced reason = %q, want %q", got, BlockedByDialog)
+	}
+	// Either marker alone is enough — the warning composer without the hint...
+	onlyMarker := strings.Join([]string{hermesStatusLine, hermesRule, "⚠ ❯", hermesRule, ""}, "\n")
+	if !hermesDialog(onlyMarker) {
+		t.Fatal("warning composer alone did not signal a dialog")
+	}
+	// ...and an ordinary idle pane still delivers.
+	if hermesDialog(hermesPane(hermesIdleRow)) {
+		t.Fatal("an idle Hermes pane was called a dialog")
+	}
+	// A non-Hermes pane is never judged by these markers.
+	if hermesDialog(claudePane("⚠ ❯")) {
+		t.Fatal("a Claude pane was judged by Hermes dialog markers")
+	}
+}
+
 func TestBusyReadsTheHermesComposerRow(t *testing.T) {
 	tests := []struct {
 		name string

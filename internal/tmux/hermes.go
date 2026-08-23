@@ -140,6 +140,56 @@ var hermesBusyComposer = regexp.MustCompile(`^` + hermesCaduceus + `\s*[❯›]`
 // second, separate bug rather than a stale binary).
 var hermesStatusRow = regexp.MustCompile(`^` + hermesCaduceus + `\s+\S.*·\s*(?:\d+%|--)\s*·`)
 
+// hermesDialogComposer matches the composer row while Hermes is WAITING FOR A
+// HUMAN DECISION. Measured 2026-08-23 on probot-outreach-ig-kuanta, whose agent
+// tried to run a `curl | python3` heredoc and hit Hermes' own security scanner:
+//
+//	│ ❯ 1. Allow once                                                │
+//	│   2. Allow for this session                                    │
+//	│   4. Deny                                                      │
+//	  ↑/↓ to select, Enter to confirm  (62s)
+//	 ⚕ x-preview-f-free · 40% · 1.2d          ─ kuanta.md görev d...
+//	────────────────────────────────────────────────────────────────
+//	⚠ ❯
+//	────────────────────────────────────────────────────────────────
+//
+// The state marker in front of the prompt is a WARNING SIGN (U+26A0) where the
+// idle pane has nothing and the busy pane has the caduceus. The composer itself
+// is EMPTY, which is exactly why this state was invisible: bp read the pane as
+// idle and would have pasted into it — and the paste's Enter would have
+// answered a security prompt whose selected line was "Allow once". bp deciding
+// a permission dialog is the same class of harm as pressing Escape into a pane,
+// and gets the same answer: refuse, wait for the human.
+//
+// "Idle" and "blocked" look identical from outside and mean opposite things
+// (probot-outreach, who found this from the other side: three of their panes
+// were reported working-but-idle for minutes while they sat on this screen).
+var hermesDialogComposer = regexp.MustCompile(`^⚠\s*[❯›]`)
+
+// hermesSelectAffordance is the second, independent signature of the same
+// state: the key hint Hermes draws under a selection list. It is textual and
+// therefore the more fragile of the two, which is why it is an OR rather than
+// a requirement — either marker is enough to refuse.
+var hermesSelectAffordance = regexp.MustCompile(`(?i)to select.*to confirm`)
+
+// hermesDialog reports whether a Hermes pane is holding a modal the HUMAN must
+// answer (a permission prompt, a selection list).
+//
+// The asymmetry is deliberate and matches every other gate in this package: a
+// wrong "blocked" costs one dispatch pass, a wrong "idle" answers somebody's
+// security prompt with a pasted message.
+func hermesDialog(pane string) bool {
+	if !HermesPane(pane) {
+		return false
+	}
+	for _, line := range hermesRegion(pane) {
+		if hermesDialogComposer.MatchString(line) || hermesSelectAffordance.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
 // hermesTailRows is how far up from the bottom of a capture the markers are
 // looked for. Same discipline as Busy/AuthExpired: a LIVE marker sits in the
 // narrow strip the TUI owns, a quotation of one usually does not. Measured, the

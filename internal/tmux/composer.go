@@ -392,6 +392,14 @@ const (
 	BlockedByForeignText = "composer'da yabanci metin var"
 	// BlockedByBusyPane is the ordinary, transient case: the agent is mid-turn.
 	BlockedByBusyPane = "pane calisiyor (esc to interrupt)"
+	// BlockedByDialog is the pane waiting on a decision only a human may make —
+	// today a Hermes permission prompt ("1. Allow once / 4. Deny"). It reads as
+	// idle by every other measure (empty composer, no spinner), which is what
+	// made it dangerous: a paste there lands on a selection list and its Enter
+	// answers the prompt. Unlike BlockedByBusyPane this one does not clear
+	// itself — it waits for a person, so `bp q` says so instead of implying
+	// patience will fix it.
+	BlockedByDialog = "onay/secim ekrani acik — yalnizca insan yanitlar"
 )
 
 // ComposerBlockReason names why a pane cannot take a message, or "" when nothing
@@ -419,6 +427,15 @@ func ComposerBlockReason(pane string, texts []string) string {
 // over somebody's half-written line. Callers that force ask this one instead and
 // keep every composer refusal intact.
 func ComposerContentBlockReason(pane string, texts []string) string {
+	// Asked before the composer, because this state has an EMPTY composer: a
+	// Hermes permission prompt would otherwise fall straight through as "idle"
+	// and take a paste onto its selection list (measured 2026-08-23, see
+	// hermesDialog). It is also checked here rather than only in Busy() so that
+	// FORCED delivery cannot skip it — force overrides "the agent is working",
+	// never "a human is being asked something".
+	if hermesDialog(pane) {
+		return BlockedByDialog
+	}
 	if !composerFilled(pane) {
 		return ""
 	}

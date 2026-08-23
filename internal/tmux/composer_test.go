@@ -1078,3 +1078,32 @@ func TestWideRuneMessageIsOursNotDamaged(t *testing.T) {
 		}
 	}
 }
+
+// The half of the emoji fix that the lab could not see (2026-08-24). The GATE
+// (classifyPaste) accepted a lossy render as ours, but submit() compared the
+// composer against the message a second time and called it foreign — so Enter
+// went in, nothing verified, and the record left through the delivery layer's
+// one silent exit (stuckUnresolved -> ErrTyping: no reason, no attempt, no
+// notice). Eight of probot-outreach's 68-column panes sat like that with the
+// queue saying nothing at all.
+//
+// The lab missed it because a 200-column pane does not WRAP the message, and
+// without wrapping the emoji costs no character.
+func TestSubmitTimeComparisonToleratesWideRuneRender(t *testing.T) {
+	want := stripSpace("[bp] UYARI: komut satirina ✍️ / ✅ emojisi YAZMA — gorunmez Unicode tasiyor, guvenlik taramasi kilitliyor.")
+	// The pane as it was measured live: one character short, wrapped.
+	rendered := strings.Replace("[bp] UYARI: komut satirina ✍️ / ✅ emojisi YAZMA — gorunmez Unicode tasiyor, guvenlik taramasi kilitliyor.", "gorunmez", "grunmez", 1)
+	pane := claudePane("❯ " + rendered)
+	if got := classifyComposer(pane, want); got != composerMine {
+		t.Fatalf("classifyComposer = %v, want composerMine — a wrapped emoji render is still OUR text", got)
+	}
+	// Somebody else's text is still foreign, wide runes or not.
+	if got := classifyComposer(claudePane("❯ insanin kendi yazdigi bambaska bir cumle ✍️"), want); got != composerOther {
+		t.Fatalf("classifyComposer = %v, want composerOther", got)
+	}
+	// And a plain-ASCII message keeps the strict comparison.
+	plain := stripSpace("[bp] duz metin mesaji, hicbir genis karakter yok, yeterince uzun.")
+	if got := classifyComposer(claudePane("❯ [bp] duz metin mesaji, hicbir genis karakter yk, yeterince uzun."), plain); got != composerOther {
+		t.Fatalf("classifyComposer = %v, want composerOther for a plain-text mismatch", got)
+	}
+}

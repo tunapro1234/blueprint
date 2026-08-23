@@ -231,6 +231,23 @@ func classifyComposer(pane, want string) composerVerdict {
 	if got == want || strings.HasPrefix(want, got) || strings.HasPrefix(got, want) {
 		return composerMine
 	}
+	// The SUBMIT-time twin of the wide-rune rule in classifyPaste, and the half
+	// that was missing until 2026-08-24. A message carrying emoji renders with a
+	// character missing once the composer WRAPS it ("gorunmez" -> "grunmez",
+	// measured on eight of probot-outreach's 68-column panes), so this exact
+	// comparison called our own paste FOREIGN, submit() never verified, and the
+	// record fell out through the one silent path in the delivery layer
+	// (stuckUnresolved -> ErrTyping, which records no reason and no attempt).
+	// Eight panes sat with the message in the composer and the queue said
+	// nothing at all.
+	//
+	// The lab missed it because a 200-column pane does not wrap that message: the
+	// gate fix alone looked sufficient there. Same message, narrower pane,
+	// different answer — which is why the environment that produces a bug is the
+	// one that must confirm its fix.
+	if hasWideRunes(want) && relatedPaste(got, want) {
+		return composerMine
+	}
 	return composerOther
 }
 

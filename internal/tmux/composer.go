@@ -336,9 +336,30 @@ func classifyPaste(pane string, texts []string) (pasteVerdict, string) {
 		}
 	}
 	for _, text := range texts {
-		if relatedPaste(got, stripSpace(text)) {
-			return pasteDamaged, text
+		want := stripSpace(text)
+		if !relatedPaste(got, want) {
+			continue
 		}
+		// A near-match on a message carrying WIDE characters is not a damaged
+		// paste — it is a lossy RENDER. Measured 2026-08-23: a message with
+		// "✍️ / ✅" in it came back from the screen with a letter missing
+		// ("gorunmez" -> "grunmez"), because a double-width glyph shifts the
+		// TUI's column accounting and a character is overwritten. The bytes in
+		// the composer's own buffer are fine — the agents that received these
+		// messages quoted them back correctly — so clearing and re-pasting
+		// cannot help: the second render loses a character too, which is
+		// exactly what bp did until now (probot-outreach lost most of two
+		// seven-pane batches to this, and both batches happened to be the
+		// message that warned about emoji).
+		//
+		// So: if the difference could be explained by the wide characters, the
+		// composer is treated as holding OUR text. Only then — a near-match on
+		// a plain-ASCII message stays "damaged", where re-pasting really can
+		// fix a torn paste.
+		if hasWideRunes(text) {
+			return pasteExact, text
+		}
+		return pasteDamaged, text
 	}
 	return pasteForeign, ""
 }
@@ -347,6 +368,27 @@ func classifyPaste(pane string, texts []string) (pasteVerdict, string) {
 // contains the other, or they share a long common prefix or suffix. Both sides
 // must carry at least pasteRelatedMin characters, so a short line can never be
 // dragged into a damage verdict by a coincidental overlap.
+// hasWideRunes reports whether a text carries characters a terminal may render
+// wider than one column — emoji, variation selectors, CJK. Their width is where
+// screen text and sent text stop being comparable character by character.
+func hasWideRunes(text string) bool {
+	for _, r := range text {
+		switch {
+		case r == 0xFE0F || r == 0x200D: // variation selector-16, ZWJ
+			return true
+		case r >= 0x1F000 && r <= 0x1FAFF: // emoji planes
+			return true
+		case r >= 0x2600 && r <= 0x27BF: // misc symbols and dingbats (✍ ✅ ❯)
+			return true
+		case r >= 0x1100 && r <= 0x11FF, r >= 0x2E80 && r <= 0xA4CF: // CJK ranges
+			return true
+		case r >= 0xAC00 && r <= 0xD7A3, r >= 0xF900 && r <= 0xFAFF:
+			return true
+		}
+	}
+	return false
+}
+
 func relatedPaste(got, want string) bool {
 	g, w := []rune(got), []rune(want)
 	if len(g) < pasteRelatedMin || len(w) < pasteRelatedMin {

@@ -137,6 +137,12 @@ const (
 	// and still holds the text: the message never went in, and bp could not press
 	// Enter itself. This one names the action instead of the mechanism.
 	hangingPasteReason = "mesaj composer'da ASILI (gonderilmemis); bp bitiremedi — pane bosaldiginda tek Enter yeter"
+	// unverifiedGoneReason is the same record after the text has LEFT the
+	// composer. It may have been submitted by a human, cleared, or dropped by the
+	// TUI; bp cannot tell which, and there is nothing left to press Enter on. The
+	// wording exists because the previous one kept advising an Enter that landed
+	// on an empty composer (probot-outreach, 2026-08-23).
+	unverifiedGoneReason = "teslim dogrulanamadi ve metin composer'da yok; bp bir sey yapamaz — ulasmadiysa yeniden gonderin"
 	// exhaustedReason is the other way into the same waiting state: the screen
 	// kept claiming a proven failure and three pastes could not be verified.
 	// Continuing would only produce more copies of a message that may already
@@ -1104,7 +1110,29 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			line.block(rec.ID)
 			return
 		}
-		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {
+		// The text is NOT in the composer any more (it was submitted, cleared, or
+		// the TUI dropped it). Two consequences, both measured 2026-08-23 when a
+		// record like this held probot-outreach's queue for 200 seconds and its
+		// advice sent them to press Enter on an empty composer:
+		//
+		//  - The reason must stop saying "one Enter finishes it". Nothing is
+		//    there to finish; the record is only aging toward its close.
+		//  - It must stop blocking the LINE. Head-of-line exists so a later
+		//    message cannot overtake one that is about to be delivered — but this
+		//    record will never be pasted again, and the pane it guards is free.
+		//    Holding the queue behind it buys nothing and costs every message
+		//    after it. A forced record still holds, because its interlock is a
+		//    different promise (see holdForce).
+		// Only the two "text was hanging" wordings are replaced. A record that got
+		// here through exhausted attempts keeps ITS reason, because
+		// settleUnrepasted reads it to choose the closing status — overwriting it
+		// would report a proven failure as a probable delivery. (Caught by
+		// TestProvenFailureBacksOffAndStopsAtThreeAttempts, which is exactly the
+		// kind of thing a blanket assignment breaks quietly.)
+		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason {
+			q.remember(rec.path, rec.Message, unverifiedGoneReason, report)
+		}
+		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) && rec.ForceBusy {
 			line.block(rec.ID)
 			if rec.ForceBusy {
 				// A forced message whose paste could not be confirmed holds the line

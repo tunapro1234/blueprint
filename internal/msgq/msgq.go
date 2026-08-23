@@ -103,6 +103,13 @@ type Queue struct {
 	// outcome. The dependency runs this way round because msgq must not know what
 	// a transcript is; the daemon binds book.CanWitness here.
 	CanWitness func(text string) bool
+	// HasTranscript reports whether a TARGET has a transcript at all. A Hermes
+	// pane keeps none, so its unverified records can never be confirmed — waiting
+	// the witness window out on them is fifteen minutes of pure delay, and the
+	// record sits in `bp q` looking like an open question that nobody can answer
+	// (measured 2026-08-23: an operator hand-delivered five messages and the
+	// records still read "pending", so the real ones could not be told apart).
+	HasTranscript func(agent string) bool
 	// TurnOpen is the second busy gate, and it exists because the first one has a
 	// measured blind window: while a long answer is STREAMED the pane draws no
 	// spinner, so bptmux.Busy reads idle for as long as the streaming lasts (147
@@ -739,7 +746,10 @@ func noticeHome(from string) string {
 }
 
 func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string, message Message, report func(string)) bool {
-	if q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
+	// The window exists to give the transcript witness time. A target that keeps
+	// no transcript has no witness to wait for, so it is settled at once.
+	witnessPossible := q.HasTranscript == nil || q.HasTranscript(message.To)
+	if witnessPossible && q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
 		return false
 	}
 	// Which of the two roads got here decides the wording: an injection nobody

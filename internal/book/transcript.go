@@ -309,6 +309,30 @@ func userContentText(content json.RawMessage) string {
 // DeliveryWitness builds the function msgq.Queue.Witness expects: it resolves the
 // target's folder out of the agentbooks on every call, because the fleet changes
 // under a long-running daemon.
+// TranscriptExists reports whether an agent HAS a transcript the witness could
+// ever read. It is not about this message or this moment: a Hermes pane keeps no
+// Claude-style session file at all, so for such a target the witness is not
+// "slow to confirm", it is permanently absent.
+//
+// Callers use it to avoid waiting on evidence that cannot arrive (msgq holds an
+// unverified record for fifteen minutes to give the witness time — for a target
+// with no transcript that wait is pure delay, measured on the Hermes fleet
+// 2026-08-23).
+func TranscriptExists(agentbooks []string, projectsRoot string) func(string) bool {
+	return func(agent string) bool {
+		fleet, err := LoadFleet(Paths(agentbooks))
+		if err != nil {
+			return false
+		}
+		dir := FirstPath(fleet.Agents[agent].Folder)
+		if dir == "" || agent == "" {
+			return false
+		}
+		_, ok := bptmux.ResumeSessionPath(projectsRoot, dir, agent)
+		return ok
+	}
+}
+
 func DeliveryWitness(agentbooks []string, projectsRoot string) func(string, string, time.Time) bool {
 	return func(to, text string, since time.Time) bool {
 		fleet, err := LoadFleet(Paths(agentbooks))

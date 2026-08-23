@@ -47,6 +47,7 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// for the transcript only when the answer is yes — otherwise nothing would
 	// ever settle the record.
 	queue.CanWitness = book.CanWitness
+	queue.HasTranscript = book.TranscriptExists(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	// The busy question, asked of the transcript rather than the screen. The pane
 	// draws nothing at all while a long answer streams, so the screen gate alone
 	// lets the queue paste into a working agent; this is what closes that window.

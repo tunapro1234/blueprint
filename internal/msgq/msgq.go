@@ -464,7 +464,15 @@ func (q *Queue) Status(id string) (string, error) {
 			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued); bak: bp peek %s",
 				message.To, message.Reason, seconds, message.To), nil
 		}
-		return fmt.Sprintf("PENDING: %s is still busy (%d seconds queued)", message.To, seconds), nil
+		// No reason at all means bp has not TOUCHED this record yet — it was
+		// enqueued and no dispatch pass has reached a verdict on it. Saying "is
+		// still busy" there states a fact about the PANE that nobody measured,
+		// and on 2026-08-24 that cost an hour: eight records sat with an empty
+		// reason for seven minutes while `bp qstat` told probot-outreach the
+		// agents were busy. They were idle; the delivery layer had fallen out
+		// through a silent path. An untouched record must say so.
+		return fmt.Sprintf("PENDING: %s — bp bu kayda henuz bir sey yapmadi (kuyrukta %d saniye); pane durumu HAKKINDA BILGI YOK, bak: bp peek %s",
+			message.To, seconds, message.To), nil
 	}
 	if message, err := read(filepath.Join(q.done(), id+".json")); err == nil {
 		when := time.Unix(0, int64(message.Finished*1e9)).Local().Format("15:04")

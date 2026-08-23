@@ -113,8 +113,14 @@ func TestEnqueueListAndStatus(t *testing.T) {
 	}
 	q.Now = func() time.Time { return now.Add(12 * time.Second) }
 	status, _ := q.Status(id)
-	if status != "PENDING: target is still busy (12 seconds queued)" {
+	// A record bp has not touched must NOT claim anything about the pane: the
+	// old wording ("is still busy") asserted a state nobody had measured, and on
+	// 2026-08-24 it described eight idle agents as busy for seven minutes.
+	if !strings.Contains(status, "henuz bir sey yapmadi") || !strings.Contains(status, "12 saniye") {
 		t.Fatalf("status=%q", status)
+	}
+	if strings.Contains(status, "busy") {
+		t.Fatalf("an untouched record still claims the pane is busy: %q", status)
 	}
 }
 

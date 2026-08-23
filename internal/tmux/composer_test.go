@@ -1046,3 +1046,35 @@ func TestSendForceStillRefusesAnExpiredLogin(t *testing.T) {
 		t.Fatalf("a forced message was typed at a login prompt: %v", h.mutations)
 	}
 }
+
+// The trigger three days of hanging pastes came down to (measured 2026-08-23 in
+// a lab pane, confirmed against probot-outreach's two failed batches): a message
+// carrying emoji renders WRONG. "gorunmez" came back from the screen as
+// "grunmez" — a double-width glyph shifts the TUI's column accounting and eats a
+// character. The composer's own buffer is intact; only the drawing is lossy, so
+// clearing and re-pasting produces the same loss again.
+func TestWideRuneMessageIsOursNotDamaged(t *testing.T) {
+	sent := "[bp] UYARI: komut satirina ✍️ / ✅ emojisi YAZMA — gorunmez Unicode tasiyor."
+	// What the screen gave back: one letter short.
+	rendered := strings.Replace(sent, "gorunmez", "grunmez", 1)
+	pane := claudePane("❯ " + rendered)
+	verdict, text := classifyPaste(pane, []string{sent})
+	if verdict != pasteExact || text != sent {
+		t.Fatalf("verdict=%v text=%q, want pasteExact — a lossy render of OUR text is not a damaged paste", verdict, text)
+	}
+	// A plain-ASCII message with the same kind of difference is still damaged:
+	// there, re-pasting genuinely repairs a torn paste.
+	plain := "[bp] UYARI: komut satirina emoji yazma, gorunmez Unicode tasiyor kardesim."
+	plainPane := claudePane("❯ " + strings.Replace(plain, "gorunmez", "grunmez", 1))
+	if verdict, _ := classifyPaste(plainPane, []string{plain}); verdict != pasteDamaged {
+		t.Fatalf("verdict=%v, want pasteDamaged for a plain-text mismatch", verdict)
+	}
+	if hasWideRunes(plain) {
+		t.Fatal("a plain ASCII message was called wide")
+	}
+	for _, wide := range []string{"✍️", "✅", "🚀", "日本語"} {
+		if !hasWideRunes(wide) {
+			t.Fatalf("%q was not recognised as wide", wide)
+		}
+	}
+}

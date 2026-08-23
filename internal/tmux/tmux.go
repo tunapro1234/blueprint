@@ -657,6 +657,17 @@ var ErrNotReady = errors.New("message was not delivered")
 // a retry would duplicate it. The CLI reports it instead of calling it sent.
 var ErrUnverified = errors.New("delivery could not be verified")
 
+// The named causes of an unverified delivery. They are wrapped onto
+// ErrUnverified (errors.Is still matches) so the record a human reads says
+// WHICH signal failed, not merely that one did. The distinction is operational,
+// not cosmetic: the first cause leaves the text sitting in the composer with no
+// Enter ever pressed, the second means Enter went in and the screen would not
+// confirm it — the first needs finishing, the second needs looking at.
+const (
+	UnverifiedClientActive      = "ekran okunamadi ya da pane'de klavye aktif — Enter BASILMADI, metin composer'da kalmis olabilir"
+	UnverifiedSubmitUnconfirmed = "Enter basildi ama ekran teslimi dogrulamadi"
+)
+
 // authExpiredMarkers are the phrases a Claude Code session renders in its status
 // footer when its credentials expired ("● Login expired · Please run /login").
 // Such a pane looks exactly like a healthy idle one to Typing/readyToSend — an
@@ -1299,7 +1310,15 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		// A client is typing or the pane could not be read: no key may be pressed
 		// and nothing confirms the delivery either way, which is exactly what
 		// submit would have reported after the same check.
-		return finished, ErrUnverified
+		//
+		// NOTE the consequence, measured 2026-08-23: the text is already in the
+		// composer at this point and Enter is NOT pressed here, so this branch
+		// leaves a hanging paste by construction. Which branch produced an
+		// unverified delivery therefore matters to whoever has to clean up, and
+		// that is why the causes below are named rather than collapsed into one
+		// opaque verdict (six of seven panes in one salvo hit this class and
+		// nobody could tell which cause it was).
+		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedClientActive)
 	}
 	pane, ok := c.checkPaste(ctx, target, session, message, pane, hermes)
 	if !ok {
@@ -1311,7 +1330,7 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 	case sendMismatch:
 		return finished, c.provenFailure(ctx, session, pane, composerOtherReason)
 	default:
-		return finished, ErrUnverified
+		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedSubmitUnconfirmed)
 	}
 }
 

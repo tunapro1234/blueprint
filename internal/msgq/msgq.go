@@ -475,6 +475,10 @@ type Target interface {
 	// again, so leaving it would block the target permanently — the deadlock, back
 	// from the other end.
 	ClearDelivered(context.Context, string, []string) (bool, error)
+	// SubmitStuck presses Enter on a composer holding one of texts EXACTLY, and
+	// reports whether it cleared. Dispatch uses it for the one case the witness
+	// cannot reach: an unverified send still sitting unsubmitted in the box.
+	SubmitStuck(context.Context, string, []string) (bool, error)
 }
 
 // PendingFor returns the queued message texts for one target, oldest first.
@@ -670,6 +674,17 @@ func whyNotDelivered(err error) string {
 		return bptmux.ErrNotReady.Error()
 	}
 	return reason
+}
+
+// finishHangingPaste presses Enter on this record's own unsubmitted paste, when
+// the composer provably still holds it. Returns false for anything it may not
+// touch — a forced record (see the interlock note at the call site), a pane that
+// refuses, or a composer holding something else.
+func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec record) (bool, error) {
+	if rec.ForceBusy {
+		return false, nil
+	}
+	return target.SubmitStuck(ctx, rec.To, []string{rec.Msg})
 }
 
 // settleUnrepasted handles a record that may never be pasted again: it waits for
@@ -1041,6 +1056,26 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// above is its only way to a "delivered" close; everything below exists to put
 	// text into a pane, and for this record that is precisely what must not happen.
 	if rec.NoRepaste {
+		// Before waiting the window out: is the text simply sitting in the
+		// composer, never submitted? The witness above already said it is not in
+		// the transcript, so if the box holds it EXACTLY then the delivery never
+		// completed and pressing Enter finishes it — no second paste, same
+		// message. Measured 2026-08-23: without this the paste hangs until a
+		// human presses Enter (probot-outreach did, on ig-kuanta) or until
+		// another message to the same target happens to resolve it.
+		// FORCED records are excluded, deliberately. The follower-force interlock
+		// (designed with ada, field-verified 2026-08-21) holds a second forced
+		// message while the first one still sits in the composer; finishing that
+		// first paste here would dissolve the state the interlock waits on. The
+		// case measured today was an ordinary record, so the fix is scoped to
+		// ordinary records — an interlock nobody has reported a problem with is
+		// not something to redesign as a side effect.
+		if submitted, err := q.finishHangingPaste(ctx, target, rec); err == nil && submitted {
+			if err := q.finish(rec.path, rec.Message, "delivered (asili paste tamamlandi)"); err != nil && report != nil {
+				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
+			}
+			return
+		}
 		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {
 			line.block(rec.ID)
 			if rec.ForceBusy {

@@ -20,8 +20,10 @@ type fakeTarget struct {
 	sendErr error // when set, Send returns it instead of recording the delivery
 	// cleared records every ClearDelivered call and, when the pane provably holds
 	// one of the texts, empties it — the way the real client's C-u loop does.
-	cleared  [][]string
-	clearErr error
+	cleared   [][]string
+	submitted []string
+	submitErr error
+	clearErr  error
 	// forced lists the deliveries that came through SendForce — the door that may
 	// type into a working pane.
 	forced []string
@@ -61,6 +63,25 @@ func (f *fakeTarget) SendForce(ctx context.Context, to, text string) error {
 
 func (f *fakeTarget) CaptureAnsi(ctx context.Context, session string) (string, error) {
 	return f.Capture(ctx, session)
+}
+
+// SubmitStuck mirrors the real client: it presses Enter only on a composer
+// holding the text EXACTLY, and reports whether the box then cleared. The
+// fake's submitted list lets a test assert that dispatch finished its own
+// hanging paste instead of waiting the witness window out.
+func (f *fakeTarget) SubmitStuck(_ context.Context, _ string, texts []string) (bool, error) {
+	if f.submitErr != nil {
+		return false, f.submitErr
+	}
+	for _, text := range texts {
+		if composerPane(text) != f.pane {
+			continue
+		}
+		f.submitted = append(f.submitted, text)
+		f.pane = composerPane("")
+		return true, nil
+	}
+	return false, nil
 }
 
 func (f *fakeTarget) ClearDelivered(_ context.Context, _ string, texts []string) (bool, error) {
@@ -1849,5 +1870,41 @@ func TestForcedRecordStillWaitsForABusyHermes(t *testing.T) {
 	}
 	if record.Reason != bptmux.BlockedByBusyPane || record.ForcedAt != 0 {
 		t.Fatalf("record=%+v, want it waiting like any other busy target", record)
+	}
+}
+
+// The hole probot-outreach found by hand on 2026-08-23: a delivery bp could not
+// verify left its text sitting UNSUBMITTED in the composer. The witness can
+// never settle that one — the message is not in the transcript because it was
+// never sent — so before this the paste hung until a human pressed Enter.
+func TestUnverifiedRecordFinishesItsOwnHangingPaste(t *testing.T) {
+	dir := t.TempDir()
+	queue := New(dir)
+	id, err := queue.EnqueueUnverified("kavram-main", "blueprint", "asili kalan mesaj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("asili kalan mesaj")}
+	queue.Dispatch(context.Background(), target, nil)
+	if len(target.submitted) != 1 || target.submitted[0] != "asili kalan mesaj" {
+		t.Fatalf("the hanging paste was not finished: %v", target.submitted)
+	}
+	rows, err := queue.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("record %s stayed open after its paste was submitted: %+v", id, rows)
+	}
+	// A composer holding SOMEBODY ELSE's text is never submitted: that would put
+	// a human's half-written line into their own agent.
+	queue2 := New(t.TempDir())
+	if _, err := queue2.EnqueueUnverified("kavram-main", "blueprint", "bizim mesaj"); err != nil {
+		t.Fatal(err)
+	}
+	foreign := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("insanin yazdigi bir sey")}
+	queue2.Dispatch(context.Background(), foreign, nil)
+	if len(foreign.submitted) != 0 {
+		t.Fatalf("a foreign composer was submitted: %v", foreign.submitted)
 	}
 }

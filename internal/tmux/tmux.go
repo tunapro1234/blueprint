@@ -1016,6 +1016,66 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 //
 // Reports whether it actually cleared anything, so the caller can say so out
 // loud instead of clearing a human's composer in silence.
+// SubmitStuck presses ENTER on a composer that provably holds one of texts
+// EXACTLY, and does nothing else. It reports whether the composer then cleared.
+//
+// It closes a measured hole. When a delivery cannot be verified bp stops
+// pasting — correctly, since the message may have arrived — and the record goes
+// to the transcript witness. But if the paste is sitting UNSUBMITTED in the
+// composer, the witness will never find it: nothing re-reads that pane, so the
+// text hangs there and the agent never sees the message. On 2026-08-23
+// probot-outreach found exactly that on ig-kuanta and finished it by hand after
+// checking three signals themselves. That is bp's job, not theirs.
+//
+// What it must never become is a second delivery, so the rules are strict:
+//
+//   - EXACT match only. A damaged composer is left alone — repairing means
+//     re-pasting, and this path exists precisely for records that may not be
+//     pasted again.
+//   - The caller must have asked the transcript FIRST. Dispatch does: the
+//     witness runs before the NoRepaste branch, so a message already in the
+//     transcript is closed as delivered and never reaches here.
+//   - Every refusal the ordinary send path has still applies — a dialog, a busy
+//     pane, a foreign composer, a non-agent pane. On a Hermes pane mid-turn an
+//     Enter would cancel the turn, which is why Busy is checked here too.
+//
+// Pressing Enter on our own unsubmitted text is not a new delivery; it is the
+// same one, finished.
+func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string) (bool, error) {
+	if _, err := c.requireAgentPane(ctx, session); err != nil {
+		return false, err
+	}
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if hermesDialog(pane) {
+		return false, ErrDialog
+	}
+	if Busy(pane) {
+		return false, ErrBusy
+	}
+	if verdict, _ := classifyPaste(pane, texts); verdict != pasteExact {
+		return false, nil
+	}
+	target := "=" + session + ":"
+	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "Enter"); err != nil {
+		return false, err
+	}
+	c.Sleep(composerSettleWindow)
+	after, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	// Cleared composer OR a pane that has started working: both mean the text
+	// left the box. Anything else and we report failure rather than guess — a
+	// second Enter is the caller's decision, not ours.
+	if verdict, _ := classifyPaste(after, texts); verdict == pasteExact {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (c *Client) ClearDelivered(ctx context.Context, session string, texts []string) (bool, error) {
 	if _, err := c.requireAgentPane(ctx, session); err != nil {
 		return false, err

@@ -820,6 +820,21 @@ func (q *Queue) shouldNotify(message Message) bool {
 // noticeText is what the sender reads: which message, to whom, how to look, and
 // enough of the opening to recognise it. It quotes the head only — a notice that
 // repeated the whole message would be indistinguishable from a re-delivery.
+// unverifiedSnapshotRows is how much of the screen goes into the log when a
+// delivery cannot be verified. Enough to hold the status row, both composer
+// rules and a few rows above them; small enough that a bad night cannot fill a
+// disk.
+const unverifiedSnapshotRows = 12
+
+// paneTail returns the last rows of a capture, blank tail trimmed.
+func paneTail(pane string, rows int) string {
+	lines := strings.Split(strings.TrimRight(pane, "\n \t"), "\n")
+	if len(lines) > rows {
+		lines = lines[len(lines)-rows:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // noticeText says what is true AT THE MOMENT THE NOTICE IS WRITTEN, not what was
 // true when the delivery failed — the two are usually different, because the
 // notice waits out the witness window first.
@@ -1292,6 +1307,20 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			return
 		}
 		if errors.Is(err, bptmux.ErrUnverified) {
+			// The frame at the moment of failure, into the log. This class has
+			// resisted reproduction: probot-outreach sees it on roughly half of
+			// every seven-pane batch, while 25 controlled deliveries here (long,
+			// short, concurrent up to seven, busy, queued) all succeeded — the
+			// difference lives in their long-running, high-context panes and
+			// cannot be staged cheaply. So instead of reproducing it, bp records
+			// what the screen looked like when it happened; the next real
+			// occurrence carries its own evidence.
+			if report != nil {
+				if pane, capErr := target.Capture(ctx, rec.To); capErr == nil {
+					report(fmt.Sprintf("msgq: %s -> %s DOGRULANAMADI (%v); ekranin son satirlari:\n%s",
+						message.ID, message.To, err, paneTail(pane, unverifiedSnapshotRows)))
+				}
+			}
 			// Injected and submitted, but nothing confirmed it either way. Closing
 			// the record here — the old behavior — is honest only when nobody could
 			// ever settle it: if the text never landed the message is silently LOST,

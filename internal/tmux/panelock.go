@@ -63,6 +63,13 @@ const BlockedByPaneLock = "baska bir bp sureci bu pane'e yaziyor (pane kilidi)"
 // bp is typing there" needs exactly that treatment.
 var ErrPaneLocked = fmt.Errorf("%w: %s", ErrBusy, BlockedByPaneLock)
 
+// ErrDialog is a pane waiting on a human decision (a Hermes permission prompt).
+// It wraps ErrBusy on purpose: every caller that already knows how to wait for a
+// working pane — the queue, the CLI, the WhatsApp bridge — waits for this one
+// too without a line of new code. What differs is the REASON shown to the
+// operator, because this state does not clear on its own (see BlockedByDialog).
+var ErrDialog = fmt.Errorf("%w: %s", ErrBusy, BlockedByDialog)
+
 // AcquirePaneLock takes the exclusive lock for one target session and returns the
 // function that releases it. dir is the shared queue root (config.msgqRoot); the
 // package deliberately holds no path of its own, so the caller's config stays the

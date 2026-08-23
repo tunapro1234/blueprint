@@ -1388,6 +1388,15 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 	if err != nil {
 		return nil, "", stuckAbsent, err
 	}
+	// A pane asking its human a question is refused before anything else, force
+	// or not. Measured 2026-08-23 (probot-outreach-ig-kuanta): a Hermes
+	// permission prompt draws an EMPTY composer and no spinner, so every other
+	// gate here reads it as idle — and the paste's Enter would have answered
+	// "Allow once" on a security dialog. bp does not answer questions put to
+	// people; it waits, and says why (BlockedByDialog).
+	if hermesDialog(pane) {
+		return nil, "", stuckAbsent, ErrDialog
+	}
 	if Busy(pane) && (!force || hermesForceRefused(pane)) {
 		// A pane mid-turn is refused HERE, before anything is pasted. It used to
 		// fall through as stuckAbsent into readyToSend, which asks about typing,

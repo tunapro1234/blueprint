@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Every string in this file is QUOTED FROM A LIVE CAPTURE of the Hermes Agent
@@ -516,4 +517,32 @@ func TestClearComposerAcceptsAHermesPane(t *testing.T) {
 		t.Fatalf("expected 1 C-u, got %d: %v", got, h.mutations)
 	}
 	assertNoEscape(t, h.mutations)
+}
+
+// The post-paste race probot-outreach's data pointed at (2026-08-23): the pane
+// was idle when bp pasted, and the agent's own tool call raised a permission
+// prompt before Enter. Pressing Enter there answers the DIALOG — the highlighted
+// line is "Allow once" — instead of submitting the message.
+func TestSubmitRefusesEnterWhenADialogAppearedAfterThePaste(t *testing.T) {
+	message := "gorev dosyasi hazir, oku ve uygula"
+	// Our text IS in the composer (the paste landed), and a prompt is now on
+	// screen. The composer content alone would say "press Enter again".
+	pane := strings.Join([]string{
+		"│ ❯ 1. Allow once                                                │",
+		"│   4. Deny                                                      │",
+		"╰────────────────────────────────────────────────────────────────╯",
+		"  ↑/↓ to select, Enter to confirm  (58s)",
+		hermesStatusLine,
+		hermesRule,
+		"❯ " + message,
+		hermesRule,
+		"",
+	}, "\n")
+	if !hermesDialog(pane) {
+		t.Fatal("the prompt that appeared after the paste was not seen")
+	}
+	client := &Client{Sleep: func(time.Duration) {}}
+	if got := client.submit(context.Background(), "=lab:", "lab", message, &pane); got != sendUnverified {
+		t.Fatalf("submit = %v, want sendUnverified (no Enter into a dialog)", got)
+	}
 }

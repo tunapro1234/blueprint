@@ -1792,6 +1792,7 @@ func (a *app) dispatchNow() {
 		projects := bptmux.ClaudeProjectsRoot()
 		a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
 		a.queue.CanWitness = book.CanWitness
+		a.queue.HasTranscript = book.TranscriptExists(a.config.Agentbooks, projects)
 		a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
 	}
 	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {

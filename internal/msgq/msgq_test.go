@@ -1939,3 +1939,23 @@ func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T)
 		t.Fatalf("the queue stayed blocked behind a dead record: sent=%v (later=%s)", target.sent, later)
 	}
 }
+
+// A notice must describe the situation AS IT IS WHEN IT IS SENT. Four of five
+// notices in one evening described situations already fixed by hand, and the
+// noise hid the one real hanging paste (probot-outreach, 2026-08-23).
+func TestNoticeSaysWhetherThePasteIsStillHanging(t *testing.T) {
+	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "asili duran mesaj"}, true)
+	if !strings.Contains(hanging, "HALA ASILI") {
+		t.Fatalf("a hanging paste was not announced as such: %q", hanging)
+	}
+	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "asili duran mesaj"}, false)
+	if !strings.Contains(gone, "SONRADAN COZULMUS OLABILIR") {
+		t.Fatalf("a resolved case was not marked as such: %q", gone)
+	}
+	// Both keep the parts an operator navigates by.
+	for _, text := range []string{hanging, gone} {
+		if !strings.Contains(text, "kavram-main hedefine") || !strings.Contains(text, "bp peek kavram-main") {
+			t.Fatalf("notice lost its target: %q", text)
+		}
+	}
+}

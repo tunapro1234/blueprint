@@ -34,29 +34,30 @@ OUT = "/srv/blueprint/state/hermes-usage.jsonl"
 KEY_URL = "https://openrouter.ai/api/v1/key"
 
 
-def token_volume():
-    """Per-model totals from Hermes' own accounting. input_tokens EXCLUDES
-    cache; cache_read_tokens is separate (verified against a bg-review record
-    on 2026-08-22: 7746 + 47360 = 55106 prompt tokens)."""
+def totals(group_by):
+    """Cumulative counters from Hermes' own accounting, grouped by one column.
+    input_tokens EXCLUDES cache; cache_read_tokens is separate (verified
+    against a bg-review record on 2026-08-22: 7746 + 47360 = 55106 prompt
+    tokens)."""
     if not os.path.exists(STATE_DB):
         return {"error": "state.db yok"}
     connection = sqlite3.connect(f"file:{STATE_DB}?mode=ro", uri=True)
     try:
         rows = connection.execute(
-            "select model, sum(api_call_count), sum(input_tokens),"
+            f"select {group_by}, sum(api_call_count), sum(input_tokens),"
             " sum(cache_read_tokens), sum(output_tokens)"
-            " from session_model_usage group by model"
+            f" from session_model_usage group by {group_by}"
         ).fetchall()
     finally:
         connection.close()
     return {
-        model or "(bilinmiyor)": {
+        key or "(bilinmiyor)": {
             "calls": calls or 0,
             "fresh_in": fresh or 0,
             "cache_read": cached or 0,
             "out": out or 0,
         }
-        for model, calls, fresh, cached, out in rows
+        for key, calls, fresh, cached, out in rows
     }
 
 
@@ -87,9 +88,18 @@ def openrouter_usage():
 
 
 def main():
+    # Per-SESSION as well as per-model. The model view alone could not answer
+    # the first real question asked of this data (2026-08-23): "what did
+    # salvo #1 cost, separately from salvo #2?" Hermes panes are long-lived —
+    # probot-outreach ran a second day of work inside the SAME eight sessions
+    # opened on 22 Aug — so a per-model total attributes a whole day to one
+    # undifferentiated number, and hourly diffs cannot separate two salvos that
+    # share an hour. Session rows make attribution possible whenever the work
+    # is split across panes, which is how this fleet actually runs it.
     snapshot = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "models": token_volume(),
+        "models": totals("model"),
+        "sessions": totals("session_id"),
         "openrouter": openrouter_usage(),
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

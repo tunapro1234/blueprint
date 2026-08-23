@@ -981,6 +981,20 @@ func codexContext(usage *codexrpc.ThreadTokenUsage) string {
 	return humanTokens(int(used))
 }
 
+// unverifiedCause pulls the named cause off an ErrUnverified, falling back to a
+// plain description for an error that carries none.
+func unverifiedCause(err error) string {
+	if err == nil {
+		return "pane'de dogrulanamadi"
+	}
+	if text := err.Error(); strings.Contains(text, ": ") {
+		if _, cause, ok := strings.Cut(text, ": "); ok && cause != "" {
+			return cause
+		}
+	}
+	return "pane'de dogrulanamadi"
+}
+
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-prompt]")
@@ -1642,7 +1656,11 @@ func (a *app) message(args []string) error {
 				return errReported
 			}
 			if channelID, enqueueErr := a.queue.EnqueueUnverified(name, sender, message); enqueueErr == nil {
-				fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s — pane'de dogrulanamadi, tekrar gonderilmeyecek; transcript tanigi kontrol edecek (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
+				// The cause travels with the message: "Enter was never pressed"
+				// and "Enter went in but nothing confirmed it" need different
+				// things from a human, and until 2026-08-23 both printed the same
+				// sentence (six hanging pastes in one salvo, no way to tell which).
+				fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s — %s; tekrar gonderilmeyecek, VARSA transcript tanigi kontrol edecek (channel: %s). Durum: bp qstat %s\n", name, unverifiedCause(err), channelID, channelID)
 				a.resultLine("unverified", channelID)
 				return errReported
 			}

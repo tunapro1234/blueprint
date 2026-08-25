@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"blueprint/internal/cache"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -65,6 +66,15 @@ func TranscriptDelivered(projectsRoot, folder, agent, text string, since time.Ti
 	if !ok {
 		return false
 	}
+	return deliveredIn(path, text, since)
+}
+
+// deliveredIn is the scan itself, kept apart from transcript RESOLUTION so a
+// second kind of session file can use it. Codex writes JSONL with the same two
+// properties this scan needs — one record per line, a "timestamp" field, the
+// message text JSON-escaped inside — so the codex witness is the same reader
+// pointed at a rollout (see CodexDelivered).
+func deliveredIn(path, text string, since time.Time) bool {
 	probes, ok := transcriptProbes(text)
 	if !ok {
 		return false
@@ -341,4 +351,35 @@ func DeliveryWitness(agentbooks []string, projectsRoot string) func(string, stri
 		}
 		return TranscriptDelivered(projectsRoot, fleet.Agents[to].Folder, to, text, since)
 	}
+}
+
+// CodexDelivered is TranscriptDelivered for a codex agent, whose record is a
+// rollout under CODEX_HOME/sessions rather than a Claude transcript.
+//
+// It closes a class of false alarm rather than adding a new capability: with no
+// witness for codex targets, every unverified delivery to one aged out through
+// the "may have gone missing, resend if it never arrived" notice. Measured
+// 2026-08-25 on q177804375 — probot-out-codex had read the message and acted on
+// it (four replies queued) while bp was still telling the sender the delivery
+// could not be confirmed. A notice that cries wolf on delivered messages is how
+// a fleet learns to ignore the ones that mean it.
+//
+// The inbound shape, from the live rollout: {"timestamp":"…","type":
+// "response_item","payload":{"type":"message","role":"user","content":[{"type":
+// "input_text","text":"…"}]}}. The scan is deliberately the SAME one the Claude
+// witness uses, probes and clock skew included: a second matching rule would be
+// a second thing to keep true.
+func CodexDelivered(codexHome, folder, text string, since time.Time) bool {
+	path, ok := cache.RolloutPath(codexHome, FirstPath(folder))
+	if !ok {
+		return false
+	}
+	return deliveredIn(path, text, since)
+}
+
+// CodexTranscriptExists reports whether a codex agent has a readable rollout, so
+// the queue knows an unverified record has something to wait FOR.
+func CodexTranscriptExists(codexHome, folder string) bool {
+	_, ok := cache.RolloutPath(codexHome, FirstPath(folder))
+	return ok
 }

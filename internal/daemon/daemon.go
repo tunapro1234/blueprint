@@ -53,7 +53,14 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// draws nothing at all while a long answer streams, so the screen gate alone
 	// lets the queue paste into a working agent; this is what closes that window.
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
-	return &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
+	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
+	// Both halves are then WIDENED to codex agents, whose record is a rollout
+	// rather than a Claude transcript (see codexwitness.go). The Claude answer is
+	// still asked first and still decides on its own; this only adds an answer
+	// where there used to be none.
+	queue.Witness = service.witness(queue.Witness)
+	queue.HasTranscript = service.hasTranscript(queue.HasTranscript)
+	return service
 }
 
 func (s *Service) Run(ctx context.Context) {

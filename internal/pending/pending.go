@@ -60,6 +60,18 @@ func Append(dir, agent string, entry Entry) error {
 	return err
 }
 
+// ErrReadOnly reports that this process cannot WRITE the spool — the file, or
+// the tree it lives in, is mounted read-only for us. Measured 2026-08-25: a
+// Codex agent under bubblewrap has /srv/blueprint mounted read-only, so every
+// `bp msg` it sent failed at the spool, not at the delivery. The caller can
+// still read; what it must not do is pretend it can prune or clear.
+var ErrReadOnly = errors.New("spool is read-only for this process")
+
+// readOnly reports whether an open error means "we may read but not write".
+func readOnly(err error) bool {
+	return errors.Is(err, syscall.EROFS) || errors.Is(err, os.ErrPermission)
+}
+
 // Load is the DELIVERY path: it returns the entries to hand the agent and
 // PRUNES the spool to match, so the caller must surface dropped (formatDigest
 // does). Anything that only wants to look — a count, a status bar — must use
@@ -68,6 +80,13 @@ func Load(dir, agent string) ([]Entry, int, error) {
 	file, err := os.OpenFile(path(dir, agent), os.O_RDWR, 0644)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, 0, nil
+	}
+	if readOnly(err) {
+		// Say WHICH failure this is, because the caller's choice depends on it:
+		// pruning is impossible here, so a digest must not be delivered either
+		// (it could never be cleared, and would repeat on every later message —
+		// the duplicate class this queue was rebuilt to end).
+		return nil, 0, fmt.Errorf("%w: %s", ErrReadOnly, path(dir, agent))
 	}
 	if err != nil {
 		return nil, 0, err

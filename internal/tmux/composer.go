@@ -185,6 +185,12 @@ func composerBoxAt(pane string) (string, int, bool) {
 	if box, top, ok := claudeComposerBoxAt(pane); ok {
 		return box, top, true
 	}
+	// Codex before Hermes, and both only on their own proven screens: each
+	// reader refuses outright unless the capture shows its TUI, so adding one
+	// cannot change any verdict about the other two.
+	if box, top, ok := codexComposerBox(pane); ok {
+		return box, top, true
+	}
 	return hermesComposerBox(pane)
 }
 

@@ -70,7 +70,14 @@ func IsCodexCommand(cmd string) bool {
 
 // CodexPane reports whether the pane's live region shows the Codex TUI.
 func CodexPane(pane string) bool {
-	for _, line := range hermesRegion(pane) {
+	for _, raw := range hermesRegion(pane) {
+		// Rows are normalised before matching: Codex indents its footer and may
+		// indent the composer, and every marker below is anchored at the row
+		// start. Matching raw rows made CodexPane depend on which marker
+		// happened to sit flush left (measured 2026-08-25: the footer never
+		// matched, so a pane whose composer held text was recognised only by
+		// luck).
+		line := stripSpace1(raw)
 		if codexPlaceholder.MatchString(line) ||
 			codexWorking.MatchString(line) ||
 			codexFooter.MatchString(line) ||
@@ -79,6 +86,107 @@ func CodexPane(pane string) bool {
 		}
 	}
 	return false
+}
+
+// codexComposerBox is Codex's composer reader, and it closes the gap this
+// package carried since the first Codex pane: there were readers for Claude and
+// for Hermes, and NONE for Codex, so every Codex composer holding more than one
+// rendered row was unreadable.
+//
+// What that cost, measured on q218783035 (probot-outreach, 2026-08-25): a ~520
+// character plain-ASCII message — below the chip threshold, so it rendered as
+// literal wrapped text — was pasted into probot-out-codex and never submitted.
+// With no box reader, the only fallback was composerContent, which returns the
+// LAST prompt row alone: one row of an eight-row paste. So
+//
+//   - submit() could not confirm its own text and gave up as "unverified";
+//   - stillHolds() read the composer as FOREIGN, which made the operator notice
+//     say the text was no longer in the composer while it was sitting there in
+//     plain sight;
+//   - and finishHangingPaste, the recovery that presses Enter on our own
+//     hanging paste, refused for the same reason.
+//
+// A 1.1k message to the SAME pane two minutes earlier went through, because
+// above ~1024 characters Codex draws a chip and the chip path was already
+// handled. The gap was exactly the middle: too long to fit one row, too short
+// to become a chip.
+//
+// Codex anchors its composer differently from both existing readers: a rule
+// line ABOVE it (the transcript separator) and no bottom border at all — the
+// footer ("model settings · /abs/path") is what sits underneath, separated by
+// blank rows. So the footer is the anchor, and the nearest rule above is the
+// top edge.
+func codexComposerBox(pane string) (string, int, bool) {
+	if !CodexPane(pane) {
+		return "", -1, false
+	}
+	lines := strings.Split(pane, "\n")
+	footer := -1
+	for i, line := range lines {
+		if codexFooter.MatchString(stripSpace1(StripDim(line))) {
+			footer = i // the LAST footer: the live one, never a transcript quote
+		}
+	}
+	if footer <= 0 {
+		return "", -1, false
+	}
+	bottom := footer - 1
+	for bottom >= 0 && stripSpace(StripDim(lines[bottom])) == "" {
+		bottom--
+	}
+	if bottom < 0 {
+		return "", -1, false
+	}
+	top := -1
+	for j := bottom; j >= 0 && bottom-j <= composerBoxMaxRows; j-- {
+		if isComposerBorder(stripSpace(StripDim(lines[j]))) {
+			top = j
+			break
+		}
+	}
+	if top < 0 {
+		return "", -1, false
+	}
+	// Codex pads: a blank row sits between the rule and the prompt. Those are the
+	// TUI's own spacing, not composer content, so the box starts at the first
+	// prompt row. Blanks BELOW it are left alone — those are real newlines in
+	// the composer, and composerTrail is what reads them.
+	start := top + 1
+	for start <= bottom && stripSpace(StripDim(lines[start])) == "" {
+		start++
+	}
+	rows := lines[start : bottom+1]
+	if len(rows) == 0 || !promptLine.MatchString(rows[0]) {
+		return "", -1, false
+	}
+	out := make([]string, 0, len(rows))
+	for k, row := range rows {
+		clean := StripDim(row)
+		if k == 0 {
+			clean = promptLine.ReplaceAllString(clean, "")
+			if codexPlaceholderOnly(clean) {
+				clean = "" // the idle placeholder is not somebody's text
+			}
+		} else if promptLine.MatchString(row) {
+			// A second prompt marker means these rows are not one composer.
+			return "", -1, false
+		}
+		out = append(out, strings.TrimRight(clean, " \t "))
+	}
+	return strings.Join(out, "\n"), start - 1, true
+}
+
+// codexPlaceholderOnly recognises the idle composer's own sentence, so an empty
+// Codex composer reads as empty rather than as a human typing.
+func codexPlaceholderOnly(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), codexIdleText)
+}
+
+// stripSpace1 collapses runs of whitespace to a single space, which is what the
+// footer pattern expects (it counts fields). It is NOT stripSpace: that one
+// removes whitespace entirely and would glue the footer's fields together.
+func stripSpace1(text string) string {
+	return strings.Join(strings.Fields(text), " ")
 }
 
 // hermesRegion is shared rather than duplicated: both TUIs need the same tail

@@ -49,6 +49,11 @@ type Message struct {
 	// it, or the timeout below. It is the single flag that separates "we do not
 	// know" from "we know it failed".
 	NoRepaste bool `json:"noRepaste,omitempty"`
+	// TornClears counts the times bp erased a MUTILATED copy of this message from
+	// the target's composer and allowed it to be sent again. Bounded by
+	// tornClearMax: a paste that tears repeatedly is a pane problem, not
+	// something a retry loop should keep feeding.
+	TornClears int `json:"tornClears,omitempty"`
 	// Notified records that the SENDER has been told this delivery could not be
 	// verified, so the notice goes out exactly once.
 	Notified bool `json:"notified,omitempty"`
@@ -144,6 +149,20 @@ const (
 	// and still holds the text: the message never went in, and bp could not press
 	// Enter itself. This one names the action instead of the mechanism.
 	hangingPasteReason = "mesaj composer'da ASILI (gonderilmemis); bp bitiremedi — pane bosaldiginda tek Enter yeter"
+	// damagedPasteReason is the OTHER thing a held composer can mean, and it
+	// wants the opposite action. The text in the box is our message with
+	// characters missing, so an Enter delivers a mutilated instruction and
+	// closes the record as if it had arrived whole.
+	//
+	// It exists because the generic wording caused exactly that on 2026-08-25:
+	// q952220088 sat torn in probot-outreach's composer, the record advised "one
+	// Enter is enough", an operator pressed it, and 81 characters of a
+	// 716-character instruction were delivered — cut mid-word, the remaining 635
+	// in no transcript anywhere.
+	damagedPasteReason = "composer'da bu mesajin KIRPIK bir kopyasi duruyor — ENTER BASMA (kirpik mesaj teslim edilir); bp temizleyip yeniden gonderecek"
+	// tornClearedReason marks the recovery itself, so a reader who sees the
+	// message pasted twice in one pane knows the first copy was torn and erased.
+	tornClearedReason = "kirpik paste temizlendi; mesaj bastan yeniden gonderilecek"
 	// unverifiedGoneReason is the same record after the text has LEFT the
 	// composer. It may have been submitted by a human, cleared, or dropped by the
 	// TUI; bp cannot tell which, and there is nothing left to press Enter on. The
@@ -708,6 +727,19 @@ func stillHolds(pane, message string) bool {
 	return ours
 }
 
+// holdsTorn is stillHolds' sharper twin: the composer holds our text with
+// characters MISSING. Both answers mean "not delivered", and they want opposite
+// handling — see damagedPasteReason.
+func holdsTorn(pane, message string) bool {
+	return bptmux.DamagedPaste(pane, []string{message})
+}
+
+// tornClearMax bounds the clear-and-resend recovery. A paste that tears twice in
+// a row is not an accident this loop can fix, and an unbounded retry would paste
+// into the same pane forever — the failure this queue already paid for once
+// (q163159804, 2026-08-15).
+const tornClearMax = 2
+
 // finishHangingPaste presses Enter on this record's own unsubmitted paste, when
 // the composer provably still holds it. Returns false for anything it may not
 // touch — a forced record (see the interlock note at the call site), a pane that
@@ -1146,7 +1178,38 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
 			}
 			return
-		} else if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil && !rec.ForceBusy && stillHolds(pane, rec.Msg) {
+		} else if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil && !rec.ForceBusy && holdsTorn(pane, rec.Msg) {
+			// A TORN copy of our message is sitting in the box. This is the one
+			// state in which "never paste again" may be lifted: the witness has
+			// already said the text is not in the transcript, and the mutilated
+			// copy on screen is positive evidence that this delivery never
+			// completed — so a fresh paste cannot be a duplicate. Erase it and
+			// let the ordinary path send the message whole.
+			//
+			// The alternative is what happened on 2026-08-25: the record sat
+			// telling a human to press Enter, and Enter delivered 81 characters
+			// of a 716-character instruction.
+			if rec.TornClears < tornClearMax {
+				if cleared, err := target.ClearDelivered(ctx, rec.To, []string{rec.Msg}); err == nil && cleared {
+					message := rec.Message
+					message.NoRepaste = false
+					message.TornClears++
+					message.Attempts = 0
+					message.Reason = tornClearedReason
+					q.update(rec.path, message, report)
+					if report != nil {
+						report(fmt.Sprintf("msgq: %s composer'da kirpik duruyordu; temizlendi, yeniden gonderilecek (%d/%d)", rec.ID, message.TornClears, tornClearMax))
+					}
+					line.block(rec.ID)
+					return
+				}
+			}
+			// Could not erase it (busy pane, refusal, or the bound is spent):
+			// say plainly that Enter is the wrong key here.
+			q.remember(rec.path, rec.Message, damagedPasteReason, report)
+			line.block(rec.ID)
+			return
+		} else if err == nil && !rec.ForceBusy && stillHolds(pane, rec.Msg) {
 			// bp could not finish it (a damaged box, a busy or asking pane, a
 			// forced record) but the text IS still sitting there — so the record
 			// must say what a PERSON should do. The old wording named the
@@ -1183,7 +1246,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		// would report a proven failure as a probable delivery. (Caught by
 		// TestProvenFailureBacksOffAndStopsAtThreeAttempts, which is exactly the
 		// kind of thing a blanket assignment breaks quietly.)
-		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason {
+		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason || rec.Reason == damagedPasteReason {
 			q.remember(rec.path, rec.Message, unverifiedGoneReason, report)
 		}
 		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) && rec.ForceBusy {

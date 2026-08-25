@@ -1107,3 +1107,19 @@ func TestSubmitTimeComparisonToleratesWideRuneRender(t *testing.T) {
 		t.Fatalf("classifyComposer = %v, want composerOther for a plain-text mismatch", got)
 	}
 }
+
+// A tall paste can SCROLL inside its composer box, and then the visible rows
+// are the tail of an intact message — byte for byte what a message whose head
+// was lost looks like. The damaged verdict is acted on by ERASING the composer,
+// so on an incomplete view it must be refused: the cost of being wrong is a
+// whole message destroyed to "recover" a paste that was never torn.
+func TestDamagedPasteRefusesIncompleteView(t *testing.T) {
+	message := "[server-main] yeterince uzun bir mesaj, kirpik mi yoksa kaydirilmis mi oldugunu ayirt etmek gerekiyor, iste bu kadar."
+	torn := "\u276f " + message[40:]
+	if DamagedPaste(screenFillingPane(torn), []string{message}) {
+		t.Fatal("a scrolled composer was declared damaged; bp would erase a whole message")
+	}
+	if !DamagedPaste(claudePane(torn), []string{message}) {
+		t.Fatal("a torn paste on a complete view was not recognised")
+	}
+}

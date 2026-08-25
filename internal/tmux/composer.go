@@ -508,3 +508,29 @@ func StuckPaste(pane string, texts []string) (string, bool) {
 	verdict, text := classifyPaste(pane, texts)
 	return text, verdict != pasteForeign
 }
+
+// DamagedPaste reports whether the composer holds a MUTILATED copy of one of
+// texts — our own message with characters missing — as opposed to the whole
+// thing.
+//
+// The distinction is the difference between "press Enter and it is delivered"
+// and "press Enter and a truncated instruction is delivered". Measured
+// 2026-08-25 (q952220088, probot-out-codex -> probot-outreach): bp refused to
+// submit, the record's advice said "one Enter is enough when the pane frees up",
+// an operator pressed Enter, and probot-outreach received 81 characters of a
+// 716-character instruction — cut mid-word, and the missing 635 characters are
+// in no transcript anywhere. bp's own judgement was right; the sentence it
+// showed the human was not.
+func DamagedPaste(pane string, texts []string) bool {
+	// The verdict may only be given on a COMPLETE view of the composer. A tall
+	// paste can scroll inside its box, and then the visible rows are the TAIL of
+	// an intact message — indistinguishable, character for character, from a
+	// message whose head was lost. Callers act on this answer by ERASING the
+	// composer, so the difference is between recovering a torn paste and
+	// destroying a whole one.
+	if _, complete := composerJudgeText(pane); !complete {
+		return false
+	}
+	verdict, _ := classifyPaste(pane, texts)
+	return verdict == pasteDamaged
+}

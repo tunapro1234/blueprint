@@ -62,6 +62,13 @@ func composerContent(pane string) string {
 	}
 	composer = StripDim(composer) // dim placeholder/ghost metni gercek yazi DEGIL (2026-07-10)
 	after := promptLine.ReplaceAllString(composer, "")
+	if CodexPane(pane) && codexPlaceholderOnly(after) {
+		// Codex has a placeholder sentence of its own ("Ask Codex to do
+		// anything"), and an idle composer that reads as OCCUPIED blocks its
+		// own agent's queue behind text nobody typed — the Hermes lesson,
+		// applied before it can be relearned on Codex.
+		return ""
+	}
 	if hermesPlaceholderOnly(after) {
 		// The text fallback still matters: most captures in this package are
 		// PLAIN (capture-pane without -e), and there the italic wrapper is

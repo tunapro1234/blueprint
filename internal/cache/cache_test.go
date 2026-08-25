@@ -134,3 +134,44 @@ func TestReadWidensTailPastRecordLargerThanWindow(t *testing.T) {
 		t.Fatalf("last human age=%v, want about 10m", state.LastHumanAge)
 	}
 }
+
+// An agentbook folder may carry an annotation. server-main's reads
+// "/srv (home: /srv/server-main)", and until 2026-08-25 that whole string was
+// munged into a project directory that cannot exist, so `bp status` reported
+// the fleet's busiest agent as having no session at all — a blank cell that
+// reads as "quiet agent", not as "bp could not look".
+func TestReadAcceptsAnnotatedAgentbookFolder(t *testing.T) {
+	root, agent := t.TempDir(), "server-main"
+	dir := filepath.Join(root, "-srv")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	writeJSONL(t, filepath.Join(dir, "session.jsonl"), []any{
+		map[string]any{"type": "custom-title", "customTitle": agent},
+		user(now.Add(-10*time.Minute), "hello"),
+		usage(now.Add(-5*time.Minute), 100_000, 20_000),
+	})
+	plain := Read(root, "/srv", agent)
+	annotated := Read(root, "/srv (home: /srv/server-main)", agent)
+	if !plain.Known {
+		t.Fatalf("plain folder unreadable: %+v", plain)
+	}
+	if !annotated.Known || annotated.CtxTokens != plain.CtxTokens {
+		t.Fatalf("annotated=%+v, want the same state as plain=%+v", annotated, plain)
+	}
+}
+
+// A folder with a space in it is a path, not an annotation: only a SECOND field
+// makes the first one a prefix. This keeps the normaliser from truncating a
+// legitimate directory name.
+func TestFolderPathLeavesRealPathsAlone(t *testing.T) {
+	for _, folder := range []string{"/srv/probot", "relative/dir", ""} {
+		if got := FolderPath(folder); got != folder {
+			t.Fatalf("FolderPath(%q)=%q, want unchanged", folder, got)
+		}
+	}
+	if got := FolderPath("/srv (home: /srv/server-main)"); got != "/srv" {
+		t.Fatalf("annotated folder=%q, want /srv", got)
+	}
+}

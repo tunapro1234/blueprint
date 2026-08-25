@@ -19,6 +19,7 @@ const maxRolloutScan = 200
 // line carrying the cwd it was started in — the freshest rollout for the
 // agent's folder is that agent's live session.
 func ReadCodex(codexHome, folder string) State {
+	folder = FolderPath(folder)
 	if folder == "" {
 		return State{LastHumanAge: -1}
 	}

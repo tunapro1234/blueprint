@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/cache"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/fed"
@@ -532,6 +533,10 @@ type busySanityState struct {
 	// reported, so the detector's silence means "clean since the last sweep" —
 	// not "clean, or drowning you in history". See merge.go for why it exists.
 	MergeWatermark string `json:"merge_watermark,omitempty"`
+	// PaneSanityReported maps an agent to the moment its recognition
+	// contradiction was last reported (see panesanity.go). An entry is dropped
+	// as soon as the contradiction clears, so a relapse alarms again.
+	PaneSanityReported map[string]string `json:"pane_sanity_reported,omitempty"`
 }
 
 // busySanity runs one sweep. Errors from a single pane are never fatal: a session
@@ -555,6 +560,7 @@ func (s *Service) busySanity(ctx context.Context) error {
 	fleet, _ := book.LoadFleet(book.Paths(s.config.Agentbooks))
 	projects := bptmux.ClaudeProjectsRoot()
 	hashes := make(map[string]string, len(sessions))
+	observations := make([]paneObservation, 0, len(sessions))
 	busy, moved, agreed := false, false, false
 	samples := 0
 	for _, session := range sessions {
@@ -576,7 +582,24 @@ func (s *Service) busySanity(ctx context.Context) error {
 		// capture per non-agent session in a sweep that already captures every agent
 		// one, and buys the watchdog its Hermes samples — a signature that drifts on
 		// a pane type nobody is sampling is a signature nobody finds out about.
-		if !bptmux.IsAgentPane(process.Command, pane) {
+		// Every session feeds the recognition watchdog, including the ones this
+		// loop is about to skip: a pane bp does NOT count as an agent is exactly
+		// the case that watchdog exists for (panesanity.go).
+		isAgent := bptmux.IsAgentPane(process.Command, pane)
+		observation := paneObservation{
+			Session:    session,
+			Open:       fleet.Agents[session].Status == "open",
+			IsAgent:    isAgent,
+			ClaudePane: process.Command == "claude",
+			Folder:     fleet.Agents[session].Folder,
+		}
+		if !isAgent {
+			observation.Binary = paneAgentBinary(process.PID)
+		} else if observation.ClaudePane {
+			_, observation.SessionFound = bptmux.ResumeSessionPath(projects, cache.FolderPath(observation.Folder), session)
+		}
+		observations = append(observations, observation)
+		if !isAgent {
 			continue
 		}
 		hash := paneHash(pane)
@@ -625,6 +648,10 @@ func (s *Service) busySanity(ctx context.Context) error {
 	// message per delivery. It shares the state file, never fails the sweep, and is
 	// run last so a failure in it cannot cost the busy verdict its bookkeeping.
 	s.mergeScan(sessions, &state, now)
+	// The third watchdog on the same beat: whether bp still RECOGNISES the agents
+	// it is supposed to be talking to. Run after the others for the same reason —
+	// a failure here must not cost the sweep its bookkeeping.
+	s.paneSanityScan(observations, &state, now)
 	return writeBusySanity(path, state)
 }
 

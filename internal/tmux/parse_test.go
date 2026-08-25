@@ -295,10 +295,50 @@ func TestPaneProcessSelectsActivePane(t *testing.T) {
 	}
 }
 
+// A "node" pane is an agent only when Codex's own TUI is on screen (2026-08-25:
+// Tuna disabled the sandbox, so probot-out-codex reports "node" instead of
+// "bwrap" and bp read the agent as dead, refusing every inbound message).
+func TestNodePaneNeedsCodexOnScreen(t *testing.T) {
+	// Some other node program: refused, and nothing typed into it.
+	foreign := &sendHarness{command: "node", captures: []string{"npm run dev\n> build succeeded\n"}}
+	if err := testClient(foreign).Send(context.Background(), "target", "hello"); !errors.Is(err, ErrNotAgent) {
+		t.Fatalf("a plain node pane was accepted: err=%v", err)
+	}
+	if len(foreign.mutations) != 0 {
+		t.Fatalf("injected into a non-agent node pane: %v", foreign.mutations)
+	}
+	// The measured Codex screen: recognised.
+	if !CodexPane("• Working (0s • esc to interrupt)\n› Ask Codex to do anything\n  gpt-5.6-sol medium fast · /srv/probot/out-codex\n") {
+		t.Fatal("the live Codex screen was not recognised")
+	}
+	// Each marker carries recognition on its own, because they appear in
+	// different states (busy / idle-empty / composer-holding-text).
+	for _, row := range []string{
+		"› Ask Codex to do anything",
+		"• Working (0s • esc to interrupt)",
+		"  gpt-5.6-sol medium fast · /srv/probot/out-codex",
+		"[Pasted Content 1024 chars]",
+	} {
+		if !CodexPane(row + "\n") {
+			t.Fatalf("marker not recognised on its own: %q", row)
+		}
+	}
+	// Prose that merely mentions Codex is not a Codex pane.
+	if CodexPane("kullanici dedi ki: Ask Codex to do anything, sonra bekle\n") {
+		t.Fatal("a transcript quoting the placeholder was read as a Codex pane")
+	}
+}
+
 func TestSendRejectsNonAgentPane(t *testing.T) {
 	// A pane that dropped to a shell must be rejected with ErrNotAgent BEFORE any
 	// paste/keystroke: no capture, no activity check, no mutation ever happens.
-	for _, cmd := range []string{"zsh", "bash", "sh", "dash", "fish", "tmux", "node"} {
+	//
+	// "node" moved OUT of this list on 2026-08-25 and into the test below. A
+	// sandbox-less Codex pane reports "node", so the command can no longer decide
+	// alone — but the property that matters is unchanged: without Codex's TUI on
+	// screen the pane is still refused, and nothing is ever injected. What it
+	// costs is one read-only capture.
+	for _, cmd := range []string{"zsh", "bash", "sh", "dash", "fish", "tmux"} {
 		h := &sendHarness{command: cmd}
 		err := testClient(h).Send(context.Background(), "target", "hello")
 		if !errors.Is(err, ErrNotAgent) {

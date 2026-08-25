@@ -75,8 +75,28 @@ type State struct {
 	Window int
 }
 
+// FolderPath is the one place a caller's folder string becomes a path. An
+// agentbook folder may carry an annotation — server-main's reads
+// "/srv (home: /srv/server-main)" — and munging that whole string yields a
+// project directory that cannot exist, so the agent silently reports no state
+// at all (measured 2026-08-25: `bp status` showed server-main with no context
+// and no last-talk while `bp bar server-main`, which already normalised, showed
+// 244.8k). Normalising here rather than at each call site means a new caller
+// cannot reintroduce the bug by forgetting.
+//
+// The rule is book.FirstPath's, deliberately duplicated: package book imports
+// tmux and this package sits beside it, so importing book here to share four
+// lines would tie the low-level reader to the fleet model.
+func FolderPath(folder string) string {
+	fields := strings.Fields(folder)
+	if len(fields) > 1 && strings.HasPrefix(fields[0], "/") {
+		return fields[0]
+	}
+	return folder
+}
+
 func Read(projectsRoot, folder, agent string) State {
-	path, ok := bptmux.ResumeSessionPath(projectsRoot, folder, agent)
+	path, ok := bptmux.ResumeSessionPath(projectsRoot, FolderPath(folder), agent)
 	if !ok {
 		return State{LastHumanAge: -1}
 	}

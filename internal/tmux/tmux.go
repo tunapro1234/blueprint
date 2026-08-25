@@ -820,17 +820,24 @@ func (c *Client) requireAgentPane(ctx context.Context, session string) (hermes b
 	if IsAgentCommand(cmd) {
 		return false, nil
 	}
-	if !IsHermesCommand(cmd) {
+	if !IsHermesCommand(cmd) && !IsCodexCommand(cmd) {
 		return false, ErrNotAgent
 	}
 	pane, err := c.Capture(ctx, session)
 	if err != nil {
 		return false, err
 	}
-	if !HermesPane(pane) {
-		return false, ErrNotAgent
+	if IsHermesCommand(cmd) && HermesPane(pane) {
+		return true, nil
 	}
-	return true, nil
+	// A sandbox-less Codex pane ("node") is an agent only once its own TUI is on
+	// screen. It is NOT a Hermes target, so the bracketed-paste flag stays off:
+	// Codex's paste mechanics were measured under the unbracketed paste this
+	// package has always used.
+	if IsCodexCommand(cmd) && CodexPane(pane) {
+		return false, nil
+	}
+	return false, ErrNotAgent
 }
 
 // isShellCommand reports whether cmd is an interactive shell — the pane state

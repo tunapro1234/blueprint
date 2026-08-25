@@ -159,7 +159,7 @@ func (a *app) barLine(agent string) string {
 		if !stateRead {
 			// A codex pane has no Claude projects entry: its live session is
 			// the freshest rollout under CODEX_HOME started in this folder.
-			if p := readProcess(); p.Command == "codex" || p.Command == "bwrap" {
+			if p := readProcess(); a.codexPane(agent, p) {
 				state = cache.ReadCodex(codexHome(p.PID), readFolder())
 			} else {
 				state = cache.Read(bptmux.ClaudeProjectsRoot(), readFolder(), agent)
@@ -220,7 +220,7 @@ func (a *app) barLine(agent string) string {
 				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(items)))
 			}
 		case "model":
-			if model := a.barModel(readProcess(), readFolder(), readState); model != "" {
+			if model := a.barModel(agent, readProcess(), readFolder(), readState); model != "" {
 				segments = append(segments, style(barQuiet, model))
 			}
 		case "quota":
@@ -236,9 +236,31 @@ func (a *app) barLine(agent string) string {
 	return gap + strings.Join(segments, gap) + gap + "#[default]"
 }
 
-func (a *app) barModel(process bptmux.PaneProcess, folder string, state func() cache.State) string {
+func (a *app) barModel(agent string, process bptmux.PaneProcess, folder string, state func() cache.State) string {
 	home, _ := os.UserHomeDir()
 	var model, effort string
+	if a.codexPane(agent, process) {
+		root := codexHome(process.PID)
+		if root == "" {
+			return ""
+		}
+		model, effort = readCodexModel(filepath.Join(root, "config.toml"))
+		// The launch line beats the config file, for the same reason the session
+		// record beats a Claude pin: `codex -c model_reasoning_effort=medium`
+		// changes what this pane actually runs and touches no file. Measured
+		// 2026-08-25 — both codex agents were launched with -c overrides while
+		// config.toml still said xhigh, so the bar advertised an effort the fleet
+		// has banned on a pane that was not using it.
+		if liveModel, liveEffort := codexLaunchModel(process.PID); liveModel != "" || liveEffort != "" {
+			if liveModel != "" {
+				model = liveModel
+			}
+			if liveEffort != "" {
+				effort = liveEffort
+			}
+		}
+		return modelLabel(model, effort)
+	}
 	switch process.Command {
 	case "claude":
 		model, effort = readClaudeModel(folder, home)
@@ -248,16 +270,36 @@ func (a *app) barModel(process bptmux.PaneProcess, folder string, state func() c
 		if live := state().Model; live != "" {
 			model = live
 		}
-	case "codex", "bwrap":
-		root := codexHome(process.PID)
-		if root == "" {
-			return ""
-		}
-		model, effort = readCodexModel(filepath.Join(root, "config.toml"))
 	default:
 		return ""
 	}
 	return modelLabel(model, effort)
+}
+
+// codexPane reports whether this pane is running Codex, by the rule the
+// delivery path already follows: the COMMAND may only nominate a pane, the
+// SCREEN has to confirm it.
+//
+// "codex" and "bwrap" are Codex-specific names and answer on their own. The
+// third spelling does not: since Tuna turned the sandbox off (2026-08-25) a
+// Codex pane reports "node", which is also every build watcher and bridge on
+// this machine, so that one costs a read-only capture. Nothing here presses a
+// key, so a capture is the whole price of being right.
+func (a *app) codexPane(agent string, process bptmux.PaneProcess) bool {
+	if !bptmux.IsCodexCommand(process.Command) {
+		return false
+	}
+	if process.Command != "node" {
+		return true
+	}
+	if a.tmux == nil {
+		return false
+	}
+	pane, err := a.tmux.Capture(a.ctx, agent)
+	if err != nil {
+		return false
+	}
+	return bptmux.CodexPane(pane)
 }
 
 // codexHome resolves the CODEX_HOME the pane's process actually runs with,
@@ -502,4 +544,89 @@ func (a *app) barStore(agent, line string) {
 		return
 	}
 	_ = os.WriteFile(path, []byte(line+"\n"), 0o644)
+}
+
+// codexLaunchModel reads the model and reasoning effort a codex pane was
+// actually started with. The pane's own process is checked first, then its
+// direct children, because the pane pid is sometimes the shell that exec'd
+// codex rather than codex itself.
+func codexLaunchModel(pid int) (string, string) {
+	if pid <= 0 {
+		return "", ""
+	}
+	candidates := append([]int{pid}, childPIDs(pid)...)
+	for _, candidate := range candidates {
+		if model, effort := codexArgsModel(procArgs(candidate)); model != "" || effort != "" {
+			return model, effort
+		}
+	}
+	return "", ""
+}
+
+// codexArgsModel understands the two ways a launch line states them: the
+// dedicated -m/--model flag, and -c key=value config overrides.
+func codexArgsModel(argv []string) (string, string) {
+	var model, effort string
+	for i := 0; i < len(argv); i++ {
+		switch argv[i] {
+		case "-m", "--model":
+			if i+1 < len(argv) {
+				model = argv[i+1]
+				i++
+			}
+		case "-c", "--config":
+			if i+1 >= len(argv) {
+				continue
+			}
+			key, value, ok := strings.Cut(argv[i+1], "=")
+			i++
+			if !ok {
+				continue
+			}
+			value = strings.Trim(strings.TrimSpace(value), `"'`)
+			switch strings.TrimSpace(key) {
+			case "model":
+				model = value
+			case "model_reasoning_effort":
+				effort = value
+			}
+		}
+	}
+	return model, effort
+}
+
+func procArgs(pid int) []string {
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return nil
+	}
+	var argv []string
+	for _, field := range strings.Split(string(data), "\x00") {
+		if field != "" {
+			argv = append(argv, field)
+		}
+	}
+	return argv
+}
+
+// childPIDs lists the direct children of pid, read from /proc rather than
+// spawned as pgrep: the bar runs on every status tick.
+func childPIDs(pid int) []int {
+	entries, err := filepath.Glob(filepath.Join("/proc", strconv.Itoa(pid), "task", "*", "children"))
+	if err != nil {
+		return nil
+	}
+	var children []int
+	for _, entry := range entries {
+		data, err := os.ReadFile(entry)
+		if err != nil {
+			continue
+		}
+		for _, field := range strings.Fields(string(data)) {
+			if child, err := strconv.Atoi(field); err == nil {
+				children = append(children, child)
+			}
+		}
+	}
+	return children
 }

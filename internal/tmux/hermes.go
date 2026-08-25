@@ -354,7 +354,12 @@ func IsAgentPane(cmd, pane string) bool {
 	if IsAgentCommand(cmd) {
 		return true
 	}
-	return IsHermesCommand(cmd) && HermesPane(pane)
+	if IsHermesCommand(cmd) && HermesPane(pane) {
+		return true
+	}
+	// Codex without its sandbox reports "node" (2026-08-25). Same rule, same
+	// reason: the command nominates, the screen confirms.
+	return IsCodexCommand(cmd) && CodexPane(pane)
 }
 
 // hermesComposerBox is the BOX view (see composer.go) for a Hermes pane.

@@ -11,6 +11,7 @@ import (
 
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/pending"
+	bptmux "blueprint/internal/tmux"
 )
 
 func TestBarWidgetOrderFollowsConfig(t *testing.T) {
@@ -126,5 +127,64 @@ func writeBarTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// codexPane decides which reader the bar uses for an agent's context and model.
+// Since the sandbox came off (2026-08-25) a Codex pane reports "node", which is
+// also every build watcher on this machine, so the command may only nominate:
+// the Codex screen has to confirm before the bar reads codex rollouts, and a
+// node pane that is NOT Codex must fall through to the Claude reader rather
+// than be labelled a codex agent.
+func TestCodexPaneRequiresScreenForNode(t *testing.T) {
+	codexScreen := "› Ask Codex to do anything\n  gpt-5.6-sol medium fast · /srv/probot/out-codex\n"
+	otherScreen := "> vite v5 building for production...\n"
+	for _, tc := range []struct {
+		name    string
+		command string
+		screen  string
+		want    bool
+	}{
+		{"sandboxed codex answers on its own name", "bwrap", otherScreen, true},
+		{"plain codex answers on its own name", "codex", otherScreen, true},
+		{"node with codex on screen", "node", codexScreen, true},
+		{"node running something else", "node", otherScreen, false},
+		{"claude is never codex", "claude", codexScreen, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "tmux")
+			script := "#!/bin/sh\ncat <<'SCREEN'\n" + tc.screen + "SCREEN\n"
+			if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			a := &app{ctx: context.Background(), tmux: &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}}
+			if got := a.codexPane("agent", bptmux.PaneProcess{Command: tc.command, PID: 1}); got != tc.want {
+				t.Fatalf("codexPane(%q)=%v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+// The launch line is the live truth for a codex pane's model and effort:
+// `-c model_reasoning_effort=medium` changes what the pane runs and writes
+// nothing to config.toml. Measured 2026-08-25 on both codex agents, whose
+// config.toml said xhigh — an effort the fleet has banned — while their panes
+// ran medium.
+func TestCodexArgsModelReadsLaunchOverrides(t *testing.T) {
+	model, effort := codexArgsModel([]string{
+		"codex", "--search", "-c", "model_reasoning_effort=medium", "-c", "service_tier=fast", "-c", "sandbox_mode=danger-full-access",
+	})
+	if model != "" || effort != "medium" {
+		t.Fatalf("model=%q effort=%q, want empty model and medium effort", model, effort)
+	}
+	if model, effort := codexArgsModel([]string{"codex", "-m", "gpt-5.6-luna"}); model != "gpt-5.6-luna" || effort != "" {
+		t.Fatalf("model=%q effort=%q, want the -m model", model, effort)
+	}
+	if model, effort := codexArgsModel([]string{"codex", "-c", `model="gpt-5.6-terra"`, "-c", "broken"}); model != "gpt-5.6-terra" || effort != "" {
+		t.Fatalf("model=%q effort=%q, want the quoted -c model", model, effort)
+	}
+	if model, effort := codexArgsModel([]string{"codex", "--search"}); model != "" || effort != "" {
+		t.Fatalf("model=%q effort=%q, want nothing when the launch line says nothing", model, effort)
 	}
 }

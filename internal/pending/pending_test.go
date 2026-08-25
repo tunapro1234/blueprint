@@ -1,9 +1,12 @@
 package pending
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -212,5 +215,41 @@ func TestLoadLimitsAgeAndItems(t *testing.T) {
 	}
 	if len(entries) != 20 || dropped != 0 {
 		t.Fatalf("second load len=%d dropped=%d, want 20/0", len(entries), dropped)
+	}
+}
+
+// A sandboxed agent (Codex under bubblewrap, measured 2026-08-25) has the state
+// tree mounted READ-ONLY. Load opens the spool O_RDWR because it prunes, so
+// every bp msg from that agent failed at the spool rather than at the delivery
+// — and the failure looked like "bp cannot send" rather than "bp cannot write
+// here". The error must name that difference, because the caller's correct
+// response differs: skip the digest, do not fail the message.
+func TestLoadReportsAReadOnlySpoolDistinctly(t *testing.T) {
+	dir := t.TempDir()
+	if err := Append(dir, "kavram-main", Entry{TS: time.Now().Unix(), From: "bp", Kind: "msg", Text: "bekleyen mesaj"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "pending", "kavram-main.jsonl"), 0o444); err != nil {
+		t.Skipf("cannot drop write permission here: %v", err)
+	}
+	// The classifier is checked directly, because root ignores the permission
+	// bit and the real case (a bubblewrap read-only mount) cannot be staged in a
+	// unit test. These are the two errno values such a mount produces.
+	for _, err := range []error{syscall.EROFS, os.ErrPermission, fmt.Errorf("open: %w", syscall.EROFS)} {
+		if !readOnly(err) {
+			t.Fatalf("readOnly(%v) = false, want true", err)
+		}
+	}
+	if readOnly(os.ErrNotExist) || readOnly(errors.New("bozuk dosya")) {
+		t.Fatal("an ordinary failure was classified as read-only")
+	}
+	if os.Geteuid() != 0 {
+		if _, _, err := Load(dir, "kavram-main"); !errors.Is(err, ErrReadOnly) {
+			t.Fatalf("Load err=%v, want ErrReadOnly", err)
+		}
+	}
+	// Reading still works, so a sandboxed client can still SEE what is waiting.
+	if entries, _, err := Peek(dir, "kavram-main"); err != nil || len(entries) != 1 {
+		t.Fatalf("Peek entries=%v err=%v — a read-only spool must still be readable", entries, err)
 	}
 }

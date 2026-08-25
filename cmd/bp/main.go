@@ -1399,6 +1399,17 @@ func (a *app) readCache(folders map[string]string) map[string]bpcache.State {
 // review needs no extra probe of its own.
 func (a *app) flushPending(name string) error {
 	entries, dropped, err := pending.Load(a.config.StateDir, name)
+	if errors.Is(err, pending.ErrReadOnly) {
+		// This client cannot prune or clear the spool (a sandboxed agent with the
+		// state tree mounted read-only — measured on probot-out-codex,
+		// 2026-08-25). Delivering the digest anyway would repeat it on every
+		// later message, since nothing could ever clear it; failing the whole
+		// send would stop the agent talking at all, which is what happened.
+		// So: the message goes through alone and the digest stays spooled for a
+		// client that can write.
+		fmt.Fprintf(a.err, "NOT: %s icin bekleyen duyurular EKLENMEDI — spool bu ortamdan salt-okunur (%v). Mesaj tek basina gonderiliyor; duyurular yazma izni olan bir istemcide teslim edilecek.\n", name, err)
+		return nil
+	}
 	if err != nil || len(entries) == 0 {
 		return err
 	}
@@ -1579,6 +1590,12 @@ func (a *app) message(args []string) error {
 	}
 	if !a.hasSession(name) {
 		if err := pending.Append(a.config.StateDir, name, pending.Entry{TS: time.Now().Unix(), From: sender, Kind: "msg", Text: message}); err != nil {
+			if errors.Is(err, pending.ErrReadOnly) {
+				// Honest refusal beats a silent drop: the target is closed, the
+				// only store for it is unwritable here, so the message CANNOT be
+				// kept and the sender has to know that now.
+				return fmt.Errorf("%s kapali ve mesaj saklanamiyor: spool bu ortamdan salt-okunur (%w). Mesaji yazma izni olan bir agent/istemci uzerinden gonder", name, err)
+			}
 			return err
 		}
 		fmt.Fprintf(a.out, "queued for %s (offline; delivered when it opens)\n", name)

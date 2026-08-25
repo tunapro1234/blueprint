@@ -1965,3 +1965,112 @@ func TestNoticeSaysWhetherThePasteIsStillHanging(t *testing.T) {
 		}
 	}
 }
+
+// The 2026-08-25 case (q952220088, probot-out-codex -> probot-outreach): the
+// composer held our message with its FIRST 128 characters missing. bp was right
+// to refuse Enter — but the record advised "one Enter is enough when the pane
+// frees up", an operator pressed it, and probot-outreach received 81 characters
+// of a 716-character instruction, cut mid-word, the remaining 635 in no
+// transcript anywhere.
+//
+// A torn copy on screen is positive evidence that this delivery never
+// completed, so it is also the one state where "never paste again" may be
+// lifted: erase it and send the message whole.
+// deepPane is composerPane with transcript above it, so the composer box does
+// not start at the top of the capture. That distinction is load-bearing since
+// 2026-08-25: a box flush against the top edge may be a SCROLLED view of a
+// taller composer, and verdicts that erase a composer are refused there.
+func deepPane(text string) string {
+	return "  agent: eski cikti\n  agent: daha eski cikti\n  agent: en eski cikti\n" + composerPane(text)
+}
+
+func TestTornPasteIsClearedAndResent(t *testing.T) {
+	message := "[server-main] ERTELENEN HAFTALIK TARAMA, probot-rakip'i TAZE ac, task dosyasi aynen gecerli, bitince elle commit."
+	queue := New(t.TempDir())
+	id, err := queue.EnqueueUnverified("probot-main", "server-main", message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pane holds the message with its opening torn off — the measured shape.
+	target := &fakeTarget{sessions: map[string]bool{"probot-main": true}, pane: deepPane(message[40:])}
+	queue.Dispatch(context.Background(), target, nil)
+
+	if len(target.submitted) != 0 {
+		t.Fatalf("a MUTILATED paste was submitted: %v", target.submitted)
+	}
+	if len(target.cleared) != 1 {
+		t.Fatalf("the torn copy was not erased: cleared=%v", target.cleared)
+	}
+	record, err := read(filepath.Join(queue.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.NoRepaste || record.TornClears != 1 || record.Attempts != 0 {
+		t.Fatalf("record=%+v, want it sendable again exactly once more", record)
+	}
+	if record.Reason != tornClearedReason {
+		t.Fatalf("reason=%q, want the torn-cleared wording", record.Reason)
+	}
+
+	// Second pass, composer now empty: the message goes out WHOLE.
+	queue.Dispatch(context.Background(), target, nil)
+	if len(target.sent) != 1 || target.sent[0] != "probot-main:"+message {
+		t.Fatalf("the message was not re-sent whole: %v", target.sent)
+	}
+}
+
+// The bound: a paste that keeps tearing is a pane problem, and an unbounded
+// clear-and-resend would feed the same pane forever. Once it is spent the
+// record must say plainly that Enter is the WRONG key here.
+func TestTornPasteStopsAtTheBound(t *testing.T) {
+	message := "[server-main] ayni mesaj, ayni pane, tekrar tekrar yirtiliyorsa durmak gerekir."
+	queue := New(t.TempDir())
+	id, err := queue.EnqueueUnverified("probot-main", "server-main", message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	torn := deepPane(message[30:])
+	target := &fakeTarget{sessions: map[string]bool{"probot-main": true}, pane: torn}
+	for i := 0; i < tornClearMax; i++ {
+		queue.Dispatch(context.Background(), target, nil)
+		target.pane = torn // it tore again on the way in
+		record, err := read(filepath.Join(queue.pending(), id+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		record.NoRepaste = true // the re-send came back unverified again
+		if err := writePending(filepath.Join(queue.pending(), id+".json"), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queue.Dispatch(context.Background(), target, nil)
+	record, err := read(filepath.Join(queue.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.TornClears > tornClearMax {
+		t.Fatalf("tornClears=%d, want at most %d", record.TornClears, tornClearMax)
+	}
+	if record.Reason != damagedPasteReason {
+		t.Fatalf("reason=%q, want the do-not-press-Enter wording", record.Reason)
+	}
+	if len(target.submitted) != 0 {
+		t.Fatalf("a mutilated paste was submitted after the bound: %v", target.submitted)
+	}
+}
+
+// And the property that must not regress: an INTACT hanging paste is still
+// finished with Enter, never erased and re-pasted. Clearing that one would risk
+// the duplicate the whole no-repaste rule exists to prevent.
+func TestIntactHangingPasteIsStillSubmittedNotCleared(t *testing.T) {
+	message := "[server-main] bu mesaj composer'da eksiksiz duruyor, tek Enter yeter."
+	queue := New(t.TempDir())
+	if _, err := queue.EnqueueUnverified("probot-main", "server-main", message); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{sessions: map[string]bool{"probot-main": true}, pane: composerPane(message)}
+	queue.Dispatch(context.Background(), target, nil)
+	if len(target.submitted) != 1 || len(target.cleared) != 0 {
+		t.Fatalf("submitted=%v cleared=%v, want one Enter and no erasure", target.submitted, target.cleared)
+	}
+}

@@ -181,3 +181,20 @@ func rolloutCwd(path string) string {
 	}
 	return record.Payload.Cwd
 }
+
+// RolloutPath is newestRollout for callers outside this package: the live
+// session file of a codex agent working in folder, or false when there is none.
+//
+// It exists so the delivery witness can read a codex agent's own record. Until
+// 2026-08-25 the witness only knew Claude transcripts, so every unverified
+// delivery to a codex pane aged out with "may have gone missing" — including
+// ones that had provably arrived and been acted on (q177804375: probot-out-codex
+// had already read the message and resent four replies while bp was telling its
+// sender the delivery could not be confirmed).
+func RolloutPath(codexHome, folder string) (string, bool) {
+	folder = FolderPath(folder)
+	if codexHome == "" || folder == "" {
+		return "", false
+	}
+	return newestRollout(filepath.Join(codexHome, "sessions"), folder)
+}

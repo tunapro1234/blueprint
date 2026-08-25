@@ -1,6 +1,7 @@
 package book
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -155,4 +156,54 @@ func TestRecentUserTextsReadsWhatTheAgentWasHanded(t *testing.T) {
 	if got := RecentUserTexts(root, "", "probot-outreach", now.Add(-24*time.Hour)); got != nil {
 		t.Fatalf("an unresolvable agent returned %+v", got)
 	}
+}
+
+// The codex witness, against the shape a live rollout actually writes:
+// {"timestamp":…,"type":"response_item","payload":{"type":"message","role":
+// "user","content":[{"type":"input_text","text":…}]}}. Measured on
+// probot-out-codex, 2026-08-25.
+func TestCodexDeliveredReadsRollout(t *testing.T) {
+	home := t.TempDir()
+	folder := "/srv/probot/out-codex"
+	day := filepath.Join(home, "sessions", "2026", "08", "25")
+	if err := os.MkdirAll(day, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	message := "[blueprint] bp: INCIDENT bp-msg-enter-2026-08-25 — once acil kisim, mesajini yeniden gonder."
+	sent := time.Now().Add(-10 * time.Minute)
+	lines := []string{
+		`{"timestamp":"` + sent.Add(-time.Hour).UTC().Format(time.RFC3339Nano) + `","type":"session_meta","payload":{"cwd":"` + folder + `"}}`,
+		`{"timestamp":"` + sent.Add(time.Minute).UTC().Format(time.RFC3339Nano) + `","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":` + jsonString(message) + `}]}}`,
+	}
+	if err := os.WriteFile(filepath.Join(day, "rollout-2026-08-25T07-18-01-abc.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !CodexTranscriptExists(home, folder) {
+		t.Fatal("a codex agent with a rollout was reported as having no record to wait for")
+	}
+	if !CodexDelivered(home, folder, message, sent) {
+		t.Fatal("a message present in the rollout was not witnessed")
+	}
+	// A record written BEFORE the message was queued cannot settle it: that is
+	// what keeps a deliberate re-send from finding its own earlier copy. The
+	// margin clears transcriptClockSkew, which is deliberately tolerant.
+	if CodexDelivered(home, folder, message, sent.Add(5*time.Minute)) {
+		t.Fatal("an older rollout record settled a newer send")
+	}
+	if CodexDelivered(home, folder, "bambaska bir mesaj, yeterince uzun olsun diye", sent) {
+		t.Fatal("a message that never arrived was witnessed")
+	}
+	// Another agent's folder must not borrow this rollout.
+	if CodexDelivered(home, "/srv/probot/egitim-cx", message, sent) {
+		t.Fatal("the witness read a rollout belonging to a different folder")
+	}
+}
+
+func jsonString(s string) string {
+	data, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
 }

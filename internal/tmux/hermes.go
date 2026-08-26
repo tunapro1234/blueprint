@@ -359,7 +359,14 @@ func IsAgentPane(cmd, pane string) bool {
 	}
 	// Codex without its sandbox reports "node" (2026-08-25). Same rule, same
 	// reason: the command nominates, the screen confirms.
-	return IsCodexCommand(cmd) && CodexPane(pane)
+	if IsCodexCommand(cmd) && CodexPane(pane) {
+		return true
+	}
+	// opencode, the fourth TUI (2026-08-26). Its command name is unique enough to
+	// trust on its own; it goes through the screen anyway, because a rule applied
+	// only when it is strictly necessary is a rule the next surprise finds
+	// missing.
+	return IsOpenCodeCommand(cmd) && OpenCodePane(pane)
 }
 
 // hermesComposerBox is the BOX view (see composer.go) for a Hermes pane.

@@ -13,7 +13,12 @@ import (
 func TestPaneSanityFindings(t *testing.T) {
 	observations := []paneObservation{
 		// The 2026-08-25 case: sandbox off, pane says "node", bp says not an agent.
-		{Session: "probot-out-codex", Open: true, IsAgent: false, Binary: "codex"},
+		{Session: "probot-out-codex", Open: true, IsAgent: false, Command: "node", Binary: "codex"},
+		// The 2026-08-26 case, and the reason the alarm no longer depends on the
+		// binary list: opencode arrived, this watchdog did not know the name, and
+		// class A missed the case it was built for one day earlier. An unknown
+		// non-shell command in an open agent's pane is enough.
+		{Session: "compec-mail-ox", Open: true, IsAgent: false, Command: "opencode"},
 		// The server-main case: live Claude pane, annotated folder, no session found.
 		{Session: "server-main", Open: true, IsAgent: true, ClaudePane: true, SessionFound: false, Folder: "/srv (home: /srv/server-main)"},
 		// Healthy Claude agent.
@@ -21,13 +26,17 @@ func TestPaneSanityFindings(t *testing.T) {
 		// A recognised Codex pane has no Claude transcript by design.
 		{Session: "probot-egitim-cx", Open: true, IsAgent: true, ClaudePane: false, SessionFound: false},
 		// A plain shell in a session bp is not being asked to talk to.
-		{Session: "scratch", Open: false, IsAgent: false, Binary: "claude"},
-		// An open agent whose pane really is just a shell: bp is right, say nothing.
-		{Session: "compec-main", Open: true, IsAgent: false, Binary: ""},
+		{Session: "scratch", Open: false, IsAgent: false, Command: "claude", Binary: "claude"},
+		// An open agent whose pane really is just a shell: the agent exited and
+		// left its shell behind, which bp open already handles. Say nothing.
+		{Session: "compec-main", Open: true, IsAgent: false, Command: "zsh", Shell: true},
 	}
 	findings := paneSanityFindings(observations)
-	if len(findings) != 2 {
-		t.Fatalf("findings=%v, want exactly the two contradictions", findings)
+	if len(findings) != 3 {
+		t.Fatalf("findings=%v, want exactly the three contradictions", findings)
+	}
+	if got := findings["compec-mail-ox"]; !strings.Contains(got, "opencode") || !strings.Contains(got, "AGENT SAYMIYOR") {
+		t.Fatalf("unknown-TUI finding=%q", got)
 	}
 	if got := findings["probot-out-codex"]; !strings.Contains(got, "AGENT SAYMIYOR") || !strings.Contains(got, "codex") {
 		t.Fatalf("codex finding=%q", got)

@@ -191,6 +191,9 @@ func composerBoxAt(pane string) (string, int, bool) {
 	if box, top, ok := codexComposerBox(pane); ok {
 		return box, top, true
 	}
+	if box, top, ok := openCodeComposerBox(pane); ok {
+		return box, top, true
+	}
 	return hermesComposerBox(pane)
 }
 
@@ -329,7 +332,7 @@ func classifyPaste(pane string, texts []string) (pasteVerdict, string) {
 	// (classifyComposer treats it so), but at the PRE-SEND gate it proves
 	// nothing: it may be a human's own large paste, and pressing Enter on that
 	// would submit someone else's work. Foreign, deliberately.
-	if codexPasteChip(pane) || claudePasteChip(pane) {
+	if pasteChip(pane) {
 		return pasteForeign, ""
 	}
 	got, ok := composerBoxText(pane)
@@ -487,7 +490,7 @@ func ComposerContentBlockReason(pane string, texts []string) string {
 	if !composerFilled(pane) {
 		return ""
 	}
-	if codexPasteChip(pane) || claudePasteChip(pane) {
+	if pasteChip(pane) {
 		return BlockedByPasteChip
 	}
 	if _, ours := StuckPaste(pane, texts); ours {
@@ -533,4 +536,36 @@ func DamagedPaste(pane string, texts []string) bool {
 	}
 	verdict, _ := classifyPaste(pane, texts)
 	return verdict == pasteDamaged
+}
+
+// openCodePasteChip reports whether opencode's paste placeholder is present.
+// opencode renders a paste it considers large as "[Pasted ~1 lines]" instead of
+// the text (measured 2026-08-26 — note the threshold is LENGTH, not line count:
+// a single 480-character line chips just as a three-line paste does), and like
+// the other two chips it means the composer's content cannot be read at all.
+//
+// It reads the COMPOSER BOX, not a tail window of the pane. The first version
+// used hermesRegion and failed on the first real delivery: opencode draws its
+// banner and leaves a dozen blank rows above the footer, so on a fresh 38-row
+// pane the chip sat at row 20 while the region only reached row 24 upward. bp
+// then compared the unreadable composer against the message, called its own
+// paste broken, cleared it, pasted again, and queued the message as undelivered
+// — twice, deterministically. Reading the box also removes the other risk a
+// pane-wide search would carry: a transcript row QUOTING an old chip.
+func openCodePasteChip(pane string) bool {
+	box, _, ok := openCodeComposerBox(pane)
+	if !ok {
+		return false
+	}
+	return openCodeChip.MatchString(box)
+}
+
+// pasteChip is the ONE question every verdict asks: is the composer showing a
+// placeholder instead of its text? Three TUIs spell it differently and a fourth
+// will spell it a fourth way, so the spellings live here rather than at the six
+// call sites — the FolderPath argument again. A site that forgets one of them
+// does not fail loudly; it quietly judges an unreadable composer as if it had
+// been read.
+func pasteChip(pane string) bool {
+	return codexPasteChip(pane) || claudePasteChip(pane) || openCodePasteChip(pane)
 }

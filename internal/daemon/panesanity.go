@@ -35,11 +35,18 @@ import (
 // is one the fleet learns to skip.
 const paneSanityCooldown = 24 * time.Hour
 
-// agentBinaries are the executables an agent pane runs. The match is on the
-// executable PATH, not on the pane command, which is exactly the point: the
-// unsandboxed Codex pane calls itself "node" while its argv[0] still reads
+// agentBinaries are the executables an agent pane is KNOWN to run. The match is
+// on the executable PATH, not on the pane command, which is exactly the point:
+// the unsandboxed Codex pane calls itself "node" while its argv[0] still reads
 // .../@openai/codex/.../bin/codex.
-var agentBinaries = []string{"claude", "codex", "hermes"}
+//
+// It is a convenience, not the rule. The list itself drifted on 2026-08-26 —
+// opencode arrived, this watchdog did not know the name, and class A missed the
+// very case it was built for one day earlier. So the alarm no longer DEPENDS on
+// it: a non-shell pane is reported whatever runs inside it, and a known binary
+// only makes the message more specific. A watchdog that needs updating for each
+// new TUI is the thing it was supposed to replace.
+var agentBinaries = []string{"claude", "codex", "hermes", "opencode"}
 
 // paneObservation is one session as a sweep saw it. Keeping the decision away
 // from tmux and /proc is what makes the rules testable.
@@ -51,8 +58,14 @@ type paneObservation struct {
 	// IsAgent is bp's own verdict — the one that gates inbound delivery.
 	IsAgent bool
 	// Binary is the agent executable found in the pane's process tree, empty
-	// when there is none.
+	// when there is none — a hint for the reader, never the trigger.
 	Binary string
+	// Command is what tmux reports for the pane, and Shell says whether that is
+	// an interactive shell. A shell is the one thing an open agent's pane may
+	// legitimately be while bp declines to talk to it: the agent exited and left
+	// its shell behind, which `bp open` already handles by relaunching in place.
+	Command string
+	Shell   bool
 	// ClaudePane distinguishes class B's subject: only a Claude session has a
 	// transcript to resolve. Codex keeps rollouts elsewhere and Hermes keeps
 	// none, so their blank state is not evidence of anything.
@@ -75,11 +88,18 @@ func paneSanityFindings(observations []paneObservation) map[string]string {
 			continue
 		}
 		if !o.IsAgent {
-			if o.Binary != "" {
-				findings[o.Session] = fmt.Sprintf(
-					"bp: %s pane'ini AGENT SAYMIYOR ama icinde %s kosuyor — inbound teslim bu agent'a kapali. bp'nin TUI imzasi kaymis olabilir (kurulum/surum degisikligi); internal/tmux IsAgentPane'e bak, bp peek %s ile ekrani gor.",
-					o.Session, o.Binary, o.Session)
+			// A shell proves nothing: that is a dead agent's leftover pane, and
+			// bp already knows how to relaunch into it.
+			if o.Shell {
+				continue
 			}
+			running := "\"" + o.Command + "\" kosuyor"
+			if o.Binary != "" {
+				running = o.Binary + " kosuyor (pane komutu: \"" + o.Command + "\")"
+			}
+			findings[o.Session] = fmt.Sprintf(
+				"bp: %s pane'ini AGENT SAYMIYOR ama icinde %s — inbound teslim bu agent'a kapali. bp'nin TUI imzasi kaymis ya da yeni bir TUI gelmis olabilir; internal/tmux IsAgentPane'e bak, bp peek %s ile ekrani gor.",
+				o.Session, running, o.Session)
 			continue
 		}
 		if o.ClaudePane && !o.SessionFound {

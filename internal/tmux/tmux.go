@@ -191,7 +191,7 @@ func composerHoldsMessage(pane, want string) bool {
 	if box, ok := composerBoxText(pane); ok && box == want {
 		return true
 	}
-	return composerContent(pane) == want || codexPasteChip(pane)
+	return composerContent(pane) == want || pasteChip(pane)
 }
 
 // composerVerdict classifies what the composer holds right after we pasted a
@@ -225,7 +225,7 @@ const (
 // match instead of a prefix, and text that is genuinely unrelated is recognised
 // as such even when its first row happens to start like ours.
 func classifyComposer(pane, want string) composerVerdict {
-	if codexPasteChip(pane) || claudePasteChip(pane) {
+	if pasteChip(pane) {
 		return composerMine
 	}
 	got, boxed := composerJudgeText(pane)
@@ -462,6 +462,14 @@ func Busy(pane string) bool {
 	// INTERRUPTS the turn (see hermesForceRefused), so a false "idle" here does not
 	// merge two messages, it cancels somebody's work.
 	if hermesBusy(pane) {
+		return true
+	}
+	// A FOURTH signature (2026-08-26): opencode writes "esc interrupt" — not
+	// Claude's "esc to interrupt" — so the loop below misses it by two
+	// characters, and it draws no Claude spinner either. Without this branch
+	// every working opencode pane reads idle, which is how a message lands
+	// mid-turn.
+	if openCodeBusy(pane) {
 		return true
 	}
 	for _, line := range busyRegion(pane) {
@@ -827,7 +835,7 @@ func (c *Client) requireAgentPane(ctx context.Context, session string) (hermes b
 	if IsAgentCommand(cmd) {
 		return false, nil
 	}
-	if !IsHermesCommand(cmd) && !IsCodexCommand(cmd) {
+	if !IsHermesCommand(cmd) && !IsCodexCommand(cmd) && !IsOpenCodeCommand(cmd) {
 		return false, ErrNotAgent
 	}
 	pane, err := c.Capture(ctx, session)
@@ -844,8 +852,22 @@ func (c *Client) requireAgentPane(ctx context.Context, session string) (hermes b
 	if IsCodexCommand(cmd) && CodexPane(pane) {
 		return false, nil
 	}
+	// opencode takes the BRACKETED door, and that is a measurement, not a
+	// preference: an unbracketed multi-line paste into this TUI submits on every
+	// newline (blueprint-ox-test, 2026-08-26 — three lines went out as one turn
+	// with the newlines swallowed, and the turn started before the rest of the
+	// message existed). Hermes taught this exact lesson; opencode inherits the
+	// fix rather than the incident.
+	if IsOpenCodeCommand(cmd) && OpenCodePane(pane) {
+		return true, nil
+	}
 	return false, ErrNotAgent
 }
+
+// IsShellCommand is isShellCommand for callers outside this package: the
+// pane-recognition watchdog needs to tell "an agent bp cannot see" from "a pane
+// with a shell in it", and that distinction belongs here, beside the list.
+func IsShellCommand(cmd string) bool { return isShellCommand(cmd) }
 
 // isShellCommand reports whether cmd is an interactive shell — the pane state
 // left behind when an agent exits or crashes. Only such a pane may be reused
@@ -1146,9 +1168,9 @@ func (c *Client) ClearDelivered(ctx context.Context, session string, texts []str
 // chip counts as content: it stands in for text we cannot read.
 func composerFilled(pane string) bool {
 	if box, ok := composerBoxText(pane); ok {
-		return box != "" || codexPasteChip(pane) || claudePasteChip(pane)
+		return box != "" || pasteChip(pane)
 	}
-	return Typing(pane) || codexPasteChip(pane) || claudePasteChip(pane)
+	return Typing(pane) || pasteChip(pane)
 }
 
 // clearWithCtrlU empties a composer with repeated C-u presses — never Escape,
@@ -1405,7 +1427,7 @@ func (c *Client) provenFailure(ctx context.Context, session, verdictPane, reason
 // as they can ever be known to be). The prefix keeps the three readings from
 // comparing equal to one another by accident.
 func composerSnapshot(pane string) string {
-	if codexPasteChip(pane) || claudePasteChip(pane) {
+	if pasteChip(pane) {
 		return "chip"
 	}
 	if box, ok := composerJudgeText(pane); ok {
@@ -1608,7 +1630,28 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 // about the screen, not about the composer's internal buffer. The final witness
 // for a delivery is still the agent's own transcript (see msgq reconciliation).
 func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string, bracketed bool) (string, bool) {
-	switch c.pasteIntegrity(pane, message) {
+	verdict := c.pasteIntegrity(pane, message)
+	if verdict == pasteMangled {
+		// LOOK TWICE before acting on bad news. A TUI may render a long paste in
+		// stages, and the first frame is then a partial view that is
+		// indistinguishable from a torn paste. Measured 2026-08-26 on the first
+		// real delivery to an opencode agent: the settle-window capture caught
+		// the literal half-drawn text, bp cleared and re-pasted it, and the
+		// SECOND read raced the same way — the message was queued as broken while
+		// what actually sat in the composer was a perfectly good "[Pasted ~1
+		// lines]" chip.
+		//
+		// Scoped to MANGLED on purpose: that is the verdict that presses C-u on
+		// somebody's pane. The unrelated-content verdict (pasteBroken) already
+		// has its own second look one level up — the still-frame check in Send —
+		// and duplicating it here would only make a refusal slower.
+		c.Sleep(composerSettleWindow)
+		if next, ok := c.composerStable(ctx, session); ok {
+			pane = next
+			verdict = c.pasteIntegrity(next, message)
+		}
+	}
+	switch verdict {
 	case pasteIntact:
 		return pane, true
 	case pasteMangled:
@@ -1652,7 +1695,7 @@ const (
 )
 
 func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
-	if codexPasteChip(pane) || claudePasteChip(pane) {
+	if pasteChip(pane) {
 		return pasteUnreadable
 	}
 	box, top, ok := composerBoxAt(pane)

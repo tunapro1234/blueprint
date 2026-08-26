@@ -466,12 +466,14 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 		captures: []string{
 			claudePane(emptyRow),       // gate: empty, reused as readyToSend pass 1
 			claudePane(emptyRow),       // readyToSend pass 2
-			claudePane("❯ " + mangled), // post-paste: damaged -> repair
+			claudePane("❯ " + mangled), // post-paste: damaged
+			claudePane("❯ " + mangled), // LOOK TWICE: still damaged after the settle -> repair
 			claudePane(emptyRow),       // after C-u
 			claudePane("❯ " + mangled), // the re-paste is damaged too
+			claudePane("❯ " + mangled), // and still damaged on the second look
 			claudePane("❯ " + mangled), // still-frame check: same calm screen -> the verdict is proof
 		},
-		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
 	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
 	if !errors.Is(err, ErrNotReady) {
@@ -557,12 +559,13 @@ func TestSendSubmitsWhenTheRepairedPasteMatches(t *testing.T) {
 		captures: []string{
 			claudePane(emptyRow),            // gate / readyToSend pass 1
 			claudePane(emptyRow),            // readyToSend pass 2
-			claudePane("❯ " + mangled),      // post-paste: damaged -> repair
+			claudePane("❯ " + mangled),      // post-paste: damaged
+			claudePane("❯ " + mangled),      // LOOK TWICE: still damaged -> repair
 			claudePane(emptyRow),            // after C-u
 			claudePane("❯ " + stuckMessage), // re-paste is whole -> Enter
 			claudePane(emptyRow),            // cleared -> verified
 		},
-		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
 	if _, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil); err != nil {
 		t.Fatalf("err=%v, want a verified delivery", err)
@@ -1121,5 +1124,41 @@ func TestDamagedPasteRefusesIncompleteView(t *testing.T) {
 	}
 	if !DamagedPaste(claudePane(torn), []string{message}) {
 		t.Fatal("a torn paste on a complete view was not recognised")
+	}
+}
+
+// A TUI may render a long paste in STAGES, and the first frame is then a partial
+// view indistinguishable from a torn paste. Measured 2026-08-26 on the first
+// real delivery to an opencode agent: the settle capture caught half-drawn
+// literal text, bp cleared and re-pasted, and the message was queued as broken
+// while the composer actually held a perfectly good paste chip.
+//
+// So the mangled verdict — the one that presses C-u on somebody's pane — is
+// re-read before it is acted on. A second frame that says "intact" wins.
+func TestMangledVerdictIsRereadBeforeItClearsAnything(t *testing.T) {
+	mangled := stuckMessage[:45] + stuckMessage[80:]
+	h := &sendHarness{
+		captures: []string{
+			claudePane(emptyRow),            // gate / readyToSend pass 1
+			claudePane(emptyRow),            // readyToSend pass 2
+			claudePane("❯ " + mangled),      // half-drawn frame
+			claudePane("❯ " + stuckMessage), // the finished render: our message, whole
+			claudePane(emptyRow),            // cleared -> verified
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if _, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil); err != nil {
+		t.Fatalf("err=%v, want a verified delivery", err)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("the message was re-pasted over a half-drawn frame: %v", h.mutations)
+	}
+	for _, key := range h.mutations {
+		if strings.Contains(key, "C-u") {
+			t.Fatalf("a composer was cleared on a half-drawn frame: %v", h.mutations)
+		}
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
 	}
 }

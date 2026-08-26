@@ -598,6 +598,8 @@ func (s *Service) busySanity(ctx context.Context) error {
 			Open:       fleet.Agents[session].Status == "open",
 			IsAgent:    isAgent,
 			ClaudePane: process.Command == "claude",
+			Command:    process.Command,
+			Shell:      bptmux.IsShellCommand(process.Command),
 			Folder:     fleet.Agents[session].Folder,
 		}
 		if !isAgent {

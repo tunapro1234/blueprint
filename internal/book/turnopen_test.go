@@ -151,12 +151,34 @@ func TestTurnOpenPhases(t *testing.T) {
 		records: []string{recPrompt, recToolUse, recToolResult},
 		want:    true,
 	}, {
-		// Written a second ago: whatever the tail looks like, something is
-		// happening right now and the read may have landed inside a write burst.
-		name:    "written just now",
+		// Written a second ago, and the tail SAYS the turn is over. Until
+		// 2026-08-28 the freshness window answered "busy" here on mtime alone,
+		// which made every timestamp-less metadata append (bridge-session,
+		// agent-name, mode, permission-mode) look like a working agent for five
+		// seconds. server-main measured the consequence: the busy-sanity counter
+		// filled with samples that had no turn behind them, so the screen could
+		// never agree with them and the watchdog blamed the screen signature.
+		// A decisive tail outranks the clock.
+		name:    "written just now, tail says the turn ended",
 		age:     time.Second,
 		records: idleTail,
+		want:    false,
+	}, {
+		// The case the freshness window actually exists for, and the reason it is
+		// still here: a read landing inside a write burst sees a tail with nothing
+		// decisive in it. That is doubt about the PHASE, and doubt reads as busy —
+		// but only while the file is being written.
+		name:    "written just now, tail undecidable",
+		age:     time.Second,
+		records: []string{"{ truncated mid-record"},
 		want:    true,
+	}, {
+		// The same undecidable tail, no longer fresh: not doubt any more, just a
+		// file with no recent turn in it.
+		name:    "undecidable tail, not fresh",
+		age:     time.Minute,
+		records: []string{"{ truncated mid-record"},
+		want:    false,
 	}, {
 		// The Task subagent case. Its closing message is the LAST record in the
 		// file while the main chain still waits on the tool that started it.

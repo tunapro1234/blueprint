@@ -78,10 +78,30 @@ func TurnOpen(projectsRoot, folder, agent string, now time.Time) bool {
 	if age > turnOpenCeiling {
 		return false
 	}
-	if age <= turnOpenFresh {
-		return true
+	// The tail decides whenever it CAN. The freshness shortcut below used to run
+	// first and answer "open" on mtime alone, which made this gate fire on writes
+	// that are not turns at all: Claude Code appends timestamp-less metadata
+	// records (bridge-session, agent-name, mode, permission-mode) to session files
+	// long after the last turn ended, and each one of them read as a working
+	// agent for five seconds.
+	//
+	// That is the SAME refutation turnOpenCeiling carries in its own comment —
+	// mtime says something wrote the FILE, never that the TURN moved — applied
+	// there in August and left standing here. server-main measured the live
+	// consequence on 2026-08-28: the busy-sanity counter was filling with samples
+	// that had no turn behind them, so the screen could never agree with them and
+	// the watchdog blamed the screen signature. Two gates, one of them counting
+	// phantoms, and the alarm pointed at the wrong one.
+	open, decisive := tailTurnPhase(path, now)
+	if decisive {
+		return open
 	}
-	return tailTurnOpen(path, now)
+	// Undecidable tail. THIS is what the freshness window is for and all it is
+	// for: a read that lands inside a write burst can see a torn tail — the answer
+	// written, its end marker not yet — and doubt about the phase reads as busy.
+	// Outside the window an undecidable tail is not doubt, it is a file with no
+	// recent turn in it.
+	return age <= turnOpenFresh
 }
 
 const (
@@ -131,27 +151,33 @@ const (
 	turnClosedVerdict
 )
 
-// tailTurnOpen reads the bounded tail and returns the verdict of the LAST
+// tailTurnPhase reads the bounded tail and returns the verdict of the LAST
 // decisive record in it, aged against that record's OWN timestamp. Records are
 // classified going forward and the verdict is overwritten, which is the same
 // thing as scanning backwards without having to hold the tail in memory.
 //
-// A tail with nothing decisive in it returns false: that happens when the window
-// lands entirely inside one enormous record, and a partial line is not evidence.
-func tailTurnOpen(path string, now time.Time) bool {
+// It reads the tail and reports the turn's phase, plus whether the
+// tail could answer AT ALL. The second value is the whole point: "no decisive
+// record in this window" and "the turn has ended" are different facts, and the
+// caller treats them differently — the first one is doubt, and doubt inside a
+// write burst reads as busy.
+//
+// An unreadable file is undecidable rather than closed, for the same reason: it
+// is a failure to look, not an observation.
+func tailTurnPhase(path string, now time.Time) (open, decisive bool) {
 	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return false
+		return false, false
 	}
 	partial := info.Size() > turnOpenTailBytes
 	if partial {
 		if _, err := file.Seek(info.Size()-turnOpenTailBytes, io.SeekStart); err != nil {
-			return false
+			return false, false
 		}
 	}
 	scanner := bufio.NewScanner(file)
@@ -167,8 +193,11 @@ func tailTurnOpen(path string, now time.Time) bool {
 			verdict, decisiveStamp = v, stamp
 		}
 	}
+	if verdict == turnNone {
+		return false, false
+	}
 	if verdict != turnOpenVerdict {
-		return false
+		return false, true
 	}
 	// The ceiling is applied HERE, against the decisive record's own timestamp —
 	// the file's mtime cannot carry it, because timestamp-less metadata appends
@@ -178,9 +207,9 @@ func tailTurnOpen(path string, now time.Time) bool {
 	// that knows the phase but not the hour still outranks a guess.
 	stamp, err := time.Parse(time.RFC3339, decisiveStamp)
 	if err != nil {
-		return true
+		return true, true
 	}
-	return now.Sub(stamp) <= turnOpenCeiling
+	return now.Sub(stamp) <= turnOpenCeiling, true
 }
 
 // turnRecord is the part of a transcript record this gate reads. Everything else

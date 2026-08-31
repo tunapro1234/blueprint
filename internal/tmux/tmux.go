@@ -924,7 +924,13 @@ func (c *Client) clientActivity(ctx context.Context, session string) (time.Time,
 const (
 	composerQuietWindow  = 300 * time.Millisecond
 	composerSettleWindow = 400 * time.Millisecond
-	clientIdleWindow     = 2 * time.Second
+	// pasteFillAttempts bounds the wait for a paste that is still arriving. Four
+	// settle windows is 1.6 s; the fill was measured completing inside 150 ms on
+	// an idle pane, and the one torn paste in 25 had SETTLED short at 1.5 s — so
+	// this is generous for the slow case and still short enough that a lost
+	// chunk is answered promptly with "queued" rather than a partial delivery.
+	pasteFillAttempts = 4
+	clientIdleWindow  = 2 * time.Second
 	// submitVerifyWindow is the pause between submitting and re-checking whether
 	// the composer actually cleared before pressing Enter again.
 	submitVerifyWindow = 300 * time.Millisecond
@@ -1631,6 +1637,21 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 // for a delivery is still the agent's own transcript (see msgq reconciliation).
 func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string, bracketed bool) (string, bool) {
 	verdict := c.pasteIntegrity(pane, message)
+	// A paste still landing is given time before anything is decided about it.
+	// The wait is bounded and it presses no keys: either the composer completes,
+	// or the message is queued with nothing partial delivered.
+	for attempt := 0; verdict == pasteIncomplete && attempt < pasteFillAttempts; attempt++ {
+		c.Sleep(composerSettleWindow)
+		next, ok := c.composerStable(ctx, session)
+		if !ok {
+			return pane, false
+		}
+		pane = next
+		verdict = c.pasteIntegrity(next, message)
+	}
+	if verdict == pasteIncomplete {
+		return pane, false
+	}
 	if verdict == pasteMangled {
 		// LOOK TWICE before acting on bad news. A TUI may render a long paste in
 		// stages, and the first frame is then a partial view that is
@@ -1692,6 +1713,10 @@ const (
 	pasteMangled
 	// pasteBroken: unrelated content where our paste should be. Proof of failure.
 	pasteBroken
+	// pasteIncomplete: a complete view of the composer holding only the OPENING
+	// of our message. Never submittable: Enter would deliver the fragment and
+	// close the record as if the whole message had gone.
+	pasteIncomplete
 )
 
 func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
@@ -1710,9 +1735,25 @@ func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
 		// Empty right after the paste: it may have auto-submitted, or the pane may
 		// have swallowed it. submit() already reports that honestly as unverified.
 		return pasteUnreadable
-	case strings.HasPrefix(want, got), composerBoxScrolled(box, top):
-		// A partial render or a scrolled window, not proof of a partial paste.
+	case composerBoxScrolled(box, top):
+		// A window onto a taller composer, not proof of anything about content.
 		return pasteUnreadable
+	case strings.HasPrefix(want, got):
+		// A COMPLETE view holding the opening of our message: the paste is still
+		// arriving, or part of it was lost on the way in. Either way this is not
+		// the moment to press Enter — and pressing Enter here is exactly how the
+		// fleet lost message bodies. Measured on the receiving side: q952220088
+		// arrived at probot-outreach as 81 characters of 716, and the 31 Aug cron
+		// trigger arrived at probot-main as 135 of 701, both cut mid-word, both
+		// closed as delivered. The other half of the same event is the composer
+		// left holding the REST (q379943625), which is what a tail looks like once
+		// its head has been submitted without it.
+		//
+		// The tear itself is app-side and rare — reproduced once in 25 pastes of
+		// a 701-character message into a disposable Claude pane, settling short,
+		// so bytes are genuinely lost rather than merely late. bp cannot stop it;
+		// it can refuse to turn it into a delivery.
+		return pasteIncomplete
 	case relatedPaste(got, want):
 		return pasteMangled
 	default:

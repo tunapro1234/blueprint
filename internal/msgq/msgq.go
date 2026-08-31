@@ -796,8 +796,16 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 	// could confirm may well have landed, while an attempt that never got past a
 	// verdict of failure probably did not.
 	status := "delivered (unverified)"
-	if message.Reason == exhaustedReason {
+	switch {
+	case message.Reason == exhaustedReason:
 		status = "not delivered (verification failed)"
+	case message.Reason == damagedPasteReason:
+		// bp watched its OWN torn copy sit in the composer and refused to submit
+		// it. That is not an uncertain delivery, it is a known non-delivery, and
+		// calling it "delivered (unverified)" is how one of these was closed on
+		// 2026-08-31 after six days pending — server-main's weekly-scan
+		// instruction to probot-main, which never reached that agent at all.
+		status = "not delivered (kirpik paste, gonderilmedi)"
 	}
 	// Ask the pane what is true NOW. A notice written from the failure's own
 	// memory describes a moment that has usually passed.
@@ -1207,6 +1215,22 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// Could not erase it (busy pane, refusal, or the bound is spent):
 			// say plainly that Enter is the wrong key here.
 			q.remember(rec.path, rec.Message, damagedPasteReason, report)
+			// With the budget spent this record can never be delivered by bp, so
+			// it must be CLOSED rather than held. Held is what happened to
+			// q379943625: the bound was reached on 25 Aug and the record sat
+			// pending until 31 Aug, blocking its target's line, until a human
+			// happened to clear the composer. A record bp cannot finish belongs
+			// in the sender's hands, with the reason attached.
+			if rec.TornClears >= tornClearMax {
+				// The reason travels with the record: settleUnrepasted reads it to
+				// choose the closing status, and q.remember above only wrote it to
+				// disk.
+				spent := rec.Message
+				spent.Reason = damagedPasteReason
+				if q.settleUnrepasted(ctx, target, rec.path, spent, report) {
+					return
+				}
+			}
 			line.block(rec.ID)
 			return
 		} else if err == nil && !rec.ForceBusy && stillHolds(pane, rec.Msg) {

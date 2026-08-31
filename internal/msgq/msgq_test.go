@@ -2,6 +2,7 @@ package msgq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2072,5 +2073,54 @@ func TestIntactHangingPasteIsStillSubmittedNotCleared(t *testing.T) {
 	queue.Dispatch(context.Background(), target, nil)
 	if len(target.submitted) != 1 || len(target.cleared) != 0 {
 		t.Fatalf("submitted=%v cleared=%v, want one Enter and no erasure", target.submitted, target.cleared)
+	}
+}
+
+// q379943625 (2026-08-31): the torn-clear budget ran out on 25 Aug and the
+// record stayed PENDING for six days — blocking its target's line — until a
+// human happened to clear the composer, then closed as "delivered
+// (unverified)". Both halves were wrong. bp had watched its own torn copy sit
+// in that composer and refused to submit it, so this is a known non-delivery,
+// and a record bp can never finish belongs in the sender's hands the same day.
+func TestSpentTornRecordClosesAsNotDelivered(t *testing.T) {
+	message := "[server-main] ERTELENEN HAFTALIK TARAMA, probot-rakip'i TAZE ac, task dosyasi aynen gecerli."
+	queue := New(t.TempDir())
+	// Aged past the witness window: the transcript has had its chance.
+	queue.Now = func() time.Time { return time.Now() }
+	id, err := queue.EnqueueUnverified("probot-main", "server-main", message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(queue.pending(), id+".json")
+	record, err := read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.TS = float64(time.Now().Add(-2*witnessWindow).UnixNano()) / 1e9
+	record.TornClears = tornClearMax // the budget is spent
+	if err := writePending(path, record); err != nil {
+		t.Fatal(err)
+	}
+	// The composer still holds the torn copy, and the pane refuses to be cleared.
+	target := &fakeTarget{
+		sessions: map[string]bool{"probot-main": true, "server-main": true},
+		pane:     deepPane(message[30:]),
+		clearErr: errors.New("busy"),
+	}
+	queue.Dispatch(context.Background(), target, nil)
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the record is still pending after its budget was spent: %v", err)
+	}
+	done, err := read(filepath.Join(queue.done(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := done.Status
+	if !strings.Contains(closed, "not delivered") {
+		t.Fatalf("closed as %q, want a plain non-delivery", closed)
+	}
+	if len(target.submitted) != 0 {
+		t.Fatalf("a torn paste was submitted on the way out: %v", target.submitted)
 	}
 }

@@ -1162,3 +1162,57 @@ func TestMangledVerdictIsRereadBeforeItClearsAnything(t *testing.T) {
 		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
 	}
 }
+
+// The mechanism behind the fleet's lost message bodies (measured 2026-08-25 and
+// 2026-08-31): a paste that is still arriving leaves the composer holding the
+// OPENING of the message, bp read that as "unreadable, carry on" and pressed
+// Enter, and the fragment was delivered and recorded as the whole message —
+// 81 characters of 716 at probot-outreach, 135 of 701 at probot-main. The rest
+// stayed in the composer, which is the other shape the same event produces.
+func TestPartialPasteIsWaitedForNeverSubmitted(t *testing.T) {
+	head := stuckMessage[:40]
+	h := &sendHarness{
+		captures: []string{
+			claudePane(emptyRow),            // gate / readyToSend pass 1
+			claudePane(emptyRow),            // readyToSend pass 2
+			claudePane("❯ " + head),         // post-paste: only the opening has landed
+			claudePane("❯ " + stuckMessage), // the rest arrives
+			claudePane(emptyRow),            // Enter cleared it -> verified
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if _, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil); err != nil {
+		t.Fatalf("err=%v, want the completed paste to be delivered", err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("the message was pasted more than once: %v", h.mutations)
+	}
+}
+
+// And when the missing part never arrives — a chunk genuinely lost on the way
+// in — nothing is pressed and the message is QUEUED. A fragment delivered is
+// worse than a message delayed: it reads as complete to whoever receives it.
+func TestPartialPasteThatNeverCompletesIsQueued(t *testing.T) {
+	head := stuckMessage[:40]
+	captures := []string{
+		claudePane(emptyRow), // gate / readyToSend pass 1
+		claudePane(emptyRow), // readyToSend pass 2
+	}
+	activities := []string{"target\t900\n", "target\t900\n"}
+	for i := 0; i < 8; i++ {
+		captures = append(captures, claudePane("❯ "+head))
+		activities = append(activities, "target\t900\n")
+	}
+	h := &sendHarness{captures: captures, activities: activities}
+	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("err=%v, want ErrNotReady so the message is queued", err)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("Enter was pressed on a fragment: %v", h.mutations)
+	}
+	assertNoEscape(t, h.mutations)
+}

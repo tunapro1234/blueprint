@@ -105,6 +105,19 @@ submitting text mid-turn CANCELS the running turn (the pane itself says
 in when the turn ends. Hermes keeps no Claude-style transcript, so delivery
 is screen-verified (`unverified` outcomes are possible, as with Codex).
 
+`bp open <name> <dir> --codex --no-sandbox` opens a codex agent with BOTH
+sandboxes off: ours (the session is created with `CODEX_BWRAPPED=1`, which
+disables the bwrap wrapper) and codex's own
+(`--dangerously-bypass-approvals-and-sandbox`). It is opt-in and changes nothing
+for any other agent. The reason it exists is that the default is not merely
+stricter but broken in some directories: codex's sandbox binds `.git` read-only
+inside the writable root, and where there is no `.git` — `/srv`,
+`/srv/kavram/.agents` — bwrap tries to mkdir it and dies, leaving an agent that
+cannot run a single command. After opening, bp re-reads the pane and WARNS if
+the command still says `bwrap`, which means the environment never reached the
+launch line. What the flag buys is a shell with no confinement at all, so the
+agent's own brief has to carry the boundary the sandbox no longer does.
+
 The fleet lives in one agentbook, `/srv/server-main/agentbook.json` (override
 with `AGENTBOOK`). `bp open` takes `--parent <name>` and `--role <text>` to
 write that entry correctly instead of guessing from the folder path; the parent

@@ -950,3 +950,78 @@ func TestSendDeliversToPaneQuotingTheBanner(t *testing.T) {
 		t.Fatalf("mutations=%v", h.mutations)
 	}
 }
+
+// --no-sandbox is codex-only and opt-in, and BOTH halves have to be there or it
+// does nothing useful: the session must carry CODEX_BWRAPPED=1 (our wrapper
+// steps aside) and the launch line must carry the bypass flag (codex's own
+// sandbox steps aside). Missing either one leaves the agent unable to run a
+// single command in a directory with no .git — the failure ada measured in /srv
+// and /srv/kavram/.agents.
+func TestOpenNoSandboxTurnsOffBothSandboxes(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		opts      OpenOptions
+		wantEnv   bool
+		wantFlag  bool
+		wantCodex bool
+	}{
+		{name: "codex with --no-sandbox", opts: OpenOptions{Codex: true, NoSandbox: true, NoPrompt: true}, wantEnv: true, wantFlag: true, wantCodex: true},
+		{name: "codex default keeps its sandbox", opts: OpenOptions{Codex: true, NoPrompt: true}, wantCodex: true},
+		{name: "claude is untouched", opts: OpenOptions{NoPrompt: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			client := &Client{Sleep: func(time.Duration) {}, Now: time.Now}
+			client.exec = func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+				calls = append(calls, strings.Join(args, " "))
+				switch args[0] {
+				case "has-session":
+					return nil, errors.New("no session")
+				case "capture-pane":
+					return []byte("› Ask Codex to do anything\n  gpt-5.6-sol high · /srv\n"), nil
+				case "list-panes":
+					return []byte("1\tcodex\t4242\n"), nil
+				}
+				return nil, nil
+			}
+			_ = client.Open(context.Background(), "agent", "/srv", tc.opts, func(string) {})
+			joined := strings.Join(calls, "\n")
+			if got := strings.Contains(joined, "CODEX_BWRAPPED=1"); got != tc.wantEnv {
+				t.Fatalf("session env CODEX_BWRAPPED=%v, want %v:\n%s", got, tc.wantEnv, joined)
+			}
+			if got := strings.Contains(joined, "--dangerously-bypass-approvals-and-sandbox"); got != tc.wantFlag {
+				t.Fatalf("bypass flag=%v, want %v:\n%s", got, tc.wantFlag, joined)
+			}
+			if got := strings.Contains(joined, "codex -c model_reasoning_effort") || strings.Contains(joined, "codex --dangerously"); got != tc.wantCodex {
+				t.Fatalf("codex launch=%v, want %v:\n%s", got, tc.wantCodex, joined)
+			}
+		})
+	}
+}
+
+// The warning that tells the operator the flag did NOT take. A pane still
+// reporting "bwrap" means the session environment never reached the launch
+// line, and the agent will die on its first command in a directory with no
+// .git — silence there looks exactly like success until that happens.
+func TestOpenNoSandboxWarnsWhenTheWrapperStillWon(t *testing.T) {
+	var warnings []string
+	client := &Client{Sleep: func(time.Duration) {}, Now: time.Now}
+	client.exec = func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "has-session":
+			return nil, errors.New("no session")
+		case "capture-pane":
+			return []byte("› Ask Codex to do anything\n  gpt-5.6-sol high · /srv\n"), nil
+		case "list-panes":
+			return []byte("1\tbwrap\t4242\n"), nil
+		}
+		return nil, nil
+	}
+	_ = client.Open(context.Background(), "agent", "/srv", OpenOptions{Codex: true, NoSandbox: true, NoPrompt: true}, func(message string) {
+		warnings = append(warnings, message)
+	})
+	joined := strings.Join(warnings, "\n")
+	if !strings.Contains(joined, "bwrap") || !strings.Contains(joined, "CODEX_BWRAPPED") {
+		t.Fatalf("no warning that the flag did not take: %q", joined)
+	}
+}

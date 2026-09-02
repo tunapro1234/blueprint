@@ -41,7 +41,7 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp status [--json] | bp tree
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-prompt]
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-sandbox] [--no-prompt]
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -997,7 +997,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-sandbox] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
 	for _, positional := range []string{name, dir} {
@@ -1021,6 +1021,11 @@ func (a *app) open(args []string) error {
 			// Claude-style session files, so --resume has nothing to resume and is
 			// ignored for it (see OpenOptions.Hermes).
 			opts.Hermes = true
+		case "--no-sandbox":
+			// Codex only, and opt-in on purpose: it turns off BOTH sandboxes (our
+			// bwrap wrapper and codex's own). The default stays as it is for every
+			// other agent. See OpenOptions.NoSandbox for what it costs.
+			opts.NoSandbox = true
 		case "--no-prompt":
 			opts.NoPrompt = true
 		case "--worktree":

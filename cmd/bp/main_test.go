@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -2645,5 +2646,41 @@ func TestForceBusyRefusesAnUnestablishedSender(t *testing.T) {
 	err := a.message([]string{"--force-busy", "alp", "acil bir sey"})
 	if err == nil || !strings.Contains(err.Error(), "force-busy tesisata ayrilmis") {
 		t.Fatalf("err=%v, want the refusal", err)
+	}
+}
+
+// A flag that works but appears in no help text is a flag nobody will use:
+// --no-retitle shipped that way on 2026-09-02 and ada found it only because
+// they had just asked for it. So the help block is checked against the flags
+// the parsers actually accept, read from the source in this directory rather
+// than from a list a new flag would not be added to.
+func TestHelpListsEveryFlagTheParsersAccept(t *testing.T) {
+	flagCase := regexp.MustCompile(`case "(--[a-z-]+)"`)
+	found := map[string]string{}
+	for _, file := range []string{"main.go", "rename.go"} {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(data)
+		for _, match := range flagCase.FindAllStringSubmatchIndex(text, -1) {
+			flag := text[match[2]:match[3]]
+			// A flag kept only so an old command line still parses is
+			// deliberately absent from the help: documenting it would invite its
+			// use. The source has to SAY so, right under the case.
+			body := text[match[1]:min(match[1]+160, len(text))]
+			if strings.Contains(body, "Back-compat no-op") {
+				continue
+			}
+			found[flag] = file
+		}
+	}
+	if len(found) < 5 {
+		t.Fatalf("the flag scan found almost nothing (%v) — it has stopped measuring anything", found)
+	}
+	for flag, file := range found {
+		if !strings.Contains(usage, flag) {
+			t.Errorf("%s is accepted in %s but appears nowhere in `bp help`", flag, file)
+		}
 	}
 }

@@ -1957,9 +1957,24 @@ type OpenOptions struct {
 	// resume by), and none of the Claude-only slash commands afterwards —
 	// /rename and /remote-control would be typed into the composer as literal
 	// text. The onboarding brief is still sent, as it is for Codex.
-	Hermes   bool
-	NoPrompt bool
-	Legacy   bool
+	Hermes bool
+	// NoSandbox opens a codex agent with BOTH sandboxes off: our own bwrap
+	// wrapper (via CODEX_BWRAPPED=1 in the session environment) and codex's own
+	// (--dangerously-bypass-approvals-and-sandbox).
+	//
+	// It exists because the default is not merely stricter, it is BROKEN in some
+	// directories: codex's sandbox binds .git read-only inside the writable root,
+	// and where there is no .git — /srv, /srv/kavram/.agents — bwrap tries to
+	// mkdir it and dies, so the agent can run no command at all ("bwrap: Can't
+	// mkdir /srv/.git: Permission denied", ada 2026-09-02 and earlier).
+	//
+	// OPT-IN, and it stays opt-in: every other codex agent keeps its bwrap
+	// protection unchanged. What this flag buys is a shell with no confinement at
+	// all — a full-bypass codex has already remounted / on this machine once — so
+	// the agent's own brief has to carry the boundary the sandbox no longer does.
+	NoSandbox bool
+	NoPrompt  bool
+	Legacy    bool
 }
 
 const (
@@ -2140,8 +2155,17 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "cd "+shellQuote(dir), "Enter"); err != nil {
 			return err
 		}
-	} else if _, err := c.run(ctx, nil, "new-session", "-d", "-s", session, "-c", dir); err != nil {
-		return err
+	} else {
+		create := []string{"new-session", "-d", "-s", session, "-c", dir}
+		if opts.NoSandbox {
+			// The environment has to be set ON THE SESSION: our codex wrapper reads
+			// CODEX_BWRAPPED when it starts, and a variable exported later in the
+			// shell would come too late for a command sent on the next line.
+			create = append(create, "-e", "CODEX_BWRAPPED=1")
+		}
+		if _, err := c.run(ctx, nil, create...); err != nil {
+			return err
+		}
 	}
 	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
 	// hostname yerine agent adi gorunur).
@@ -2158,6 +2182,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	if opts.Codex {
 		command = `codex -c model_reasoning_effort="high"`
+		if opts.NoSandbox {
+			command = `codex --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"`
+		}
 	}
 	if opts.Hermes {
 		command = hermesBin
@@ -2241,6 +2268,16 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 				continue
 			}
 			clean++
+		}
+	}
+	// The check that tells the operator whether --no-sandbox actually took. If
+	// the pane still reports "bwrap", our wrapper wrapped it anyway — the session
+	// environment did not reach the command — and the agent will hit the very
+	// mkdir failure the flag was meant to avoid. Silence here would look exactly
+	// like success until the agent's first command died.
+	if opts.NoSandbox && warn != nil {
+		if process, err := c.PaneProcess(ctx, session); err == nil && process.Command == "bwrap" {
+			warn("WARNING: " + session + " --no-sandbox istendi ama pane komutu hala \"bwrap\": CODEX_BWRAPPED=1 komuta ulasmamis. Agent bu haliyle git olmayan bir dizinde komut calistiramaz; bp close " + session + " ile kapatip yeniden acmayi dene.")
 		}
 	}
 	if !opts.NoPrompt {

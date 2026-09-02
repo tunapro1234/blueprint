@@ -46,11 +46,26 @@ import (
 // is all-or-nothing without needing a rollback path that could itself fail.
 func (a *app) rename(args []string) error {
 	dry := false
+	noRetitle := false
 	var positional []string
 	for _, arg := range args {
 		switch arg {
 		case "--dry-run", "-n":
 			dry = true
+		case "--no-retitle":
+			// For the one rename this command could not do: an agent renaming
+			// ITSELF. Step 1 types /rename into the target pane and refuses a
+			// pane that is mid-turn — and an agent asking for its own rename is
+			// by definition mid-turn, so it could never get past it (ada,
+			// 2026-09-02).
+			//
+			// It is a real amputation, not a shortcut: the transcript keeps the
+			// OLD custom title, and that title is what resolves an agent to its
+			// session file. Until the agent types /rename itself, bp cannot read
+			// its context or last turn (blank CACHE column), `bp compact` reports
+			// "transcript okunamadi", and `bp open --resume` finds no prior
+			// conversation to resume. So it is allowed, and it says so loudly.
+			noRetitle = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown flag: %s", arg)
@@ -59,7 +74,7 @@ func (a *app) rename(args []string) error {
 		}
 	}
 	if len(positional) != 2 {
-		return fmt.Errorf("usage: bp rename <old-name> <new-name> [--dry-run]")
+		return fmt.Errorf("usage: bp rename <old-name> <new-name> [--dry-run] [--no-retitle]")
 	}
 	old, name := positional[0], positional[1]
 	if old == name {
@@ -103,6 +118,8 @@ func (a *app) rename(args []string) error {
 	// /rename; typing it at a codex or shell pane would just run it as a command,
 	// so those panes skip the step entirely (nothing to retitle).
 	switch {
+	case noRetitle:
+		fmt.Fprintf(a.out, "--no-retitle: %s pane'ine /rename YAZILMADI; transcript basligi %q olarak kaliyor\n", old, old)
 	case !liveOld:
 		fmt.Fprintf(a.out, "no live tmux session for %s (agentbook only)\n", old)
 	case !a.paneRunsClaude(old):
@@ -154,6 +171,12 @@ func (a *app) rename(args []string) error {
 		fmt.Fprintln(a.out, "\ndry run: nothing was changed")
 	} else {
 		fmt.Fprintf(a.out, "\nrenamed %s -> %s. Verify with: bp status && bp tree\n", old, name)
+	}
+	if noRetitle && !dry {
+		// Said at the END, where it is read: the rename LOOKS complete and the one
+		// piece that is missing is invisible until something goes quiet.
+		fmt.Fprintf(a.err, "\nEKSIK KALAN TEK ADIM — %s kendi pane'inde SU KOMUTU YAZMALI:\n  /rename %s\n", name, name)
+		fmt.Fprintf(a.err, "o yazilana kadar transcript basligi %q kalir: bp bu agent'in baglamini/son turunu OKUYAMAZ (bp status'ta CACHE bos), bp compact 'transcript okunamadi' der ve bp open --resume onceki konusmayi bulamaz.\n", old)
 	}
 	return nil
 }

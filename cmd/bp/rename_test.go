@@ -390,3 +390,34 @@ func TestRenameDryRunDescribesTheNewOrder(t *testing.T) {
 		t.Fatalf("usage state was written:\n%s", got)
 	}
 }
+
+// The rename this command could not do until 2026-09-02: an agent renaming
+// ITSELF. Step 1 types /rename into the target pane and refuses one that is
+// mid-turn — and an agent asking for its own rename is by definition mid-turn.
+// --no-retitle skips that step, does everything else, and says loudly what is
+// missing: the transcript keeps the OLD title, which is what resolves an agent
+// to its session file.
+func TestRenameNoRetitleSkipsThePaneAndSaysWhatIsMissing(t *testing.T) {
+	fix := newRenameFixture(t, renameOptions{live: true, pane: `printf '✻ Working… (23s · esc to interrupt)\n❯ \n──────────\n'`})
+
+	if err := fix.app.rename([]string{"worktrack-main", "worktrack", "--no-retitle"}); err != nil {
+		t.Fatalf("err=%v, want the rename to proceed on a busy pane", err)
+	}
+	calls := fix.calls()
+	if strings.Contains(calls, "paste-buffer") || strings.Contains(calls, "send-keys") {
+		t.Fatalf("--no-retitle typed into the pane anyway:\n%s", calls)
+	}
+	if !strings.Contains(calls, "rename-session") {
+		t.Fatalf("the tmux session was not renamed:\n%s", calls)
+	}
+	if book := readFixtureFile(t, fix.book); !strings.Contains(book, `"worktrack"`) || strings.Contains(book, "worktrack-main") {
+		t.Fatalf("agentbook was not renamed:\n%s", book)
+	}
+	stderr := readTestOutput(t, fix.app.err)
+	if !strings.Contains(stderr, "/rename worktrack") {
+		t.Fatalf("stderr does not tell the agent the one command it still owes:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "CACHE") {
+		t.Fatalf("stderr does not say what breaks until then:\n%s", stderr)
+	}
+}

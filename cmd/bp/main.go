@@ -46,7 +46,12 @@ bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
-bp rename <old-name> <new-name> [--dry-run]
+bp rename <old-name> <new-name> [--dry-run] [--no-retitle]
+                             # --no-retitle: skip typing /rename into the pane, so an
+                             # agent can rename ITSELF (its own pane is always busy).
+                             # The transcript keeps the OLD title until that agent
+                             # types /rename <new> — bp cannot read its context (blank
+                             # CACHE), compact and open --resume stop finding it.
 bp msg [--force-busy] <name> <message...>
                              # bp stamps a [sender] envelope; never write your own
                              # a /slash command goes bare, and only down the hierarchy

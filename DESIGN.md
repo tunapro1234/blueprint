@@ -1,7 +1,7 @@
 # blueprint (bp) — Tasarım
 
 Sunucudaki tüm agentic altyapıyı TEK CLI (`bp`) + TEK systemd servisi (`blueprint.service`)
-altında toplayan Go projesi. Sahibi: ada (server-main). Dil: Go 1.22, tek statik binary.
+altında toplayan Go projesi. Sahibi: blueprint; ust yetkili server-main. Dil: Go 1.22, tek statik binary.
 
 ## Neden / ne birleşiyor
 Şu anki dağınıklık: 7 timer (usage-pulse, usage-policy, usage-watch, agent-msgq,
@@ -19,7 +19,7 @@ servis hedefi sağlanır; v2'de istenirse iş mantığı Go'ya taşınır.
 ### CLI komutları (v1 — bash `agent`+`wa` paritesi şart)
 ```
 bp status [--json] | bp tree    filo (tmux+agentbook birleşik, TREE görünüm, parent'lı)
-bp open <ad> <dizin> [--parent <ad>] [--role <metin>] [--resume] [--codex] [--no-prompt]
+bp open <ad> <dizin> [--parent <ad>] [--role <metin>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread UUID] [--no-sandbox] [--no-prompt]
 bp close <ad>
 bp msg <ad> <mesaj...>         [gönderen] zarfı; typing/busy guard; doluysa kuyruk + kanal id + qstat talimatı basar
 bp compact [--idle-hours S] [--min-ctx N] [--apply]      politika seçimi; bayraksız hali LİSTELER
@@ -27,11 +27,10 @@ bp compact --all [--min-age <dk>] [--exclude <ad,...>] [--apply]   gönderenin t
 bp q | bp qstat <kanal-id>
 bp peek <ad> [n]
 bp wa send [--to <hedef>] [--reply <msgId>] [--from <etiket>] <mesaj...>   (outbox json'a yazar; prefix [gönderen])
-                               gönderen tek yerden çözülür (internal/identity): pane içinde tmux
-                               oturumu (sahte yapılamaz, --from'u da ezer), dışarıda --from → AGENT
-                               → SUDO_USER/USER → süreç ağacından TAHMİN ("cron?:x.py" — soru
-                               işareti tahmini itiraf eder) → "bilinmiyor". WA'da server-main
-                               varsayılanı YOK (bkz. 2026-08-09/10 yanlış imza olayı).
+                               kimlik internal/identity + book.ThreadIdentity ile doğrulanır;
+                               Codex thread'i explicit identityThreadId kaydına bağlanır.
+                               Ortak daemon TMUX mirası veya AGENT env yetki kanıtı değildir.
+                               Eşleşmeyen çağrı bilinmiyor/codex?: olarak görünür.
 bp wa read <hedef> [n] | bp wa chats
 bp usage                       history.jsonl son durum (5h/7d/fable/codex + resetler)
 bp policy status|override <saat>
@@ -43,9 +42,8 @@ bp daemon                      (servis modu — systemd bunu çalıştırır)
 | iş | aralık | yöntem |
 |---|---|---|
 | msgq dispatcher | 30s | NATIVE Go (channel tabanlı; pending/ dizini kaynak, done/'a kayıt) |
-| keepalive (server-main) | 2m | native: tmux has-session; yoksa `agent open` mantığı (exec bash script fallback OK) |
+| keepalive (filo koku) | 2m | kayitli launch/cwd ve Codex thread kimligiyle ayni konusmayi acar; eksik kayitta tahmin etmez |
 | usage-pulse | 10m | exec /srv/server-main/bin/usage-pulse; ardından sonuçtan bağımsız gen.py |
-| usage-policy | 10m, bağımsız | exec /srv/server-main/bin/usage-policy |
 | dashboard gen | pulse sonrası | exec python3 /srv/monitor/site/gen.py (pulse hatasında da çalışır) |
 | usage-watch | 10m | exec /srv/server-main/bin/usage-watch |
 | watch-radar | 30m | exec python3 /srv/monitor/watch/model_watch.py; ardından reactions.py |
@@ -55,15 +53,14 @@ Kurallar: işler birbirini bloklamaz (ayrı goroutine); aynı işin iki kopyası
 (per-iş mutex); her çalışma /srv/blueprint/state/jobs.json'a yazılır (bp service okur);
 panic-recover ile daemon ölmez; SIGTERM'de wa-bridge child'a TERM iletilir.
 İlk çalıştırmalar thundering-herd önlemek için kademelidir: msgq 5s, keepalive 30s,
-policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
+pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
 
 ### tmux etkileşimi (bash paritesinden birebir taşınacak KRİTİK detaylar)
-- typing(): SADECE SON '❯' satırı (canlı composer); NBSP(U+00A0)+boşluk strip; doluysa gönderme.
-- busy(): pane'de 'esc to interrupt'.
-- send: literal send-keys (-l) / çok satırda load-buffer+paste-buffer; 0.4s; Enter; 1.2s;
-  submit doğrulama (son 40 char pane'de ve busy değilse ekstra Enter).
-- msg: yerel teslimde mesajın başına "[gönderen] " zarfı konur. Kimlik tmux oturum adından
-  gelir (yetkili kaynak); AGENT env yalnız tmux DIŞINDA (daemon/systemd/düz kabuk) okunur.
+- typing(): harness'a gore tum canli composer kutusu okunur; yabanci metin varsa dokunulmaz.
+- busy(): ekran gecidi + transcript turu; remote Codex icin app-server thread durumu. Belirsiz remote durumu normal teslimi engeller.
+- send: bütün harnesslarda load-buffer + bracketed paste (-p); composer bütünlüğü, kullanıcı aktivitesi ve submit doğrulaması. Vim Normal/Insert için Escape/i gönderilmez.
+- msg: yerel teslimde mesajın başına "[gönderen] " zarfı konur. Kimlik doğrulanmış çağıran pane veya kayıtlı Codex thread
+  eşlemesinden gelir. AGENT bildirimi belirsiz etiket taşır, yetki sağlamaz.
   Agent kendi eliyle "[isim]" yazmaz — yazarsa gerçek zarfın içinde iç içe görünür.
 - slash komut (/compact, /goal ...): zarfsız gider (önek komutu bozar), bunun yerine hiyerarşi
   kapısı — yalnız filo kökü ya da hedefin bir üst-atası gönderebilir, yan/yukarı reddedilir.
@@ -79,9 +76,11 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
   state/compact.json bastırma penceresi (--min-age, varsayılan 30dk) her iki seçicide de geçerli.
   --apply her gönderimden hemen önce pane'i yeniden okur; meşgul hedef KUYRUĞA ALINMADAN atlanır
   (geç düşen /compact yanlış konuşmayı sıkıştırır). Okunamayan pane meşgul sayılır.
-- open: claude --dangerously-skip-permissions [-c]; resume picker'da Down+Enter (FULL, summary'ye HAYIR);
-  hazır bekleme ('bypass permissions|-- INSERT --'); /rename, /remote-control, onboarding prompt;
-  agentbook güncelle. --codex: codex -c model_reasoning_effort="high" + trust prompt Enter.
+- open: yeni kayitlarda varsayilan Codex; --claude/--hermes acik secimdir.
+  Codex resume UUID ile ayni thread'i acar; cwd eslesmesi zorunlu, model/effort/tier override edilmez.
+  --remote unix:// yalniz acik --no-sandbox ile kabul edilir: TUI bwrap'i daemonu izole etmez.
+  Kayitli launch tekrar acilista korunur; hazirlik timeout'u hata olarak bildirilir.
+  Claude dalinda /rename ve /remote-control akisi korunur.
   --parent/--role kitaba yazılacak ebeveyni/rolü açıkça verir (yol-önekinden çıkarım yerine);
   --parent açılıştan ÖNCE filoya karşı doğrulanır, bilinmeyen adda hiçbir şey açılmaz/yazılmaz.
   Zaten açık agentta iki bayrak yalnız kitap kaydını düzeltir.
@@ -90,9 +89,10 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
   Agent klasörü ebeveyninin klasörü altında değilse tek satır ÖNERİ basılır (asla ret);
   worktree yolları, ebeveyniyle aynı klasör ve kökün çocukları muaf.
 - close: kill-session + agentbook status=closed.
-- status/tree durumları: closed / idle / working / dead — dead = oturum ayakta ama pane'de agent
+- status/tree durumları: closed / idle / working / unknown / blocked / dead — dead = oturum ayakta ama pane'de agent
   yok (CLI çıkmış, kabuk kalmış); idle ile karıştırılmaz.
-- status --json: tek JSON nesnesi — her agent için name, tmux, status, folder, parent; bilindiğinde
+- status --json: schema_version=2, producer/daemon executable kimliği ve activity kanıtları;
+  [runtime sözleşmesi](docs/runtime-status.md). Her agent için name, tmux, status, folder, parent; bilindiğinde
   ctx_tokens, cache_age_seconds, last_human_age_seconds, model (bilinmeyen sayı sıfır değil, yok).
 - -h/--help komut mantığından ÖNCE yanıtlanır; msg/announce/wa'da yalnız baştaki bayraklar taranır,
   serbest metindeki --help mesaj olarak gider. status/tree/open/close/msg/peek '-' ile başlayan
@@ -103,14 +103,23 @@ policy 60s, pulse 90s, usage-watch 2m, reset-watch 2m30s, radar 3m.
 
 ### bar (`bp bar <ad>` — pane'in tmux status-right'ı)
 - Widget listesi config'ten: `bar.widgets` (varsayılan ctx, temp, queue, model, quota; talk ve
-  clock kapalı). Her tick'te çağrıldığı için 45s'lik kısa ömürlü cache dosyası araya girer.
-- Claude pane'inde model chip'i CANLI oturum kaydından (session jsonl'ındaki son assistant
-  turu) okunur; settings/pin dosyaları yalnız effort ve fallback için — /model global
-  varsayılanı değiştirip pin'e dokunmadığı için ayar dosyası iki yönde de yanılabiliyor.
-- Codex pane'inde ctx ve yaş CODEX_HOME/sessions rollout kayıtlarından gelir (session_meta'daki
-  cwd agent klasörüne eşlenir, mtime'a göre en taze rollout canlı olandır); model chip'i codex
-  config.toml'dan. Rollout pencere bildiriyorsa ctx rengi doluluk oranına, bildirmiyorsa
-  mutlak eşiklere göre.
+  clock kapalı). Her tick'te çağrıldığı için 2s'lik kısa ömürlü cache dosyası araya girer.
+- Canlı model chip'i eşleşmiş runtime kaydından gelir; bilinmeyen model config'ten uydurulmaz.
+  Kota observed runtime sağlayıcısınındır: Codex/remote için Codex, Claude için Claude.
+  Yüzdeler kullanılan limittir; sağlayıcı bilinmiyorsa kota gizlenir.
+- Cache sıcaklığı sabit 1 saat değildir: son Claude kullanımındaki açık 5m/1h yazım
+  kaydından tahmin edilir (`warm~`/`cold~`). TTL bilinmiyorsa yalnız `age` gösterilir.
+  `cache_age_seconds` uyumluluk için son token ölçümünün yaşıdır; TTL değildir.
+  JSON'daki `cache_ttl_seconds`/`cache_estimate` yalnız TTL kanıtı varsa eklenir.
+- Claude/Codex status/bar/teslim gecitleri internal/book.RuntimeFor kullanir. Codex thread UUID
+  acikca eslesmelidir; cwd/mtime fallback yoktur. Token/model kayitlari
+  buyuk tool ciktisi arkasinda da bagimsiz okunur; olcum yasi dosya mtime'i ile sifirlanmaz.
+  Yerel app-server salt-okunur thread/read ile yuklu thread'in durum/model/effort bilgisini
+  verir. Resume/turn/start cagrilmaz. Bilinmeyen/celiskili durum teslimi bekletir;
+  busy emniyet bool'u working diye gosterilmez. Claude eslemesi cwd + tekil oturum adidir.
+- Otomatik usage-policy model degisimi kaldirildi; bp policy status/override manuel kalir.
+- Pending mesajlar yas/adet nedeniyle budanmaz; teslim snapshot'i arsivlenerek onaylanir,
+  eszamanli eklenen mesajlar korunur. Msgq history silinmez; kapali hedefin mesaji bekler.
 
 ### Yapı
 ```
@@ -202,7 +211,7 @@ Agentlara giden MESAJ İÇERİĞİ göndericiye aittir (o Türkçe olabilir) —
 
 ## v1.3 — ANNOUNCE (kullanıcı, 2026-07-10)
 `bp announce <message...>` — hiyerarşik toplu duyuru (örn. bp toolunda değişiklik, global kural).
-- Hedef kümesi: gönderenin (tmux oturum adı / AGENT env) agentbook hiyerarşisinde ALTINDA kalan
+- Hedef kümesi: doğrulanmış ana agentın (pane/thread kimliği) agentbook hiyerarşisinde ALTINDA kalan
   ve şu an AÇIK olan tüm agentlar (parent zinciri takip edilir). ada(server-main) → tüm filo;
   alp(probot-main) → probot alt-ağacı. lab-* oturumları hariç.
 - Mesaj otomatik "[ANNOUNCE <sender>] " prefix'i alır.

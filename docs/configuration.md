@@ -219,3 +219,35 @@ otherwise it uses `~/.blueprint`. A checkout at `/srv/blueprint` alone does not
 activate server integrations. Local installs are the default; `--client` and
 `--server` must be selected explicitly. On a configured server, set `BP_HOME` to
 your personal configuration directory to use a separate local installation.
+
+
+## Konuşmayı koruyarak çalışma klasörünü değiştirmek
+
+Bu bölüm inceleme sonucudur; BP henüz bir `move` komutu sunmuyor ve otomatik
+klasör/transcript taşıması yapmıyor.
+
+- Codex, belirli UUID ile `resume` ve `--cd` kabul ediyor. `tui.resume_cwd`
+  `current` veya `session` seçebiliyor; ayar yoksa dizinler farklı olduğunda native
+  seçim gösteriliyor. Aynı konuşmayı devam ettirmek için `fork` kullanılmamalı.
+  [CLI referansı](https://developers.openai.com/codex/cli/reference/) ve
+  [config referansı](https://developers.openai.com/codex/config-reference/).
+- Claude, UUID ile resume sırasında güncel sürümlerde diğer proje kayıtlarını da
+  arıyor (belgelenen eşik: 2.1.223). Eski proje dizini artık yoksa native picker
+  mevcut dizinde devam edebiliyor; başka mevcut projeden seçim ise bir `cd`/resume
+  komutu sunabiliyor. Dolayısıyla UUID'nin bulunması tek başına yeni cwd'nin
+  uygulandığını kanıtlamaz.
+  [Claude resume](https://code.claude.com/docs/en/cli-reference) ve
+  [session davranışı](https://code.claude.com/docs/en/sessions).
+
+BP entegrasyonu için önerilen akış: önce eski/yeni fiziksel yolları ve tam thread
+kimliğini gösteren bir önizleme; doğal CLI kapanışından sonra aynı UUID ile native
+resume; callback/app-server üzerinden yeni cwd ve aynı thread kanıtı; ancak bundan
+sonra agentbook/local runtime kaydını güncelleme. Model, effort, servis tier ve
+izolasyon korunmalı. Başarısızlıkta eski kayıt ve dosyalar yerinde kalmalı.
+
+Kodda ek çalışma gerekiyor: `bp open --resume` ve yerel observation doğrulaması
+cwd'yi mevcut kayıtla eşleştiriyor. Yeni cwd'ye geçişin doğrudan metadata değiştirerek
+bu denetimi atlaması doğru olmaz. Remote Codex'te yürütücü TUI değil app-server;
+loaded thread ve writer sahipliği ayrıca doğrulanmalı. Proje dosyalarını taşımak,
+konuşmanın çalışma dizinini değiştirmekten ayrı ve açıkça seçilen bir işlem olmalı.
+Şu aşamada gerçek kullanıcı konuşmasıyla taşıma testi yapılmadı.

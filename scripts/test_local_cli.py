@@ -425,6 +425,47 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd,b"\x03");self.wait_closed("after-name")
         self.assertNotIn("before-name",[a["name"] for a in json.loads(registry.read_text())["agents"]])
 
+    def test_archive_restore_preserves_native_history_and_refuses_live_or_pending_target(self):
+        shutil.copyfile(self.fake_tui,self.bin/"claude")
+        fd=self.start("claude","archive-me")
+        registry=self.root/".blueprint/agentbook.json"
+        row=next(a for a in json.loads(registry.read_text())["agents"] if a["name"]=="archive-me")
+        transcript=Path(json.loads(Path(row["localRuntime"]["path"]).read_text())["transcript_path"])
+        original=transcript.read_bytes()
+        def bp(*args):return subprocess.run([self.binary,*args],env=self.env,capture_output=True,text=True)
+        result=bp("archive","archive-me")
+        self.assertNotEqual(result.returncode,0);self.assertIn("tmux session",result.stderr)
+        self.assertTrue(self.alive("archive-me"))
+        os.write(fd,b"\x03");self.wait_closed("archive-me")
+        pending=self.root/".blueprint/msgq/pending";pending.mkdir(parents=True,exist_ok=True)
+        channel=pending/"q989898989.json"
+        channel.write_text(json.dumps(dict(id="q989898989",to="archive-me",**{"from":"fixture"},msg="keep pending",ts=time.time())))
+        result=bp("archive","archive-me")
+        self.assertNotEqual(result.returncode,0);self.assertIn("q989898989",result.stderr)
+        self.assertTrue(channel.exists())
+        # Simulate normal queue finalization inside this isolated fixture.
+        done=self.root/".blueprint/msgq/done";done.mkdir(exist_ok=True);channel.rename(done/channel.name)
+        result=bp("archive","archive-me");self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(transcript.read_bytes(),original)
+        active=json.loads(bp("book","--json").stdout)["agents"]
+        self.assertNotIn("archive-me",active)
+        archived=json.loads(bp("archive","--list","--json").stdout)
+        self.assertEqual(archived[0]["agent"]["name"],"archive-me")
+        checks=json.loads(bp("doctor","--agent","archive-me","--json").stdout)["checks"]
+        self.assertTrue(any(c["name"]=="archive" and c["next_step"]=="bp restore archive-me" for c in checks))
+        result=bp("open","archive-me",str(self.root),"--claude","--no-prompt")
+        self.assertNotEqual(result.returncode,0);self.assertIn("bp restore",result.stderr)
+        self.assertFalse(self.alive("archive-me"))
+        incoming=pending/"q989898988.json"
+        incoming.write_text(json.dumps(dict(id="q989898988",to="archive-me",**{"from":"fixture"},msg="arrived after archive",ts=time.time())))
+        result=bp("restore","archive-me");self.assertEqual(result.returncode,0,result.stderr)
+        self.assertTrue(incoming.exists(),"restore discarded a pending message")
+        restored=json.loads(bp("book","--json").stdout)["agents"]["archive-me"]
+        self.assertEqual(restored["localRuntime"],row["localRuntime"])
+        self.assertEqual(restored["status"],"closed")
+        self.assertEqual(transcript.read_bytes(),original)
+        self.assertFalse(self.alive("archive-me"))
+
     def test_native_exit_error_survives_tmux_and_doctor_points_to_evidence(self):
         shutil.copyfile(self.fake_tui, self.bin / "codex")
         self.env.update(BP_FAKE_PICKER_THREAD="2832a3a6-1234-1234-1234-123456789012", BP_FAKE_START_ERROR="Error: fixture native resume configuration failed")
@@ -597,7 +638,7 @@ class LocalCLITest(unittest.TestCase):
                 status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
                 row = next(a for a in status["agents"] if a["name"] == name)
                 self.assertEqual(row["thread_id"], selected, row)
-                self.assertIn(str(selected_cwd).replace("/", "-") if cli == "claude" else "rollout-"+selected, row["activity"]["transcript_path"])
+                self.assertIn(re.sub(r"[^a-zA-Z0-9]", "-", str(selected_cwd)) if cli == "claude" else "rollout-"+selected, row["activity"]["transcript_path"])
                 self.assertTrue(row.get("model"), row)
                 os.write(fd, b"\x03")
                 self.wait_closed(name)

@@ -17,6 +17,7 @@ import (
 )
 
 type Agent struct {
+	ArchivedAt       string              `json:"archivedAt,omitempty"`
 	Local            *cache.LocalBinding `json:"localRuntime,omitempty"`
 	IdentityThreadID string              `json:"identityThreadId,omitempty"`
 	Name             string              `json:"name"`
@@ -85,7 +86,7 @@ func LoadFleet(paths []string) (Fleet, error) {
 			defaultParent = fleet.Root
 		}
 		for _, agent := range file.Agents {
-			if invalidName(agent.Name) {
+			if invalidName(agent.Name) || agent.ArchivedAt != "" {
 				continue
 			}
 			fleet.Sources[agent.Name] = append(fleet.Sources[agent.Name], path)
@@ -580,6 +581,9 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 			continue
 		}
 		for _, agent := range file.Agents {
+			if agent.ArchivedAt != "" && agent.Name != name {
+				continue
+			}
 			candidates = append(candidates, agent)
 			owners = append(owners, path)
 			if agent.Name == name {
@@ -634,6 +638,9 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 	for _, value := range agents {
 		agent, ok := value.(map[string]any)
 		if ok && agent["name"] == name {
+			if at, _ := agent["archivedAt"].(string); at != "" {
+				return fmt.Errorf("%s is archived; use bp restore %s first", name, name)
+			}
 			currentStatus, _ := agent["status"].(string)
 			currentFolder, _ := agent["folder"].(string)
 			// Explicit pins correct an existing entry in place — in its own

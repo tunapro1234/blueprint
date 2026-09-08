@@ -43,6 +43,7 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp version [--json] | bp update [--check] [--json] | bp doctor [--agent <name>] [--json]
+bp archive <name> | bp archive --list [--json] | bp restore <name>
 bp status [--json] | bp tree
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
@@ -323,6 +324,10 @@ func (a *app) run(args []string) error {
 		return a.worktree(args[1:])
 	case "close":
 		return a.close(args[1:])
+	case "archive":
+		return a.archive(args[1:], true)
+	case "restore":
+		return a.archive(args[1:], false)
 	case "rename":
 		return a.rename(args[1:])
 	case "msg":
@@ -1125,6 +1130,9 @@ func (a *app) open(args []string) error {
 		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
+	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
+		return err
+	}
 	absolute, err := filepath.Abs(dir)
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@ import (
 	"blueprint/internal/book"
 	"blueprint/internal/cache"
 	"blueprint/internal/identity"
+	bptmux "blueprint/internal/tmux"
 )
 
 func localHarness(name string) bool {
@@ -119,6 +120,32 @@ func (a *app) localRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	logicalCWD := cwd
+	cwd = physicalPath(cwd)
+	if err := a.initLocalBook(); err != nil {
+		return err
+	}
+	var resumeGuard *localResumeGuard
+	if args[0] == "claude" {
+		thread, resolved, err := claudeResumeArgs(args[1:], logicalCWD, bptmux.ClaudeProjectsRoot())
+		if err != nil {
+			return err
+		}
+		if thread != "" {
+			var existing string
+			resumeGuard, existing, err = a.guardClaudeResume(thread, name, cwd)
+			if err != nil {
+				return err
+			}
+			defer resumeGuard.close()
+			if existing != "" {
+				resumeGuard.close()
+				return a.attachLocal(existing)
+			}
+			name = resumeGuard.name
+			args = append([]string{"claude"}, resolved...)
+		}
+	}
 	if name == "" {
 		var suffix [3]byte
 		if _, err := rand.Read(suffix[:]); err != nil {
@@ -154,6 +181,9 @@ func (a *app) localRun(args []string) error {
 		command[index] = quoteShell(command[index])
 	}
 	argv := []string{"new-session", "-s", name, "-c", cwd}
+	if resumeGuard != nil {
+		argv = append(argv, "-d")
+	}
 	for _, key := range []string{"BP_HOME", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENTBOOK"} {
 		value, ok := os.LookupEnv(key)
 		if key == "BP_HOME" {
@@ -167,7 +197,17 @@ func (a *app) localRun(args []string) error {
 	fmt.Fprintf(a.out, "bp: %s — messages: bp msg %s <text>\n", name, name)
 	cmd := exec.Command(a.tmux.Bin, argv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.err
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	if resumeGuard != nil {
+		if err := a.recordClaudeResume(resumeGuard); err != nil {
+			return err
+		}
+		resumeGuard.close()
+		return a.attachLocal(name)
+	}
+	return nil
 }
 
 // localSession replaces itself with the CLI. tmux sees the real harness as its
@@ -181,6 +221,7 @@ func (a *app) localSession(args []string) error {
 	if err != nil {
 		return err
 	}
+	cwd = physicalPath(cwd)
 	if err := a.initLocalBook(); err != nil {
 		return err
 	}

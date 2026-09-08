@@ -2,19 +2,46 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"blueprint/internal/book"
 	"blueprint/internal/cache"
+	bptmux "blueprint/internal/tmux"
 )
 
 // nativeName uses an already-bound runtime, never title/cwd to discover a thread.
 func (a *app) nativeName(agent book.Agent, state *cache.State) string {
-	if state == nil || state.Runtime != "claude" || state.Activity == nil || state.Activity.ThreadID == "" || state.Activity.TranscriptPath == "" {
+	if state == nil || state.Activity == nil || state.Activity.ThreadID == "" || state.Activity.TranscriptPath == "" {
 		return agent.Name
 	}
-	value, err := book.ReadNativeTitle(state.Activity.TranscriptPath, state.Activity.ThreadID, agent.NativeTitle)
+	var value book.NativeTitle
+	var err error
+	switch state.Runtime {
+	case "claude":
+		value, err = book.ReadNativeTitle(state.Activity.TranscriptPath, state.Activity.ThreadID, agent.NativeTitle)
+	case "codex", "codex-remote":
+		home := ""
+		if agent.Local != nil {
+			home = agent.Local.Home
+		}
+		if home == "" {
+			// Derive the native home only from the already bound rollout path.
+			for dir := filepath.Dir(state.Activity.TranscriptPath); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+				if filepath.Base(dir) == "sessions" {
+					home = filepath.Dir(dir)
+					break
+				}
+			}
+		}
+		if home == "" {
+			return agent.Name
+		}
+		value, err = book.ReadCodexNativeTitle(filepath.Join(home, "session_index.jsonl"), state.Activity.ThreadID, agent.NativeTitle)
+	default:
+		return agent.Name
+	}
 	if err != nil {
 		return agent.Name
 	}
@@ -49,12 +76,12 @@ func (a *app) liveName(name string) string {
 		return name
 	}
 	if agent.Local != nil {
-		if agent.Local.Harness != "claude" {
+		if agent.Local.Harness != "claude" && agent.Local.Harness != "codex" {
 			return name
 		}
 	} else {
 		process, err := a.tmux.PaneProcess(a.ctx, name)
-		if err != nil || process.Command != "claude" {
+		if err != nil || (process.Command != "claude" && !bptmux.IsCodexCommand(process.Command)) {
 			return name
 		}
 	}

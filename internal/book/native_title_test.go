@@ -51,3 +51,23 @@ func TestNativeTitleIncrementalAndSessionIsolation(t *testing.T) {
 		t.Fatal(reset, err)
 	}
 }
+
+func TestCodexNativeTitleExactIDAndRepeatedRename(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session_index.jsonl")
+	os.WriteFile(path, []byte("{\"id\":\"mine\",\"thread_name\":\"old\"}\n{\"id\":\"other\",\"thread_name\":\"foreign\"}\n"), 0600)
+	first, err := ReadCodexNativeTitle(path, "mine", nil)
+	if err != nil || first.Text != "old" {
+		t.Fatal(first, err)
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	f.WriteString("{\"id\":\"mine\",\"thread_name\":\"hypr-codex\"}\n{\"id\":\"other\",\"thread_name\":\"wrong\"}\n")
+	f.Close()
+	next, err := ReadCodexNativeTitle(path, "mine", &first)
+	if err != nil || next.Text != "hypr-codex" || next.Offset <= first.Offset {
+		t.Fatal(next, err)
+	}
+	reset, err := ReadCodexNativeTitle(path, "other", &next)
+	if err != nil || reset.Text != "wrong" {
+		t.Fatal(reset, err)
+	}
+}

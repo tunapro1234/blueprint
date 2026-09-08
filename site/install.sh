@@ -8,6 +8,8 @@ YES=${BP_YES:-0}
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --yes|-y) YES=1 ;;
+        --local) INSTALL_MODE=local ;;
+        --client) INSTALL_MODE=client ;;
         *) printf 'error: unknown option: %s\n' "$1" >&2; exit 1 ;;
     esac
     shift
@@ -117,6 +119,63 @@ install_client_binary() {
     say "installed $target_binary"
 }
 
+# Local mode installs no daemon or remote peer and does not edit tmux options.
+install_local() {
+    client_platform
+    if ! command -v tmux >/dev/null 2>&1; then
+        case "$(uname -s)" in
+            Darwin)
+                command -v brew >/dev/null 2>&1 || { say "error: tmux is missing; install Homebrew, then rerun this command"; exit 1; }
+                brew install tmux
+                ;;
+            Linux)
+                command -v apt-get >/dev/null 2>&1 || { say "error: install tmux with your package manager, then rerun this command"; exit 1; }
+                if [ "$(id -u)" = 0 ]; then
+                    apt-get update
+                    apt-get install -y tmux
+                else
+                    sudo apt-get update
+                    sudo apt-get install -y tmux
+                fi
+                ;;
+        esac
+    fi
+    local_tmp=$(mktemp -d "${TMPDIR:-/tmp}/bp-install.XXXXXX")
+    trap 'rm -rf "$local_tmp"' EXIT HUP INT TERM
+    if [ -n "${BP_LOCAL_BINARY:-}" ]; then
+        cp "$BP_LOCAL_BINARY" "$local_tmp/bp"
+    else
+        command -v curl >/dev/null 2>&1 || { say "error: curl is required"; exit 1; }
+        local_base=https://bp.tunapro.xyz
+        curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/bp-$PLATFORM" -o "$local_tmp/bp"
+        curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/checksums.txt" -o "$local_tmp/checksums"
+        expected=$(awk -v name="bp-$PLATFORM" '$2 == name {print $1}' "$local_tmp/checksums")
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$local_tmp/bp" | awk '{print $1}')
+        else
+            actual=$(shasum -a 256 "$local_tmp/bp" | awk '{print $1}')
+        fi
+        [ -n "$expected" ] && [ "$expected" = "$actual" ] || { say "error: SHA-256 mismatch"; exit 1; }
+    fi
+    chmod 755 "$local_tmp/bp"
+    case "$("$local_tmp/bp" help)" in
+        *'bp setup'*'bp config path|check'*'bp run '*) ;;
+        *) say "error: published binary does not support local YAML setup yet; keeping your installation"; exit 1 ;;
+    esac
+    local_bin="$HOME/.local/bin"
+    mkdir -p "$local_bin"
+    if [ -e "$local_bin/bp" ]; then
+        local_backup=$(mktemp "$local_bin/bp.before-local.XXXXXX")
+        cp -p "$local_bin/bp" "$local_backup"
+    fi
+    local_candidate=$(mktemp "$local_bin/.bp-install.XXXXXX")
+    cp "$local_tmp/bp" "$local_candidate"
+    chmod 755 "$local_candidate"
+    mv "$local_candidate" "$local_bin/bp"
+    "$local_bin/bp" setup
+    say "installed $local_bin/bp; no remote setup required"
+}
+
 tmux_is_configured() {
     tmux_file=$HOME/.tmux.conf
     [ -f "$tmux_file" ] || return 1
@@ -186,16 +245,17 @@ print_client_notes() {
 case "$INSTALL_MODE" in
     server) link_server_binary; ACTIVE_MODE=server ;;
     client) install_client_binary; ACTIVE_MODE=client ;;
+    local) install_local; exit 0 ;;
     "")
         if [ -d "$SERVER_ROOT" ]; then
             link_server_binary
             ACTIVE_MODE=server
         else
-            install_client_binary
-            ACTIVE_MODE=client
+            install_local
+            exit 0
         fi
         ;;
-    *) say "error: BP_INSTALL_MODE must be server or client"; exit 1 ;;
+    *) say "error: BP_INSTALL_MODE must be server, client or local"; exit 1 ;;
 esac
 
 configure_tmux

@@ -33,3 +33,6 @@ waBridge: false
 
 # Kontrol: bp config check
 # Etkin dosya: bp config path
+
+# Check signed releases in the background at most daily; never starts a model turn.
+updateCheck: true

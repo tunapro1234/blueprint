@@ -118,6 +118,7 @@ func (a *app) localRun(args []string) error {
 	if os.Getenv("TMUX") != "" || !terminal(os.Stdin) || !terminal(a.out) || batchCommand(args[0], args[1:]) {
 		return syscall.Exec(program, append([]string{program}, args[1:]...), os.Environ())
 	}
+	a.updateNotice()
 	if _, err := exec.LookPath(a.tmux.Bin); err != nil {
 		return fmt.Errorf("tmux is required; rerun the local installer: %w", err)
 	}

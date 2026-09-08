@@ -75,6 +75,28 @@ Custom CLIs can run in tmux; structured activity and automatic delivery require 
 supported harness. Run interactive onboarding outside tmux. `BP_ONBOARD=skip`
 skips automatic onboarding during installation.
 
+## Updates and diagnostics
+
+```sh
+bp version --json
+bp update --check
+bp update
+bp doctor --json
+bp setup --disable
+```
+
+Releases are versioned and signed. The installer requires OpenSSL with Ed25519
+support; macOS can use `brew install openssl@3`. Pin installation with `BP_VERSION`
+(e.g. `BP_VERSION=1.6.0 sh install.sh --local`). The updater verifies the signed
+manifest and binary checksum, keeps a backup, and restores the previous binary if
+setup fails. Running agents are not restarted. Server installations use an explicit
+host rollout so CLI and daemon versions are verified together.
+
+Local agent startup can show a cached update notice. `updateCheck: false` in YAML
+disables its daily background check. No model prompt is sent. Disabling shell
+integration preserves aliases, agent records and open sessions; open a new terminal
+to use native commands again.
+
 ## Develop
 
 ```sh

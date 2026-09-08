@@ -71,51 +71,25 @@ function expectedChecksum(checksums, filename) {
 }
 
 function printIntegrationNotes() {
-  console.log(`
-For remote commands and bp img, create ~/.config/bp/config with:
-  REMOTE=user@host
-  REMOTE_METHOD=mosh
-
-Optional kitty keybinding:
-  map ctrl+shift+i launch --type=background bp img
-
-For tmux clipboard, scroll, and OSC52 support, add these missing lines to ~/.tmux.conf:
-  set -g mouse on
-  set -g history-limit 100000
-  setw -g mode-keys vi
-  set -sg escape-time 10
-  set -s set-clipboard on
-  set -as terminal-features ',xterm*:clipboard'
-  set -g allow-passthrough on`);
-}
-
-function printManualInstall(filename, error) {
-  const suffix = filename || 'bp-<os>-<arch>';
-  console.warn(`
-@tunapro/blueprint could not install its native binary: ${error.message}
-
-Manual install:
-  mkdir -p ~/.local/bin
-  curl -fsSL ${baseUrl}/${suffix} -o ~/.local/bin/bp
-  chmod 755 ~/.local/bin/bp
-
-Verify the SHA-256 value against ${baseUrl}/checksums.txt and ensure ~/.local/bin is on PATH.
-Running the npm "bp" command will show these instructions until its native binary is available.`);
+  console.log('Run bp setup, then bp onboard in a terminal to configure local agent sessions.');
 }
 
 async function install() {
   let filename;
   try {
     filename = platformBinary();
-    const [checksumsBuffer, binary] = await Promise.all([
-      download(`${baseUrl}/checksums.txt`),
-      download(`${baseUrl}/${filename}`),
+    const version = require('./package.json').version;
+    const releaseUrl = `${baseUrl}/releases/v${version}`;
+    const [manifestBytes, signature] = await Promise.all([
+      download(`${releaseUrl}/manifest.json`), download(`${releaseUrl}/manifest.sig`)
     ]);
-    const expected = expectedChecksum(checksumsBuffer.toString('utf8'), filename);
+    const key = fs.readFileSync(path.join(__dirname, 'release.pub'));
+    if (!crypto.verify(null, manifestBytes, key, signature)) throw new Error('release signature failed');
+    const manifest = JSON.parse(manifestBytes);
+    if (manifest.version !== version) throw new Error('release version mismatch');
+    const binary = await download(`${releaseUrl}/${filename}`);
     const actual = crypto.createHash('sha256').update(binary).digest('hex');
-    if (actual !== expected) {
-      throw new Error(`SHA-256 mismatch for ${filename}`);
-    }
+    if (actual !== manifest.sha256[filename]) throw new Error(`SHA-256 mismatch for ${filename}`);
 
     const target = path.join(__dirname, 'bin', filename);
     const temporary = `${target}.tmp-${process.pid}`;
@@ -125,9 +99,8 @@ async function install() {
     console.log(`Installed ${filename} (SHA-256 verified).`);
     printIntegrationNotes();
   } catch (error) {
-    printManualInstall(filename, error);
-    // Keep npm installation usable: bin/bp.js provides the direct-run fallback.
-    process.exitCode = 0;
+    console.error(`bp installation failed: ${error.message}`);
+    process.exitCode = 1;
   }
 }
 

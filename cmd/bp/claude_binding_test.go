@@ -29,12 +29,19 @@ func TestOpenClaudeSwitchReplacesCodexLaunchAndUsesExactResume(t *testing.T) {
 			}
 			client, _, _ := openTestTmux(t, bookPath, "bypass permissions", false)
 			a := openTestApp(t, bookPath, client)
-			if e := a.open(append([]string{"ghost", dir}, flags...)); e != nil {
+			alias := filepath.Join(t.TempDir(), "project-link")
+			if err := os.Symlink(dir, alias); err != nil {
+				t.Fatal(err)
+			}
+			if e := a.open(append([]string{"ghost", alias}, flags...)); e != nil {
 				t.Fatal(e)
 			}
 			fleet, e := book.LoadFleet([]string{bookPath})
 			if e != nil {
 				t.Fatal(e)
+			}
+			if fleet.Agents["ghost"].Folder != dir {
+				t.Fatalf("logical cwd persisted: %s", fleet.Agents["ghost"].Folder)
 			}
 			launch := fleet.Agents["ghost"].Launch
 			if launch == nil || launch.Codex || launch.ResumeID != id || launch.Remote != "" || launch.NoSandbox {

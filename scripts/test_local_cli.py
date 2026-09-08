@@ -121,6 +121,8 @@ else:
  if args[0] != "--settings": sys.exit(0)
  settings = json.loads(Path(args[1]).read_text())
 thread = str(uuid.uuid4())
+if cli == "claude" and "--resume" in args:
+ thread = args[args.index("--resume") + 1]
 cwd = str(Path.cwd())
 stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 home = Path.home()
@@ -242,6 +244,93 @@ class LocalCLITest(unittest.TestCase):
             if status == "closed": break
             time.sleep(0.05)
         self.assertEqual(status, "closed")
+
+    def resume_client(self, args, cwd=None):
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(cwd or self.root)
+            os.execve(self.binary, [self.binary, "run", "claude"] + args, self.env)
+        self.children.append((pid, fd))
+        return fd
+
+    def test_continue_reuses_live_owner_and_symlink(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        self.start("claude", "advice")
+        observation = next((self.root / ".blueprint/state/local").glob("run-*/observation.json"))
+        thread = json.loads(observation.read_text())["session_id"]
+        before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        alias = self.root.parent / (self.root.name + "-alias")
+        alias.symlink_to(self.root)
+        try:
+            for args, cwd in [(["-c"], alias), (["--resume", thread], self.root), (["--continue"], alias)]:
+                fd = self.resume_client(args, cwd)
+                self.read_until(fd, b"FAKE_READY")
+            after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+            self.assertEqual(before, after)
+            entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+            self.assertEqual([a["name"] for a in entries], ["advice"])
+            self.assertEqual(entries[0]["folder"], str(self.root.resolve()))
+        finally:
+            alias.unlink()
+
+    def test_resume_after_exit_reuses_record_and_thread(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        fd = self.start("claude", "advice")
+        observation = next((self.root / ".blueprint/state/local").glob("run-*/observation.json"))
+        thread = json.loads(observation.read_text())["session_id"]
+        os.write(fd, b"quit\r")
+        self.wait_closed("advice")
+        fd = self.resume_client(["-c"])
+        self.read_until(fd, b"FAKE_READY")
+        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+        self.assertEqual([a["name"] for a in entries], ["advice"])
+        current = json.loads(Path(entries[0]["localRuntime"]["path"]).read_text())
+        self.assertEqual(current["session_id"], thread)
+
+    def test_multiple_legacy_owners_block_resume_without_killing(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        self.start("claude", "advice-one")
+        self.start("claude", "advice-two")
+        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+        first = json.loads(Path(entries[0]["localRuntime"]["path"]).read_text())
+        path = Path(entries[1]["localRuntime"]["path"])
+        path.write_text(json.dumps(first))  # reproduce old launchers sharing one native UUID
+        before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        fd = self.resume_client(["--resume", first["session_id"]])
+        self.read_until(fd, b"multiple live bp owners")
+        after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        self.assertEqual(before, after)
+
+    def test_codex_native_name_index_updates_bar_and_alias(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        self.start("codex", "codex-original")
+        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+        # The fake Codex holds the same kernel writer lock used by the runtime probe.
+        transcript = next((self.root / ".codex/sessions").glob("*/*/*/*.jsonl"))
+        thread = json.loads(transcript.read_text().splitlines()[0])["payload"]["id"]
+        index = self.root / ".codex/session_index.jsonl"
+        def rename(title):
+            with index.open("a") as f:
+                f.write(json.dumps(dict(id=thread, thread_name=title, updated_at="2026-09-08T12:00:00Z")) + "\n")
+        rename("hypr-codex")
+        result = subprocess.run([self.binary, "name", "codex-original"], env=self.env, capture_output=True, text=True, check=True)
+        self.assertIn("hypr-codex", result.stdout)
+        result = subprocess.run([self.binary, "color", "hypr-codex", "red"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rename("server-main")
+        result = subprocess.run([self.binary, "name", "codex-original"], env=self.env, capture_output=True, text=True, check=True)
+        self.assertNotIn("server-main", result.stdout)
+        self.assertIn("codex-original", result.stdout)
+
+    def test_concurrent_resume_creates_only_one_pane(self):
+        thread = "2832a3a6-1234-1234-1234-123456789012"
+        # No observer is needed: the durable claim must close the startup gap.
+        first = self.resume_client(["--resume", thread])
+        second = self.resume_client(["--resume", thread])
+        self.read_until(first, b"FAKE_READY")
+        self.read_until(second, b"FAKE_READY")
+        panes = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True).splitlines()
+        self.assertEqual(len(panes), 1)
 
     def test_quit_closes_only_own_session_for_each_cli(self):
         for cli in ["codex", "claude", "opencode", "hermes"]:

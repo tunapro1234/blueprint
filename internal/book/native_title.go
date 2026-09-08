@@ -18,6 +18,15 @@ type NativeTitle struct {
 }
 
 func ReadNativeTitle(path, id string, previous *NativeTitle) (NativeTitle, error) {
+	return readNativeTitle(path, id, previous, false)
+}
+
+// ReadCodexNativeTitle reads the native append-only session name index by exact thread ID.
+func ReadCodexNativeTitle(path, id string, previous *NativeTitle) (NativeTitle, error) {
+	return readNativeTitle(path, id, previous, true)
+}
+
+func readNativeTitle(path, id string, previous *NativeTitle, codex bool) (NativeTitle, error) {
 	value := NativeTitle{ThreadID: id, Path: path}
 	f, err := os.Open(path)
 	if err != nil {
@@ -44,6 +53,16 @@ func ReadNativeTitle(path, id string, previous *NativeTitle) (NativeTitle, error
 			return value, e
 		}
 		value.Offset += int64(len(line))
+		if codex {
+			var record struct {
+				ID    string  `json:"id"`
+				Title *string `json:"thread_name"`
+			}
+			if json.Unmarshal(line, &record) == nil && record.ID == id && record.Title != nil {
+				value.Text = *record.Title
+			}
+			continue
+		}
 		if !bytes.Contains(line, []byte(`"custom-title"`)) {
 			continue
 		}

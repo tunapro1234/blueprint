@@ -159,6 +159,8 @@ kalan local worker eski binary ile çalışıyorsa, agentı kapatmadan bu yol ku
 ## Native /rename ve canlı kimliğin gösterimi
 
 Claude içindeki `/rename orch`, doğrulanmış transcript üzerinden izlenir.
+Codex `/rename` adı da bağlı thread UUID ile native `session_index.jsonl`
+kaydından okunur; cwd veya ekran metni kimlik kanıtı sayılmaz.
 `bp name` alt çubuğu yeni adı gösterir; `bp status --json` sabit `name` yanında
 `display_name` verir. `bp msg orch`, `bp peek orch` ve `bp color orch` tek bir canlı
 oturum eşleşiyorsa bu adı kabul eder. İki aynı başlıkta hata verilir. Canonical
@@ -173,3 +175,26 @@ ve sidechain kayıtları başlık sayılmaz. Güncelleme yeni prompt/hook gerekt
 Embedded Codex'te canlı writer lock; Claude'da doğrulanmış süreç session id'si
 varsa telemetry eski launch pininden bağımsız okunur. Bu gözlem identityThreadId
 yetki pinini değiştirmez. Remote Codex eşleme/pin kontrolleri korunur.
+
+
+## Yerel Claude continue / resume sahipliği
+
+`claude -c` / `--continue`, en son yerel konuşmanın UUID'sini bir kez çözer ve
+Claude'u açık UUID ile başlatır. Aynı UUID zaten canlı bir bp pane'ine bağlıysa
+o pane'e attach olur; yeni süreç, mesaj veya agent kaydı oluşturulmaz. Bu durumda
+yeni komuttaki model/izin/prompt argümanları açık sürece uygulanmaz. Kapanmış
+konuşmanın önceki agent adı tekrar kullanılır. Symlink cwd'ler fiziksel yola
+normalize edilir; eski logical-path transcript dizini de continue aramasına katılır.
+
+`stateDir/local-resume/` kilidi, sahiplik kontrolü ile tmux oluşturmayı tek işlem
+olarak sıralar. Kalıcı claim, `_session` kaydı oluşana kadarki boşluğu kapatır;
+canlı PID doğrulamalı gözlem varsa önceliklidir. Bir UUID'nin birden fazla canlı
+eski sahibi varsa bp isimlerini gösterip durur; pane kapatmaz veya kazanan seçmez.
+Eşit güncellikte farklı konuşmalar da sessizce seçilmez.
+
+Bu koruma aynı BP_HOME ve tmux sunucusundaki `bp run claude -c` ve UUID'li
+`--resume` içindir. UUID'siz resume seçicisi/başlık sorgusu açık hata verir;
+`claude --resume <UUID>` kullanılmalıdır. `--fork-session` bilinçli yeni konuşma
+olduğu için yeniden bağlanmaz. BP dışındaki Claude süreçlerini veya TUI içinden
+sonradan `/resume` ile başka konuşmaya geçişi kilitlemez. Eski kayıt/transkriptler
+silinmez; var olan çoklu writer'lar otomatik olarak birleştirilmez.

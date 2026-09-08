@@ -8,7 +8,7 @@ configurable colors. Works with local laptop sessions and configured servers.
 Install and sign in to your preferred agent CLI first, then:
 
 ```sh
-curl -fsSL https://bp.tunapro.xyz/install.sh | sh -s -- --local
+curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/install.sh | sh -s -- --local
 ```
 
 On first interactive installation, bp asks which CLI to use and opens a `main`

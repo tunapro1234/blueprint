@@ -1538,7 +1538,12 @@ func (a *app) close(args []string) error {
 func (a *app) sender() string { return a.senderIdentity().Label }
 
 func (a *app) identityOptions() identity.Options {
-	return identity.Options{Known: a.knownAgent, Origin: a.originProbe, Thread: func(ctx context.Context, id string) identity.Identity {
+	return identity.Options{Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
+		if a.tmux == nil {
+			return "", fmt.Errorf("tmux client unavailable")
+		}
+		return a.tmux.CallingSession(ctx)
+	}, Thread: func(ctx context.Context, id string) identity.Identity {
 		home := bptmux.CodexProcessInfo(0).Home
 		who := book.ThreadIdentity(ctx, a.config.Agentbooks, home, id)
 		if !who.Certain {
@@ -1811,6 +1816,12 @@ func (a *app) message(args []string) error {
 			return err
 		}
 	}
+	if sender == "" || sender == identity.Unknown {
+		return fmt.Errorf("sender identity unavailable (%s: %s); message not sent or queued; inspect bp whoami", who.Source, who.Reason)
+	}
+	if a.queue != nil {
+		a.queue.Sender = &msgq.SenderEvidence{Label: who.Label, ThreadID: who.ThreadID, Parent: who.Parent, Source: who.Source, Certain: who.Certain, Authority: who.Authoritative(), PID: os.Getpid()}
+	}
 	if strings.HasPrefix(message, "/") {
 		if !who.Authoritative() {
 			return fmt.Errorf("slash command refused: sender identity is not verified (%s)", who.Source)
@@ -1907,6 +1918,12 @@ func (a *app) message(args []string) error {
 	}
 	switch {
 	case unverified:
+		if channelID != "" {
+			fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s; transcript tanigi bekleniyor; durum: bp qstat %s\n", name, channelID)
+			a.resultLine("unverified", channelID)
+			return errReported
+		}
+
 		// Not a failure and not a delivery: the keystrokes went in and nothing
 		// confirmed them. Never silently "sent" again (2026-08-01 incident).
 		//
@@ -1943,7 +1960,7 @@ func (a *app) message(args []string) error {
 		return nil
 	case !queued:
 		fmt.Fprintln(a.out, "sent")
-		a.resultLine("delivered", "")
+		a.resultLine("delivered", channelID)
 		return nil
 	}
 	fmt.Fprintf(a.out, "QUEUED (channel: %s). Check: bp qstat %s\n", channelID, channelID)
@@ -2006,7 +2023,7 @@ func (a *app) forceMessage(name, sender, message string, entries []pending.Entry
 			}
 		}
 	}
-	channelID, err := a.queue.EnqueueForce(name, sender, message)
+	channelID, err := a.queue.EnqueueUnique(name, sender, message, true, dedupWindow)
 	if err != nil {
 		return err
 	}
@@ -2026,9 +2043,15 @@ func (a *app) forceMessage(name, sender, message string, entries []pending.Entry
 	// lines: the pass may have been a no-op (daemon held the dispatch lock) and
 	// the record then delivers within the daemon's next tick. "queued" therefore
 	// means "in flight", never "failed".
-	if status, done := a.queue.Finished(channelID); done && strings.HasPrefix(status, "delivered") {
-		a.resultLine("delivered", channelID)
-		return nil
+	if status, done := a.queue.Finished(channelID); done {
+		if status == "delivered (unverified)" {
+			a.resultLine("unverified", channelID)
+			return errReported
+		}
+		if strings.HasPrefix(status, "delivered") {
+			a.resultLine("delivered", channelID)
+			return nil
+		}
 	}
 	a.resultLine("queued", channelID)
 	return nil
@@ -2047,6 +2070,7 @@ func (a *app) dispatchNow() {
 	if a.queue == nil || a.tmux == nil {
 		return
 	}
+	a.queue.CanWitness = book.CanWitness
 	if len(a.config.Agentbooks) > 0 {
 		projects := bptmux.ClaudeProjectsRoot()
 		a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
@@ -2054,6 +2078,7 @@ func (a *app) dispatchNow() {
 		a.queue.HasTranscript = book.TranscriptExists(a.config.Agentbooks, projects)
 		a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
 		a.queue.RuntimeBlock = book.RuntimeBlockProbe(a.config.Agentbooks)
+		a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
 	}
 	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
 		fmt.Fprintf(a.err, "WARNING: teslim pass'i calistirilamadi: %v\n", err)
@@ -2121,6 +2146,10 @@ func (a *app) resultLine(verdict, channel string) {
 }
 
 func (a *app) federatedMessage(target, peer, message string) error {
+	who := a.senderIdentity()
+	if who.Label == "" || who.Label == identity.Unknown {
+		return fmt.Errorf("sender identity unavailable (%s: %s); message not sent or queued; inspect bp whoami", who.Source, who.Reason)
+	}
 	if a.config.P2P != nil && a.config.P2P.Enabled {
 		return a.p2pMessage(target, peer, message)
 	}
@@ -2167,100 +2196,25 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	if !a.tmux.HasSession(a.ctx, name) {
 		return false, "", fmt.Errorf("no open session named %s", name)
 	}
-	// The critical section starts BEFORE the capture and ends after the send's own
-	// verification, because a capture taken while another bp is mid-paste is worth
-	// nothing: that is exactly how the digest of `bp open` and the message of
-	// `bp msg` ended up in one composer, submitted by one Enter. Holding the lock
-	// across the capture is also what makes the flush handshake work — this capture
-	// now sees the composer as it is AFTER any flush, so a digest still hanging in
-	// there reads as "not empty" and the message is queued instead of stacked.
-	release, lockErr := a.lockPane(name)
-	if lockErr != nil {
-		// Another bp owns the pane. Treat it as the busy pane it effectively is:
-		// queue the message with the reason, never type into a composer someone
-		// else is in the middle of.
-		channelID, err := a.queue.EnqueueReason(name, sender, message, bptmux.BlockedByPaneLock)
-		if err != nil {
-			return true, channelID, err
-		}
-		return true, channelID, nil
-	}
-	defer release()
-	pane, err := a.tmux.CaptureAnsi(a.ctx, name)
+	channelID, err = a.queue.EnqueueUnique(name, sender, message, false, dedupWindow)
 	if err != nil {
 		return false, "", err
 	}
-	// reason survives the enqueue below so the caller can name WHY the message
-	// had to be queued instead of reporting a plain "busy" queue.
-	var reason error
-	// busyLate records that the pane began a turn AFTER the capture above, which
-	// only the send step can see. Without it the queue reason would be computed
-	// from a capture that is already stale and would read "" — an empty wait.
-	var busyLate bool
-	// The queue's own records for this target. They let the delivery step tell OUR
-	// OWN unsubmitted paste apart from a human's half-written line: a composer
-	// still holding a message bp pasted earlier used to read as "busy", so every
-	// later message queued behind it and the queue blocked itself (measured: four
-	// days). A composer whose content is provably ours is therefore no longer a
-	// reason to skip the send — anything else still is.
-	pendingTexts := a.queue.PendingFor(name)
-	_, ours := bptmux.StuckPaste(pane, append([]string{message}, pendingTexts...))
-	// The transcript is only consulted when the frame says idle — the case where
-	// the screen has nothing to show because the agent is streaming an answer.
-	// Everything that follows types into the pane, so this is exactly where a
-	// wrong "idle" costs something.
-	runtimeReason := a.deliveryRuntimeReason(name)
-	if (!bptmux.Typing(pane) || ours) && !bptmux.Busy(pane) && runtimeReason == "" {
-		finished, sendErr := a.tmux.SendWithPending(a.ctx, name, message, pendingTexts)
-		// A queued message that was hanging in the composer and has now been
-		// submitted: close its record, or the queue would paste it again.
-		for _, text := range finished {
-			if id, ok := a.queue.CloseDelivered(name, text, "delivered (composer'da bekliyordu, Enter atildi)"); ok {
-				fmt.Fprintf(a.out, "kuyruk %s: %s composer'inda bekleyen mesaj Enter ile gonderildi\n", id, name)
-			}
-		}
-		switch {
-		case sendErr == nil:
-			return false, "", nil
-		case errors.Is(sendErr, bptmux.ErrUnverified):
-			// Pasted and submitted, but unconfirmed. Queueing it would risk a
-			// second copy, so it is reported and NOT retried.
-			return false, "", sendErr
-		case errors.Is(sendErr, bptmux.ErrNotReady):
-			// Proven non-delivery: queue it exactly like a busy composer, and
-			// carry the reason out with the channel id.
-			reason = sendErr
-		case errors.Is(sendErr, bptmux.ErrBusy):
-			// The pane started working between the capture above and the paste.
-			// Nothing was injected, so this is an ordinary queueing case — it
-			// only needs to say "calisiyor" rather than the stale capture's "".
-			busyLate = true
-		case errors.Is(sendErr, bptmux.ErrTyping):
-			// Someone is typing: queue, as before.
-		default:
-			return false, "", sendErr
-		}
+	a.dispatchNow()
+	record, readErr := a.queue.Record(channelID)
+	if readErr != nil {
+		return true, channelID, readErr
 	}
-	// Why this message is being queued, in words the operator can act on. A
-	// provable non-delivery names its own cause (expired login, a paste that landed
-	// broken); otherwise the pane is asked — a composer holding an unreadable paste
-	// chip, or someone else's text, is a state only a human can clear, and it must
-	// not hide behind "still busy" for four days.
-	why := bptmux.ComposerBlockReason(pane, append([]string{message}, pendingTexts...))
-	if runtimeReason != "" {
-		why = runtimeReason
+	if record.Status == "delivered (unverified)" || (record.Status == "" && record.NoRepaste) {
+		return true, channelID, bptmux.ErrUnverified
 	}
-	if busyLate {
-		why = bptmux.BlockedByBusyPane
+	if strings.HasPrefix(record.Status, "delivered") {
+		return false, channelID, nil
 	}
-	if reason != nil {
-		why = deliveryReason(reason, bptmux.ErrNotReady)
+	if record.Attempts > 0 {
+		return true, channelID, fmt.Errorf("%w: %s", bptmux.ErrNotReady, record.Reason)
 	}
-	channelID, err = a.queue.EnqueueReason(name, sender, message, why)
-	if err != nil {
-		return true, channelID, err
-	}
-	return true, channelID, reason
+	return true, channelID, nil
 }
 
 // deliveryTally accumulates per-target deliver() outcomes for the batch commands

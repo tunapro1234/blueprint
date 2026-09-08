@@ -296,3 +296,17 @@ func TestValidFromRejectsForgery(t *testing.T) {
 func fixedAncestors(frames ...[]string) func() [][]string {
 	return func() [][]string { return frames }
 }
+
+func TestCallerPaneContextIsReadableButNeverAuthoritative(t *testing.T) {
+	setEnv(t, map[string]string{})
+	opts := Options{Origin: noCodexOrigin, Known: knownSet("writer"), Pane: func(context.Context) (string, error) { return "writer", nil }}
+	who := Resolve(context.Background(), nil, opts)
+	if who.Label != "writer?" || who.Source != "pane-process-context" || who.Certain || who.Authoritative() {
+		t.Fatal(who)
+	}
+	opts.Origin = func(context.Context) Origin { return Origin{CodexDetected: true} }
+	who = Resolve(context.Background(), nil, opts)
+	if who.Label != Unknown || who.Authoritative() {
+		t.Fatal("shared Codex used a pane fallback", who)
+	}
+}

@@ -2459,3 +2459,31 @@ func (c *Client) PressEnter(ctx context.Context, session string) error {
 	_, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
 	return err
 }
+
+// CallingSession finds a unique pane in the actual caller ancestry. It does not
+// trust TMUX_PANE, cwd, display names or the currently attached tmux client.
+func (c *Client) CallingSession(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}\t#{pane_dead}")
+	if err != nil {
+		return "", err
+	}
+	found := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 || fields[2] != "0" || !identity.ValidName(fields[0]) {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[1])
+		if err != nil || !identity.CallingPane(ctx, pid) {
+			continue
+		}
+		if found != "" && found != fields[0] {
+			return "", fmt.Errorf("ambiguous caller pane ancestry")
+		}
+		found = fields[0]
+	}
+	if found == "" {
+		return "", fmt.Errorf("no pane in caller process ancestry")
+	}
+	return found, nil
+}

@@ -248,3 +248,19 @@ func TestStatusUnknownKeepsGateClosedAndSnapshotConsistent(t *testing.T) {
 		t.Fatalf("misleading JSON: %+v", result)
 	}
 }
+
+func TestAnonymousMessageIsRefusedBeforeSpoolOrDelivery(t *testing.T) {
+	for _, open := range []bool{false, true} {
+		called := false
+		a := &app{ctx: context.Background(), config: bpconfig.Config{StateDir: t.TempDir()}, sessionExists: func(string) bool { return open }, resolveSender: func() identity.Identity {
+			return identity.Identity{Label: identity.Unknown, Source: "none", Reason: "no caller pane"}
+		}, deliverMessage: func(string, string, string) (bool, string, error) { called = true; return false, "", nil }}
+		err := a.message([]string{"target", "anonymous task"})
+		if err == nil || !strings.Contains(err.Error(), "sender identity unavailable") || called {
+			t.Fatal(err, called)
+		}
+		if _, err = os.Stat(filepath.Join(a.config.StateDir, "pending")); !os.IsNotExist(err) {
+			t.Fatal("anonymous message reached offline spool")
+		}
+	}
+}

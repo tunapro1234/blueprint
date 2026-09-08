@@ -63,8 +63,8 @@ func TestWhatsAppSendIgnoresNtfyFailure(t *testing.T) {
 	if err := a.whatsapp([]string{"send", "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	if body != "[agent] hello" {
-		t.Fatalf("ntfy body=%q, want %q", body, "[agent] hello")
+	if body != "[agent?:agent] hello" {
+		t.Fatalf("ntfy body=%q, want %q", body, "[agent?:agent] hello")
 	}
 	entries, err := os.ReadDir(outbox)
 	if err != nil {
@@ -289,8 +289,9 @@ func TestAnnounceDefersColdAndSendsWarm(t *testing.T) {
 		},
 		loadCache: func(map[string]string) map[string]bpcache.State {
 			return map[string]bpcache.State{
-				"warm": {Known: true, Age: 10 * time.Minute, CtxTokens: 100_000},
-				"cold": {Known: true, Age: 2 * time.Hour, CtxTokens: 300_000},
+				"warm": {Known: true, Age: 10 * time.Minute, CacheTTL: time.Hour, CacheAge: 10 * time.Minute, CtxTokens: 100_000},
+				// Recent usage without a TTL must not trigger a warm-cache send.
+				"cold": {Known: true, Age: 36 * time.Minute, CtxTokens: 300_000},
 			}
 		},
 		deliverMessage: func(name, from, message string) (bool, string, error) {
@@ -298,6 +299,7 @@ func TestAnnounceDefersColdAndSendsWarm(t *testing.T) {
 			return false, "", nil
 		},
 	}
+	trustedSenderFixture(a)
 	if err := a.announce([]string{"hello"}); err != nil {
 		t.Fatal(err)
 	}
@@ -327,6 +329,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 			out:           out,
 			sessionExists: func(string) bool { return false },
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "hello"}); err != nil {
 			t.Fatal(err)
 		}
@@ -361,6 +364,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "direct"}); err != nil {
 			t.Fatal(err)
 		}
@@ -387,11 +391,16 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
-		if err := a.message([]string{"alp", "hello"}); err != nil {
-			t.Fatal(err)
-		}
-		if delivered != "[ada] hello" {
-			t.Fatalf("delivered=%q, want %q", delivered, "[ada] hello")
+		trustedSenderFixture(a)
+		// The envelope is added exactly once. A caller-written label is body
+		// text; silently stripping it could rewrite a quote or a command.
+		for _, body := range []string{"hello", "[ada] hello", "[server-main] quoted claim"} {
+			if err := a.message([]string{"alp", body}); err != nil {
+				t.Fatal(err)
+			}
+			if want := "[ada] " + body; delivered != want {
+				t.Fatalf("delivered=%q, want %q", delivered, want)
+			}
 		}
 	})
 
@@ -423,6 +432,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "/compact"}); err != nil {
 			t.Fatal(err)
 		}
@@ -456,6 +466,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "/compact"}); err != nil {
 			t.Fatal(err)
 		}
@@ -481,6 +492,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "/goal", "finish", "report"}); err != nil {
 			t.Fatal(err)
 		}
@@ -501,6 +513,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "/goal"}); err != nil {
 			t.Fatal(err)
 		}
@@ -522,6 +535,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		err := a.message([]string{"alp", "/goal", "finish", "report"})
 		if err == nil || !strings.Contains(err.Error(), "hierarchy") {
 			t.Fatalf("err=%v, want hierarchy refusal", err)
@@ -544,6 +558,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		err := a.message([]string{"alp", "/compact"})
 		if err == nil || !strings.Contains(err.Error(), "hierarchy") {
 			t.Fatalf("err=%v, want hierarchy refusal", err)
@@ -844,6 +859,7 @@ func TestCompactApplyWithDryRunNeverReachesFleet(t *testing.T) {
 					return false, "", nil
 				},
 			}
+			trustedSenderFixture(a)
 			if err := a.compact(args); err == nil {
 				t.Fatalf("compact %v succeeded, want error", args)
 			}
@@ -894,6 +910,7 @@ const (
 
 func TestCompactListsWithoutSendingByDefault(t *testing.T) {
 	a := compactApp(t, nil, nil)
+	trustedSenderFixture(a)
 	if err := a.compact(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -919,10 +936,12 @@ func TestCompactListsWithoutSendingByDefault(t *testing.T) {
 // same table and still send nothing.
 func TestCompactSynonymsMatchDefault(t *testing.T) {
 	first := compactApp(t, nil, nil)
+	trustedSenderFixture(first)
 	if err := first.compact(nil); err != nil {
 		t.Fatal(err)
 	}
 	second := compactApp(t, nil, nil)
+	trustedSenderFixture(second)
 	if err := second.compact([]string{"--policy", "--dry-run"}); err != nil {
 		t.Fatal(err)
 	}
@@ -934,6 +953,7 @@ func TestCompactSynonymsMatchDefault(t *testing.T) {
 func TestCompactApplySendsAndRecordsState(t *testing.T) {
 	var sent []string
 	a := compactApp(t, &sent, nil)
+	trustedSenderFixture(a)
 	if err := a.compact([]string{"--apply"}); err != nil {
 		t.Fatal(err)
 	}
@@ -950,6 +970,19 @@ func TestCompactApplySendsAndRecordsState(t *testing.T) {
 	state := loadCompactState(filepath.Join(a.config.StateDir, "compact.json"))
 	if _, ok := state["alpha-child"]; !ok || len(state) != 1 {
 		t.Fatalf("compact state=%v", state)
+	}
+}
+
+func TestCompactPolicyCannotSendSidewaysOrUpward(t *testing.T) {
+	var sent []string
+	a := compactApp(t, &sent, nil)
+	t.Setenv("AGENT", "beta")
+	trustedSenderFixture(a)
+	if err := a.compact([]string{"--apply"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("policy escaped sender hierarchy: %v", sent)
 	}
 }
 
@@ -970,6 +1003,7 @@ func TestCompactApplyClearsTheComposerBeforeSending(t *testing.T) {
 		events = append(events, "send:"+name+":"+message)
 		return deliver(name, from, message)
 	}
+	trustedSenderFixture(a)
 	if err := a.compact([]string{"--apply"}); err != nil {
 		t.Fatal(err)
 	}
@@ -995,6 +1029,7 @@ func TestCompactSkipsPanesThatRefuseToClear(t *testing.T) {
 			var sent []string
 			a := compactApp(t, &sent, nil)
 			a.clearPane = func(string) error { return tc.err }
+			trustedSenderFixture(a)
 			if err := a.compact([]string{"--apply"}); err != nil {
 				t.Fatal(err)
 			}
@@ -1017,6 +1052,7 @@ func TestCompactSkipsBusyAndTypedTargets(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var sent []string
 			a := compactApp(t, &sent, map[string]string{"alpha-child": pane})
+			trustedSenderFixture(a)
 			if err := a.compact([]string{"--apply"}); err != nil {
 				t.Fatal(err)
 			}
@@ -1042,6 +1078,7 @@ func TestCompactSkipsUnreadablePane(t *testing.T) {
 	var sent []string
 	a := compactApp(t, &sent, nil)
 	a.capturePane = func(string) (string, error) { return "", errors.New("no such session") }
+	trustedSenderFixture(a)
 	if err := a.compact([]string{"--apply"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1054,6 +1091,7 @@ func TestCompactAllKeepsTheDescendantSweep(t *testing.T) {
 	var sent []string
 	// --all has no idle or context thresholds, so only the pane says "busy".
 	a := compactApp(t, &sent, map[string]string{"alpha-grandchild": busyPane})
+	trustedSenderFixture(a)
 	if err := a.compact([]string{"--all", "--exclude", "beta,does-not-exist", "--apply"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1110,7 +1148,7 @@ func TestStatusHumanOutputIsUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := fmt.Sprintf("%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK") +
-		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "alpha", "working", "warm 1m 312k", "25h", "open", "") +
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "alpha", "working", "age 1m 312k", "25h", "open", "") +
 		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "closed-agent", "closed", "-", "-", "closed", "") +
 		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "server-main", "idle", "-", "-", "open", "")
 	if got := readTestOutput(t, a.out); got != want {
@@ -1137,7 +1175,8 @@ func TestStatusJSON(t *testing.T) {
 	alpha := report.Agents[0]
 	want := map[string]any{
 		"name": "alpha", "tmux": "working", "status": "open", "folder": "/srv/alpha", "parent": "server-main",
-		"ctx_tokens": float64(312_000), "cache_age_seconds": float64(90), "last_human_age_seconds": float64(90_000),
+		"usage_scope": "last_context_snapshot",
+		"ctx_tokens":  float64(312_000), "cache_age_seconds": float64(90), "last_human_age_seconds": float64(90_000),
 		"model": "claude-opus-5",
 		// The composite's two components, exposed so "which gate spoke?" is
 		// answerable from outside (2026-08-18): alpha's verdict came from the
@@ -1212,6 +1251,7 @@ func TestHelpDoesNotSwallowMessageText(t *testing.T) {
 			return false, "", nil
 		},
 	}
+	trustedSenderFixture(a)
 	if err := a.run([]string{"msg", "alp", "run", "--help"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1353,7 +1393,8 @@ func TestSenderPrecedence(t *testing.T) {
 		t.Helper()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "tmux")
-		script := "#!/bin/sh\ncase \"$1\" in\ndisplay-message) echo " + session + " ;;\n*) : ;;\nesac\n"
+		t.Setenv("TMUX_PANE", "%42")
+		script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\t%%s\\t0\\n' %s %d\n", session, os.Getpid())
 		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -1377,7 +1418,7 @@ func TestSenderPrecedence(t *testing.T) {
 		{
 			name: "agent beats sudo user",
 			env:  map[string]string{"AGENT": "tunarch", "SUDO_USER": "tunapro", "USER": "root"},
-			want: "tunarch",
+			want: "agent?:tunarch",
 		},
 		{
 			name: "sudo user names the human",
@@ -1402,16 +1443,16 @@ func TestSenderPrecedence(t *testing.T) {
 		{
 			name: "control characters are skipped",
 			env:  map[string]string{"SUDO_USER": "ada\nserver-main", "USER": "bad\tname"},
-			want: "server-main",
+			want: identity.Unknown,
 		},
 		{
 			name: "daemon and cron keep the default",
 			env:  map[string]string{"USER": "root", "LOGNAME": "root"},
-			want: "server-main",
+			want: identity.Unknown,
 		},
 		{
 			name: "empty environment keeps the default",
-			want: "server-main",
+			want: identity.Unknown,
 		},
 	}
 
@@ -1453,8 +1494,8 @@ func TestSenderNeverAsksTmuxOutsidePane(t *testing.T) {
 	}
 	a := &app{ctx: context.Background(), tmux: &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}}
 
-	if got := a.sender(); got != "server-main" {
-		t.Fatalf("sender()=%q, want the deliberate server-main default", got)
+	if got := a.sender(); got != identity.Unknown {
+		t.Fatalf("sender()=%q, want an unknown sender", got)
 	}
 	if data, err := os.ReadFile(marker); err == nil {
 		t.Fatalf("tmux was consulted with TMUX empty: %q", data)
@@ -1994,6 +2035,7 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 				return false, "", nil
 			},
 		}
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "hello"}); err != nil {
 			t.Fatal(err)
 		}
@@ -2022,6 +2064,7 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		// status footer carrying the banner.
 		tmuxClient, calls := fakeTmux(t, `printf '  earlier output\n❯  \n──────────\n  ⏵⏵ bypass permissions on   ● Login expired · Please run /login\n'`)
 		a.tmux = tmuxClient
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", "the whole brief"}); err != nil {
 			t.Fatal(err)
 		}
@@ -2061,6 +2104,7 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		}
 		tmuxClient, calls := fakeTmux(t, `printf '❯  \n──────────\n'`)
 		a.tmux = tmuxClient
+		trustedSenderFixture(a)
 		err := a.message([]string{"alp", "the whole brief"})
 		if !strings.Contains(calls(), "paste-buffer") {
 			t.Fatalf("the unverified case must be a real paste:\n%s", calls())
@@ -2095,6 +2139,7 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		tmuxClient, _ := fakeTmux(t, `printf '❯  \n──────────\n'`)
 		a.tmux = tmuxClient
 		brief := "roadmap incelemesi: hedef sistemi bolumunu bugun bitirelim"
+		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", brief}); !errors.Is(err, errReported) {
 			t.Fatalf("err=%v, want errReported", err)
 		}
@@ -2381,6 +2426,7 @@ func TestMessageRefusesADuplicateThatIsStillInFlight(t *testing.T) {
 			return false, "", nil
 		},
 	}
+	trustedSenderFixture(a)
 	if err := a.message([]string{"alp", "ayni metin"}); err != nil {
 		t.Fatal(err)
 	}
@@ -2395,6 +2441,7 @@ func TestMessageRefusesADuplicateThatIsStillInFlight(t *testing.T) {
 	}
 	// A different message is not touched by the guard.
 	a.out = testOutput(t)
+	trustedSenderFixture(a)
 	if err := a.message([]string{"alp", "bambaska bir mesaj"}); err != nil {
 		t.Fatal(err)
 	}
@@ -2534,15 +2581,14 @@ func TestForceBusyIsRefusedForAnOrdinaryAgent(t *testing.T) {
 // "wa" — the first allowlist shipped without it, and the feature would have
 // looked live while every bridge call silently fell back to the ordinary queue
 // (ada's pre-deploy catch, 2026-08-21).
-func TestForceBusyAcceptsTheBridgeIdentity(t *testing.T) {
+func TestForceBusyRejectsSelfDeclaredBridgeIdentity(t *testing.T) {
 	t.Setenv("AGENT", "whatsapp")
-	out := testOutput(t)
-	a := forceApp(t, out)
-	if err := a.message([]string{"--force-busy", "alp", "Tuna:", "acil bak"}); err != nil {
-		t.Fatalf("bridge identity was refused: %v", err)
+	a := forceApp(t, testOutput(t))
+	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err == nil {
+		t.Fatal("self-declared bridge received force authority")
 	}
 	rows, err := a.queue.List()
-	if err != nil || len(rows) != 1 || !rows[0].ForceBusy {
+	if err != nil || len(rows) != 0 {
 		t.Fatalf("rows=%v err=%v", rows, err)
 	}
 }
@@ -2559,6 +2605,7 @@ func TestForceBusyQueuesAForcedRecordForThePlumbing(t *testing.T) {
 		delivered++
 		return false, "", nil
 	}
+	trustedSenderFixture(a)
 	if err := a.message([]string{"--force-busy", "alp", "Tuna:", "acil bak"}); err != nil {
 		t.Fatal(err)
 	}
@@ -2591,6 +2638,7 @@ func TestForceBusySaysHowManyMessagesItIsJumping(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	trustedSenderFixture(a)
 	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err != nil {
 		t.Fatal(err)
 	}
@@ -2609,6 +2657,7 @@ func TestForceBusyStillRefusesADuplicateInFlight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	trustedSenderFixture(a)
 	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err != nil {
 		t.Fatal(err)
 	}
@@ -2640,7 +2689,7 @@ func TestForceBusyRefusesAnUnestablishedSender(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	a := forceApp(t, testOutput(t))
-	if got := a.sender(); got != "server-main" {
+	if got := a.sender(); got != identity.Unknown {
 		t.Fatalf("fixture is not the fallback case: sender()=%q", got)
 	}
 	err := a.message([]string{"--force-busy", "alp", "acil bir sey"})
@@ -2682,5 +2731,13 @@ func TestHelpListsEveryFlagTheParsersAccept(t *testing.T) {
 		if !strings.Contains(usage, flag) {
 			t.Errorf("%s is accepted in %s but appears nowhere in `bp help`", flag, file)
 		}
+	}
+}
+
+// Queue/policy tests inject a verified main-agent identity. AGENT is only the
+// fixture's selector here; production does not authenticate from that variable.
+func trustedSenderFixture(a *app) {
+	a.resolveSender = func() identity.Identity {
+		return identity.Identity{Label: os.Getenv("AGENT"), Certain: true, Source: "tmux"}
 	}
 }

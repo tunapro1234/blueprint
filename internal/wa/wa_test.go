@@ -86,8 +86,8 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 		{
 			name:     "AGENT signs when there is no pane",
 			env:      map[string]string{"TMUX": "", "AGENT": "compec-mail", "SUDO_USER": "tunapro"},
-			wantText: "[compec-mail] gonderildi",
-			wantSure: true,
+			wantText: "[agent?:compec-mail] gonderildi",
+			wantSure: false,
 		},
 		{
 			name:     "a human on the box signs with their own name",

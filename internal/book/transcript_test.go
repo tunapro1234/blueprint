@@ -207,3 +207,26 @@ func jsonString(s string) string {
 	}
 	return string(data)
 }
+
+func TestCodexWitnessRejectsQuotedAndTruncatedMessages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	msg := "[bp] " + strings.Repeat("important instruction ", 30)
+	now := time.Now()
+	write := func(role, text string) {
+		row := map[string]any{"type": "response_item", "timestamp": now.Format(time.RFC3339Nano), "payload": map[string]any{"type": "message", "role": role, "content": []any{map[string]string{"type": "input_text", "text": text}}}}
+		data, _ := json.Marshal(row)
+		if err := os.WriteFile(path, append(data, '\n'), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ role, text string }{{"assistant", msg}, {"user", msg[:420]}, {"tool", msg}} {
+		write(tc.role, tc.text)
+		if codexDeliveredIn(path, msg, now) {
+			t.Fatalf("false witness for %s / %d chars", tc.role, len(tc.text))
+		}
+	}
+	write("user", msg)
+	if !codexDeliveredIn(path, msg, now) {
+		t.Fatal("full inbound message not witnessed")
+	}
+}

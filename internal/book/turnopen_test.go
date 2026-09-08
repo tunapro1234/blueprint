@@ -334,7 +334,7 @@ func TestTurnOpenProbeResolvesFolderFromTheBook(t *testing.T) {
 	if !probe("kavram-main") {
 		t.Fatal("an open turn was not seen through the agentbook")
 	}
-	if probe("nobody") {
-		t.Fatal("an agent that is not in the book was reported busy")
+	if !probe("nobody") {
+		t.Fatal("unmapped target must block unattended delivery")
 	}
 }

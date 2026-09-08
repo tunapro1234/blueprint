@@ -52,6 +52,11 @@ func TestStdioMatchesResponsesByIDAndForwardsNotifications(t *testing.T) {
 			serverDone <- err
 			return
 		}
+		initialized, err := read()
+		if err != nil || initialized.Method != "initialized" {
+			serverDone <- fmt.Errorf("missing initialized: %v", err)
+			return
+		}
 		first, err := read()
 		if err != nil {
 			serverDone <- err
@@ -146,6 +151,10 @@ func TestThreadListFollowsPagination(t *testing.T) {
 			if err := json.Unmarshal(scanner.Bytes(), &request); err != nil {
 				serverDone <- err
 				return
+			}
+			if request.Method == "initialized" {
+				page--
+				continue
 			}
 			result := any(map[string]any{})
 			if page == 1 {
@@ -259,6 +268,11 @@ func TestDialUnixWebSocketHandshakeMaskingAndPing(t *testing.T) {
 			return
 		}
 
+		initialized, _, err := readClientFrame(reader)
+		if err != nil || !strings.Contains(string(initialized), `"method":"initialized"`) {
+			serverDone <- fmt.Errorf("missing initialized: %v", err)
+			return
+		}
 		list, opcode, err := readClientFrame(reader)
 		if err != nil || opcode != opText {
 			serverDone <- fmt.Errorf("list frame: opcode=%d err=%v", opcode, err)
@@ -424,4 +438,65 @@ func writeServerFrame(writer io.Writer, opcode byte, payload []byte) error {
 		return err
 	}
 	return writeAll(writer, payload)
+}
+
+func TestThreadReadDoesNotResumeOrGenerate(t *testing.T) {
+	serverOutput, clientOutput := io.Pipe()
+	serverInput, clientInput := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		defer clientOutput.Close()
+		defer serverInput.Close()
+		scanner := bufio.NewScanner(serverInput)
+		for _, method := range []string{"initialize", "initialized", "thread/read"} {
+			if !scanner.Scan() {
+				done <- fmt.Errorf("missing %s", method)
+				return
+			}
+			var req testRequest
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				done <- err
+				return
+			}
+			if req.Method != method {
+				done <- fmt.Errorf("unexpected method %s, expected %s", req.Method, method)
+				return
+			}
+			if method == "initialized" {
+				continue
+			}
+			result := map[string]any{}
+			if method == "thread/read" {
+				var params map[string]any
+				_ = json.Unmarshal(req.Params, &params)
+				if params["threadId"] != "thread-a" || params["includeTurns"] != false {
+					done <- fmt.Errorf("wrong read params")
+					return
+				}
+				result["thread"] = map[string]any{"id": "thread-a", "cwd": "/work", "model": "gpt-6-astra", "reasoningEffort": "medium", "status": map[string]any{"type": "active"}}
+			}
+			if err := json.NewEncoder(clientOutput).Encode(map[string]any{"id": req.ID, "result": result}); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	c, err := ConnectStdio(ctx, serverOutput, clientInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	thread, err := c.ThreadRead(ctx, "thread-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.ID != "thread-a" || thread.Status.Type != "active" || thread.ReasoningEffort != "medium" {
+		t.Fatalf("incorrect metadata: %+v", thread)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }

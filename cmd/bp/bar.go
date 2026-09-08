@@ -12,6 +12,7 @@ import (
 
 	"blueprint/internal/book"
 	"blueprint/internal/cache"
+	bpconfig "blueprint/internal/config"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
@@ -40,7 +41,7 @@ const (
 	barWarn  = "colour136" // amber: worth knowing
 	barAlert = "colour131" // red: act before the next long task
 
-	barCacheTTL = 45 * time.Second
+	barCacheTTL = 2 * time.Second
 
 	// barDefaultAccent is Claude Code's own default plate colour, so an agent
 	// that never ran /color is left unrecorded rather than pinned to the default.
@@ -68,7 +69,7 @@ func (a *app) bar(args []string) error {
 func (a *app) barName(agent string) string {
 	accent := a.barAccent(agent)
 	a.barApplyStyle(agent, accent)
-	return "#[bg=" + barGap + ",fg=colour" + accent + ",bold] " + agent + " #[default]"
+	return "#[bg=" + barGap + ",fg=colour" + accent + ",bold] " + a.liveName(agent) + " #[default]"
 }
 
 // barApplyStyle keeps the session's status-style in step with the accent. It
@@ -97,7 +98,15 @@ func (a *app) barAccent(agent string) string {
 	stored := ""
 	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil {
 		if entry, ok := fleet.Agents[agent]; ok {
+			if entry.ColorOverride != "" {
+				return entry.ColorOverride
+			}
 			stored = entry.Color
+		}
+	}
+	if a.config.Bar.DefaultColor != "" {
+		if index, err := bpconfig.ColorIndex(a.config.Bar.DefaultColor); err == nil {
+			return index
 		}
 	}
 	live, ok := a.paneAccent(agent)
@@ -120,8 +129,13 @@ func (a *app) paneAccent(agent string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	for _, match := range agentChip.FindAllStringSubmatch(pane, -1) {
-		if match[2] == agent {
+	matches := agentChip.FindAllStringSubmatch(pane, -1)
+	if len(matches) == 0 {
+		return "", false
+	}
+	label := a.liveName(agent)
+	for _, match := range matches {
+		if match[2] == agent || match[2] == label {
 			return match[1], true
 		}
 	}
@@ -157,25 +171,49 @@ func (a *app) barLine(agent string) string {
 	stateRead := false
 	readState := func() cache.State {
 		if !stateRead {
-			// A codex pane has no Claude projects entry: its live session is
-			// the freshest rollout under CODEX_HOME started in this folder.
-			if p := readProcess(); a.codexPane(agent, p) {
-				state = cache.ReadCodex(codexHome(p.PID), readFolder())
-			} else {
-				state = cache.Read(bptmux.ClaudeProjectsRoot(), readFolder(), agent)
-			}
+			state = a.readCache(map[string]string{agent: readFolder()})[agent]
 			stateRead = true
 		}
 		return state
+	}
+	if a.tmux != nil || a.loadCache != nil {
+		if activity := readState().Activity; activity != nil {
+			symbol, colour := "?", barWarn
+			switch activity.State {
+			case "idle":
+				symbol, colour = "·", barQuiet
+			case "working":
+				frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+				symbol, colour = string(frames[(time.Now().Unix()/2)%int64(len(frames))]), barCalm
+			case "blocked":
+				symbol = "!"
+			case "dead":
+				symbol, colour = "×", barAlert
+			}
+			segments = append(segments, style(colour, symbol))
+		}
 	}
 	for _, widget := range a.config.Bar.Widgets {
 		switch widget {
 		case "ctx":
 			state := readState()
 			if !state.Known {
+				if state.Runtime != "" {
+					segments = append(segments, style(barQuiet, "ctx —"))
+				}
 				continue
 			}
 			text := humanTokens(state.CtxTokens)
+			if a.config.Bar.Context == "remaining" && state.Window <= 0 {
+				text += "/?"
+			}
+			if a.config.Bar.Context == "remaining" && state.Window > 0 {
+				remaining := state.Window - state.CtxTokens
+				if remaining < 0 {
+					remaining = 0
+				}
+				text = humanTokens(remaining) + " boş"
+			}
 			colour := barQuiet
 			// Claude never reports its window, so those keep the absolute
 			// thresholds; a session that does report one is judged by how
@@ -197,11 +235,12 @@ func (a *app) barLine(agent string) string {
 			if !state.Known {
 				continue
 			}
-			temperature, colour := "cold", barQuiet
-			if state.Age < time.Hour {
-				temperature, colour = "warm", barCalm
+			temperature, elapsed := state.CacheHint()
+			colour := barQuiet
+			if temperature == "warm~" {
+				colour = barCalm
 			}
-			segments = append(segments, style(colour, temperature+" "+formatAge(state.Age)))
+			segments = append(segments, style(colour, temperature+" "+formatAge(elapsed)))
 		case "talk":
 			state := readState()
 			if state.LastHumanAge < 0 {
@@ -224,8 +263,11 @@ func (a *app) barLine(agent string) string {
 				segments = append(segments, style(barQuiet, model))
 			}
 		case "quota":
-			if quota := a.barQuota(); quota != "" {
-				segments = append(segments, quota)
+			runtime := readState().Runtime
+			if runtime == "claude" || runtime == "codex" || runtime == "codex-remote" {
+				if quota := a.barQuotaFor(strings.HasPrefix(runtime, "codex")); quota != "" {
+					segments = append(segments, quota)
+				}
 			}
 		case "clock":
 			segments = append(segments, style(barQuiet, time.Now().Format("15:04")))
@@ -237,14 +279,35 @@ func (a *app) barLine(agent string) string {
 }
 
 func (a *app) barModel(agent string, process bptmux.PaneProcess, folder string, state func() cache.State) string {
+	if live := state(); live.Activity != nil {
+		if live.Model == "" {
+			return ""
+		}
+		return modelLabel(live.Model, live.Effort)
+	}
 	home, _ := os.UserHomeDir()
 	var model, effort string
 	if a.codexPane(agent, process) {
+		live := state()
+		if live.Model != "" {
+			return modelLabel(live.Model, live.Effort)
+		}
+		if live.Runtime == "codex-remote" {
+			return "" // the client's config cannot describe an unknown server model
+		}
 		root := codexHome(process.PID)
 		if root == "" {
 			return ""
 		}
 		model, effort = readCodexModel(filepath.Join(root, "config.toml"))
+		if pinModel, pinEffort := readCodexModel(filepath.Join(folder, ".codex", "config.toml")); pinModel != "" || pinEffort != "" {
+			if pinModel != "" {
+				model = pinModel
+			}
+			if pinEffort != "" {
+				effort = pinEffort
+			}
+		}
 		// The launch line beats the config file, for the same reason the session
 		// record beats a Claude pin: `codex -c model_reasoning_effort=medium`
 		// changes what this pane actually runs and touches no file. Measured
@@ -401,7 +464,7 @@ func processEnv(pid int, key string) string {
 
 func modelLabel(model, effort string) string {
 	lower := strings.ToLower(model)
-	for _, name := range []string{"opus", "fable", "sonnet", "haiku", "sol", "terra", "luna"} {
+	for _, name := range []string{"opus", "fable", "sonnet", "haiku", "astra", "sol", "terra", "luna"} {
 		if strings.Contains(lower, name) {
 			model = name
 			break
@@ -422,10 +485,10 @@ func modelLabel(model, effort string) string {
 	return strings.TrimSpace(model + " " + effort)
 }
 
-// barQuota renders the fleet-wide budget: the shared Claude 7-day window is
-// what actually forces model and effort decisions, so it belongs on every
-// agent's bar, not just the orchestrator's.
-func (a *app) barQuota() string {
+// barQuota is the legacy Claude budget helper; live bars select their provider.
+func (a *app) barQuota() string { return a.barQuotaFor(false) }
+
+func (a *app) barQuotaFor(codex bool) string {
 	if a.config.UsageHistory == "" {
 		return ""
 	}
@@ -433,7 +496,15 @@ func (a *app) barQuota() string {
 	if err != nil {
 		return ""
 	}
-	week, ok := percent(sample.Claude.Claude7)
+	weekly, short := sample.Claude.Claude7, sample.Claude.Claude5
+	if codex {
+		weekly, short = sample.Codex.Codex7, sample.Codex.Codex5
+		if weekly == nil {
+			weekly = short
+			short = nil
+		}
+	}
+	week, ok := percent(weekly)
 	if !ok {
 		return ""
 	}
@@ -444,9 +515,17 @@ func (a *app) barQuota() string {
 	case week >= 60:
 		colour = barWarn
 	}
-	text := "7d " + strconv.Itoa(int(week)) + "%"
-	if hours, ok := percent(sample.Claude.Claude5); ok && hours >= 80 {
-		text += " (5h " + strconv.Itoa(int(hours)) + "%)"
+	provider := "cc "
+	if codex {
+		provider = "gpt "
+	}
+	text := provider + strconv.Itoa(int(week)) + "%"
+	if hours, ok := percent(short); ok {
+		if codex {
+			text += "/" + strconv.Itoa(int(hours)) + "%"
+		} else {
+			text = provider + strconv.Itoa(int(hours)) + "%/" + strconv.Itoa(int(week)) + "%"
+		}
 	}
 	return style(colour, text)
 }

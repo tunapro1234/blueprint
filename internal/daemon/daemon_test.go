@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"blueprint/internal/config"
 	"context"
 	"os"
 	"path/filepath"
@@ -262,4 +263,30 @@ func TestStartLoopHonorsInitialDelay(t *testing.T) {
 	}
 	cancel()
 	service.wg.Wait()
+}
+
+func TestKeepaliveNeverGuessesHarnessOrThread(t *testing.T) {
+	dir := t.TempDir()
+	bookPath := filepath.Join(dir, "agentbook.json")
+	fake := filepath.Join(dir, "tmux")
+	calls := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\ncase \"$1\" in\nhas-session) exit 1;;\n*) exit 90;;\nesac\n"
+	if err := os.WriteFile(fake, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, launch := range []string{"null", `{"codex":true}`} {
+		data := `{"orchestrator":"server-main","agents":[{"name":"server-main","folder":"/srv","launch":` + launch + `}]}`
+		if err := os.WriteFile(bookPath, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		s := New(nil, config.Config{Agentbooks: []string{bookPath}, StateDir: dir, MsgqRoot: filepath.Join(dir, "msgq")})
+		s.tmux.Bin = fake
+		if err := s.keepalive(context.Background()); err == nil {
+			t.Fatal("missing launch/thread was guessed")
+		}
+	}
+	data, _ := os.ReadFile(calls)
+	if strings.Contains(string(data), "new-session") || strings.Contains(string(data), "send-keys") {
+		t.Fatalf("started a replacement agent: %s", data)
+	}
 }

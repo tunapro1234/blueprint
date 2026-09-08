@@ -3,7 +3,9 @@ package book
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -149,6 +151,7 @@ const (
 	turnNone = iota
 	turnOpenVerdict
 	turnClosedVerdict
+	turnUncertainVerdict
 )
 
 // tailTurnPhase reads the bounded tail and returns the verdict of the LAST
@@ -165,51 +168,92 @@ const (
 // An unreadable file is undecidable rather than closed, for the same reason: it
 // is a failure to look, not an observation.
 func tailTurnPhase(path string, now time.Time) (open, decisive bool) {
-	file, err := os.Open(path)
-	if err != nil {
+	verdict, stamp, err := readTurnPhase(path)
+	if err != nil || verdict == turnNone {
 		return false, false
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return false, false
-	}
-	partial := info.Size() > turnOpenTailBytes
-	if partial {
-		if _, err := file.Seek(info.Size()-turnOpenTailBytes, io.SeekStart); err != nil {
-			return false, false
-		}
-	}
-	scanner := bufio.NewScanner(file)
-	// Same buffer as the delivery witness: transcript lines are single JSON
-	// records and a tool result makes them very long.
-	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	if partial {
-		scanner.Scan() // discard the partial line the offset landed in
-	}
-	verdict, decisiveStamp := turnNone, ""
-	for scanner.Scan() {
-		if v, stamp := classifyTurnRecord(scanner.Bytes()); v != turnNone {
-			verdict, decisiveStamp = v, stamp
-		}
-	}
-	if verdict == turnNone {
-		return false, false
+	if verdict == turnUncertainVerdict {
+		return true, true
 	}
 	if verdict != turnOpenVerdict {
 		return false, true
 	}
-	// The ceiling is applied HERE, against the decisive record's own timestamp —
-	// the file's mtime cannot carry it, because timestamp-less metadata appends
-	// keep refreshing mtime on files whose last turn died days ago (see
-	// turnOpenCeiling). A decisive record without a readable timestamp falls back
-	// to the mtime bound alone, which TurnOpen has already applied: the record
-	// that knows the phase but not the hour still outranks a guess.
-	stamp, err := time.Parse(time.RFC3339, decisiveStamp)
-	if err != nil {
+	if stamp.IsZero() {
 		return true, true
 	}
 	return now.Sub(stamp) <= turnOpenCeiling, true
+}
+
+// readTurnPhase returns event time separately from file mtime. A truncated or
+// unreadable tail cannot provide an idle verdict to unattended callers.
+func readTurnPhase(path string) (int, time.Time, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return turnNone, time.Time{}, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return turnNone, time.Time{}, err
+	}
+	if info.Size() > 0 {
+		last := make([]byte, 1)
+		if _, err := file.ReadAt(last, info.Size()-1); err != nil || last[0] != '\n' {
+			return turnNone, time.Time{}, fmt.Errorf("incomplete transcript tail")
+		}
+	}
+	partial := info.Size() > turnOpenTailBytes
+	if partial {
+		if _, err = file.Seek(info.Size()-turnOpenTailBytes, io.SeekStart); err != nil {
+			return turnNone, time.Time{}, err
+		}
+	}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	if partial {
+		scanner.Scan()
+	}
+	verdict, stamp := turnNone, time.Time{}
+	var manualCompactAt time.Time
+	compactSummary := false
+	for scanner.Scan() {
+		var row turnRecord
+		if json.Unmarshal(scanner.Bytes(), &row) == nil && !row.IsSidechain {
+			ts, _ := time.Parse(time.RFC3339Nano, row.Timestamp)
+			if row.Type == "system" && row.Subtype == "compact_boundary" {
+				manualCompactAt, compactSummary = time.Time{}, false
+				if row.CompactMetadata.Trigger == "manual" {
+					manualCompactAt = ts
+				}
+			} else if !manualCompactAt.IsZero() {
+				if row.Type == "user" && row.IsCompactSummary {
+					compactSummary = true
+				}
+				if compactSummary && row.Type == "user" && !row.IsMeta && !ts.Before(manualCompactAt) && compactCommandCompleted(row.Message.Content) {
+					verdict, stamp = turnClosedVerdict, ts
+					manualCompactAt = time.Time{}
+					continue
+				}
+				// A new actual turn invalidates the pending compact completion.
+				// Compaction can replay older records; those are not new work.
+				if v, _ := classifyTurnRecord(scanner.Bytes()); v != turnNone && ts.After(manualCompactAt) {
+					manualCompactAt = time.Time{}
+				}
+			}
+		}
+		if v, ts := classifyTurnRecord(scanner.Bytes()); v != turnNone {
+			verdict = v
+			stamp, _ = time.Parse(time.RFC3339Nano, ts)
+			var row turnRecord
+			if json.Unmarshal(scanner.Bytes(), &row) == nil && row.Type == "assistant" && v == turnOpenVerdict && row.Message.StopReason != "tool_use" {
+				verdict = turnUncertainVerdict
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return turnNone, time.Time{}, err
+	}
+	return verdict, stamp, nil
 }
 
 // turnRecord is the part of a transcript record this gate reads. Everything else
@@ -225,6 +269,9 @@ type turnRecord struct {
 	// IsCompactSummary marks the "This session is being continued..." user record
 	// that /compact writes. It is not a prompt anyone is answering.
 	IsCompactSummary bool `json:"isCompactSummary"`
+	CompactMetadata  struct {
+		Trigger string `json:"trigger"`
+	} `json:"compactMetadata"`
 	// Timestamp is when the record was RECORDED (not written — a streamed answer's
 	// records carry timestamps minutes apart and hit the disk together). It is
 	// what the ceiling measures against.
@@ -341,6 +388,18 @@ func localCommandEcho(content json.RawMessage) bool {
 	return false
 }
 
+// A completed LOCAL /compact command, observed in native Claude transcripts.
+// Only used after a manual boundary and summary, never as a standalone idle cue.
+func compactCommandCompleted(content json.RawMessage) bool {
+	for _, text := range contentTexts(content) {
+		text = strings.ReplaceAll(strings.ReplaceAll(text, "\x1b[2m", ""), "\x1b[22m", "")
+		if strings.TrimSpace(text) == "<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>" {
+			return true
+		}
+	}
+	return false
+}
+
 // contentTexts decodes a user record's content into its text pieces. Both
 // measured shapes are read: a plain string (older records) and a list of text
 // blocks.
@@ -385,11 +444,18 @@ func interruptedText(content json.RawMessage) bool {
 // changes under a long-running daemon, and answers false for anything it cannot
 // resolve.
 func TurnOpenProbe(agentbooks []string, projectsRoot string) func(agent string) bool {
-	return func(agent string) bool {
+	return func(name string) bool {
 		fleet, err := LoadFleet(Paths(agentbooks))
 		if err != nil {
-			return false
+			return true
 		}
-		return TurnOpen(projectsRoot, fleet.Agents[agent].Folder, agent, time.Now())
+		_, ok := fleet.Agents[name]
+		if !ok {
+			return true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		state := RuntimeFor(ctx, bptmux.New(), fleet, name)
+		return state.Activity == nil || state.Activity.State != "idle"
 	}
 }

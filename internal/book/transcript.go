@@ -3,6 +3,7 @@ package book
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -69,11 +70,7 @@ func TranscriptDelivered(projectsRoot, folder, agent, text string, since time.Ti
 	return deliveredIn(path, text, since)
 }
 
-// deliveredIn is the scan itself, kept apart from transcript RESOLUTION so a
-// second kind of session file can use it. Codex writes JSONL with the same two
-// properties this scan needs — one record per line, a "timestamp" field, the
-// message text JSON-escaped inside — so the codex witness is the same reader
-// pointed at a rollout (see CodexDelivered).
+// deliveredIn is the Claude transcript scan, separate from session resolution.
 func deliveredIn(path, text string, since time.Time) bool {
 	probes, ok := transcriptProbes(text)
 	if !ok {
@@ -309,7 +306,7 @@ func userContentText(content json.RawMessage) string {
 	}
 	var parts []string
 	for _, block := range blocks {
-		if block.Type == "text" && block.Text != "" {
+		if (block.Type == "text" || block.Type == "input_text") && block.Text != "" {
 			parts = append(parts, block.Text)
 		}
 	}
@@ -334,12 +331,11 @@ func TranscriptExists(agentbooks []string, projectsRoot string) func(string) boo
 		if err != nil {
 			return false
 		}
-		dir := FirstPath(fleet.Agents[agent].Folder)
-		if dir == "" || agent == "" {
-			return false
-		}
-		_, ok := bptmux.ResumeSessionPath(projectsRoot, dir, agent)
-		return ok
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		state := RuntimeFor(ctx, bptmux.New(), fleet, agent)
+		return state.Activity != nil && state.Activity.Binding != "" && state.Path != ""
+
 	}
 }
 
@@ -349,32 +345,30 @@ func DeliveryWitness(agentbooks []string, projectsRoot string) func(string, stri
 		if err != nil {
 			return false
 		}
-		return TranscriptDelivered(projectsRoot, fleet.Agents[to].Folder, to, text, since)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		state := RuntimeFor(ctx, bptmux.New(), fleet, to)
+		if state.Activity == nil || state.Activity.Binding == "" || state.Path == "" {
+			return false
+		}
+		if strings.HasPrefix(state.Runtime, "codex") {
+			return codexDeliveredIn(state.Path, text, since)
+		}
+		if state.Runtime == "claude" {
+			return deliveredIn(state.Path, text, since)
+		}
+		return false
+
 	}
 }
 
-// CodexDelivered is TranscriptDelivered for a codex agent, whose record is a
-// rollout under CODEX_HOME/sessions rather than a Claude transcript.
-//
-// It closes a class of false alarm rather than adding a new capability: with no
-// witness for codex targets, every unverified delivery to one aged out through
-// the "may have gone missing, resend if it never arrived" notice. Measured
-// 2026-08-25 on q177804375 — probot-out-codex had read the message and acted on
-// it (four replies queued) while bp was still telling the sender the delivery
-// could not be confirmed. A notice that cries wolf on delivered messages is how
-// a fleet learns to ignore the ones that mean it.
-//
-// The inbound shape, from the live rollout: {"timestamp":"…","type":
-// "response_item","payload":{"type":"message","role":"user","content":[{"type":
-// "input_text","text":"…"}]}}. The scan is deliberately the SAME one the Claude
-// witness uses, probes and clock skew included: a second matching rule would be
-// a second thing to keep true.
+// CodexDelivered checks complete inbound user messages in the matching rollout.
 func CodexDelivered(codexHome, folder, text string, since time.Time) bool {
 	path, ok := cache.RolloutPath(codexHome, FirstPath(folder))
 	if !ok {
 		return false
 	}
-	return deliveredIn(path, text, since)
+	return codexDeliveredIn(path, text, since)
 }
 
 // CodexTranscriptExists reports whether a codex agent has a readable rollout, so
@@ -382,4 +376,34 @@ func CodexDelivered(codexHome, folder, text string, since time.Time) bool {
 func CodexTranscriptExists(codexHome, folder string) bool {
 	_, ok := cache.RolloutPath(codexHome, FirstPath(folder))
 	return ok
+}
+
+// Only an inbound user message witnesses delivery. An assistant quoting a
+// queued instruction or a tool printing it must never close the record.
+func codexDeliveredIn(path, text string, since time.Time) bool {
+	if path == "" {
+		return false
+	}
+	found := false
+	cache.ScanCodexReverse(path, func(line []byte) bool {
+		var r struct {
+			Type      string    `json:"type"`
+			Timestamp time.Time `json:"timestamp"`
+			Payload   struct {
+				Type    string          `json:"type"`
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &r) != nil || r.Type != "response_item" || r.Payload.Type != "message" || r.Payload.Role != "user" || r.Timestamp.Before(since.Add(-transcriptClockSkew)) {
+			return true
+		}
+		found = normalizeCodexText(userContentText(r.Payload.Content)) == normalizeCodexText(text)
+		return !found
+	})
+	return found
+}
+
+func normalizeCodexText(text string) string {
+	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"))
 }

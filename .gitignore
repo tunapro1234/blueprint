@@ -3,3 +3,7 @@
 /config.json
 /dist/
 /config.json.bak-*
+# Host-only agent settings and retained legacy installer snapshot.
+/.codex/
+/install
+**/__pycache__/

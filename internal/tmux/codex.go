@@ -39,7 +39,7 @@ var codexPlaceholder = regexp.MustCompile(`^[›❯]\s+` + regexp.QuoteMeta(code
 // codexWorking matches the busy row Codex draws above its composer. The bullet
 // is part of the signature: "Working" on its own is a word any program may
 // print, while "• Working (…)" at a row start is this TUI's own affordance.
-var codexWorking = regexp.MustCompile(`^[•·]\s+Working\b`)
+var codexWorking = regexp.MustCompile(`^[•·◦]\s+Working\b`)
 
 // codexFooter matches the status line under the composer: the model, its
 // settings, then " · " and an ABSOLUTE PATH (the session's cwd). It is the only
@@ -47,10 +47,8 @@ var codexWorking = regexp.MustCompile(`^[•·]\s+Working\b`)
 // which is what keeps a Codex pane recognisable while a human's half-typed line
 // sits in the box (without it such a pane reads "dead" in bp status).
 //
-// The path requirement is what keeps it from matching prose: a row that ends in
-// "· /something" after three whitespace-separated fields is a status line, not
-// a sentence.
-var codexFooter = regexp.MustCompile(`^\S+\s+\S+\s+\S+\s+·\s+/\S`)
+// The model slug and absolute cwd distinguish it from ordinary prose.
+var codexFooter = regexp.MustCompile(`^(?:gpt-|o[1-9])\S*(?:\s+[^·]+)?\s+·\s+/\S`)
 
 // IsCodexCommand reports whether cmd COULD be a Codex pane. Like
 // IsHermesCommand it is not a whitelist: "node" is shared with half the
@@ -88,34 +86,8 @@ func CodexPane(pane string) bool {
 	return false
 }
 
-// codexComposerBox is Codex's composer reader, and it closes the gap this
-// package carried since the first Codex pane: there were readers for Claude and
-// for Hermes, and NONE for Codex, so every Codex composer holding more than one
-// rendered row was unreadable.
-//
-// What that cost, measured on q218783035 (probot-outreach, 2026-08-25): a ~520
-// character plain-ASCII message — below the chip threshold, so it rendered as
-// literal wrapped text — was pasted into probot-out-codex and never submitted.
-// With no box reader, the only fallback was composerContent, which returns the
-// LAST prompt row alone: one row of an eight-row paste. So
-//
-//   - submit() could not confirm its own text and gave up as "unverified";
-//   - stillHolds() read the composer as FOREIGN, which made the operator notice
-//     say the text was no longer in the composer while it was sitting there in
-//     plain sight;
-//   - and finishHangingPaste, the recovery that presses Enter on our own
-//     hanging paste, refused for the same reason.
-//
-// A 1.1k message to the SAME pane two minutes earlier went through, because
-// above ~1024 characters Codex draws a chip and the chip path was already
-// handled. The gap was exactly the middle: too long to fit one row, too short
-// to become a chip.
-//
-// Codex anchors its composer differently from both existing readers: a rule
-// line ABOVE it (the transcript separator) and no bottom border at all — the
-// footer ("model settings · /abs/path") is what sits underneath, separated by
-// blank rows. So the footer is the anchor, and the nearest rule above is the
-// top edge.
+// codexComposerBox reads every row between the last prompt and model footer.
+// Current Codex has no top border; older versions may draw one above the prompt.
 func codexComposerBox(pane string) (string, int, bool) {
 	if !CodexPane(pane) {
 		return "", -1, false
@@ -137,23 +109,17 @@ func codexComposerBox(pane string) (string, int, bool) {
 	if bottom < 0 {
 		return "", -1, false
 	}
-	top := -1
+	// Current Codex has no rule above the composer. The last prompt before
+	// the footer is the anchor; everything above it may be streamed transcript.
+	start := -1
 	for j := bottom; j >= 0 && bottom-j <= composerBoxMaxRows; j-- {
-		if isComposerBorder(stripSpace(StripDim(lines[j]))) {
-			top = j
+		if promptLine.MatchString(lines[j]) {
+			start = j
 			break
 		}
 	}
-	if top < 0 {
+	if start < 0 {
 		return "", -1, false
-	}
-	// Codex pads: a blank row sits between the rule and the prompt. Those are the
-	// TUI's own spacing, not composer content, so the box starts at the first
-	// prompt row. Blanks BELOW it are left alone — those are real newlines in
-	// the composer, and composerTrail is what reads them.
-	start := top + 1
-	for start <= bottom && stripSpace(StripDim(lines[start])) == "" {
-		start++
 	}
 	rows := lines[start : bottom+1]
 	if len(rows) == 0 || !promptLine.MatchString(rows[0]) {
@@ -173,7 +139,7 @@ func codexComposerBox(pane string) (string, int, bool) {
 		}
 		out = append(out, strings.TrimRight(clean, " \t "))
 	}
-	return strings.Join(out, "\n"), start - 1, true
+	return strings.Join(out, "\n"), start, true
 }
 
 // codexPlaceholderOnly recognises the idle composer's own sentence, so an empty
@@ -196,3 +162,57 @@ func stripSpace1(text string) string {
 // would touch every Hermes call site for no behavioural gain; this comment is
 // the pointer for the next reader.
 var _ = strings.TrimSpace
+
+// Modal confirmation belongs to the user, even if an old composer is visible.
+func paneDialog(pane string) bool {
+	if hermesDialog(pane) || codexSearchActive(pane) || codexNavigationMenu(pane) {
+		return true
+	}
+	for _, line := range hermesRegion(pane) {
+		text := strings.ToLower(line)
+		if (strings.Contains(text, "esc to cancel") || strings.Contains(text, "esc to go back")) && (strings.Contains(text, "enter to") || strings.Contains(text, "confirm")) {
+			return true
+		}
+	}
+	return false
+}
+
+// Dialog exposes the same input protection used by the delivery path.
+func Dialog(pane string) bool { return paneDialog(pane) }
+
+// This navigation menu has no "enter to confirm / esc to cancel" footer.
+// Enter selects a destination, so a disappearing draft here is not delivery.
+func codexNavigationMenu(pane string) bool {
+	choices := []string{"1. new chat", "2. agent command center", "3. resume another chat"}
+	next := 0
+	for _, line := range hermesRegion(pane) {
+		text := strings.ToLower(strings.Trim(strings.TrimSpace(line), "›❯> "))
+		if text == choices[next] {
+			next++
+			if next == len(choices) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Vim / and ? searches replace Codex's footer and receive paste events instead
+// of the draft (Codex 0.153.4, textarea/vim_search.rs). Leave that input alone,
+// including an empty search. Ordinary shortcut hints are not search editors.
+func codexSearchActive(pane string) bool {
+	lines := strings.Split(strings.TrimSpace(ansiSeq.ReplaceAllString(pane, "")), "\n")
+	// Search replaces the model footer, so a populated draft may have lost
+	// CodexPane's other signatures. Its own prompt still anchors the editor.
+	prompt := false
+	for _, line := range lines[:len(lines)-1] {
+		if strings.HasPrefix(strings.TrimSpace(line), "›") {
+			prompt = true
+		}
+	}
+	if !prompt && !CodexPane(pane) {
+		return false
+	}
+	last := strings.TrimSpace(lines[len(lines)-1])
+	return strings.HasPrefix(last, "/") || strings.HasPrefix(last, "?") && last != "? for shortcuts"
+}

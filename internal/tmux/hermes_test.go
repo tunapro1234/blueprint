@@ -472,10 +472,7 @@ func TestSendPastesBracketedIntoAHermesPane(t *testing.T) {
 	assertNoEscape(t, h.mutations)
 }
 
-func TestSendKeepsClaudePastesUnbracketed(t *testing.T) {
-	// The -p flag is scoped to Hermes: Claude's chip thresholds and Codex's
-	// expand-then-submit mechanics were measured under the unbracketed paste this
-	// package has always used, and nothing here re-opens them.
+func TestSendPastesBracketedIntoClaude(t *testing.T) {
 	h := &sendHarness{
 		captures: []string{
 			claudePane(emptyRow), claudePane(emptyRow),
@@ -487,8 +484,8 @@ func TestSendKeepsClaudePastesUnbracketed(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 	for _, m := range h.mutations {
-		if strings.HasPrefix(m, "paste-buffer") && strings.Contains(m, " -p ") {
-			t.Fatalf("a Claude paste was bracketed: %q", m)
+		if strings.HasPrefix(m, "paste-buffer") && !strings.Contains(m, " -p ") {
+			t.Fatalf("a Claude paste was not bracketed: %q", m)
 		}
 	}
 }

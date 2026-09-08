@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"blueprint/internal/messagetext"
 	"bufio"
 	"bytes"
 	"context"
@@ -17,6 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"blueprint/internal/identity"
 )
 
 var promptLine = regexp.MustCompile("^(?:\x1b\\[[0-9;]*m|[\t ])*[❯›](?:\x1b\\[[0-9;]*m)?")
@@ -24,6 +27,12 @@ var promptLine = regexp.MustCompile("^(?:\x1b\\[[0-9;]*m|[\t ])*[❯›](?:\x1b\
 // Typing reports whether the final rendered composer line contains real text.
 // Older prompt lines are deliberately ignored.
 func Typing(pane string) bool {
+	if box, _, ok := codexComposerBox(pane); ok {
+		return stripSpace(box) != ""
+	}
+	if box, _, ok := claudeComposerBoxAt(pane); ok {
+		return stripSpace(box) != ""
+	}
 	return composerContent(pane) != ""
 }
 
@@ -318,7 +327,7 @@ func stripSpace(s string) string {
 	}, s)
 }
 
-var busyIndicator = regexp.MustCompile(`\(\s*\d+\s*[a-z]?\s*s?\s*[·•]|⏵`)
+var busyIndicator = regexp.MustCompile(`\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+(?:\.\d+)?s?\s*[·•]|⏵`)
 
 // busySpinner is the CURRENT generation of the "this pane is working" signature:
 // the animated status row Claude Code draws above its composer while a turn runs.
@@ -823,45 +832,27 @@ func IsAgentCommand(cmd string) bool {
 //
 // A capture that fails is a refusal, not a pass: we do not type into panes we
 // cannot see.
-//
-// hermes reports which kind of agent was recognised, because one delivery detail
-// depends on it: a Hermes paste must be BRACKETED or its newlines submit (see
-// Client.inject).
-func (c *Client) requireAgentPane(ctx context.Context, session string) (hermes bool, err error) {
+func (c *Client) requireAgentPane(ctx context.Context, session string) error {
 	cmd, err := c.PaneCommand(ctx, session)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if IsAgentCommand(cmd) {
-		return false, nil
+		return nil
 	}
 	if !IsHermesCommand(cmd) && !IsCodexCommand(cmd) && !IsOpenCodeCommand(cmd) {
-		return false, ErrNotAgent
+		return ErrNotAgent
 	}
 	pane, err := c.Capture(ctx, session)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if IsHermesCommand(cmd) && HermesPane(pane) {
-		return true, nil
+	if IsHermesCommand(cmd) && HermesPane(pane) ||
+		IsCodexCommand(cmd) && CodexPane(pane) ||
+		IsOpenCodeCommand(cmd) && OpenCodePane(pane) {
+		return nil
 	}
-	// A sandbox-less Codex pane ("node") is an agent only once its own TUI is on
-	// screen. It is NOT a Hermes target, so the bracketed-paste flag stays off:
-	// Codex's paste mechanics were measured under the unbracketed paste this
-	// package has always used.
-	if IsCodexCommand(cmd) && CodexPane(pane) {
-		return false, nil
-	}
-	// opencode takes the BRACKETED door, and that is a measurement, not a
-	// preference: an unbracketed multi-line paste into this TUI submits on every
-	// newline (blueprint-ox-test, 2026-08-26 — three lines went out as one turn
-	// with the newlines swallowed, and the turn started before the rest of the
-	// message existed). Hermes taught this exact lesson; opencode inherits the
-	// fix rather than the incident.
-	if IsOpenCodeCommand(cmd) && OpenCodePane(pane) {
-		return true, nil
-	}
-	return false, ErrNotAgent
+	return ErrNotAgent
 }
 
 // IsShellCommand is isShellCommand for callers outside this package: the
@@ -959,13 +950,16 @@ const (
 // are tested, so a login that expires inside the quiet window is caught too. The
 // refusal is an ErrNotReady error rather than a plain not-ready result: it is
 // PROOF the message cannot land, and the caller must queue it.
-func (c *Client) readyToSend(ctx context.Context, session, firstPane string) (bool, error) {
+func (c *Client) readyToSend(ctx context.Context, session, firstPane string, force bool) (bool, error) {
 	if firstPane == "" {
 		captured, err := c.CaptureAnsi(ctx, session)
 		if err != nil {
 			return false, err
 		}
 		firstPane = captured
+	}
+	if paneDialog(firstPane) {
+		return false, ErrDialog
 	}
 	if Typing(firstPane) {
 		return false, nil
@@ -981,6 +975,12 @@ func (c *Client) readyToSend(ctx context.Context, session, firstPane string) (bo
 	secondPane, err := c.CaptureAnsi(ctx, session)
 	if err != nil || Typing(secondPane) {
 		return false, err
+	}
+	if paneDialog(secondPane) {
+		return false, ErrDialog
+	}
+	if Busy(secondPane) && (!force || hermesForceRefused(secondPane)) {
+		return false, ErrBusy
 	}
 	if AuthExpired(secondPane) {
 		return false, fmt.Errorf("%w: %s", ErrNotReady, authExpiredReason)
@@ -1049,7 +1049,7 @@ const (
 func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	// Same chokepoint discipline as Send: C-u at a shell prompt would erase
 	// whatever a human left typed there.
-	if _, err := c.requireAgentPane(ctx, session); err != nil {
+	if err := c.requireAgentPane(ctx, session); err != nil {
 		return err
 	}
 	pane, err := c.CaptureAnsi(ctx, session)
@@ -1112,14 +1112,17 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 // Pressing Enter on our own unsubmitted text is not a new delivery; it is the
 // same one, finished.
 func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string) (bool, error) {
-	if _, err := c.requireAgentPane(ctx, session); err != nil {
+	if err := messagetext.Validate(texts...); err != nil {
+		return false, err
+	}
+	if err := c.requireAgentPane(ctx, session); err != nil {
 		return false, err
 	}
 	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
 		return false, err
 	}
-	if hermesDialog(pane) {
+	if paneDialog(pane) {
 		return false, ErrDialog
 	}
 	if Busy(pane) {
@@ -1137,6 +1140,9 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 	if err != nil {
 		return false, err
 	}
+	if paneDialog(after) {
+		return false, ErrUnverified
+	}
 	// Cleared composer OR a pane that has started working: both mean the text
 	// left the box. Anything else and we report failure rather than guess — a
 	// second Enter is the caller's decision, not ours.
@@ -1147,12 +1153,18 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 }
 
 func (c *Client) ClearDelivered(ctx context.Context, session string, texts []string) (bool, error) {
-	if _, err := c.requireAgentPane(ctx, session); err != nil {
+	if err := messagetext.Validate(texts...); err != nil {
+		return false, err
+	}
+	if err := c.requireAgentPane(ctx, session); err != nil {
 		return false, err
 	}
 	pane, err := c.CaptureAnsi(ctx, session)
 	if err != nil {
 		return false, err
+	}
+	if paneDialog(pane) {
+		return false, ErrDialog
 	}
 	if Busy(pane) {
 		return false, ErrBusy
@@ -1201,6 +1213,9 @@ func composerFilled(pane string) bool {
 // capture (rows + hermesClearMargin, capped by hermesClearAttemptsMax) and only
 // ever GROWS the loop, never shrinks it below composerClearAttempts.
 func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []string) error {
+	if err := messagetext.Validate(mine...); err != nil {
+		return err
+	}
 	target := "=" + session + ":"
 	budget := composerClearAttempts
 	for attempt := 0; attempt < budget; attempt++ {
@@ -1211,6 +1226,9 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 		pane, err := c.CaptureAnsi(ctx, session)
 		if err != nil {
 			return err
+		}
+		if paneDialog(pane) {
+			return ErrDialog
 		}
 		if Busy(pane) {
 			// The pane started working under us: stop pressing keys immediately.
@@ -1322,13 +1340,18 @@ func (c *Client) SendForce(ctx context.Context, session, message string) error {
 // send is the body of every delivery. force drops the busy refusal and nothing
 // else; see SendForce.
 func (c *Client) send(ctx context.Context, session, message string, pending []string, force bool) (finished []string, err error) {
+	if err := messagetext.Validate(pending...); err != nil {
+		return nil, err
+	}
+	if err := messagetext.Validate(message); err != nil {
+		return nil, err
+	}
 	// Guard first: never inject keystrokes into a pane that is not running an
 	// agent CLI. A session that dropped to a root shell (zsh) would otherwise
 	// receive the message text at its shell prompt. Send is the single delivery
 	// chokepoint, so checking here covers every path (deliver->Send,
 	// msgq.Dispatch->Send). The check targets the exact pane keystrokes go to.
-	hermes, err := c.requireAgentPane(ctx, session)
-	if err != nil {
+	if err := c.requireAgentPane(ctx, session); err != nil {
 		return nil, err
 	}
 	target := "=" + session + ":"
@@ -1347,14 +1370,14 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		// busy composer does: the message is queued and nothing was mangled.
 		return finished, ErrTyping
 	}
-	ready, err := c.readyToSend(ctx, session, firstPane)
+	ready, err := c.readyToSend(ctx, session, firstPane, force)
 	if err != nil {
 		return finished, err
 	}
 	if !ready {
 		return finished, ErrTyping
 	}
-	if err := c.inject(ctx, target, message, hermes); err != nil {
+	if err := c.inject(ctx, target, message); err != nil {
 		return finished, err
 	}
 
@@ -1365,6 +1388,9 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 	// retries.
 	c.Sleep(composerSettleWindow)
 	pane, stable := c.composerStable(ctx, session)
+	if stable && paneDialog(pane) {
+		return finished, ErrUnverified
+	}
 	if !stable {
 		// A client is typing or the pane could not be read: no key may be pressed
 		// and nothing confirms the delivery either way, which is exactly what
@@ -1379,7 +1405,7 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		// nobody could tell which cause it was).
 		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedClientActive)
 	}
-	pane, ok := c.checkPaste(ctx, target, session, message, pane, hermes)
+	pane, ok := c.checkPaste(ctx, target, session, message, pane)
 	if !ok {
 		return finished, c.provenFailure(ctx, session, pane, composerBrokenReason)
 	}
@@ -1442,33 +1468,19 @@ func composerSnapshot(pane string) string {
 	return "row:" + composerContent(pane)
 }
 
-// inject puts message into the composer with a bracketed paste, never
-// send-keys -l. Every agent on this fleet runs Claude Code with editorMode
-// "vim": literal keystrokes into a NORMAL-mode composer are interpreted as vim
-// commands and silently eaten until an i/a/s happens to appear in the text —
-// exactly how single-line federation messages arrived mangled. A paste is
-// inserted as text in any mode, and it is also what keeps external message
-// content data rather than keys.
-// bracketed asks tmux to wrap the paste in bracketed-paste markers (-p). It is
-// set for HERMES targets only, and it is not cosmetic: without it Hermes reads
-// every newline in the buffer as a submit. Measured 2026-08-22 in
-// blueprint-hermes-test — a three-line message pasted unbracketed went out as
-// three separate messages, the second and third of them INTERRUPTING the turn the
-// first had just started ("⚡ Sending after interrupt: …"). With -p the same
-// message stayed in the composer as three rows and left on one Enter. tmux only
-// emits the markers when the application requested bracketed paste, so the flag
-// is inert elsewhere; it is still scoped to Hermes because Claude's paste-chip
-// thresholds and Codex's expand-then-submit behavior were both measured under the
-// unbracketed paste this package has always used.
-func (c *Client) inject(ctx context.Context, target, message string, bracketed bool) error {
+// inject delivers one bracketed paste in every supported TUI. Without -p,
+// Codex Vim Normal interprets rapid characters as commands, and Hermes/OpenCode
+// may submit individual lines. No Escape or insert-mode keystrokes are needed.
+// tmux emits the markers only when the application enabled bracketed paste.
+func (c *Client) inject(ctx context.Context, target, message string) error {
+	if err := messagetext.Validate(message); err != nil {
+		return err
+	}
 	buffer := fmt.Sprintf("bp-agentmsg-%d-%d", os.Getpid(), atomic.AddUint64(&bufferSequence, 1))
 	if _, err := c.run(ctx, []byte(message), "load-buffer", "-b", buffer, "-"); err != nil {
 		return err
 	}
-	paste := []string{"paste-buffer", "-b", buffer, "-d", "-t", target}
-	if bracketed {
-		paste = []string{"paste-buffer", "-b", buffer, "-d", "-p", "-t", target}
-	}
+	paste := []string{"paste-buffer", "-b", buffer, "-d", "-p", "-t", target}
 	if _, err := c.run(ctx, nil, paste...); err != nil {
 		// A failed paste may leave the uniquely named buffer behind.
 		_, _ = c.run(ctx, nil, "delete-buffer", "-b", buffer)
@@ -1532,7 +1544,7 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 	// gate here reads it as idle — and the paste's Enter would have answered
 	// "Allow once" on a security dialog. bp does not answer questions put to
 	// people; it waits, and says why (BlockedByDialog).
-	if hermesDialog(pane) {
+	if paneDialog(pane) {
 		return nil, "", stuckAbsent, ErrDialog
 	}
 	if Busy(pane) && (!force || hermesForceRefused(pane)) {
@@ -1635,7 +1647,7 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 // accepted but drew differently are all invisible here — the box is evidence
 // about the screen, not about the composer's internal buffer. The final witness
 // for a delivery is still the agent's own transcript (see msgq reconciliation).
-func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string, bracketed bool) (string, bool) {
+func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string) (string, bool) {
 	verdict := c.pasteIntegrity(pane, message)
 	// A paste still landing is given time before anything is decided about it.
 	// The wait is bounded and it presses no keys: either the composer completes,
@@ -1682,7 +1694,7 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		if err := c.clearWithCtrlU(ctx, session, []string{message}); err != nil {
 			return pane, false
 		}
-		if err := c.inject(ctx, target, message, bracketed); err != nil {
+		if err := c.inject(ctx, target, message); err != nil {
 			return pane, false
 		}
 		c.Sleep(composerSettleWindow)
@@ -1822,6 +1834,11 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		if !ok {
 			return sendUnverified
 		}
+		// A dialog may appear after paste or the first Enter. It receives
+		// keys instead of the composer, even over a stale native-queue hint.
+		if paneDialog(pane) {
+			return sendUnverified
+		}
 		if codexBusyQueue(pane) {
 			// TOCTOU: the target went BUSY after Dispatch's idle check and our
 			// paste. On a busy Codex, Enter never submits (it only expands the
@@ -1832,7 +1849,7 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 			held = true // the affordance renders under OUR paste chip
 			c.Sleep(submitVerifyWindow)
 			next, ok := c.composerStable(ctx, session)
-			if !ok {
+			if !ok || paneDialog(next) {
 				return sendUnverified
 			}
 			if !Typing(next) && !codexPasteChip(next) {
@@ -1845,18 +1862,6 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 			// never clears we give up silently at the bound WITHOUT ever
 			// falling through to Enter.
 			continue
-		}
-		// A modal may have appeared AFTER the paste — the agent's own tool call
-		// can raise a permission prompt while our text sits in the composer, and
-		// with seven panes working at once that race is not rare (probot-outreach
-		// measured three of seven panes on a prompt during one salvo, 2026-08-23).
-		// Enter here would not submit the message: the dialog takes the key and
-		// answers ITSELF, selecting whatever line is highlighted — "Allow once" on
-		// a security prompt. The pre-paste gate (resolveStuckPaste) cannot see a
-		// dialog that did not exist yet, so the check is repeated here, where the
-		// key is actually pressed.
-		if hermesDialog(pane) {
-			return sendUnverified
 		}
 		switch classifyComposer(pane, want) {
 		case composerCleared:
@@ -1948,37 +1953,44 @@ func (c *Client) recoverTrailingNewlines(ctx context.Context, target, session, w
 	return found && !foreign && empty == 0
 }
 
+// OpenOptions records how to reopen an agent. Model, effort and service tier
+// remain owned by Codex's persisted thread and configuration, never bp defaults.
 type OpenOptions struct {
-	Resume bool
-	Codex  bool
-	// Hermes launches the Hermes Agent TUI (/usr/local/bin/hermes) instead of
-	// claude. It follows the Codex precedent exactly: a plain command override, no
-	// --resume (Hermes keeps no Claude-style session files, so there is no id to
-	// resume by), and none of the Claude-only slash commands afterwards —
-	// /rename and /remote-control would be typed into the composer as literal
-	// text. The onboarding brief is still sent, as it is for Codex.
-	Hermes bool
-	// NoSandbox opens a codex agent with BOTH sandboxes off: our own bwrap
-	// wrapper (via CODEX_BWRAPPED=1 in the session environment) and codex's own
-	// (--dangerously-bypass-approvals-and-sandbox).
-	//
-	// It exists because the default is not merely stricter, it is BROKEN in some
-	// directories: codex's sandbox binds .git read-only inside the writable root,
-	// and where there is no .git — /srv, /srv/kavram/.agents — bwrap tries to
-	// mkdir it and dies, so the agent can run no command at all ("bwrap: Can't
-	// mkdir /srv/.git: Permission denied", ada 2026-09-02 and earlier).
-	//
-	// OPT-IN, and it stays opt-in: every other codex agent keeps its bwrap
-	// protection unchanged. What this flag buys is a shell with no confinement at
-	// all — a full-bypass codex has already remounted / on this machine once — so
-	// the agent's own brief has to carry the boundary the sandbox no longer does.
-	NoSandbox bool
-	NoPrompt  bool
-	Legacy    bool
+	Resume    bool   `json:"resume,omitempty"`
+	ResumeID  string `json:"resumeId,omitempty"`
+	Codex     bool   `json:"codex,omitempty"`
+	Remote    string `json:"remote,omitempty"`
+	Hermes    bool   `json:"hermes,omitempty"`
+	NoSandbox bool   `json:"noSandbox,omitempty"`
+	NoPrompt  bool   `json:"-"`
+	Legacy    bool   `json:"-"`
+}
+
+var codexThreadID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
+
+func (o OpenOptions) Validate() error {
+	if o.Codex && o.Hermes {
+		return fmt.Errorf("choose one harness")
+	}
+	if o.NoSandbox && !o.Codex {
+		return fmt.Errorf("--no-sandbox requires Codex")
+	}
+	if o.Remote != "" {
+		if !o.Codex || CodexSocket("/home", o.Remote) == "" {
+			return fmt.Errorf("--remote requires Codex and a unix:// endpoint")
+		}
+		if !o.NoSandbox {
+			return fmt.Errorf("remote execution leaves the TUI sandbox; use an explicitly approved --no-sandbox launch")
+		}
+	}
+	if o.ResumeID != "" && !codexThreadID.MatchString(o.ResumeID) {
+		return fmt.Errorf("invalid session/thread id")
+	}
+	return nil
 }
 
 const (
-	legacyOnboarding   = "Selam, sen %s agentisin (ismine gore calisirsin; proje detayini kullanici sonra verebilir). Bu COK-SERVISLI bir sunucu (nginx 80/443 public + Cloudflare, Docker+systemd: gitea, mail, probot, kitap...). Orchestrator=server-main, evi /srv/server-main. ONCE OKU: /srv/server-main/AGENT-ONBOARDING.md (server + PORT kurallari) ve /srv/server-main/agentbook.json (agentlar + iletisim). DIGER AGENTLARLA KONUSMA: bp msg <ad> <mesaj> — cevabi okumak icin bp peek <ad>, filo icin bp status. Elle tmux send-keys KULLANMA (bp mesgul-kontrolu ve kuyrugu atlanir); sadece bp calismazsa bilincli fallback. bp'nin tum komutlari ve kurallari: /srv/blueprint/README.md (ya da bp help). Model secimi + codex + subagent kurallari global CLAUDE.md inde (otomatik yuklu) - uygula. UYARI1 ghost-text: soluk oneri gercek degil. UYARI2 vim modu: submit icin cogu zaman fazladan Enter (bp msg bunu kendi halleder). Okuyunca kisa hazirim de."
+	legacyOnboarding   = "Selam, sen %s agentisin (ismine gore calisirsin; proje detayini kullanici sonra verebilir). Bu COK-SERVISLI bir sunucu (nginx 80/443 public + Cloudflare, Docker+systemd: gitea, mail, probot, kitap...). Orchestrator=server-main, evi /srv/server-main. ONCE OKU: /srv/server-main/AGENT-ONBOARDING.md (server + PORT kurallari) ve /srv/server-main/agentbook.json (agentlar + iletisim). DIGER AGENTLARLA KONUSMA: bp msg <ad> <mesaj> — cevabi okumak icin bp peek <ad>, filo icin bp status. Elle tmux send-keys KULLANMA (bp mesgul-kontrolu ve kuyrugu atlanir). bp'nin tum komutlari ve kurallari: /srv/blueprint/README.md (ya da bp help). Model ve filo kurallari: Codex icin /root/.codex/AGENTS.md, Claude icin /root/.claude/CLAUDE.md - uygula. UYARI1 ghost-text: soluk oneri gercek degil. UYARI2 vim modu: submit icin cogu zaman fazladan Enter (bp msg bunu kendi halleder). Okuyunca kisa hazirim de."
 	portableOnboarding = "Sen '%s' agentisin. Diger agentlarla iletisim: bp msg <ad> <mesaj>."
 )
 
@@ -2001,6 +2013,9 @@ func mungeProjectPath(dir string) string {
 
 // claudeProjectsRoot is the directory where Claude Code stores per-cwd session logs.
 func ClaudeProjectsRoot() string {
+	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, "projects")
+	}
 	home := os.Getenv("HOME")
 	if home == "" {
 		home, _ = os.UserHomeDir()
@@ -2125,7 +2140,82 @@ func ResumeSessionID(projectsRoot, dir, agent string) (string, bool) {
 	return strings.TrimSuffix(filepath.Base(path), ".jsonl"), true
 }
 
+// UniqueSessionPath is for live observation, unlike newest-session resume.
+// A title duplicated across sessions is ambiguous unless explicitly pinned.
+func UniqueSessionPath(projectsRoot, dir, agent, id string) (string, bool) {
+	path, err := ResolveSessionPath(projectsRoot, dir, agent, id)
+	return path, err == nil
+}
+
+// ClaudeSessionPathForID locates a process-verified session without requiring
+// its mutable display title to equal the stable orchestration name.
+func ClaudeSessionPathForID(projectsRoot, dir, id string) (string, error) {
+	if !codexThreadID.MatchString(id) {
+		return "", fmt.Errorf("invalid Claude session id")
+	}
+	path := filepath.Join(projectsRoot, mungeProjectPath(dir), id+".jsonl")
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("Claude transcript is not a regular file")
+	}
+	return path, nil
+}
+
+// ResolveSessionPath distinguishes a missing pin from duplicate titles and
+// includes the conflicting paths. A missing same-provider pin never falls open.
+func ResolveSessionPath(projectsRoot, dir, agent, id string) (string, error) {
+	root := filepath.Join(projectsRoot, mungeProjectPath(dir))
+	if id != "" && !codexThreadID.MatchString(id) {
+		return "", fmt.Errorf("invalid Claude session pin %q under %s", id, root)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", fmt.Errorf("Claude transcript directory unavailable: %s: %w", root, err)
+	}
+	var found []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		if id != "" && entry.Name() != id+".jsonl" {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		title, ok := ReadCustomTitle(path)
+		if !ok || title != agent {
+			continue
+		}
+		found = append(found, path)
+	}
+	if len(found) == 1 {
+		return found[0], nil
+	}
+	if len(found) > 1 {
+		return "", fmt.Errorf("ambiguous Claude title %q: %s; bind the live process session or an explicit Claude --thread", agent, strings.Join(found, ", "))
+	}
+	if id != "" {
+		return "", fmt.Errorf("Claude session pin %s missing or title differs from %q under %s; verify the registered launch", id, agent, root)
+	}
+	return "", fmt.Errorf("missing Claude title %q under %s", agent, root)
+}
+
 func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions, warn func(string)) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	if opts.Resume && !opts.Codex && !opts.Hermes {
+		path, err := ResolveSessionPath(ClaudeProjectsRoot(), dir, session, opts.ResumeID)
+		if err != nil {
+			return err
+		}
+		opts.ResumeID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	}
+	if opts.Codex && opts.Resume && opts.ResumeID == "" {
+		return fmt.Errorf("Codex resume requires a verified thread id")
+	}
 	if c.HasSession(ctx, session) {
 		process, err := c.PaneProcess(ctx, session)
 		if err != nil {
@@ -2174,16 +2264,23 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		// Resume THIS agent's own conversation by id, not `claude -c` (which
 		// continues whichever conversation in the cwd is most recent and so
 		// grabs a co-located agent's session in a shared directory).
-		if id, ok := ResumeSessionID(ClaudeProjectsRoot(), dir, session); ok {
-			command += " --resume " + id
-		} else if warn != nil {
-			warn("no prior '" + session + "' conversation found under " + dir + "; opening a fresh session")
+		command += " --resume " + shellQuote(opts.ResumeID)
+	}
+	if opts.Codex {
+		command = "codex"
+		if opts.NoSandbox {
+			command = "CODEX_BWRAPPED=1 codex --dangerously-bypass-approvals-and-sandbox"
 		}
 	}
 	if opts.Codex {
-		command = `codex -c model_reasoning_effort="high"`
-		if opts.NoSandbox {
-			command = `codex --dangerously-bypass-approvals-and-sandbox -c model_reasoning_effort="high"`
+		if opts.Remote != "" {
+			command += " --remote " + shellQuote(opts.Remote)
+		}
+		if opts.Resume {
+			if opts.ResumeID == "" {
+				return fmt.Errorf("Codex resume requires a verified thread id")
+			}
+			command += " resume " + shellQuote(opts.ResumeID)
 		}
 	}
 	if opts.Hermes {
@@ -2225,6 +2322,14 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 					break
 				}
 			} else {
+				if !trusted && claudeTrustModal(pane, dir) {
+					if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter"); err != nil {
+						return err
+					}
+					trusted = true
+					c.Sleep(2 * time.Second)
+					continue
+				}
 				if RemoteControlMenu(pane) {
 					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
 					c.Sleep(2 * time.Second)
@@ -2246,8 +2351,8 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		}
 		c.Sleep(2 * time.Second)
 	}
-	if !ready && warn != nil {
-		warn("WARNING: agent did not appear ready; continuing anyway")
+	if !ready {
+		return fmt.Errorf("agent did not become ready; session retained for inspection")
 	}
 	c.Sleep(time.Second)
 	if !opts.Codex && !opts.Hermes {
@@ -2307,8 +2412,23 @@ func (c *Client) RenameSession(ctx context.Context, session, name string) error 
 }
 
 func (c *Client) DisplaySession(ctx context.Context) (string, error) {
-	out, err := c.run(ctx, nil, "display-message", "-p", "#S")
-	return strings.TrimSpace(string(out)), err
+	pane := os.Getenv("TMUX_PANE")
+	if !regexp.MustCompile(`^%[0-9]+$`).MatchString(pane) {
+		return "", fmt.Errorf("calling pane is unavailable")
+	}
+	out, err := c.run(ctx, nil, "display-message", "-p", "-t", pane, "#{session_name}\t#{pane_pid}\t#{pane_dead}")
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Split(strings.TrimSpace(string(out)), "\t")
+	if len(fields) != 3 || fields[2] != "0" || !identity.ValidName(fields[0]) {
+		return "", fmt.Errorf("invalid calling pane")
+	}
+	pid, err := strconv.Atoi(fields[1])
+	if err != nil || !identity.CallingPane(ctx, pid) {
+		return "", fmt.Errorf("stale or unrelated calling pane")
+	}
+	return fields[0], nil
 }
 
 // Commands maps each session to the foreground command of its first pane

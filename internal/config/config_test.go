@@ -65,6 +65,9 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 		os.Stat,
 		os.UserHomeDir,
 		func(path string) ([]byte, error) {
+			if !strings.HasSuffix(path, "config.json") {
+				return nil, os.ErrNotExist
+			}
 			if path != LegacyHome+"/config.json" {
 				t.Fatalf("read path=%q", path)
 			}
@@ -146,7 +149,12 @@ func TestInvalidConfigFallsBackToDefaultsWithWarning(t *testing.T) {
 		},
 		os.Stat,
 		os.UserHomeDir,
-		func(string) ([]byte, error) { return []byte(`{"fed":`), nil },
+		func(path string) ([]byte, error) {
+			if !strings.HasSuffix(path, "config.json") {
+				return nil, os.ErrNotExist
+			}
+			return []byte(`{"fed":`), nil
+		},
 		&warning,
 	)
 	if err != nil {
@@ -174,7 +182,12 @@ func TestFederationConfigRequiresLoopbackHubListener(t *testing.T) {
 		},
 		os.Stat,
 		os.UserHomeDir,
-		func(string) ([]byte, error) { return data, nil },
+		func(path string) ([]byte, error) {
+			if !strings.HasSuffix(path, "config.json") {
+				return nil, os.ErrNotExist
+			}
+			return data, nil
+		},
 	)
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("error=%v, want loopback validation error", err)

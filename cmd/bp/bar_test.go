@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
@@ -84,6 +85,23 @@ func TestBarUnknownWidgetIsSkipped(t *testing.T) {
 	}
 }
 
+func TestBarCacheTemperatureRequiresRecordedTTL(t *testing.T) {
+	bookPath := filepath.Join(t.TempDir(), "agentbook.json")
+	writeBarTestFile(t, bookPath, `{"agents":[{"name":"agent","folder":"/test"}]}`)
+	for _, tc := range []struct {
+		ttl  time.Duration
+		want string
+	}{{time.Hour, "warm~ 36m"}, {5 * time.Minute, "cold~ 36m"}, {0, "age 36m"}} {
+		a := &app{config: bpconfig.Config{Agentbooks: []string{bookPath}, Bar: bpconfig.BarConfig{Widgets: []string{"temp"}}},
+			loadCache: func(map[string]string) map[string]cache.State {
+				return map[string]cache.State{"agent": {Known: true, Age: 36 * time.Minute, CacheAge: 36 * time.Minute, CacheTTL: tc.ttl}}
+			}}
+		if line := a.barLine("agent"); !strings.Contains(line, tc.want) {
+			t.Fatalf("TTL %v: %s", tc.ttl, line)
+		}
+	}
+}
+
 func TestReadClaudeModelPrefersLocalSettings(t *testing.T) {
 	folder := t.TempDir()
 	home := t.TempDir()
@@ -98,6 +116,46 @@ func TestReadClaudeModelPrefersLocalSettings(t *testing.T) {
 	}
 	if got := modelLabel(model, effort); got != "opus med" {
 		t.Fatalf("model label=%q, want %q", got, "opus med")
+	}
+}
+
+func TestBarClaudeEffortUsesTranscriptWithActivity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeBarTestFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"model":"claude-opus-5","effortLevel":"high"}`)
+	path := filepath.Join(home, "session.jsonl")
+	writeBarTestFile(t, path, `{"type":"assistant","effort":"medium","message":{"model":"claude-fable-5-1"}}`+"\n")
+	s := cache.ReadClaudePath(path)
+	s.Runtime, s.Activity = "claude", &cache.Activity{State: "idle"}
+	a := &app{}
+	if got := a.barModel("agent", bptmux.PaneProcess{Command: "claude"}, home, func() cache.State { return s }); got != "fable med" {
+		t.Fatalf("bar=%q", got)
+	}
+	// An old transcript without effort must not borrow the global high default.
+	s.Effort = ""
+	if got := a.barModel("agent", bptmux.PaneProcess{Command: "claude"}, home, func() cache.State { return s }); got != "fable" {
+		t.Fatalf("unknown effort fabricated: %q", got)
+	}
+}
+
+func TestBarRemainingContextDoesNotInventAWindow(t *testing.T) {
+	bookPath := filepath.Join(t.TempDir(), "agentbook.json")
+	writeBarTestFile(t, bookPath, `{"agents":[{"name":"agent","folder":"/test"}]}`)
+	for _, tc := range []struct {
+		window int
+		known  bool
+		want   string
+	}{
+		{200000, true, "170k boş"}, {0, true, "30k/?"}, {20000, true, "0 boş"}, {0, false, "ctx —"},
+	} {
+		a := &app{config: bpconfig.Config{Agentbooks: []string{bookPath}, Bar: bpconfig.BarConfig{Context: "remaining", Widgets: []string{"ctx"}}},
+			loadCache: func(map[string]string) map[string]cache.State {
+				return map[string]cache.State{"agent": {Runtime: "claude", Known: tc.known, CtxTokens: 30000, Window: tc.window}}
+			}}
+		if got := a.barLine("agent"); !strings.Contains(got, tc.want) {
+			t.Fatalf("window=%d: %s", tc.window, got)
+		}
 	}
 }
 
@@ -186,5 +244,33 @@ func TestCodexArgsModelReadsLaunchOverrides(t *testing.T) {
 	}
 	if model, effort := codexArgsModel([]string{"codex", "--search"}); model != "" || effort != "" {
 		t.Fatalf("model=%q effort=%q, want nothing when the launch line says nothing", model, effort)
+	}
+}
+
+func TestBarQuotaUsesObservedHarnessAndNeverDefaultsToClaude(t *testing.T) {
+	dir := t.TempDir()
+	bookPath := filepath.Join(dir, "agentbook.json")
+	if err := os.WriteFile(bookPath, []byte(`{"agents":[{"name":"probot-studio-astra","folder":"/work"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	usage := filepath.Join(dir, "usage.jsonl")
+	if err := os.WriteFile(usage, []byte(`{"ts":"2026-09-05T12:00:00Z","claude_5h":17,"claude_7d":83,"codex_5h":21,"codex_7d":42}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, harness := range []string{"codex", "codex-remote", "claude", ""} {
+		a := &app{config: bpconfig.Config{Agentbooks: []string{bookPath}, UsageHistory: usage}, loadCache: func(map[string]string) map[string]cache.State {
+			return map[string]cache.State{"probot-studio-astra": {Runtime: harness, Activity: &cache.Activity{State: "unknown"}}}
+		}}
+		a.config.Bar.Widgets = []string{"quota"}
+		line := a.barLine("probot-studio-astra")
+		if strings.HasPrefix(harness, "codex") && (!strings.Contains(line, "gpt 42%/21%") || strings.Contains(line, "cc ")) {
+			t.Fatalf("wrong provider: %s", line)
+		}
+		if harness == "claude" && !strings.Contains(line, "cc 17%/83%") {
+			t.Fatal(line)
+		}
+		if harness == "" && (strings.Contains(line, "cc ") || strings.Contains(line, "gpt ") || strings.Contains(line, "%")) {
+			t.Fatalf("invented provider: %s", line)
+		}
 	}
 }

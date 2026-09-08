@@ -65,7 +65,7 @@ func main() {
  for {
   _,err:=os.Stat(os.Getenv("BP_FAKE_BUSY")); busy:=err==nil
   frame:=strings.ReplaceAll(last,"\n","\r\n")+"\r\n\r\n"
-  if busy { frame+="◦ Working (1m 11s • esc to interrupt)\r\n" }
+  if busy { if filepath.Base(os.Args[0])=="claude" {frame+="✻ Working… (1m 11s · esc to interrupt)\r\n"} else {frame+="◦ Working (1m 11s • esc to interrupt)\r\n"} }
   prompt:=text; if prompt=="" {prompt="Ask Codex to do anything"}
   if filepath.Base(os.Args[0])=="claude" {
    frame+="────────────────────────────────────────\r\n❯ "+strings.ReplaceAll(text,"\n","\r\n")+"\r\n────────────────────────────────────────\r\n  -- "+strings.ToUpper(mode)+" -- ⏵⏵ bypass permissions on"
@@ -153,6 +153,10 @@ else:
  records = [dict(type="assistant", effort="medium", timestamp=stamp, sessionId=thread,
                  message=dict(model=model, role="assistant", usage=dict(input_tokens=30000), stop_reason="end_turn")),
             dict(type="system", subtype="turn_duration", timestamp=stamp)]
+if cli == "claude" and os.environ.get("BP_FAKE_PRETURN"):
+ records = [dict(type="custom-title", sessionId=thread, customTitle="fresh"),
+            dict(type="user", sessionId=thread, cwd=cwd, timestamp=stamp,
+                 message=dict(content="<command-name>/model</command-name><command-message>model</command-message>"))]
 path.parent.mkdir(parents=True, exist_ok=True)
 if cli != "codex" or not path.exists():
  path.write_text("".join(json.dumps(r) + "\n" for r in records))
@@ -447,6 +451,40 @@ class LocalCLITest(unittest.TestCase):
         self.read_until(canceled, b"Session number")
         os.write(canceled, b"\n")
         self.assertEqual(len(json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]), 2)
+
+    def test_first_claude_message_waits_for_busy_and_draft_then_delivers(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        busy = self.root / "busy"
+        busy.touch()
+        received = self.root / "received.jsonl"
+        self.env.update(BP_FAKE_PRETURN="1", BP_FAKE_BUSY=str(busy), BP_FAKE_RECEIVED=str(received), BP_FAKE_VIM="insert")
+        fd = self.start("claude", "fresh")
+        result = subprocess.run([self.binary, "msg", "fresh", "first task fixture"], env=self.env, capture_output=True, text=True, check=True)
+        match = re.search(r"CHANNEL=(q[0-9]+)", result.stdout)
+        self.assertIsNotNone(match, result.stdout)
+        channel = match.group(1)
+        self.assertFalse(received.exists())
+        os.write(fd, b"user draft")
+        self.read_until(fd, b"user draft")
+        busy.unlink()
+        time.sleep(1.2)
+        self.assertFalse(received.exists(), "first-message path interrupted a draft")
+        os.write(fd, b"\x15")
+        deadline = time.monotonic() + 12
+        receipt = {}
+        while time.monotonic() < deadline:
+            receipt = json.loads(subprocess.check_output([self.binary, "qstat", channel, "--json"], env=self.env))
+            if receipt.get("status") == "delivered": break
+            time.sleep(.15)
+        self.assertEqual(receipt.get("status"), "delivered", receipt)
+        messages = [json.loads(line) for line in received.read_text().splitlines()]
+        self.assertEqual(len(messages), 1, messages)
+        self.assertTrue(messages[0].endswith("first task fixture"))
+        state = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        row = next(a for a in state["agents"] if a["name"] == "fresh")
+        self.assertEqual(row["activity"]["source"], "transcript")
+        os.write(fd, b"\x03")
+        self.wait_closed("fresh")
 
     def test_continue_reuses_live_owner_and_symlink(self):
         shutil.copyfile(self.fake_tui, self.bin / "claude")

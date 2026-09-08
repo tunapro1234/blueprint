@@ -6,12 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClaudeProcessSessionChecksLivePIDAndIgnoresNestedAgent(t *testing.T) {
-	for _, mode := range []string{"valid", "reused-pid", "wrong-cwd", "wrong-id", "noninteractive", "missing"} {
+	for _, mode := range []string{"valid", "reused-pid", "wrong-cwd", "wrong-id", "noninteractive", "missing", "continued", "historical-continuation"} {
 		t.Run(mode, func(t *testing.T) {
-			proc, sessions := t.TempDir(), t.TempDir()
+			proc, sessions := t.TempDir(), filepath.Join(t.TempDir(), "sessions")
 			put := func(path, data string) {
 				t.Helper()
 				if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
@@ -44,6 +45,22 @@ func TestClaudeProcessSessionChecksLivePIDAndIgnoresNestedAgent(t *testing.T) {
 			case "noninteractive":
 				r["kind"] = "subagent"
 			}
+			expected := id
+			if mode == "continued" || mode == "historical-continuation" {
+				start := time.Now().Add(-time.Minute)
+				r["startedAt"] = start.UnixMilli()
+				at := start.Add(time.Second)
+				next := "b9c94862-2cdf-4b04-b490-679f6f83065d"
+				expected = next
+				if mode == "historical-continuation" {
+					at = start.Add(-time.Second)
+					expected = id
+				}
+				data, _ := json.Marshal(map[string]any{"type": "continued-in", "sessionId": id, "continuedInSessionId": next, "timestamp": at.UTC().Format(time.RFC3339Nano)})
+				projects := filepath.Join(filepath.Dir(sessions), "projects", "-work")
+				put(filepath.Join(projects, id+".jsonl"), string(data)+"\n")
+				put(filepath.Join(projects, next+".jsonl"), `{"type":"user","sessionId":"`+next+`","cwd":"/work"}`+"\n")
+			}
 			if mode != "missing" {
 				data, _ := json.Marshal(r)
 				put(filepath.Join(sessions, "11.json"), string(data))
@@ -51,8 +68,8 @@ func TestClaudeProcessSessionChecksLivePIDAndIgnoresNestedAgent(t *testing.T) {
 			// A nested agent must never be considered as the pane's conversation.
 			put(filepath.Join(sessions, "12.json"), `{"pid":12,"sessionId":"invalid"}`)
 			got, err := claudeProcessSession(proc, sessions, 10, "/work")
-			if mode == "valid" {
-				if got != id || err != nil {
+			if mode == "valid" || mode == "continued" || mode == "historical-continuation" {
+				if got != expected || err != nil {
 					t.Fatal(got, err)
 				}
 			} else if mode == "missing" {

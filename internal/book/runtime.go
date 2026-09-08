@@ -53,6 +53,7 @@ func RuntimeState(ctx context.Context, client *bptmux.Client, agent Agent) (cach
 		state.Runtime = process.Command
 		a.Reason = "harness has no structured activity probe"
 	}
+	applyClaudePreTurn(state, a, FirstPath(agent.Folder), pane)
 	// Positive screen evidence must not disappear behind missing/stale metrics.
 	// An empty composer is never affirmative idle evidence.
 	if screen {

@@ -47,7 +47,9 @@ bp color work purple
 Messages wait when the target is working, its state is uncertain, or the user is
 typing. A transport acknowledgement alone is not proof of agent delivery.
 
-`claude -c` reattaches to an existing bp owner of the conversation. If old duplicate
+`claude --resume` (or `-r`) opens a numbered conversation list; a name or UUID
+can also be supplied directly. Selecting an open conversation attaches to its
+existing pane. `claude -c` reattaches to an existing bp owner of the conversation. If old duplicate
 owners exist, bp reports them without choosing or closing a pane. `codex resume` selects the conversation before opening a pane and attaches to
 its existing kernel-verified writer when possible. BP currently uses a numbered
 selector; `--last` and UUID/name selectors are also supported. An unmatched active

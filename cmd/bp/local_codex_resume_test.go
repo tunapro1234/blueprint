@@ -80,3 +80,14 @@ func TestCodexResumeMetadataUsesPhysicalCWDAndExcludesSubagents(t *testing.T) {
 		t.Fatalf("%+v %v", rows, e)
 	}
 }
+
+func TestResumePickerDoesNotRenderTerminalControlFromCWD(t *testing.T) {
+	var out bytes.Buffer
+	rows := []codexResumeSession{{ID: "one", Title: "work", CWD: "/tmp/\x1b[2J"}}
+	if _, err := chooseResumeSession("Claude", rows, false, "", strings.NewReader("1\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "\x1b") {
+		t.Fatal("native metadata emitted terminal controls")
+	}
+}

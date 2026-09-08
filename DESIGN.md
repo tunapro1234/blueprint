@@ -28,6 +28,7 @@ while the CLI is alive. Batch commands and existing tmux sessions retain native
 behavior.
 
 Claude continue/resume pins a native conversation UUID before creating a pane.
+Bare resume lists saved conversations across projects before selecting an owner.
 Owner lookup and creation are serialized. An existing owner is attached; multiple
 live owners produce an error. Physical cwd paths prevent symlink aliases from
 creating mismatched registry folders. This does not lock processes outside bp or

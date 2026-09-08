@@ -411,6 +411,34 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd,b"quit\r")
         self.wait_closed("my-codex")
 
+    def test_claude_resume_picker_can_select_older_live_conversation(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        self.start("claude", "older")
+        self.start("claude", "newer")
+        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+        old = next(a for a in entries if a["name"] == "older")
+        thread = json.loads(Path(old["localRuntime"]["path"]).read_text())["session_id"]
+        transcript = next((self.root / ".claude/projects").glob("*/" + thread + ".jsonl"))
+        with transcript.open("a") as out:
+            out.write(json.dumps(dict(type="custom-title", customTitle="my older work")) + "\n")
+        os.utime(transcript, (time.time()-3600, time.time()-3600))
+        before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"])
+        fd = self.resume_client(["--dangerously-skip-permissions", "--resume"])
+        self.read_until(fd, b"Session number")
+        os.write(fd, b"2\n")
+        self.read_until(fd, b"FAKE_READY")
+        clients = subprocess.check_output([self.tmux, "-S", self.socket, "list-clients", "-F", "#{session_name}"], text=True).splitlines()
+        self.assertEqual(clients.count("older"), 2, clients)
+        self.assertEqual(clients.count("newer"), 1, clients)
+        after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"])
+        self.assertEqual(before, after)
+        named = self.resume_client(["--resume", "my older work"])
+        self.read_until(named, b"FAKE_READY")
+        canceled = self.resume_client(["-r"])
+        self.read_until(canceled, b"Session number")
+        os.write(canceled, b"\n")
+        self.assertEqual(len(json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]), 2)
+
     def test_continue_reuses_live_owner_and_symlink(self):
         shutil.copyfile(self.fake_tui, self.bin / "claude")
         self.start("claude", "advice")

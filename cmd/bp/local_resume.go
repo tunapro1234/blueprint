@@ -19,6 +19,8 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
+var errResumeCanceled = errors.New("resume canceled")
+
 var claudeResumeUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
 func physicalPath(path string) string {
@@ -31,10 +33,10 @@ func physicalPath(path string) string {
 // Resolve -c once, then pass an explicit UUID to Claude. Otherwise another
 // process can change what "latest" means between our check and native startup.
 // This is launch routing only; it grants no identity or hierarchy authority.
-func claudeResumeArgs(args []string, cwd, projects string) (string, []string, error) {
+func claudeResumeArgs(args []string, cwd, projects string, resolve ...func(string) (string, error)) (string, []string, error) {
 	rest := make([]string, 0, len(args))
 	id, continuing := "", false
-	fork := false
+	fork, picker := false, false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -49,12 +51,14 @@ func claudeResumeArgs(args []string, cwd, projects string) (string, []string, er
 			continuing = true
 		case arg == "-r" || arg == "--resume":
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return "", nil, fmt.Errorf("bp needs an explicit Claude resume UUID to prevent duplicate writers; use claude -c or claude --resume <UUID>")
+				picker = true
+				continue
 			}
 			i++
 			id = args[i]
 		case strings.HasPrefix(arg, "--resume="):
 			id = strings.TrimPrefix(arg, "--resume=")
+			picker = id == ""
 		default:
 			rest = append(rest, arg)
 			// Do not interpret a flag's value (e.g. a system prompt containing -c).
@@ -67,12 +71,23 @@ func claudeResumeArgs(args []string, cwd, projects string) (string, []string, er
 	if fork {
 		return "", args, nil
 	}
-	if id == "" && !continuing {
+	if id == "" && !continuing && !picker {
 		return "", args, nil
 	}
-	if id != "" && !claudeResumeUUID.MatchString(id) {
-		return "", nil, fmt.Errorf("Claude resume target must be a UUID for safe bp ownership checks: %q", id)
+	if picker || (id != "" && !claudeResumeUUID.MatchString(id)) {
+		if len(resolve) == 0 {
+			return "", nil, fmt.Errorf("Claude resume selection needs an interactive resolver")
+		}
+		var err error
+		id, err = resolve[0](id)
+		if err != nil {
+			return "", nil, err
+		}
+		if id == "" {
+			return "", nil, errResumeCanceled
+		}
 	}
+
 	if id == "" {
 		var err error
 		id, err = latestClaudeResume(projects, cwd)

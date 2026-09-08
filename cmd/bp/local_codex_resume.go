@@ -153,6 +153,10 @@ func codexResumeSessions(home, cwd string, all bool, includeNonInteractive ...bo
 }
 
 func chooseCodexResume(sessions []codexResumeSession, last bool, target string, in io.Reader, out io.Writer) (string, error) {
+	return chooseResumeSession("Codex", sessions, last, target, in, out)
+}
+
+func chooseResumeSession(harness string, sessions []codexResumeSession, last bool, target string, in io.Reader, out io.Writer) (string, error) {
 	if claudeResumeUUID.MatchString(target) {
 		return strings.ToLower(target), nil
 	}
@@ -161,25 +165,29 @@ func chooseCodexResume(sessions []codexResumeSession, last bool, target string, 
 		for _, s := range sessions {
 			if s.Title == target {
 				if found != "" && found != s.ID {
-					return "", fmt.Errorf("multiple Codex sessions named %q; use its UUID", target)
+					return "", fmt.Errorf("multiple %s sessions named %q; select by number or UUID", harness, target)
 				}
 				found = s.ID
 			}
 		}
 		if found == "" {
-			return "", fmt.Errorf("Codex session %q not found; use its UUID", target)
+			return "", fmt.Errorf("%s session %q not found", harness, target)
 		}
 		return found, nil
 	}
 	if len(sessions) == 0 {
-		return "", fmt.Errorf("no saved Codex sessions here; try codex resume --all")
+		return "", fmt.Errorf("no saved %s sessions found%s", harness, map[string]string{"Codex": "; try codex resume --all"}[harness])
 	}
 	if last {
 		return sessions[0].ID, nil
 	}
-	fmt.Fprintln(out, "Resume Codex — open conversations attach to their existing tmux pane:")
+	fmt.Fprintf(out, "Resume %s — open conversations attach to their existing tmux pane:\n", harness)
 	for i, s := range sessions {
-		fmt.Fprintf(out, "%d. %s  (%s)\n", i+1, s.Title, s.Modified.Local().Format("Jan 02 15:04"))
+		displayCWD := s.CWD
+		if messagetext.Label(displayCWD) != nil {
+			displayCWD = ""
+		}
+		fmt.Fprintf(out, "%d. %s  (%s)  %s\n", i+1, s.Title, s.Modified.Local().Format("Jan 02 15:04"), displayCWD)
 	}
 	fmt.Fprint(out, "Session number (Enter cancels): ")
 	line, e := bufio.NewReader(in).ReadString('\n')

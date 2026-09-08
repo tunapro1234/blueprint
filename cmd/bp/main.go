@@ -295,6 +295,8 @@ func (a *app) run(args []string) error {
 		return a.localRun(args[1:])
 	case "_session":
 		return a.localSession(args[1:])
+	case "_open-session":
+		return a.managedSession(args[1:])
 	case "_local-worker":
 		return a.localWorker(args[1:])
 	case "whoami":
@@ -1339,6 +1341,19 @@ func (a *app) open(args []string) error {
 	if opts.Codex && !opts.Resume {
 		previousRollout, _ = bpcache.CodexPath(bptmux.CodexProcessInfo(0).Home, dir, "")
 	}
+	if !a.config.Legacy && opts.Codex && opts.Remote == "" {
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		opts.Launcher = "env BP_HOME=" + quoteShell(a.config.Home)
+		for _, key := range []string{"HOME", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENTBOOK"} {
+			if value, ok := os.LookupEnv(key); ok {
+				opts.Launcher += " " + key + "=" + quoteShell(value)
+			}
+		}
+		opts.Launcher += " " + quoteShell(self) + " _open-session " + quoteShell(name) + " codex"
+	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		// Roll back only while tmux can still be believed. A cancelled or timed-out
 		// open cannot ask it anything (HasSession reports "no" for an unreachable
@@ -1364,6 +1379,13 @@ func (a *app) open(args []string) error {
 				}
 			}
 		}
+	}
+	if opts.Launcher != "" {
+		fresh, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+		if err != nil {
+			return err
+		}
+		reg.Local = fresh.Agents[name].Local
 	}
 	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
 		return err

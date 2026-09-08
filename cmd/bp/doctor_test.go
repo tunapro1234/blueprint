@@ -6,8 +6,23 @@ import (
 	"strings"
 	"testing"
 
+	"blueprint/internal/book"
+	"blueprint/internal/config"
 	"blueprint/internal/release"
 )
+
+func TestDoctorDeniedSocketDoesNotReportClosedWriter(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte("#!/bin/sh\necho 'error connecting to /tmp/tmux-1000/default (Operation not permitted)' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fleet := book.Fleet{Agents: map[string]book.Agent{"hypr-codex": {Name: "hypr-codex"}}}
+	checks := doctorRuntimeChecks(config.Config{}, fleet, "hypr-codex")
+	if len(checks) != 1 || checks[0].OK || checks[0].Name != "tmux_access" || !strings.Contains(checks[0].Detail, "Operation not permitted") {
+		t.Fatalf("denied socket misdiagnosed: %+v", checks)
+	}
+}
 
 func TestCheckShellIntegrationDistinguishesActiveDisabledAndBroken(t *testing.T) {
 	dir := t.TempDir()

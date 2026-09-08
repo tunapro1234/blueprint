@@ -1,0 +1,12 @@
+{
+  "version": "1.7.7",
+  "revision": "67b023c8f02a6f8eaaa631311d0d74ac64dbb7bd",
+  "published": "2026-09-08T19:33:40.981122+00:00",
+  "sha256": {
+    "bp-linux-amd64": "de80c0056e771c1a9b60527d068e8b76803f7506d4b6831d47945d68db4bf43e",
+    "bp-linux-arm64": "cb90d2048061d7b7bc49a9e251942ad000ebbff543925c4ab729a6f5c677eb3e",
+    "bp-darwin-amd64": "f3a1b28a2e496c3f860e9c1609e16fcd4414000814eb7dc128597ff5ae625584",
+    "bp-darwin-arm64": "ec8938f0298256947e06da8328c41cde388cb72b6d1cd03738116ab607adb627",
+    "install.sh": "4d1184e2765ffd90e6c8511207a2f3e35343a3c629fa14b85c0d50cf960d4268"
+  }
+}

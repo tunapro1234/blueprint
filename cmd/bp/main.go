@@ -83,6 +83,7 @@ bp tokens collect | bp tokens gc
 bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>
 bp service
+bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
@@ -380,6 +381,8 @@ func (a *app) run(args []string) error {
 		return nil
 	case "dash":
 		return a.dashboard(args[1:])
+	case "p2p":
+		return a.p2pCommand(args[1:])
 	case "fed":
 		return a.federation(args[1:])
 	case "daemon":
@@ -2118,6 +2121,9 @@ func (a *app) resultLine(verdict, channel string) {
 }
 
 func (a *app) federatedMessage(target, peer, message string) error {
+	if a.config.P2P != nil && a.config.P2P.Enabled {
+		return a.p2pMessage(target, peer, message)
+	}
 	if a.config.Fed == nil {
 		return fmt.Errorf("federation is not configured on this machine")
 	}
@@ -3057,6 +3063,16 @@ func (a *app) queueList(args []string) error {
 }
 
 func (a *app) queueStatus(args []string) error {
+	if len(args) > 0 && strings.HasPrefix(args[0], "p") {
+		return a.p2pChannelStatus(args)
+	}
+	if len(args) == 2 && args[1] == "--json" {
+		m, err := a.queue.Record(args[0])
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(a.out).Encode(m)
+	}
 	if len(args) != 1 {
 		return fmt.Errorf("usage: bp qstat <channel-id>")
 	}

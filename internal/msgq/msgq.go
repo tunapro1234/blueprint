@@ -23,6 +23,9 @@ type Message struct {
 	From string  `json:"from"`
 	Msg  string  `json:"msg"`
 	TS   float64 `json:"ts"`
+	// Origin is receiver-authored provenance, distinct from display labels and
+	// local hierarchy authority. Remote agent claims never establish authority.
+	Origin *Origin `json:"origin,omitempty"`
 	// Reason says WHY the message is still waiting, in words the operator can act
 	// on ("composer'da okunamayan bir paste var (chip)"). It is refreshed on every
 	// dispatch pass that has to skip the target, and cleared when the pane frees
@@ -91,6 +94,19 @@ type Message struct {
 	// unsubmitted, so a follower waits for the witness or, failing that, for
 	// forceCooldown measured from this moment.
 	ForcedAt float64 `json:"forcedAt,omitempty"`
+}
+
+type Origin struct {
+	Transport         string `json:"transport"`
+	PeerID            string `json:"peer_id"`
+	PeerAlias         string `json:"peer_alias"`
+	ChannelID         string `json:"channel_id"`
+	PeerAuthenticated bool   `json:"peer_authenticated"`
+	AgentClaim        string `json:"agent_claim"`
+	AgentVerified     bool   `json:"agent_verified"`
+	ReportedThread    string `json:"reported_thread,omitempty"`
+	ReportedSource    string `json:"reported_source,omitempty"`
+	ReportedCertain   bool   `json:"reported_certain"`
 }
 
 type Queue struct {
@@ -438,6 +454,16 @@ func (q *Queue) pendingRecords() ([]record, []badRecord, error) {
 	records := make([]record, 0, len(paths))
 	var bad []badRecord
 	for _, path := range paths {
+		// A crash can leave both halves of finish on disk. The durable terminal
+		// receipt wins; a transport retry must never resurrect that message.
+		if strings.HasPrefix(filepath.Base(path), "qp") {
+			if _, err := read(filepath.Join(q.done(), filepath.Base(path))); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				bad = append(bad, badRecord{path: path, err: err})
+				continue
+			}
+		}
 		message, readErr := read(path)
 		if readErr != nil {
 			bad = append(bad, badRecord{path: path, err: readErr})
@@ -1008,7 +1034,22 @@ func (q *Queue) finish(path string, message Message, status string) error {
 	if err = os.Rename(name, target); err != nil {
 		return err
 	}
-	return os.Remove(path)
+	if err = syncQueueDir(q.done()); err != nil {
+		return err
+	}
+	if err = os.Remove(path); err != nil {
+		return err
+	}
+	return syncQueueDir(q.pending())
+}
+
+func syncQueueDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // lineState is what one pass remembers about ONE target: its queue is a LINE, not

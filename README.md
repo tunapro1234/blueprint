@@ -48,7 +48,11 @@ Messages wait when the target is working, its state is uncertain, or the user is
 typing. A transport acknowledgement alone is not proof of agent delivery.
 
 `claude -c` reattaches to an existing bp owner of the conversation. If old duplicate
-owners exist, bp reports them without choosing or closing a pane. Native Claude
+owners exist, bp reports them without choosing or closing a pane. `codex resume` selects the conversation before opening a pane and attaches to
+its existing kernel-verified writer when possible. BP currently uses a numbered
+selector; `--last` and UUID/name selectors are also supported. An unmatched active
+writer is reported without closing it; shared app-server connections retain the
+native `--remote` flow. Native Claude
 and Codex `/rename` changes update the display name without changing authority.
 
 ## Configure
@@ -137,4 +141,5 @@ python3 -m unittest scripts.test_local_cli
 - [Security boundaries](SECURITY.md)
 - [Build and release](docs/local-release.md)
 
-Server-only integrations are optional. P2P/libp2p is not part of the current release.
+Server-only integrations are optional. [P2P messaging](docs/p2p.md) is opt-in and uses
+libp2p with your own rendezvous/relay and explicit peer permissions.

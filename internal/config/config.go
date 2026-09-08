@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"blueprint/internal/ntfy"
+	"blueprint/internal/p2p"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -39,6 +40,7 @@ type Config struct {
 	WABridge         bool         `json:"waBridge" yaml:"waBridge"`
 	Ntfy             *ntfy.Config `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
 	Fed              *FedConfig   `json:"fed,omitempty" yaml:"fed,omitempty"`
+	P2P              *p2p.Config  `json:"p2p,omitempty" yaml:"p2p,omitempty"`
 	Codex            *CodexConfig `json:"codex,omitempty" yaml:"codex,omitempty"`
 	Bar              BarConfig    `json:"bar" yaml:"bar"`
 	InvalidConfig    string       `json:"-" yaml:"-"`
@@ -87,6 +89,7 @@ type overrides struct {
 	WABridge         *bool         `json:"waBridge" yaml:"waBridge"`
 	Ntfy             *ntfy.Config  `json:"ntfy" yaml:"ntfy"`
 	Fed              *FedConfig    `json:"fed" yaml:"fed"`
+	P2P              *p2p.Config   `json:"p2p" yaml:"p2p"`
 	Codex            *CodexConfig  `json:"codex" yaml:"codex"`
 	Bar              *barOverrides `json:"bar" yaml:"bar"`
 }
@@ -196,6 +199,11 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 	}
 	if err := validateFed(result.Fed); err != nil {
 		return Config{}, fmt.Errorf("parse %s: fed: %w", path, err)
+	}
+	if result.P2P != nil {
+		if err := result.P2P.Validate(); err != nil {
+			return Config{}, fmt.Errorf("parse %s: p2p: %w", path, err)
+		}
 	}
 	return result, nil
 }
@@ -320,6 +328,10 @@ func apply(result *Config, values overrides) {
 	if values.Fed != nil {
 		value := *values.Fed
 		result.Fed = &value
+	}
+	if values.P2P != nil {
+		value := *values.P2P
+		result.P2P = &value
 	}
 	if values.Codex != nil {
 		value := *values.Codex

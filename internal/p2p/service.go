@@ -166,7 +166,7 @@ func (n *Node) Serve(ctx context.Context, dispatch func()) error {
 		case e := <-done:
 			return e
 		case <-ticker.C:
-			if dispatch != nil {
+			if dispatch != nil && n.pendingInbound() {
 				dispatch()
 			}
 		}
@@ -201,3 +201,21 @@ func Ping(ctx context.Context, root, alias string) error {
 	return Control(ctx, root, http.MethodGet, "/ping?peer="+url.QueryEscape(alias), &response{})
 }
 func LogPath(root string) string { return filepath.Join(root, "p2p", "service.log") }
+
+// A relay with no inbound messages must not repeatedly probe the whole local
+// fleet. Once P2P work exists, the normal dispatcher still owns all ordering.
+func (n *Node) pendingInbound() bool {
+	rows, err := n.Queue.List()
+	if err != nil {
+		if n.Log != nil {
+			fmt.Fprintln(n.Log, "p2p inbound:", err)
+		}
+		return false
+	}
+	for _, m := range rows {
+		if m.Origin != nil && m.Origin.Transport == "libp2p" {
+			return true
+		}
+	}
+	return false
+}

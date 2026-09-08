@@ -43,6 +43,13 @@ func TestLocalControlAndWorkerShutdown(t *testing.T) {
 	if info.ID != n.Host.ID().String() {
 		t.Fatal("wrong local service identity")
 	}
+	time.Sleep(1100 * time.Millisecond)
+	if passes.Load() != 0 {
+		t.Fatal("idle relay probed unrelated local agents")
+	}
+	if _, err := n.Queue.EnqueueOnceOrigin("fixture", "agent", "external:fixture@test", "hello", &msgq.Origin{Transport: "libp2p"}); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, func() bool { return passes.Load() > 0 })
 	if e := Control(ctx, root, http.MethodGet, "/stop", nil); e == nil {
 		t.Fatal("GET stopped service")

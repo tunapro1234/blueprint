@@ -43,6 +43,16 @@ for line in sys.stdin:
 FAKE_TUI = r'''package main
 import("os"; "os/exec"; "fmt"; "encoding/json"; "time"; "strings"; "syscall"; "path/filepath")
 func main() {
+ if path:=os.Getenv("BP_FAKE_NATIVE_ARGS");path!="" {b,_:=json.Marshal(os.Args[1:]);if e:=os.WriteFile(path,b,0600);e!=nil{panic(e)}}
+ if thread:=os.Getenv("BP_FAKE_PICKER_THREAD");thread!="" {
+  raw:=exec.Command("stty","raw","-echo");raw.Stdin=os.Stdin;if raw.Run()!=nil{os.Exit(2)}
+  fmt.Print("NATIVE_RESUME_PICKER "+filepath.Base(os.Args[0])+"\r\nSearch conversations / Enter selects / Esc cancels\r\n")
+  b:=make([]byte,1)
+  for {if _,e:=os.Stdin.Read(b);e!=nil{return};if b[0]==27||b[0]==3{return};if b[0]=='\r'||b[0]=='\n'{break};fmt.Printf("native search: %c\r\n",b[0])}
+  if cwd:=os.Getenv("BP_FAKE_PICKER_CWD");cwd!="" {if e:=os.Chdir(cwd);e!=nil{panic(e)}}
+  selector:="resume";if filepath.Base(os.Args[0])=="claude"{selector="--resume"}
+  for i,arg:=range os.Args {if arg==selector {tail:=append([]string{},os.Args[i+1:]...);os.Args=append(append(os.Args[:i+1],thread),tail...);break}}
+ }
  if observer:=os.Getenv("BP_FAKE_OBSERVER"); observer!="" {
   c:=exec.Command("python3",append([]string{observer,filepath.Base(os.Args[0])},os.Args[1:]...)...); c.Stderr=os.Stderr
   out,e:=c.Output();if e!=nil{panic(e)}
@@ -163,7 +173,7 @@ if cli == "claude" and os.environ.get("BP_FAKE_PRETURN"):
             dict(type="user", sessionId=thread, cwd=cwd, timestamp=stamp,
                  message=dict(content="<command-name>/model</command-name><command-message>model</command-message>"))]
 path.parent.mkdir(parents=True, exist_ok=True)
-if cli != "codex" or not path.exists():
+if not path.exists():
  path.write_text("".join(json.dumps(r) + "\n" for r in records))
 (home / ("native-" + str(os.getppid()) + "-transcript")).write_text(str(path))
 payload = dict(session_id=thread, transcript_path=str(path), cwd=cwd, hook_event_name="SessionStart", source="startup", model=model)
@@ -286,7 +296,7 @@ class LocalCLITest(unittest.TestCase):
         self.children.append((pid, fd))
         return fd
 
-    def test_codex_resume_reuses_native_writer_with_and_without_picker(self):
+    def test_codex_explicit_resume_and_last_reuse_native_writer(self):
         shutil.copyfile(self.fake_tui, self.bin / "codex")
         original = self.start("codex", "hypr-codex")
         status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
@@ -294,11 +304,8 @@ class LocalCLITest(unittest.TestCase):
         transcript = next((self.root / ".codex/sessions").glob("**/*-" + thread + ".jsonl"))
         content = transcript.read_bytes()
         before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
-        for args in [["resume", thread, "--yolo"], ["resume", "--last", "--yolo"], ["resume", "--yolo"]]:
+        for args in [["resume", thread, "--yolo"], ["resume", "--last", "--yolo"]]:
             fd = self.resume_client(args, cli="codex")
-            if args == ["resume", "--yolo"]:
-                self.read_until(fd, b"Session number")
-                os.write(fd, b"1\n")
             self.read_until(fd, b"FAKE_READY")
         after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
         self.assertEqual(before, after, "resume started a second native writer")
@@ -431,33 +438,54 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd,b"quit\r")
         self.wait_closed("my-codex")
 
-    def test_claude_resume_picker_can_select_older_live_conversation(self):
-        shutil.copyfile(self.fake_tui, self.bin / "claude")
-        self.start("claude", "older")
-        self.start("claude", "newer")
-        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
-        old = next(a for a in entries if a["name"] == "older")
-        thread = json.loads(Path(old["localRuntime"]["path"]).read_text())["session_id"]
-        transcript = next((self.root / ".claude/projects").glob("*/" + thread + ".jsonl"))
-        with transcript.open("a") as out:
-            out.write(json.dumps(dict(type="custom-title", customTitle="my older work")) + "\n")
-        os.utime(transcript, (time.time()-3600, time.time()-3600))
-        before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"])
-        fd = self.resume_client(["--dangerously-skip-permissions", "--resume"])
-        self.read_until(fd, b"Session number")
-        os.write(fd, b"2\n")
-        self.read_until(fd, b"FAKE_READY")
-        clients = subprocess.check_output([self.tmux, "-S", self.socket, "list-clients", "-F", "#{session_name}"], text=True).splitlines()
-        self.assertEqual(clients.count("older"), 2, clients)
-        self.assertEqual(clients.count("newer"), 1, clients)
-        after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"])
-        self.assertEqual(before, after)
-        named = self.resume_client(["--resume", "my older work"])
-        self.read_until(named, b"FAKE_READY")
-        canceled = self.resume_client(["-r"])
-        self.read_until(canceled, b"Session number")
-        os.write(canceled, b"\n")
-        self.assertEqual(len(json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]), 2)
+    def test_native_resume_picker_owns_input_then_bp_observes_selection(self):
+        for cli in ("claude", "codex"):
+            with self.subTest(cli=cli):
+                shutil.copyfile(self.fake_tui, self.bin / cli)
+                selected = "2832a3a6-1234-1234-1234-123456789012"
+                selected_cwd = self.root / (cli + "-selected")
+                selected_cwd.mkdir()
+                native_args = self.root / (cli + "-native-args.json")
+                self.env.update(BP_FAKE_PICKER_THREAD=selected, BP_FAKE_PICKER_CWD=str(selected_cwd), BP_FAKE_NATIVE_ARGS=str(native_args))
+                args = ["--resume", "--dangerously-skip-permissions"] if cli == "claude" else ["resume", "--yolo", "--search"]
+                fd = self.resume_client(args, cli=cli)
+                self.read_until(fd, b"NATIVE_RESUME_PICKER")
+                passed = json.loads(native_args.read_text())
+                if cli == "claude":
+                    self.assertEqual(passed[0], "--settings")
+                    passed = passed[2:]
+                self.assertEqual(passed, args, "bp rewrote native picker arguments")
+                entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+                name = next(a["name"] for a in entries if a["status"] == "open")
+                status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+                row = next(a for a in status["agents"] if a["name"] == name)
+                self.assertFalse(row.get("thread_id"), row)
+                self.assertTrue(row["activity"]["delivery_blocked"], row)
+                os.write(fd, b"x")
+                self.read_until(fd, b"native search: x")
+                os.write(fd, b"\r")
+                self.read_until(fd, b"FAKE_READY")
+                status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+                row = next(a for a in status["agents"] if a["name"] == name)
+                self.assertEqual(row["thread_id"], selected, row)
+                self.assertIn(str(selected_cwd).replace("/", "-") if cli == "claude" else "rollout-"+selected, row["activity"]["transcript_path"])
+                self.assertTrue(row.get("model"), row)
+                os.write(fd, b"\x03")
+                self.wait_closed(name)
+
+    def test_native_resume_picker_cancel_exits_tmux_without_selecting_thread(self):
+        for cli in ("claude", "codex"):
+            with self.subTest(cli=cli):
+                shutil.copyfile(self.fake_tui, self.bin / cli)
+                self.env["BP_FAKE_PICKER_THREAD"] = "2832a3a6-1234-1234-1234-123456789012"
+                fd = self.resume_client(["--resume"] if cli == "claude" else ["resume"], cli=cli)
+                self.read_until(fd, b"NATIVE_RESUME_PICKER")
+                entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+                name = next(a["name"] for a in entries if a["status"] == "open")
+                os.write(fd, b"\x1b")
+                self.wait_closed(name)
+                self.assertFalse(list((self.root / ".claude/projects").glob("**/*.jsonl")))
+                self.assertFalse(list((self.root / ".codex/sessions").glob("**/*.jsonl")))
 
     def test_first_claude_message_waits_for_busy_and_draft_then_delivers(self):
         shutil.copyfile(self.fake_tui, self.bin / "claude")

@@ -193,8 +193,15 @@ eski sahibi varsa bp isimlerini gösterip durur; pane kapatmaz veya kazanan seç
 Eşit güncellikte farklı konuşmalar da sessizce seçilmez.
 
 Bu koruma aynı BP_HOME ve tmux sunucusundaki `bp run claude -c` ve UUID'li
-`--resume` içindir. UUID'siz resume seçicisi/başlık sorgusu açık hata verir;
-`claude --resume <UUID>` kullanılmalıdır. `--fork-session` bilinçli yeni konuşma
+`--resume` içindir. UUID'siz `claude --resume` / `-r`, `codex resume` ve başlık
+sorguları native CLI'ye değiştirilmeden aktarılır. Kendi resume ekranını CLI
+çizer; bp numaralı liste üretmez, seçim tuşlarını okumaz. Konuşma seçilene kadar
+bp geçici pane'i bilir fakat thread/model uydurmaz ve mesaj teslim etmez. Seçimden
+sonra mevcut native callback/writer-lock gözlemi konuşmayı bağlar.
+
+Native seçicide açık bir konuşma seçilmesi, yukarıdaki açılış öncesi attach
+korumasından geçmez; aktif writer kontrolü ve uyarısı native CLI'ye aittir.
+Mevcut writer kapatılmaz veya kilidi kaldırılmaz. `--fork-session` bilinçli yeni konuşma
 olduğu için yeniden bağlanmaz. BP dışındaki Claude süreçlerini veya TUI içinden
 sonradan `/resume` ile başka konuşmaya geçişi kilitlemez. Eski kayıt/transkriptler
 silinmez; var olan çoklu writer'lar otomatik olarak birleştirilmez.

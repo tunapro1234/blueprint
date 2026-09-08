@@ -4,18 +4,14 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"blueprint/internal/messagetext"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -82,8 +78,8 @@ func parseCodexResume(args []string) codexResumeSelection {
 }
 
 type codexResumeSession struct {
-	ID, CWD, Title string
-	Modified       time.Time
+	ID, CWD  string
+	Modified time.Time
 }
 
 // Selection reads metadata only. The native CLI still performs the resume and
@@ -92,21 +88,6 @@ func codexResumeSessions(home, cwd string, all bool, includeNonInteractive ...bo
 	paths, e := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "*.jsonl"))
 	if e != nil {
 		return nil, e
-	}
-	titles := map[string]string{}
-	if f, e := os.Open(filepath.Join(home, "session_index.jsonl")); e == nil {
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 4096), 1024*1024)
-		for scanner.Scan() {
-			var row struct {
-				ID   string `json:"id"`
-				Name string `json:"thread_name"`
-			}
-			if json.Unmarshal(scanner.Bytes(), &row) == nil {
-				titles[row.ID] = row.Name
-			}
-		}
-		_ = f.Close()
 	}
 	var sessions []codexResumeSession
 	for _, path := range paths {
@@ -137,11 +118,7 @@ func codexResumeSessions(home, cwd string, all bool, includeNonInteractive ...bo
 		if e != nil {
 			return nil, e
 		}
-		title := titles[row.Payload.ID]
-		if title == "" || messagetext.Label(title) != nil {
-			title = row.Payload.ID
-		}
-		sessions = append(sessions, codexResumeSession{row.Payload.ID, row.Payload.CWD, title, info.ModTime()})
+		sessions = append(sessions, codexResumeSession{ID: row.Payload.ID, CWD: row.Payload.CWD, Modified: info.ModTime()})
 	}
 	sort.Slice(sessions, func(i, j int) bool {
 		if sessions[i].Modified.Equal(sessions[j].Modified) {
@@ -152,64 +129,11 @@ func codexResumeSessions(home, cwd string, all bool, includeNonInteractive ...bo
 	return sessions, nil
 }
 
-func chooseCodexResume(sessions []codexResumeSession, last bool, target string, in io.Reader, out io.Writer) (string, error) {
-	return chooseResumeSession("Codex", sessions, last, target, in, out)
-}
-
-func chooseResumeSession(harness string, sessions []codexResumeSession, last bool, target string, in io.Reader, out io.Writer) (string, error) {
-	if claudeResumeUUID.MatchString(target) {
-		return strings.ToLower(target), nil
-	}
-	if target != "" {
-		found := ""
-		for _, s := range sessions {
-			if s.Title == target {
-				if found != "" && found != s.ID {
-					return "", fmt.Errorf("multiple %s sessions named %q; select by number or UUID", harness, target)
-				}
-				found = s.ID
-			}
-		}
-		if found == "" {
-			return "", fmt.Errorf("%s session %q not found", harness, target)
-		}
-		return found, nil
-	}
-	if len(sessions) == 0 {
-		return "", fmt.Errorf("no saved %s sessions found%s", harness, map[string]string{"Codex": "; try codex resume --all"}[harness])
-	}
-	if last {
-		return sessions[0].ID, nil
-	}
-	fmt.Fprintf(out, "Resume %s — open conversations attach to their existing tmux pane:\n", harness)
-	for i, s := range sessions {
-		displayCWD := s.CWD
-		if messagetext.Label(displayCWD) != nil {
-			displayCWD = ""
-		}
-		fmt.Fprintf(out, "%d. %s  (%s)  %s\n", i+1, s.Title, s.Modified.Local().Format("Jan 02 15:04"), displayCWD)
-	}
-	fmt.Fprint(out, "Session number (Enter cancels): ")
-	line, e := bufio.NewReader(in).ReadString('\n')
-	if e != nil && !errors.Is(e, io.EOF) {
-		return "", e
-	}
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return "", nil
-	}
-	n, e := strconv.Atoi(line)
-	if e != nil || n < 1 || n > len(sessions) {
-		return "", fmt.Errorf("invalid session number")
-	}
-	return sessions[n-1].ID, nil
-}
-
 // Resolve a selection before launching a second TUI. The writer-lock proof is
 // used only for routing, never as agent identity/authority evidence.
 func (a *app) routeCodexResume(args []string, cwd string) ([]string, *localResumeGuard, string, bool, error) {
 	r := parseCodexResume(args)
-	if r.command < 0 || r.remote {
+	if r.command < 0 || r.remote || (r.target == "" && !r.last) || (r.target != "" && !claudeResumeUUID.MatchString(r.target)) {
 		return args, nil, "", false, nil
 	}
 	home := bptmux.CodexProcessInfo(0).Home
@@ -224,9 +148,13 @@ func (a *app) routeCodexResume(args []string, cwd string) ([]string, *localResum
 	if e != nil {
 		return nil, nil, "", true, e
 	}
-	thread, e := chooseCodexResume(sessions, r.last, r.target, os.Stdin, a.out)
-	if e != nil || thread == "" {
-		return nil, nil, "", true, e
+	thread := strings.ToLower(r.target)
+	if thread == "" {
+		if len(sessions) == 0 {
+			// Native --last owns the no-history UX too.
+			return args, nil, "", false, nil
+		}
+		thread = sessions[0].ID
 	}
 	root := filepath.Join(a.config.StateDir, "local-resume")
 	if e = os.MkdirAll(root, 0700); e != nil {

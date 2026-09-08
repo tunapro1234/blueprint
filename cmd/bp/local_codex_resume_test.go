@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
-	"time"
 )
 
 func TestCodexResumeFlagSelection(t *testing.T) {
@@ -34,26 +32,13 @@ func TestCodexResumeFlagSelection(t *testing.T) {
 	}
 }
 
-func TestCodexResumeSelectionPreservesChoice(t *testing.T) {
-	rows := []codexResumeSession{{ID: "one", Title: "recent", Modified: time.Now()}, {ID: "two", Title: "older"}}
-	for _, tc := range []struct {
-		last                bool
-		target, input, want string
-		err                 bool
-	}{
-		{false, "", "2\n", "two", false}, {true, "", "", "one", false},
-		{false, "older", "", "two", false}, {false, "", "\n", "", false},
-		{false, "", "99\n", "", true},
-	} {
-		var out bytes.Buffer
-		id, e := chooseCodexResume(rows, tc.last, tc.target, strings.NewReader(tc.input), &out)
-		if id != tc.want || (e != nil) != tc.err {
-			t.Fatalf("%+v: %q %v", tc, id, e)
+func TestCodexNativePickerAndTitlePassThroughWithoutReadingHistory(t *testing.T) {
+	for _, args := range [][]string{{"resume"}, {"resume", "--yolo"}, {"--search", "resume", "--all"}, {"resume", "my session"}, {"resume", "--model", "selected", "--remote", "unix://"}} {
+		a := &app{}
+		got, guard, existing, handled, err := a.routeCodexResume(args, "/nonexistent")
+		if err != nil || guard != nil || existing != "" || handled || !reflect.DeepEqual(got, args) {
+			t.Fatalf("native resume intercepted: %v -> %v %v %s %v %v", args, got, guard, existing, handled, err)
 		}
-	}
-	rows[1].Title = "recent"
-	if _, e := chooseCodexResume(rows, false, "recent", strings.NewReader(""), &bytes.Buffer{}); e == nil {
-		t.Fatal("ambiguous title chosen")
 	}
 }
 
@@ -78,16 +63,5 @@ func TestCodexResumeMetadataUsesPhysicalCWDAndExcludesSubagents(t *testing.T) {
 	rows, e := codexResumeSessions(home, cwd, false)
 	if e != nil || len(rows) != 1 || rows[0].ID != id {
 		t.Fatalf("%+v %v", rows, e)
-	}
-}
-
-func TestResumePickerDoesNotRenderTerminalControlFromCWD(t *testing.T) {
-	var out bytes.Buffer
-	rows := []codexResumeSession{{ID: "one", Title: "work", CWD: "/tmp/\x1b[2J"}}
-	if _, err := chooseResumeSession("Claude", rows, false, "", strings.NewReader("1\n"), &out); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out.String(), "\x1b") {
-		t.Fatal("native metadata emitted terminal controls")
 	}
 }

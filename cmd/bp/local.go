@@ -21,7 +21,7 @@ import (
 )
 
 func localHarness(name string) bool {
-	return name == "codex" || name == "claude" || name == "opencode" || name == "hermes"
+	return name == "codex" || name == "claude" || name == "opencode" || name == "hermes" || name == "custom"
 }
 
 // Administrative and batch commands must retain their pipes and exit status.
@@ -99,7 +99,15 @@ func (a *app) localRun(args []string) error {
 	if len(args) == 0 || !localHarness(args[0]) {
 		return fmt.Errorf("usage: bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]")
 	}
-	program, err := exec.LookPath(args[0])
+	programName := args[0]
+	if programName == "custom" {
+		if len(args) < 2 {
+			return fmt.Errorf("bp run custom requires an executable")
+		}
+		programName = args[1]
+		args = append([]string{"custom"}, args[2:]...)
+	}
+	program, err := exec.LookPath(programName)
 	if err != nil {
 		return fmt.Errorf("install %s first: %w", args[0], err)
 	}

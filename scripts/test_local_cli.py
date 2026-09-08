@@ -16,6 +16,8 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 FAKE = '''#!/usr/bin/env python3
 import json, os, signal, sys
+if os.environ.get("BP_FAKE_ARGS"):
+ open(os.environ["BP_FAKE_ARGS"],"w").write(json.dumps(sys.argv[1:]))
 if os.environ.get("BP_FAKE_BATCH"):
  print(json.dumps(sys.argv[1:]))
  sys.exit(37)
@@ -331,6 +333,33 @@ class LocalCLITest(unittest.TestCase):
         self.read_until(second, b"FAKE_READY")
         panes = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True).splitlines()
         self.assertEqual(len(panes), 1)
+
+    def test_onboard_starts_one_main_and_repeated_call_attaches(self):
+        capture = self.root / "launch-args.json"
+        self.env["BP_FAKE_ARGS"] = str(capture)
+        def onboard():
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.chdir(self.root)
+                os.execve(self.binary, [self.binary, "onboard", "--cli", "codex"], self.env)
+            self.children.append((pid, fd))
+            self.read_until(fd, b"FAKE_READY")
+            return fd
+        fd = onboard()
+        self.assertTrue(self.alive("main"))
+        before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        args = json.loads(capture.read_text())
+        self.assertIn("Read ONBOARDING.md", args[-1])
+        self.assertNotIn("--yolo", args)
+        self.assertNotIn("--dangerously-skip-permissions", args)
+        onboard()
+        after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        self.assertEqual(before, after)
+        agents = json.loads((self.root / ".blueprint/agentbook.json").read_text())
+        self.assertEqual(agents["orchestrator"], "main")
+        self.assertEqual(len(agents["agents"]), 1)
+        os.write(fd, b"quit\r")
+        self.wait_closed("main")
 
     def test_quit_closes_only_own_session_for_each_cli(self):
         for cli in ["codex", "claude", "opencode", "hermes"]:

@@ -1,8 +1,8 @@
 # blueprint (`bp`)
 
-`bp` combines the server's agent/tmux, message queue, usage reporting, and WhatsApp
-client operations in one standalone Go binary. `bp daemon` is a supervisor that
-schedules the existing Python/Node jobs without rewriting their business logic.
+`bp` runs CLI agents in tmux with guarded messaging, model/context indicators
+and configurable colors on laptops and servers. A single Go binary provides
+the CLI; optional server integrations are configured separately.
 
 Build and verify:
 
@@ -15,6 +15,40 @@ The binary is written to `/srv/blueprint/bp`.
 Run `bp help` for a command summary. `blueprint.service` is at the repository
 root. Source changes require a rebuilt binary and a restart of that service;
 restarting the shared Codex app-server is a separate operation.
+
+## Install and onboard
+
+```sh
+curl -fsSL https://bp.tunapro.xyz/install.sh | sh -s -- --local
+```
+
+On first interactive installation, bp asks which CLI to use (Codex, Claude,
+OpenCode or another executable), then opens a machine-local `main` coordinator
+with a generic onboarding prompt. Existing CLI configuration and shell aliases
+are preserved; bp adds no model, effort or permission-bypass flags. To pass
+one-time native options explicitly: `bp onboard --cli claude -- --your-option`.
+
+`bp setup` is shell integration; `bp onboard` is the guided agent startup.
+`bp book [--json]` shows the actual coordinator, records and source paths.
+Use `bp onboard --cli codex --prepare` to prepare files without starting an
+agent or spending model quota. Non-interactive installers print the next command;
+`BP_ONBOARD=skip` also skips automatic startup. Run interactive onboarding outside
+tmux. Repeating onboarding attaches to an already-open main without sending text.
+
+The workspace is `$BP_HOME/main` (default `~/.blueprint/main`). Its preserved
+`ONBOARDING.md` asks the agent to inspect only relevant settings, determine the
+machine's purpose, and create a tailored `MACHINE.md`. Environment hints contain
+only OS/shell/terminal/desktop indicators, not a full environment dump. Hyprland
+color integration and an existing `jump2a` helper can be suggested, never installed
+automatically. Existing real coordinators are preserved, not replaced by main.
+Coordinator role is a bp hierarchy setting; verified identity and native OS/CLI
+permission boundaries still apply.
+
+For a different interactive CLI, explicitly specify its prompt convention:
+`bp onboard --cli custom -- /path/to/agent --prompt '{prompt}'`. Arguments execute
+literally, without shell evaluation. Generic CLIs can run in tmux, but structured
+activity observation and automatic message delivery require a supported harness;
+unknown activity stays unknown. Model login/setup remains the native CLI's job.
 
 ## Local laptop agents
 
@@ -70,7 +104,7 @@ the conversation automatically, including untitled sessions. Native transcripts
 stay in their CLI directories; bp stores small per-launch records under `stateDir`.
 The local bar defaults to `bar.context: used`, matching the server; missing metrics stay unknown.
 Older already-running sessions pick up launch integration when reopened, using
-`claude --resume` or `codex resume` to keep their conversation.
+`claude --resume <UUID>` or `codex resume` to keep their conversation.
 See [configuration](docs/configuration.md) for settings and platform limits.
 
 Linux and macOS, amd64/arm64, Bash/Zsh are the intended platforms. Linux real-tmux

@@ -18,7 +18,7 @@ import (
 func TestBarWidgetOrderFollowsConfig(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := pending.Append(stateDir, "agent", pending.Entry{
-		TS: time.Now().Unix(), Text: "waiting",
+		TS: time.Now().Unix(), From: "test-sender", Text: "waiting",
 	}); err != nil {
 		t.Fatal(err)
 	}

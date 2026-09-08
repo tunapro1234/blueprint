@@ -312,7 +312,7 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 	if err := messagetext.Validate(text); err != nil {
 		return "", err
 	}
-	if err := messagetext.Label(from); err != nil {
+	if err := messagetext.Sender(from); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
@@ -1286,6 +1286,11 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	witnessed := rec.Cleanup || (q.Witness != nil && q.Witness(rec.To, rec.Msg, time.Unix(0, int64(rec.TS*1e9))))
 	if witnessed {
 		q.settleDelivered(rec, line, report)
+		return
+	}
+	if err := messagetext.Sender(rec.From); err != nil {
+		q.remember(rec.path, rec.Message, "blocked: "+err.Error(), report)
+		line.block(rec.ID)
 		return
 	}
 	if !target.HasSession(ctx, rec.To) {

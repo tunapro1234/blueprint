@@ -41,3 +41,15 @@ func Label(label string) error {
 	}
 	return nil
 }
+
+// Sender requires a usable origin label, including when replaying legacy storage.
+// A readable uncertain label is allowed; this does not confer authority.
+func Sender(label string) error {
+	if err := Label(label); err != nil {
+		return err
+	}
+	if value := strings.TrimSpace(label); value == "" || value == "bilinmiyor" {
+		return errors.New("sender identity unavailable; anonymous delivery blocked")
+	}
+	return nil
+}

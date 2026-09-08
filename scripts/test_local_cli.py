@@ -133,6 +133,8 @@ else:
 thread = str(uuid.uuid4())
 if cli == "claude" and "--resume" in args:
  thread = args[args.index("--resume") + 1]
+if cli == "codex" and "resume" in args:
+ thread = args[args.index("resume") + 1]
 cwd = str(Path.cwd())
 stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 home = Path.home()
@@ -150,7 +152,8 @@ else:
                  message=dict(model=model, role="assistant", usage=dict(input_tokens=30000), stop_reason="end_turn")),
             dict(type="system", subtype="turn_duration", timestamp=stamp)]
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text("".join(json.dumps(r) + "\n" for r in records))
+if cli != "codex" or not path.exists():
+ path.write_text("".join(json.dumps(r) + "\n" for r in records))
 (home / ("native-" + str(os.getppid()) + "-transcript")).write_text(str(path))
 payload = dict(session_id=thread, transcript_path=str(path), cwd=cwd, hook_event_name="SessionStart", source="startup", model=model)
 for group in settings.get("hooks", {}).get("SessionStart", []):
@@ -255,13 +258,71 @@ class LocalCLITest(unittest.TestCase):
             time.sleep(0.05)
         self.assertEqual(status, "closed")
 
-    def resume_client(self, args, cwd=None):
+    def resume_client(self, args, cwd=None, cli="claude"):
         pid, fd = pty.fork()
         if pid == 0:
             os.chdir(cwd or self.root)
-            os.execve(self.binary, [self.binary, "run", "claude"] + args, self.env)
+            os.execve(self.binary, [self.binary, "run", cli] + args, self.env)
         self.children.append((pid, fd))
         return fd
+
+    def test_codex_resume_reuses_native_writer_with_and_without_picker(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        original = self.start("codex", "hypr-codex")
+        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        thread = next(a["thread_id"] for a in status["agents"] if a["name"] == "hypr-codex")
+        transcript = next((self.root / ".codex/sessions").glob("**/*-" + thread + ".jsonl"))
+        content = transcript.read_bytes()
+        before = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        for args in [["resume", thread, "--yolo"], ["resume", "--last", "--yolo"], ["resume", "--yolo"]]:
+            fd = self.resume_client(args, cli="codex")
+            if args == ["resume", "--yolo"]:
+                self.read_until(fd, b"Session number")
+                os.write(fd, b"1\n")
+            self.read_until(fd, b"FAKE_READY")
+        after = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True)
+        self.assertEqual(before, after, "resume started a second native writer")
+        self.assertEqual(transcript.read_bytes(), content, "resume mutated the existing transcript")
+        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+        self.assertEqual([a["name"] for a in entries], ["hypr-codex"])
+        os.write(original, b"\x03")
+        self.wait_closed("hypr-codex")
+
+    def test_codex_resume_foreign_writer_fails_before_creating_pane(self):
+        import fcntl
+        thread = "01a08084-80c4-75a3-bbfc-3b7ee1645d2a"
+        locks = self.root / ".codex/thread-writer-locks"
+        locks.mkdir(parents=True)
+        path = locks / (thread + ".lock")
+        with path.open("w+") as writer:
+            writer.write("preserve writer evidence")
+            writer.flush()
+            fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fd = self.resume_client(["resume", thread, "--yolo"], cli="codex")
+            self.read_until(fd, b"active writer outside a matched tmux pane")
+            book = self.root / ".blueprint/agentbook.json"
+            self.assertEqual(json.loads(book.read_text()).get("agents", []), [])
+            self.assertEqual(path.read_text(), "preserve writer evidence")
+
+    def test_codex_resume_after_exit_keeps_thread_and_owner_name(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        original = self.start("codex", "hypr-codex")
+        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        thread = next(a["thread_id"] for a in status["agents"] if a["name"] == "hypr-codex")
+        attach = self.resume_client(["resume", thread], cli="codex")
+        self.read_until(attach, b"FAKE_READY")
+        os.write(original, b"\x03")
+        self.wait_closed("hypr-codex")
+        reopened = self.resume_client(["resume", thread, "--yolo"], cli="codex")
+        self.read_until(reopened, b"FAKE_READY")
+        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        row = next(a for a in status["agents"] if a["name"] == "hypr-codex")
+        self.assertEqual(row["thread_id"], thread, row)
+        entries = json.loads((self.root / ".blueprint/agentbook.json").read_text())["agents"]
+        self.assertEqual([a["name"] for a in entries], ["hypr-codex"])
+        os.write(reopened, b"\x03")
+        self.wait_closed("hypr-codex")
+
 
     def test_local_codex_identity_is_readable_without_granting_authority(self):
         shutil.copyfile(self.fake_tui, self.bin / "codex")
@@ -888,12 +949,19 @@ class LocalCLITest(unittest.TestCase):
                     self.assertEqual(len(messages), 1)
                     self.assertTrue(messages[0].endswith(message), messages)
                     channel = re.search(r"CHANNEL=(q[0-9]+)", result.stdout)
-                    self.assertIsNotNone(channel, result.stdout)
-                    done = self.root / ".blueprint/msgq/done" / (channel.group(1) + ".json")
-                    deadline = time.monotonic() + 8
-                    while not done.exists() and time.monotonic() < deadline: time.sleep(0.1)
-                    self.assertTrue(done.exists(), "transcript receipt was not reconciled")
-                    self.assertNotIn("unverified", done.read_text().lower())
+                    # Idle direct sends have no queue channel. The exact single
+                    # receive above proves their delivery; queued sends must also
+                    # settle their transcript receipt. Do not assume scheduler
+                    # timing always takes the queued branch.
+                    if channel:
+                        done = self.root / ".blueprint/msgq/done" / (channel.group(1) + ".json")
+                        deadline = time.monotonic() + 8
+                        while not done.exists() and time.monotonic() < deadline: time.sleep(0.1)
+                        self.assertTrue(done.exists(), "transcript receipt was not reconciled")
+                        self.assertNotIn("unverified", done.read_text().lower())
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("RESULT=delivered", result.stdout)
                     time.sleep(0.8)  # Let the dispatcher observe the cleared composer before exit.
                     os.write(fd, b"\x03")
                     self.wait_closed(cli + "-test")

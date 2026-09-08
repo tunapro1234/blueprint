@@ -46,6 +46,7 @@ func claudeProcessSession(procRoot, sessions string, panePID int, folder string)
 				CWD       string `json:"cwd"`
 				ProcStart string `json:"procStart"`
 				Kind      string `json:"kind"`
+				StartedAt int64  `json:"startedAt"`
 			}
 			stat, statErr := os.ReadFile(filepath.Join(base, "stat"))
 			_, fields, _ := strings.Cut(string(stat), ") ")
@@ -54,6 +55,11 @@ func claudeProcessSession(procRoot, sessions string, panePID int, folder string)
 			if err != nil || json.Unmarshal(data, &r) != nil || statErr != nil || len(parts) <= 19 || r.PID != pid || r.ProcStart != parts[19] || r.Kind != "interactive" || !codexThreadID.MatchString(r.SessionID) || cwdErr != nil || filepath.Clean(cwd) != filepath.Clean(folder) || filepath.Clean(r.CWD) != filepath.Clean(folder) {
 				return "", fmt.Errorf("invalid/stale Claude process session: %s (PID start/cwd/session mismatch)", path)
 			}
+			current, err := claudeContinuation(filepath.Join(filepath.Dir(sessions), "projects"), folder, r.SessionID, r.StartedAt)
+			if err != nil {
+				return "", err
+			}
+			r.SessionID = current
 			if found != "" && found != r.SessionID {
 				return "", fmt.Errorf("multiple interactive Claude sessions under pane PID %d: %s, %s", panePID, found, r.SessionID)
 			}

@@ -569,3 +569,10 @@ func openCodePasteChip(pane string) bool {
 func pasteChip(pane string) bool {
 	return codexPasteChip(pane) || claudePasteChip(pane) || openCodePasteChip(pane)
 }
+
+// ClaudeEmptyComposer requires the native bordered composer and footer. An
+// arbitrary empty line, stale prompt quote, modal or busy screen is insufficient.
+func ClaudeEmptyComposer(pane string) bool {
+	box, _, ok := claudeComposerBoxAt(pane)
+	return ok && stripSpace(box) == "" && !Busy(pane) && !Dialog(pane)
+}

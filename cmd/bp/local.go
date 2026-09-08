@@ -216,12 +216,24 @@ func (a *app) localRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	exitDir := filepath.Dir(observationPath)
+	if observationPath == "" {
+		root := filepath.Join(a.config.StateDir, "local")
+		if err := os.MkdirAll(root, 0700); err != nil {
+			return err
+		}
+		exitDir, err = os.MkdirTemp(root, "run-")
+		if err != nil {
+			return err
+		}
+	}
+	exitReport := filepath.Join(exitDir, "exit.json")
 	command := []string{self, "_session", name, args[0], observationPath, program}
 	command = append(command, cliArgs...)
 	for index := range command {
 		command[index] = quoteShell(command[index])
 	}
-	argv := []string{"new-session", "-s", name, "-c", cwd}
+	argv := []string{"new-session", "-s", name, "-c", cwd, "-e", "BP_EXIT_REPORT=" + exitReport}
 	if resumeGuard != nil {
 		argv = append(argv, "-d")
 	}
@@ -246,9 +258,11 @@ func (a *app) localRun(args []string) error {
 			return err
 		}
 		resumeGuard.close()
-		return a.attachLocal(name)
+		if err := a.attachLocal(name); err != nil {
+			return err
+		}
 	}
-	return nil
+	return a.reportLocalExit(exitReport)
 }
 
 // localSession replaces itself with the CLI. tmux sees the real harness as its
@@ -315,7 +329,7 @@ func (a *app) localSession(args []string) error {
 	if err != nil {
 		return err
 	}
-	worker := exec.Command(self, "_local-worker", name, strconv.Itoa(os.Getpid()))
+	worker := exec.Command(self, "_local-worker", name, strconv.Itoa(os.Getpid()), args[1])
 	worker.Stdout, worker.Stderr = log, log
 	worker.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := worker.Start(); err != nil {
@@ -324,6 +338,11 @@ func (a *app) localSession(args []string) error {
 	// The worker belongs to this process, whose PID exec preserves. It exits
 	// when its parent dies, even if the terminal was detached in the meantime.
 	_ = worker.Process.Release()
+	// Retain the final frame until our worker records the native exit. Clean
+	// exits are closed too; this never leaves an interactive shell underneath.
+	if err := a.tmux.SetOption(a.ctx, "="+name+":", "remain-on-exit", "on"); err != nil {
+		return err
+	}
 	env := append(os.Environ(), "BP_SESSION="+name, "AGENT="+name)
 	return syscall.Exec(args[3], args[3:], env)
 }
@@ -391,7 +410,7 @@ func (a *app) refreshLocalBars() error {
 }
 
 func (a *app) localWorker(args []string) error {
-	if len(args) != 2 || !identity.ValidName(args[0]) {
+	if (len(args) != 2 && len(args) != 3) || !identity.ValidName(args[0]) {
 		return fmt.Errorf("invalid local worker")
 	}
 	parent, err := strconv.Atoi(args[1])
@@ -404,7 +423,16 @@ func (a *app) localWorker(args []string) error {
 		}
 	}
 	defer func() {
-		if err := book.SetStatus(a.config.Agentbooks, args[0], "closed", "", book.Registration{}); err != nil {
+		harness := "CLI"
+		if len(args) == 3 {
+			harness = args[2]
+		}
+		name := a.localWorkerName(parent)
+		if name == "" {
+			return
+		}
+		a.finishLocalExit(name, parent, harness, os.Getenv("BP_EXIT_REPORT"))
+		if err := book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{}); err != nil {
 			fmt.Fprintln(a.err, "record closed session:", err)
 		}
 	}()
@@ -436,4 +464,37 @@ func (a *app) localWorker(args []string) error {
 			a.dispatchNow()
 		}
 	}
+}
+
+// The pane can be renamed while the native process keeps its PID. Resolve the
+// current registration at exit, never recreate the launch-time name.
+func (a *app) localWorkerName(parent int) string {
+	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	if err != nil {
+		return ""
+	}
+	// The inherited pane ID is only a locator; verify the native process PID.
+	out, err := exec.Command(a.tmux.Bin, "display-message", "-p", "-t", os.Getenv("TMUX_PANE"), "#{pane_pid}\t#{session_name}").Output()
+	if err == nil {
+		fields := strings.Split(strings.TrimSpace(string(out)), "\t")
+		if len(fields) == 2 && fields[0] == strconv.Itoa(parent) && identity.ValidName(fields[1]) {
+			if _, ok := fleet.Agents[fields[1]]; ok {
+				return fields[1]
+			}
+		}
+	}
+	found := ""
+	for name, entry := range fleet.Agents {
+		if entry.Local != nil && entry.Local.PID == parent {
+			if found != "" {
+				return ""
+			}
+			found = name
+		}
+	}
+	if found != "" {
+		return found
+	}
+
+	return ""
 }

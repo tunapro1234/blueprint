@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"blueprint/internal/book"
@@ -112,6 +113,12 @@ func (a *app) rename(args []string) error {
 		fmt.Fprintf(a.out, prefix+format+"\n", args...)
 	}
 
+	applyClaims, releaseClaims, err := a.prepareResumeRename(old, name, dry)
+	if err != nil {
+		return err
+	}
+	defer releaseClaims()
+
 	// 1. Transcript title, via the agent's own pane. First, because it is the
 	// step that can fail: everything below is only reached once the agent's own
 	// transcript has been observed carrying the new name. Only Claude understands
@@ -156,6 +163,19 @@ func (a *app) rename(args []string) error {
 		}
 		for _, change := range changes {
 			report("update %s", change)
+		}
+	}
+
+	// Local launch claims and the session-local bar hold names, too. Do not
+	// touch native input or rewrite conversation history to update these.
+	if err := applyClaims(); err != nil {
+		return err
+	}
+	if liveOld && !dry {
+		if entry, ok := fleet.Agents[old]; ok && entry.Role == "local CLI" {
+			if err := a.configureLocalBar(name); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -532,4 +552,59 @@ func (a *app) reportCodeReferences(fleet book.Fleet, old, name string) {
 		fmt.Fprintf(a.out, "  %s\n", hit)
 	}
 	fmt.Fprintf(a.out, "A live reference (a hook's TARGET_AGENT, a systemd unit, a cron line) will break until it says %q.\n", name)
+}
+
+func (a *app) prepareResumeRename(old, name string, dry bool) (func() error, func(), error) {
+	noop := func() error { return nil }
+	release := func() {}
+	root := filepath.Join(a.config.StateDir, "local-resume")
+	paths, err := filepath.Glob(filepath.Join(root, "*.json"))
+	if err != nil || len(paths) == 0 {
+		return noop, release, err
+	}
+	// Hold the native launch guard across the rename, including the claim update.
+	if !dry {
+		lock, err := os.OpenFile(filepath.Join(root, "launch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return noop, release, err
+		}
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			lock.Close()
+			return noop, release, fmt.Errorf("another BP launch is in progress; retry rename: %w", err)
+		}
+		release = func() { syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); lock.Close() }
+	}
+
+	changes := map[string]map[string]any{}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			release()
+			return noop, func() {}, err
+		}
+		var raw map[string]any
+		if json.Unmarshal(data, &raw) != nil {
+			release()
+			return noop, func() {}, fmt.Errorf("invalid resume claim: %s", path)
+		}
+		if raw["Name"] == old {
+			raw["Name"] = name
+			changes[path] = raw
+		}
+	}
+	return func() error {
+		for _, path := range paths {
+			raw, ok := changes[path]
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(a.out, "update resume claim %s: %s -> %s\n", path, old, name)
+			if !dry {
+				if err := writeJSONFile(path, raw); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}, release, nil
 }

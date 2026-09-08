@@ -1,6 +1,7 @@
 package main
 
 import (
+	"blueprint/internal/bpskill"
 	bpconfig "blueprint/internal/config"
 	"fmt"
 	"os"
@@ -128,6 +129,13 @@ func (a *app) localSetup(args []string) error {
 		if closeErr != nil {
 			return closeErr
 		}
+	}
+	skills, err := bpskill.Install(home, os.Getenv("CODEX_HOME"), os.Getenv("CLAUDE_CONFIG_DIR"))
+	if err != nil {
+		return err
+	}
+	for _, line := range skills {
+		fmt.Fprintln(a.out, line)
 	}
 	if err := a.refreshLocalBars(); err != nil {
 		return err

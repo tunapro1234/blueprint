@@ -42,7 +42,7 @@ import (
 
 const usage = `blueprint (bp) — agent infrastructure CLI
 
-bp version [--json] | bp update [--check] [--json] | bp doctor [--json]
+bp version [--json] | bp update [--check] [--json] | bp doctor [--agent <name>] [--json]
 bp status [--json] | bp tree
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
@@ -825,6 +825,9 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 			}
 			if cacheState.Known {
 				row.UsageScope = "last_context_snapshot"
+				if row.Activity != nil && len(row.Activity.BindingConflicts) > 0 {
+					row.UsageScope = "shared_thread_snapshot"
+				}
 			}
 			if cacheState.Known {
 				tokens := cacheState.CtxTokens

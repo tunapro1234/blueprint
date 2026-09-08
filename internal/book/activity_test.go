@@ -102,7 +102,7 @@ func TestClosedTranscriptConflictsWithWorkingPane(t *testing.T) {
 	}
 }
 
-func TestDuplicateRuntimeBindingsWithholdMetrics(t *testing.T) {
+func TestDuplicateRuntimeBindingsBlockDeliveryAndKeepThreadEvidence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	id := "11111111-1111-1111-1111-111111111111"
@@ -110,7 +110,7 @@ func TestDuplicateRuntimeBindingsWithholdMetrics(t *testing.T) {
 	c := runtimePane(t, "codex", "› Ask Codex to do anything\n gpt-6-astra high · /work\n")
 	fleet := Fleet{Agents: map[string]Agent{"one": {Name: "one", Folder: "/work", IdentityThreadID: id}, "two": {Name: "two", Folder: "/work", IdentityThreadID: id}}}
 	s := RuntimeFor(context.Background(), c, fleet, "one")
-	if s.Activity.State != "unknown" || s.Known || s.Activity.Binding != "" {
+	if s.Activity.State != "unknown" || !s.Known || s.Activity.Binding != "" || s.Activity.ThreadID != id || len(s.Activity.BindingConflicts) != 1 {
 		t.Fatalf("ambiguous metrics: %+v %+v", s, s.Activity)
 	}
 }

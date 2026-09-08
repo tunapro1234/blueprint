@@ -35,6 +35,8 @@ func TestBatchCommandsBypassTmux(t *testing.T) {
 func TestLocalSetupPreservesFilesAndCanBeRepeated(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("ZDOTDIR", "")
 	t.Setenv("AGENTBOOK", "")
 	rc := filepath.Join(home, ".zshrc")

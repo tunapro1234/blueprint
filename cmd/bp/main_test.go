@@ -2720,3 +2720,56 @@ func trustedSenderFixture(a *app) {
 		return identity.Identity{Label: os.Getenv("AGENT"), Certain: true, Source: "tmux"}
 	}
 }
+
+func TestLocalOpenParentDoesNotComeFromSharedFolder(t *testing.T) {
+	for _, tc := range []struct {
+		name, sender, explicit string
+		certain, existing      bool
+		want                   string
+	}{
+		{"coordinator", "main", "", true, false, "main"},
+		{"verified child caller", "owner", "", true, false, "owner"},
+		{"unverified claim", "owner", "", false, false, "main"},
+		{"explicit parent", "main", "owner", true, false, "owner"},
+		{"existing parent", "main", "", true, true, "owner"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "agentbook.json")
+			agents := []map[string]string{
+				{"name": "closed-neighbor", "folder": dir, "status": "closed", "parent": "main"},
+				{"name": "main", "folder": dir, "status": "open"},
+				{"name": "owner", "folder": dir, "status": "open", "parent": "main"},
+			}
+			if tc.existing {
+				agents = append(agents, map[string]string{"name": "new-agent", "folder": dir, "status": "closed", "parent": "owner"})
+			}
+			data, _ := json.Marshal(map[string]any{"orchestrator": "main", "agents": agents})
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("AGENTBOOK", "")
+			client, _, snapshot := openTestTmux(t, path, "  ›  ", false)
+			a := openTestApp(t, path, client)
+			a.resolveSender = func() identity.Identity {
+				return identity.Identity{Label: tc.sender, Certain: tc.certain, Source: "tmux"}
+			}
+			args := []string{"new-agent", dir, "--codex", "--no-prompt"}
+			if tc.explicit != "" {
+				args = append(args, "--parent", tc.explicit)
+			}
+			if err := a.open(args); err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range []string{snapshot, path} {
+				fleet, err := book.LoadFleet([]string{file})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := fleet.Parents["new-agent"]; got != tc.want {
+					t.Fatalf("%s parent=%q want=%q", file, got, tc.want)
+				}
+			}
+		})
+	}
+}

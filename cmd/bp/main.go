@@ -63,7 +63,7 @@ bp rename <old-name> <new-name> [--dry-run] [--no-retitle]
                              # The transcript keeps the OLD title until that agent
                              # types /rename <new> — bp cannot read its context (blank
                              # CACHE), compact and open --resume stop finding it.
-bp msg [--force-busy] <name> <message...>
+bp msg [--force|--force-busy] <name> <message...>
                              # bp stamps a [sender] envelope; never write your own
                              # a /slash command goes bare, and only down the hierarchy
                              # --force-busy jumps the queue on a busy agent (root/bp/wa only)
@@ -1807,7 +1807,7 @@ const forceBusyFlag = "--force-busy"
 func cutForceBusy(args []string) ([]string, bool) {
 	rest, force := make([]string, 0, len(args)), false
 	for _, arg := range args {
-		if len(rest) < 2 && arg == forceBusyFlag {
+		if len(rest) < 2 && (arg == forceBusyFlag || arg == "--force") {
 			force = true
 			continue
 		}
@@ -1819,7 +1819,7 @@ func cutForceBusy(args []string) ([]string, bool) {
 func (a *app) message(args []string) error {
 	args, force := cutForceBusy(args)
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp msg [--force-busy] <name> <message...>")
+		return fmt.Errorf("usage: bp msg [--force|--force-busy] <name> <message...>")
 	}
 	name, raw := args[0], strings.Join(args[1:], " ")
 	if err := messagetext.Validate(raw); err != nil {

@@ -10,3 +10,6 @@
 
 # Nested development worktrees have their own Git history.
 /.worktrees/
+
+# This host keeps its agent instructions locally.
+/AGENTS.md

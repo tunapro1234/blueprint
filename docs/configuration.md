@@ -109,7 +109,7 @@ Bu özellik agent/model/effort veya tmux scroll ayarlarını değiştirmez.
 
 Mosh uyanıklık kontrolü ve Claude'a otomatik özet mesajları henüz uygulanmadı.
 
-## Yerel fare ve dış uygulamalara renk — 2026-09-08
+## Yerel fare ve dış uygulamalara renk
 
 `localMouse: true` (varsayılan), yalnız `bp run` oturumlarında tmux fare
 kaydırmasını ve seçimini açar. `false` kapatır. `bp setup --shell bash` veya
@@ -164,7 +164,7 @@ kaydından okunur; cwd veya ekran metni kimlik kanıtı sayılmaz.
 `bp name` alt çubuğu yeni adı gösterir; `bp status --json` sabit `name` yanında
 `display_name` verir. `bp msg orch`, `bp peek orch` ve `bp color orch` tek bir canlı
 oturum eşleşiyorsa bu adı kabul eder. İki aynı başlıkta hata verilir. Canonical
-agent adları başlıklardan önceliklidir; server-main ve başka kayıtlı agent adına
+agent adları başlıklardan önceliklidir; korunan orkestratör ve başka kayıtlı agent adına
 bürünmek display metadata üzerinden mümkün değildir.
 
 Tmux oturum adı, kuyruk hedefi, parent ve authority kimliği sabit kalır. Başlık

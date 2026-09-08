@@ -32,6 +32,10 @@ live owners produce an error. Physical cwd paths prevent symlink aliases from
 creating mismatched registry folders. This does not lock processes outside bp or
 native in-TUI conversation switching.
 
+Fresh Codex openings receive onboarding as a native startup prompt. This avoids
+waiting for a transcript that may only appear after the first user turn. Existing
+and resumed sessions retain normal guarded delivery.
+
 ## Observation and identity
 
 Status, the bar and delivery gates share runtime observations. Local Claude uses

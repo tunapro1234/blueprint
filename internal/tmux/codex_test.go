@@ -251,3 +251,14 @@ func TestCodexDeliveryHarness(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexHistoricalWorkingLineDoesNotBlockFreshComposer(t *testing.T) {
+	pane := "◦ Working (23s • esc to interrupt)\n" + strings.Repeat("old transcript output\n", 40) + modernCodexPane("Ask Codex to do anything")
+	if Busy(pane) {
+		t.Fatal("historical Working text treated as current turn")
+	}
+	live := strings.Repeat("old transcript output\n", 40) + "◦ Working (23s • esc to interrupt)\n" + modernCodexPane("Ask Codex to do anything")
+	if !Busy(live) {
+		t.Fatal("live Working row lost")
+	}
+}

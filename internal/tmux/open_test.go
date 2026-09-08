@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -204,5 +205,36 @@ func TestRemoteSandboxRefusalPrecedesAnyMutation(t *testing.T) {
 	err := openClient(h).Open(context.Background(), "agent", "/srv/agent", OpenOptions{Codex: true, Remote: "unix://"}, nil)
 	if err == nil || len(h.mutations) > 0 {
 		t.Fatalf("sandbox escape was not refused: %v %v", err, h.mutations)
+	}
+}
+
+func TestFreshCodexOnboardingNeedsNoTranscriptOrPostStartPaste(t *testing.T) {
+	for _, noPrompt := range []bool{false, true} {
+		h := &openHarness{paneCommand: "zsh", capture: "◦ Working (1s • esc to interrupt)\n" + modernCodexPane("Ask Codex to do anything")}
+		c := openClient(h)
+		original := c.exec
+		pastes := 0
+		c.exec = func(ctx context.Context, in []byte, args ...string) ([]byte, error) {
+			if len(args) > 0 && args[0] == "has-session" {
+				return nil, fmt.Errorf("no session")
+			}
+			if len(args) > 0 && (args[0] == "load-buffer" || args[0] == "paste-buffer") {
+				pastes++
+			}
+			return original(ctx, in, args...)
+		}
+		var warnings []string
+		err := c.Open(context.Background(), "agent", t.TempDir(), OpenOptions{Codex: true, NoPrompt: noPrompt}, func(s string) { warnings = append(warnings, s) })
+		if err != nil || pastes != 0 || len(warnings) != 0 {
+			t.Fatal(err, pastes, warnings)
+		}
+		launch := strings.Join(h.mutations, "\n")
+		present := strings.Contains(launch, "bp agent.")
+		if present == noPrompt {
+			t.Fatalf("onboarding arg missing or --no-prompt ignored: %s", launch)
+		}
+		if strings.Contains(launch, "--model") || strings.Contains(launch, "model_reasoning_effort") {
+			t.Fatal("settings changed")
+		}
 	}
 }

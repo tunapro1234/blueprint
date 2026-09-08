@@ -629,7 +629,15 @@ class LocalCLITest(unittest.TestCase):
                         command = ('. "$HOME/.config/bp/shell.sh"; . "$HOME/.config/bp/shell.sh"; '
                                    + cli + ' "extra arg" \'$(touch SHOULD_NOT_EXIST)\'; '
                                    'printf "__BP_OUTER_SHELL__\\n"')
-                        os.execve(shutil.which(shell), [shell, "-i", "-c", command], env)
+                        # CI runners may have global interactive startup hooks (notably
+                        # zsh compinit security prompts). Skip all automatic rc loading,
+                        # then source the test user's real rc as a script so aliases are
+                        # defined before the command's next line is parsed.
+                        runner = self.root / (shell + "-" + cli + "-alias-runner")
+                        runner.write_text('. "$HOME/.' + shell + 'rc"\n' + command + '\n')
+                        shell_args = ([shell, "-f", "-i", str(runner)] if shell == "zsh" else
+                                      [shell, "--noprofile", "--norc", "-i", str(runner)])
+                        os.execve(shutil.which(shell), shell_args, env)
                     self.children.append((pid, fd))
                     self.read_until(fd, b"FAKE_READY")
                     self.assertEqual(json.loads(record.read_text()),

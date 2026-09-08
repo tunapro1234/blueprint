@@ -25,6 +25,7 @@ func TestCodexWriterObservationOnlyForEmbeddedPane(t *testing.T) {
 		{"identity pin", bptmux.CodexProcess{}, Agent{IdentityThreadID: "thread"}, true},
 		{"resume pin", bptmux.CodexProcess{}, Agent{Launch: &bptmux.OpenOptions{Codex: true, ResumeID: "thread"}}, true},
 		{"remote argv", bptmux.CodexProcess{Remote: "unix://"}, Agent{}, false},
+		{"stale remote book with observed embedded CLI", bptmux.CodexProcess{Observed: true}, Agent{Launch: &bptmux.OpenOptions{Codex: true, Remote: "unix://"}}, true},
 		{"remote book", bptmux.CodexProcess{}, Agent{Launch: &bptmux.OpenOptions{Codex: true, Remote: "unix://"}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

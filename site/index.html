@@ -329,37 +329,37 @@
         <h1>Orchestrate a fleet of AI&nbsp;agents in tmux.</h1>
         <p class="lede">One small binary to connect, observe, coordinate, and supervise long-running CLI agents across a server.</p>
         <div class="install" aria-label="Installation command">
-          <code id="install-command">curl -fsSL https://bp.tunapro.xyz/install.sh | bash</code>
+          <code id="install-command">curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/install.sh | sh -s -- --local</code>
           <button class="copy" type="button" aria-label="Copy installation command" onclick="copyInstall(this)">COPY</button>
         </div>
-        <div class="hero-meta">Linux &amp; macOS · single static binary · or <code>npm i -g @tunapro/blueprint</code></div>
+        <div class="hero-meta">Linux &amp; macOS · signed native releases · npm distribution coming later</div>
       </div>
 
       <div class="demo">
         <div class="term" role="img" aria-label="Terminal session demonstrating bp commands">
           <div class="term-bar"><i></i><i></i><i></i><b>you@laptop — bp</b></div>
           <pre><code><span class="ps">$</span> <span class="cmd">bp tree</span>
-server-main <span class="dim">[idle/open]</span>
- ├── server-mail <span class="dim">[idle/open]</span>
- ├── server-monitor-dash <span class="dim">[working/open]</span>
- └── probot-main <span class="dim">[idle/open]</span>
-     ├── probot-studio <span class="dim">[working/open]</span>
-     │   └── probot-builder <span class="dim">blueprint@builder/dev</span>
-     └── probot-business <span class="dim">[idle/open]</span>
+main <span class="dim">[idle/open]</span>
+ ├── main-docs <span class="dim">[idle/open]</span>
+ ├── main-tests <span class="dim">[working/open]</span>
+ └── app <span class="dim">[idle/open]</span>
+     ├── app-web <span class="dim">[working/open]</span>
+     │   └── app-build <span class="dim">blueprint@builder/dev</span>
+     └── app-api <span class="dim">[idle/open]</span>
 
-<span class="ps">$</span> <span class="cmd">bp msg probot-studio "ship the pricing page when tests pass"</span>
+<span class="ps">$</span> <span class="cmd">bp msg app-web "ship the pricing page when tests pass"</span>
 BUSY: queued <span class="dim">(channel: q4829)</span> — check: bp qstat q4829
 
 <span class="ps">$</span> <span class="cmd">bp qstat q4829</span>
-<span class="ok">DELIVERED</span>: probot-studio <span class="dim">(at 14:32)</span>
+<span class="ok">DELIVERED</span>: app-web <span class="dim">(at 14:32)</span>
 
-<span class="ps">$</span> <span class="cmd">bp open probot-pricing /srv/probot/studio --worktree pricing</span>
+<span class="ps">$</span> <span class="cmd">bp open app-pricing ~/projects/app --worktree pricing</span>
 .worktrees/pricing · branch pricing/dev · <span class="ok">agent ready</span>
 
 <span class="ps">$</span> <span class="cmd">bp usage</span>
-Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
+Claude  5h 12% · 7d 27%      Codex  5h 4% · 7d 14%</code></pre>
         </div>
-        <p class="demo-caption">A fleet of agents in tmux — opened, messaged, queued, branched into worktrees, usage-governed. Nothing ever talks over a busy agent.</p>
+        <p class="demo-caption">A fleet of agents in tmux — opened, messaged, queued, branched into worktrees, usage-governed. Ordinary messages wait while an agent is busy or its composer contains user input.</p>
       </div>
 
       <section id="concepts">
@@ -379,7 +379,7 @@ Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
           </div>
           <div class="cell">
             <h3>mosh makes remote sweet</h3>
-            <p>Roaming and intermittent connections stay comfortable; SSH remains the automatic fallback.</p>
+            <p>For explicitly configured remote sessions, bp uses mosh when installed and SSH otherwise. A failed mosh connection is reported.</p>
           </div>
         </div>
       </section>
@@ -388,22 +388,22 @@ Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
         <h2>Quickstart</h2>
         <div class="steps">
           <article class="step">
-            <div class="num"><b>01</b> · SERVER</div>
-            <h3>Install on the server</h3>
-            <p>From the blueprint checkout, build and link the server binary.</p>
-            <pre><code>cd /srv/blueprint && ./install.sh</code></pre>
+            <div class="num"><b>01</b> · INSTALL</div>
+            <h3>Install locally</h3>
+            <p>Install and sign in to your preferred agent CLI first. Use the signed installer above, then open a new terminal.</p>
+            <pre><code>bp doctor</code></pre>
           </article>
           <article class="step">
-            <div class="num"><b>02</b> · LAPTOP</div>
-            <h3>Install on your laptop</h3>
-            <p>The installer downloads the native binary and asks for your <code>user@host</code>.</p>
-            <pre><code>curl -fsSL bp.tunapro.xyz/install.sh | bash</code></pre>
+            <div class="num"><b>02</b> · ONBOARD</div>
+            <h3>Set up your coordinator</h3>
+            <p>Choose a CLI. A main agent receives portable guidance to help configure this machine.</p>
+            <pre><code>bp onboard</code></pre>
           </article>
           <article class="step">
-            <div class="num"><b>03</b> · CONNECT</div>
-            <h3>Attach to any agent</h3>
-            <p>Local sessions attach directly; remote sessions go over mosh or SSH.</p>
-            <pre><code>bp con server-main</code></pre>
+            <div class="num"><b>03</b> · WORK</div>
+            <h3>Use your usual commands</h3>
+            <p>Existing aliases are preserved. Continue a Claude conversation without creating another bp owner.</p>
+            <pre><code>claude -c</code></pre>
           </article>
         </div>
       </section>
@@ -413,6 +413,8 @@ Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
         <div class="cmds">
           <table>
             <tbody>
+              <tr><td>bp onboard · bp book --json</td><td>Set up the coordinator and inspect agent records.</td></tr>
+              <tr><td>bp doctor · bp update --check</td><td>Diagnose installation and check signed releases.</td></tr>
               <tr><td>bp tree</td><td>Show the agent hierarchy with live state.</td></tr>
               <tr><td>bp status</td><td>Compare live tmux sessions with the agentbook.</td></tr>
               <tr><td>bp open &lt;name&gt; &lt;dir&gt; [--worktree t]</td><td>Start an agent, optionally inside a fresh git worktree.</td></tr>
@@ -442,7 +444,7 @@ Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
           </div>
           <div class="cell">
             <h3>Clipboard &amp; scroll</h3>
-            <p>The installer can add mouse scrolling, deep history, vi copy-mode, and OSC52 clipboard forwarding, so copying works through tmux and mosh. It asks first and never touches your prefix key.</p>
+            <p>Local bp sessions enable mouse scrolling and apply their own status bar. Existing tmux prefix settings are preserved; clipboard support depends on your terminal.</p>
           </div>
         </div>
       </section>
@@ -450,9 +452,9 @@ Claude  5h 12% · 7d 27% · Fable 43%      Codex  5h 4% · 7d 14%</code></pre>
       <section id="architecture">
         <h2>Architecture</h2>
         <div class="arch">
-          <h3>One daemon.<br>Long-lived work.</h3>
+          <h3>Local sessions.<br>Optional server jobs.</h3>
           <div>
-            <p>A single systemd unit, <code>blueprint.service</code>, runs the blueprint daemon. It supervises the scheduled jobs — usage tracking, policy, the message queue, keepalive — while tmux remains the durable session layer for the fleet.</p>
+            <p>Local installations run with tmux and per-session queue workers; systemd is not required. Configured servers can run <code>bp daemon</code> for shared queues and scheduled jobs.</p>
             <div class="flow" aria-label="Architecture flow">
               <span class="node">blueprint.service</span>→<span class="node">bp daemon</span>→<span class="node">scheduled jobs</span>
             </div>

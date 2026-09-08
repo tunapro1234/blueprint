@@ -53,13 +53,16 @@ func main() {
   selector:="resume";if filepath.Base(os.Args[0])=="claude"{selector="--resume"}
   for i,arg:=range os.Args {if arg==selector {tail:=append([]string{},os.Args[i+1:]...);os.Args=append(append(os.Args[:i+1],thread),tail...);break}}
  }
+ if msg:=os.Getenv("BP_FAKE_START_ERROR");msg!="" {fmt.Print(msg+"\r\n");os.Exit(17)}
  if observer:=os.Getenv("BP_FAKE_OBSERVER"); observer!="" {
   c:=exec.Command("python3",append([]string{observer,filepath.Base(os.Args[0])},os.Args[1:]...)...); c.Stderr=os.Stderr
   out,e:=c.Output();if e!=nil{panic(e)}
   if path:=strings.TrimSpace(string(out));path!="" {
    os.Setenv("CODEX_THREAD_ID",strings.TrimSuffix(filepath.Base(path),".lock"))
    f,e:=os.OpenFile(path,os.O_CREATE|os.O_RDWR,0600);if e!=nil{panic(e)};defer f.Close()
-   if e=syscall.Flock(int(f.Fd()),syscall.LOCK_EX);e!=nil{panic(e)}
+   if e=syscall.Flock(int(f.Fd()),syscall.LOCK_EX|syscall.LOCK_NB);e!=nil{
+    fmt.Printf("Error: Failed to resume session from %s: thread/resume failed during TUI bootstrap: thread/resume failed: thread %s already has an active writer (code -32600)\r\n",path,os.Getenv("CODEX_THREAD_ID"));os.Exit(1)
+   }
   }
  }
  if path:=os.Getenv("BP_FAKE_WHOAMI");path!="" {
@@ -314,6 +317,132 @@ class LocalCLITest(unittest.TestCase):
         self.assertEqual([a["name"] for a in entries], ["hypr-codex"])
         os.write(original, b"\x03")
         self.wait_closed("hypr-codex")
+
+    def test_native_codex_picker_reattaches_detached_writer_without_touching_it(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        self.start("codex", "kept-writer")
+        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        thread = next(a["thread_id"] for a in status["agents"] if a["name"] == "kept-writer")
+        transcript = next((self.root / ".codex/sessions").glob("**/*-"+thread+".jsonl"))
+        before = transcript.read_bytes()
+        native_pid = subprocess.check_output([self.tmux,"-S",self.socket,"display-message","-p","-t","=kept-writer:","#{pane_pid}"])
+        subprocess.run([self.tmux,"-S",self.socket,"detach-client","-s","=kept-writer"],check=True)
+        self.env["BP_FAKE_PICKER_THREAD"] = thread
+        subprocess.run([self.tmux,"-S",self.socket,"set-environment","-g","BP_FAKE_PICKER_THREAD",thread],check=True)
+        fd = self.resume_client(["resume"],cli="codex")
+        self.read_until(fd,b"NATIVE_RESUME_PICKER")
+        os.write(fd,b"\r")
+        self.read_until(fd,b"FAKE_READY")
+        self.assertEqual(native_pid,subprocess.check_output([self.tmux,"-S",self.socket,"display-message","-p","-t","=kept-writer:","#{pane_pid}"]))
+        self.assertEqual(transcript.read_bytes(),before)
+        deadline=time.monotonic()+5
+        reports=[]
+        while time.monotonic()<deadline:
+            reports=[json.loads(p.read_text()) for p in (self.root/".blueprint/state/local").glob("*/exit.json")]
+            if any(r.get("routed_to")=="kept-writer" for r in reports):break
+            time.sleep(.1)
+        self.assertTrue(any(r.get("routed_to")=="kept-writer" for r in reports),reports)
+        os.write(fd,b"\x03")
+        self.wait_closed("kept-writer")
+
+    def test_doctor_distinguishes_historical_and_live_duplicate_thread_without_hiding_title(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        fd = self.start("claude", "advice-live")
+        registry = self.root / ".blueprint/agentbook.json"
+        data = json.loads(registry.read_text())
+        original = next(a for a in data["agents"] if a["name"] == "advice-live")
+        observation = json.loads(Path(original["localRuntime"]["path"]).read_text())
+        transcript = Path(observation["transcript_path"])
+        with transcript.open("a") as out:
+            out.write(json.dumps(dict(type="custom-title",sessionId=observation["session_id"],customTitle="advice"))+"\n")
+        historical = dict(original, name="advice-old", status="open", launch=dict(resumeId=observation["session_id"]))
+        data["agents"].append(historical)
+        registry.write_text(json.dumps(data))
+        def status():
+            rows=json.loads(subprocess.check_output([self.binary,"status","--json"],env=self.env))["agents"]
+            return next(a for a in rows if a["name"]=="advice-live")
+        row=status()
+        self.assertEqual(row["display_name"],"advice",row)
+        self.assertEqual(row["activity"]["historical_bindings"],["advice-old"])
+        self.assertNotIn("binding_conflicts",row["activity"])
+        before=registry.read_bytes(),transcript.read_bytes()
+        result=subprocess.run([self.binary,"doctor","--agent","advice-live","--json"],env=self.env,capture_output=True,text=True)
+        check=next(c for c in json.loads(result.stdout)["checks"] if c["name"]=="runtime/advice-live")
+        self.assertIn("historical/moved registrations ignored: advice-old",check["detail"])
+        self.assertEqual(before,(registry.read_bytes(),transcript.read_bytes()),"doctor mutated native/book evidence")
+        second=self.start("claude","advice-other")
+        data=json.loads(registry.read_text())
+        other=next(a for a in data["agents"] if a["name"]=="advice-other")
+        # Native resume callback selects the same conversation in another live pane.
+        Path(other["localRuntime"]["path"]).write_text(json.dumps(observation))
+        row=status()
+        self.assertEqual(row["display_name"],"advice",row)
+        self.assertEqual(row["usage_scope"],"shared_thread_snapshot",row)
+        self.assertTrue(row["activity"]["delivery_blocked"])
+        self.assertEqual(row["activity"]["binding_conflicts"],["advice-other"])
+        before=registry.read_bytes(),transcript.read_bytes()
+        result=subprocess.run([self.binary,"doctor","--agent","advice-live","--json"],env=self.env,capture_output=True,text=True)
+        check=next(c for c in json.loads(result.stdout)["checks"] if c["name"]=="runtime/advice-live")
+        self.assertFalse(check["ok"])
+        self.assertEqual(check["thread_id"],observation["session_id"])
+        self.assertEqual(check["related_agents"],["advice-other"])
+        self.assertIn("existing pane",check["next_step"])
+        self.assertEqual(before,(registry.read_bytes(),transcript.read_bytes()))
+        self.assertTrue(self.alive("advice-other")); self.assertTrue(self.alive("advice-live"))
+        os.write(second,b"\x03"); self.wait_closed("advice-other")
+        os.write(fd,b"\x03"); self.wait_closed("advice-live")
+
+    def test_rename_updates_bar_resume_claim_and_worker_exit_without_typing(self):
+        shutil.copyfile(self.fake_tui,self.bin/"claude")
+        fd=self.start("claude","before-name")
+        registry=self.root/".blueprint/agentbook.json"
+        entry=next(a for a in json.loads(registry.read_text())["agents"] if a["name"]=="before-name")
+        transcript=Path(json.loads(Path(entry["localRuntime"]["path"]).read_text())["transcript_path"])
+        before=transcript.read_bytes()
+        pid=subprocess.check_output([self.tmux,"-S",self.socket,"display-message","-p","-t","=before-name:","#{pane_pid}"])
+        tmux_id=subprocess.check_output([self.tmux,"-S",self.socket,"display-message","-p","-t","=before-name:","#{pid}:#{session_id}:#{session_created}"],text=True).strip()
+        root=self.root/".blueprint/state/local-resume"; root.mkdir(exist_ok=True)
+        claim=root/"fixture.json"; claim.write_text(json.dumps(dict(Name="before-name",TmuxID=tmux_id,Extra="preserve")))
+        result=subprocess.run([self.binary,"rename","before-name","after-name","--no-retitle"],env=self.env,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        for option,sub in [("status-left","name"),("status-right","bar")]:
+            bar=subprocess.check_output([self.tmux,"-S",self.socket,"show-options","-v","-t","=after-name:",option],text=True)
+            self.assertIn(sub+" 'after-name'",bar)
+            self.assertNotIn("before-name",bar)
+        self.assertEqual(json.loads(claim.read_text()),dict(Name="after-name",TmuxID=tmux_id,Extra="preserve"))
+        self.assertEqual(before,transcript.read_bytes())
+        self.assertEqual(pid,subprocess.check_output([self.tmux,"-S",self.socket,"display-message","-p","-t","=after-name:","#{pane_pid}"]))
+        # Reproduce the reported partially renamed old installation, then diagnose.
+        claim.write_text(json.dumps(dict(Name="before-name",TmuxID=tmux_id)))
+        subprocess.run([self.tmux,"-S",self.socket,"set-option","-t","=after-name:","status-left","#(bp name 'before-name')"],check=True)
+        subprocess.run([self.binary,"name","after-name"],env=self.env,check=True,capture_output=True)
+        snapshots=registry.read_bytes(),claim.read_bytes(),transcript.read_bytes()
+        result=subprocess.run([self.binary,"doctor","--agent","after-name","--json"],env=self.env,capture_output=True,text=True)
+        checks=json.loads(result.stdout)["checks"]
+        self.assertTrue(any(c["name"]=="resume_name/after-name" and not c["ok"] for c in checks),checks)
+        self.assertTrue(any(c["name"]=="bar_name/after-name/status-left" and "bp setup" in c["next_step"] for c in checks),checks)
+        self.assertEqual(snapshots,(registry.read_bytes(),claim.read_bytes(),transcript.read_bytes()))
+        os.write(fd,b"\x03");self.wait_closed("after-name")
+        self.assertNotIn("before-name",[a["name"] for a in json.loads(registry.read_text())["agents"]])
+
+    def test_native_exit_error_survives_tmux_and_doctor_points_to_evidence(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        self.env.update(BP_FAKE_PICKER_THREAD="2832a3a6-1234-1234-1234-123456789012", BP_FAKE_START_ERROR="Error: fixture native resume configuration failed")
+        fd=self.resume_client(["resume"],cli="codex")
+        self.read_until(fd,b"NATIVE_RESUME_PICKER")
+        book=json.loads((self.root/".blueprint/agentbook.json").read_text())
+        name=next(a["name"] for a in book["agents"] if a["status"]=="open")
+        os.write(fd,b"\r")
+        self.read_until(fd,b"details:")
+        self.wait_closed(name)
+        reports=[json.loads(p.read_text()) for p in (self.root/".blueprint/state/local").glob("*/exit.json")]
+        self.assertEqual(len(reports),1,reports)
+        self.assertIn("fixture native resume configuration failed",reports[0]["screen"])
+        result=subprocess.run([self.binary,"doctor","--agent",name,"--json"],env=self.env,capture_output=True,text=True)
+        checks=json.loads(result.stdout)["checks"]
+        failure=next(c for c in checks if c["name"]=="native_exit/"+name)
+        self.assertFalse(failure["ok"])
+        self.assertIn("exit.json",failure["next_step"])
 
     def test_codex_resume_foreign_writer_fails_before_creating_pane(self):
         import fcntl
@@ -646,6 +775,9 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd, (cli + "\n").encode())
         self.read_until(fd, b"FAKE_READY")
         self.assertTrue(self.alive("main"))
+        for native in [".codex", ".claude"]:
+            skill = self.root / native / "skills/blueprint/SKILL.md"
+            self.assertEqual(skill.read_bytes(),(REPO/"internal/bpskill/SKILL.md").read_bytes())
         # Successful launch alone does not prove terminal input/output works.
         os.write(fd, b"quit\r")
         self.wait_closed("main")

@@ -5,8 +5,10 @@ import (
 	"blueprint/internal/codexrpc"
 	bptmux "blueprint/internal/tmux"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -253,7 +255,8 @@ func launchThread(agent Agent, codex bool) string {
 	return ""
 }
 
-// RuntimeFor also rejects a thread registered to multiple fleet agents.
+// RuntimeFor separates stale registrations from live conversation conflicts.
+// A conflict blocks delivery, but does not erase the known thread's display data.
 func RuntimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name string) cache.State {
 	agent, exists := fleet.Agents[name]
 	if !exists {
@@ -262,13 +265,44 @@ func RuntimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name st
 	agent.Name = name
 	state, _ := RuntimeState(ctx, client, agent)
 	if a := state.Activity; a != nil && a.ThreadID != "" {
+		sessions, sessionsErr := client.Sessions(ctx)
+		present := map[string]bool{}
+		for _, session := range sessions {
+			present[session] = true
+		}
 		for other, entry := range fleet.Agents {
-			codex := strings.HasPrefix(state.Runtime, "codex")
-			samePin := codex && entry.IdentityThreadID == a.ThreadID
-			sameLaunch := launchThread(entry, codex) == a.ThreadID
-			if other != name && (samePin || sameLaunch) {
-				return cache.State{LastHumanAge: -1, Runtime: state.Runtime, Busy: true, Activity: &cache.Activity{State: "unknown", Source: "agentbook", Reason: "thread registered to multiple agents", ObservedAt: a.ObservedAt, DeliveryBlocked: true, ScreenBusy: a.ScreenBusy}}
+			if other == name {
+				continue
 			}
+			codex := strings.HasPrefix(state.Runtime, "codex")
+			claim := (codex && entry.IdentityThreadID == a.ThreadID) || launchThread(entry, codex) == a.ThreadID
+			if entry.Local != nil && entry.Local.Harness == state.Runtime {
+				if observed, err := cache.ReadLocalObservation(entry.Local, entry.Local.PID); err == nil && observed.SessionID == a.ThreadID {
+					claim = true
+				}
+			}
+			if !claim {
+				continue
+			}
+			if sessionsErr == nil && !present[other] {
+				a.HistoricalBindings = append(a.HistoricalBindings, other)
+				continue
+			}
+			entry.Name = other
+			live, _ := RuntimeState(ctx, client, entry)
+			if live.Activity != nil && live.Activity.ThreadID != "" && live.Activity.ThreadID != a.ThreadID {
+				a.HistoricalBindings = append(a.HistoricalBindings, other)
+				continue
+			}
+			a.BindingConflicts = append(a.BindingConflicts, other)
+		}
+		sort.Strings(a.HistoricalBindings)
+		sort.Strings(a.BindingConflicts)
+		if len(a.BindingConflicts) > 0 {
+			a.State, a.Source, a.Binding = "unknown", "agentbook", ""
+			a.Reason = fmt.Sprintf("thread also claimed by live agents: %s; inspect bp doctor --agent %s", strings.Join(a.BindingConflicts, ", "), name)
+			a.DeliveryBlocked, state.Busy = true, true
+			state.RuntimeError = a.Reason
 		}
 	}
 	return state

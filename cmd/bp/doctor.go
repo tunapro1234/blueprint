@@ -1,12 +1,15 @@
 package main
 
 import (
+	bptmux "blueprint/internal/tmux"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"blueprint/internal/book"
 	bpconfig "blueprint/internal/config"
@@ -14,9 +17,13 @@ import (
 )
 
 type doctorCheck struct {
-	Name   string `json:"name"`
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail"`
+	Agent    string   `json:"agent,omitempty"`
+	ThreadID string   `json:"thread_id,omitempty"`
+	Related  []string `json:"related_agents,omitempty"`
+	Next     string   `json:"next_step,omitempty"`
+	Name     string   `json:"name"`
+	OK       bool     `json:"ok"`
+	Detail   string   `json:"detail"`
 }
 
 func canonicalExecutable(path string) (string, error) {
@@ -79,8 +86,20 @@ func checkShellIntegration(path string) (string, error) {
 }
 
 func doctor(cfg bpconfig.Config, configErr error, args []string) error {
-	if len(args) > 1 || len(args) == 1 && args[0] != "--json" {
-		return fmt.Errorf("usage: bp doctor [--json]")
+	jsonOutput, agentName := false, ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			jsonOutput = true
+		case "--agent":
+			if i+1 >= len(args) {
+				return fmt.Errorf("usage: bp doctor [--agent <name>] [--json]")
+			}
+			i++
+			agentName = args[i]
+		default:
+			return fmt.Errorf("usage: bp doctor [--agent <name>] [--json]")
+		}
 	}
 	if configErr == nil && cfg.InvalidConfig != "" {
 		configErr = fmt.Errorf("%s", cfg.InvalidConfig)
@@ -90,7 +109,7 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 		if err != nil {
 			detail = err.Error()
 		}
-		checks = append(checks, doctorCheck{name, err == nil, detail})
+		checks = append(checks, doctorCheck{Name: name, OK: err == nil, Detail: detail})
 	}
 	add("config", configErr, cfg.Path)
 	tmux, err := exec.LookPath("tmux")
@@ -114,6 +133,9 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 	if configErr == nil {
 		fleet, err := book.LoadFleet(book.Paths(cfg.Agentbooks))
 		add("agentbook", err, fmt.Sprintf("%d agents, coordinator %s; bp book --json shows source paths", len(fleet.Agents), fleet.Root))
+		if err == nil {
+			checks = append(checks, doctorRuntimeChecks(cfg, fleet, agentName)...)
+		}
 	}
 	home, _ := os.UserHomeDir()
 	path := filepath.Join(home, ".config", "bp", "shell.sh")
@@ -136,7 +158,7 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 			ok = false
 		}
 	}
-	if len(args) == 1 {
+	if jsonOutput {
 		json.NewEncoder(os.Stdout).Encode(struct {
 			Version string        `json:"version"`
 			OK      bool          `json:"ok"`
@@ -149,10 +171,93 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 				mark = "FAIL"
 			}
 			fmt.Printf("%s %-18s %s\n", mark, c.Name, c.Detail)
+			if c.Next != "" {
+				fmt.Printf("  next: %s\n", c.Next)
+			}
 		}
 	}
 	if !ok {
 		return errReported
 	}
 	return nil
+}
+
+// Read only: diagnose the target without repairing books, clearing input or
+// restarting a writer. Native thread evidence survives conflict reporting.
+func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string) []doctorCheck {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	client := bptmux.New()
+	if selected != "" {
+		if _, ok := fleet.Agents[selected]; !ok {
+			return []doctorCheck{{Name: "agent", Detail: "agent not registered: " + selected, Next: "bp book --json"}}
+		}
+	}
+	var checks []doctorCheck
+	for _, name := range fleet.SortedNames() {
+		if selected != "" && name != selected {
+			continue
+		}
+		entry := fleet.Agents[name]
+		if entry.Local != nil {
+			path := filepath.Join(filepath.Dir(entry.Local.Path), "exit.json")
+			if data, err := os.ReadFile(path); err == nil {
+				var exit localExitReport
+				if json.Unmarshal(data, &exit) == nil && exit.Status != "0" && exit.Status != "130" && exit.Signal != "2" && exit.RoutedTo == "" {
+					checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
+				}
+			}
+		}
+		if !client.HasSession(ctx, name) {
+			if selected != "" {
+				checks = append(checks, doctorCheck{Name: "runtime", Agent: name, OK: true, Detail: name + ": no tmux session; historical registration is not an active writer"})
+			}
+			continue
+		}
+		if entry.Role == "local CLI" {
+			probe := &app{ctx: ctx, config: cfg, tmux: client}
+			currentID := probe.resumeTmuxID(name)
+			paths, _ := filepath.Glob(filepath.Join(cfg.StateDir, "local-resume", "*.json"))
+			for _, path := range paths {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				var claim localResumeClaim
+				if json.Unmarshal(data, &claim) == nil && currentID != "" && claim.TmuxID == currentID && claim.Name != name {
+					checks = append(checks, doctorCheck{Name: "resume_name/" + name, Agent: name, Related: []string{claim.Name}, Detail: "resume claim still names " + claim.Name + ": " + path, Next: "Preserve the running pane. Inspect this claim and bp book --json before correcting its Name; do not start a second writer."})
+				}
+			}
+			for _, option := range []string{"status-left", "status-right"} {
+				data, err := exec.CommandContext(ctx, client.Bin, "show-options", "-v", "-t", "="+name+":", option).Output()
+				sub := "name"
+				if option == "status-right" {
+					sub = "bar"
+				}
+				text := string(data)
+				if err == nil && strings.Contains(text, " "+sub+" ") && !strings.Contains(text, " "+sub+" "+quoteShell(name)) && !strings.Contains(text, "#{session_name}") {
+					checks = append(checks, doctorCheck{Name: "bar_name/" + name + "/" + option, Agent: name, Detail: option + " still calls bp with another session name", Next: "bp setup refreshes BP-owned local bars without restarting the native CLI."})
+				}
+			}
+		}
+		state := book.RuntimeFor(ctx, client, fleet, name)
+		a := state.Activity
+		if a == nil {
+			continue
+		}
+		check := doctorCheck{Name: "runtime/" + name, Agent: name, ThreadID: a.ThreadID, OK: a.Reason == "", Detail: name + ": " + a.State, Related: a.BindingConflicts}
+		if a.Reason != "" {
+			check.Detail += "; " + a.Reason
+			check.Next = "bp peek " + name + "; bp status --json; inspect the blocked channel with bp qstat <channel>"
+		}
+		if len(a.BindingConflicts) > 0 {
+			check.Detail += "; model/context describe the shared thread, not separate per-agent usage"
+			check.Next = "Inspect bp peek for " + strings.Join(append([]string{name}, a.BindingConflicts...), ", ") + "; choose the intended existing pane with bp con <name>. Do not kill writers or edit pins automatically."
+		}
+		if len(a.HistoricalBindings) > 0 {
+			check.Detail += "; historical/moved registrations ignored: " + strings.Join(a.HistoricalBindings, ", ")
+		}
+		checks = append(checks, check)
+	}
+	return checks
 }

@@ -57,9 +57,10 @@ or Codex's writer lock. Until then its conversation is unknown and messages wait
 
 For explicit UUIDs, `claude -c` and `codex resume --last`, bp can attach to an
 existing verified owner before starting another CLI. This pre-launch routing does
-not apply to a selection made inside a native picker: the CLI's own active-writer
-checks and errors remain in effect. bp does not close an existing writer or
-silently transfer ownership. Shared app-server connections retain `--remote`.
+not replace a native picker. If Codex exits with its specific active-writer
+resume error, bp can attach that client to one kernel-verified existing tmux
+writer. It never kills that writer or removes its lock. Other native errors are
+preserved in a private `exit.json` and printed after tmux exits; `bp doctor --agent <name> --json` locates them. Shared app-server connections retain `--remote`.
 Native Claude
 and Codex `/rename` changes update the display name without changing authority.
 
@@ -67,7 +68,18 @@ and Codex `/rename` changes update the display name without changing authority.
 
 Settings live in `~/.blueprint/config.yaml`, or under `BP_HOME`. Shell integration
 lives in `~/.config/bp/shell.sh`. Native transcripts stay in their CLI directories.
-Setup preserves existing configuration, aliases and records.
+Setup preserves existing configuration, aliases and records. It installs the
+bundled `blueprint` skill for Codex and Claude, respecting `CODEX_HOME` and
+`CLAUDE_CONFIG_DIR`. User-owned skills are preserved; changed managed copies are
+backed up before an update.
+
+For local session problems, run `bp doctor --agent <canonical-name> --json`.
+It checks runtime binding, conflicting live registrations, stale resume names and
+bar commands, without changing sessions or records. Closed historical entries do
+not block the current session. A live thread conflict blocks message delivery,
+but keeps model/context visible as a shared thread snapshot. `bp rename` updates
+local resume claims and both bar commands; `--no-retitle` preserves native input
+and leaves the native transcript title unchanged.
 
 ```sh
 bp setup                   # install/refresh shell integration

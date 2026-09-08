@@ -2501,6 +2501,8 @@ func TestCutForceBusyOnlyReadsTheFlagBeforeTheMessage(t *testing.T) {
 		force bool
 	}{
 		{name: "leading", args: []string{"--force-busy", "ada", "selam"}, rest: []string{"ada", "selam"}, force: true},
+		{name: "short force", args: []string{"--force", "ada", "selam"}, rest: []string{"ada", "selam"}, force: true},
+		{name: "force in body", args: []string{"ada", "sunu dene:", "--force"}, rest: []string{"ada", "sunu dene:", "--force"}},
 		{name: "after the name", args: []string{"ada", "--force-busy", "selam"}, rest: []string{"ada", "selam"}, force: true},
 		{name: "inside the message", args: []string{"ada", "sunu dene:", "--force-busy"}, rest: []string{"ada", "sunu dene:", "--force-busy"}},
 		{name: "absent", args: []string{"ada", "selam"}, rest: []string{"ada", "selam"}},

@@ -344,3 +344,33 @@ func TestFolderHint(t *testing.T) {
 		}
 	}
 }
+
+func TestRoleChangeDoesNotRemoveRuntimeBinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agentbook.json")
+	original := []byte(`{"agents":[{"name":"agent","status":"open","role":"project work","localRuntime":{"harness":"codex","pid":42,"path":"/tmp/observation.json"}}]}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"local CLI", "other work"} {
+		if err := SetStatus([]string{path}, "agent", "open", "", Registration{Role: role}); err != nil {
+			t.Fatal(err)
+		}
+		file, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if file.Agents[0].Local == nil || file.Agents[0].Local.PID != 42 {
+			t.Fatalf("role=%q removed runtime: %+v", role, file.Agents[0])
+		}
+	}
+	if err := SetStatus([]string{path}, "agent", "open", "", Registration{ClearLocal: true}); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Agents[0].Local != nil {
+		t.Fatal("explicit observation reset did not clear runtime")
+	}
+}

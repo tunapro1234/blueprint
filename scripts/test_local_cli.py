@@ -396,7 +396,10 @@ class LocalCLITest(unittest.TestCase):
         shutil.copyfile(self.fake_tui,self.bin/"claude")
         fd=self.start("claude","before-name")
         registry=self.root/".blueprint/agentbook.json"
-        entry=next(a for a in json.loads(registry.read_text())["agents"] if a["name"]=="before-name")
+        records=json.loads(registry.read_text())
+        entry=next(a for a in records["agents"] if a["name"]=="before-name")
+        entry["role"]="project-specific work"
+        registry.write_text(json.dumps(records))
         transcript=Path(json.loads(Path(entry["localRuntime"]["path"]).read_text())["transcript_path"])
         before=transcript.read_bytes()
         pid=subprocess.check_output([self.tmux,"-S",self.socket,"display-message","-p","-t","=before-name:","#{pane_pid}"])
@@ -1052,12 +1055,18 @@ class LocalCLITest(unittest.TestCase):
             self.assertIn(str(self.root / ".blueprint"), value)
             self.assertIn(self.binary, value)
         self.assertNotIn("green", tmux("show-options", "-t", "=codex-test:", "-v", "status-style"))
+        # A free-form role must not remove a BP-owned session from maintenance.
+        book_path = self.root / ".blueprint" / "agentbook.json"
+        records = json.loads(book_path.read_text())
+        next(a for a in records["agents"] if a["name"] == "codex-test")["role"] = "hyprsetup Codex side"
+        book_path.write_text(json.dumps(records))
         # Reproduce the old installer: an already-open bp session has no bp bar.
         tmux("set-option", "-t", "=codex-test:", "status-right", "OLD_BAR")
         subprocess.run([self.binary, "setup", "--shell", "bash"], env=self.env,
                        check=True, capture_output=True)
         self.assertIn(" bar ", tmux("show-options", "-t", "=codex-test:", "-v", "status-right"))
         self.assertEqual(before_pid, tmux("display-message", "-p", "-t", "=codex-test:", "#{pane_pid}"))
+        self.assertEqual(next(a for a in json.loads(book_path.read_text())["agents"] if a["name"] == "codex-test")["role"], "hyprsetup Codex side")
         self.assertEqual(tmux("show-options", "-t", "=other:", "-v", "status-right"), "USER_BAR")
         for key, value in global_before.items():
             self.assertEqual(tmux("show-options", "-g", "-v", key), value, key)

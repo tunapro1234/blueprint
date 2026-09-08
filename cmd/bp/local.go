@@ -314,6 +314,10 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 	if err := a.initLocalBook(); err != nil {
 		return err
 	}
+	owner := exec.Command(a.tmux.Bin, "set-environment", "-t", "="+name, "BP_HOME", a.config.Home)
+	if output, err := owner.CombinedOutput(); err != nil {
+		return fmt.Errorf("record session installation: %w: %s", err, output)
+	}
 	cmd := exec.Command(a.tmux.Bin, "set-option", "-w", "-t", "="+name+":", "remain-on-exit", "off")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("configure own pane: %w: %s", err, output)
@@ -344,7 +348,7 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 			return err
 		}
 	}
-	reg := book.Registration{Role: "local CLI", Parent: fleet.Root, Local: local}
+	reg := book.Registration{Role: "local CLI", Parent: fleet.Root, Local: local, ClearLocal: local == nil}
 	if managed {
 		reg.Role, reg.Parent = "", ""
 	}
@@ -420,6 +424,26 @@ func (a *app) configureLocalBar(name string) error {
 	return nil
 }
 
+// ownsLocalSession is display/lifecycle provenance, never sender authority.
+// A role describes the work and must not opt a session out of maintenance.
+func (a *app) ownsLocalSession(name string, agent book.Agent) bool {
+	if a.config.Legacy || a.tmux == nil {
+		return false
+	}
+	if agent.Local != nil {
+		rel, err := filepath.Rel(filepath.Join(a.config.StateDir, "local"), agent.Local.Path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return false
+		}
+		process, err := a.tmux.PaneProcess(a.ctx, name)
+		return err == nil && process.PID == agent.Local.PID && process.PID > 0
+	}
+	// Older or observation-disabled bp run sessions carry their installation
+	// on the tmux session even though they have no structured LocalBinding.
+	out, err := exec.CommandContext(a.ctx, a.tmux.Bin, "show-environment", "-t", "="+name, "BP_HOME").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "BP_HOME="+a.config.Home
+}
+
 func (a *app) refreshLocalBars() error {
 	if a.tmux == nil {
 		return nil
@@ -429,12 +453,7 @@ func (a *app) refreshLocalBars() error {
 		return err
 	}
 	for name, agent := range fleet.Agents {
-		if agent.Role != "local CLI" || !a.tmux.HasSession(a.ctx, name) {
-			continue
-		}
-		// Old local launches already set BP_HOME on their own tmux session.
-		out, err := exec.CommandContext(a.ctx, a.tmux.Bin, "show-environment", "-t", "="+name, "BP_HOME").Output()
-		if err != nil || strings.TrimSpace(string(out)) != "BP_HOME="+a.config.Home {
+		if !a.tmux.HasSession(a.ctx, name) || !a.ownsLocalSession(name, agent) {
 			continue
 		}
 		if err := a.configureLocalBar(name); err != nil {

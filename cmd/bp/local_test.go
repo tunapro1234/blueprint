@@ -7,8 +7,38 @@ import (
 	"strings"
 	"testing"
 
+	"blueprint/internal/book"
+	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
+	bptmux "blueprint/internal/tmux"
 )
+
+func TestLocalSessionMaintenanceRequiresMatchingInstallationAndPID(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(home, "state")
+	bin := filepath.Join(home, "tmux")
+	script := "#!/bin/sh\ncase $1 in\nlist-panes) printf '1\\tcodex\\t42\\n';;\nshow-environment) echo " + quoteShell("BP_HOME="+home) + ";;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{ctx: context.Background(), config: bpconfig.Config{Home: home, StateDir: state}, tmux: &bptmux.Client{Bin: bin}}
+	for _, tc := range []struct {
+		name  string
+		local *cache.LocalBinding
+		want  bool
+	}{
+		{"custom role current runtime", &cache.LocalBinding{PID: 42, Path: filepath.Join(state, "local/run/observation.json")}, true},
+		{"stale PID", &cache.LocalBinding{PID: 43, Path: filepath.Join(state, "local/run/observation.json")}, false},
+		{"different installation", &cache.LocalBinding{PID: 42, Path: filepath.Join(home, "elsewhere/observation.json")}, false},
+		{"observation disabled", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := a.ownsLocalSession("agent", book.Agent{Role: "project work", Local: tc.local}); got != tc.want {
+				t.Fatalf("owned=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestBatchCommandsBypassTmux(t *testing.T) {
 	for _, tc := range []struct {

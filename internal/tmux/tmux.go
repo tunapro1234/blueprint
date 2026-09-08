@@ -709,11 +709,12 @@ var ErrUnverified = errors.New("delivery could not be verified")
 // ErrUnverified (errors.Is still matches) so the record a human reads says
 // WHICH signal failed, not merely that one did. The distinction is operational,
 // not cosmetic: the first cause leaves the text sitting in the composer with no
-// Enter ever pressed, the second means Enter went in and the screen would not
-// confirm it — the first needs finishing, the second needs looking at.
+// Enter ever pressed. The second can also mean ownership became ambiguous
+// before the first key; it must not claim that Enter was sent.
 const (
 	UnverifiedClientActive      = "ekran okunamadi ya da pane'de klavye aktif — Enter BASILMADI, metin composer'da kalmis olabilir"
-	UnverifiedSubmitUnconfirmed = "Enter basildi ama ekran teslimi dogrulamadi"
+	UnverifiedSubmitUnconfirmed = "composer'dan gonderim dogrulanamadi"
+	UnverifiedComposerOwnership = "composer metninin bu mesaja ait oldugu kanitlanamadi; ek Enter/Tab gonderilmedi"
 )
 
 // authExpiredMarkers are the phrases a Claude Code session renders in its status
@@ -1405,6 +1406,8 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		return finished, nil
 	case sendMismatch:
 		return finished, c.provenFailure(ctx, session, pane, composerOtherReason)
+	case sendUnowned:
+		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedComposerOwnership)
 	default:
 		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedSubmitUnconfirmed)
 	}
@@ -1777,6 +1780,8 @@ const (
 	// sendMismatch: the composer holds content unrelated to our message, which
 	// proves the paste never landed.
 	sendMismatch
+	// Text may contain an edit or a partial render; leave it untouched.
+	sendUnowned
 )
 
 // submit presses Enter to send the freshly injected message, then verifies the
@@ -1830,7 +1835,18 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		if paneDialog(pane) {
 			return sendUnverified
 		}
+		verdict := classifyComposer(pane, want)
+		owned := composerHoldsMessage(pane, want)
+		// Classification accepts prefixes to avoid repasting ambiguous text.
+		// That is not permission to submit a user's suffix or a partial frame.
+		// Claude's collapsed chip supports the first Enter only.
+		if verdict == composerMine && !owned && !(attempt == 0 && claudePasteChip(pane)) {
+			return sendUnowned
+		}
 		if codexBusyQueue(pane) {
+			if verdict != composerMine || !owned {
+				return sendUnowned
+			}
 			// TOCTOU: the target went BUSY after Dispatch's idle check and our
 			// paste. On a busy Codex, Enter never submits (it only expands the
 			// chip); the message must be pushed into Codex's own native queue
@@ -1854,7 +1870,7 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 			// falling through to Enter.
 			continue
 		}
-		switch classifyComposer(pane, want) {
+		switch verdict {
 		case composerCleared:
 			// Empty composer. After we watched it hold our message this is the
 			// submit we were waiting for; before that (attempt 0, straight after
@@ -1878,7 +1894,13 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 			}
 			empty, foreign, found := composerTrail(pane)
 			if foreign {
-				return sendUnverified
+				// Continuation rows can be our own soft-wrapped message. The
+				// complete box must match before another Enter; never backspace
+				// these rows as if they were empty lines inserted by paste mode.
+				if box, ok := composerBoxText(pane); !ok || box != want {
+					return sendUnverified
+				}
+				empty = 0
 			}
 			if found && empty > 0 {
 				// Multiline-stuck: Enter would only append newlines here.

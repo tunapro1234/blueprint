@@ -107,6 +107,7 @@ func main() {
    case 21:text=""
    case '\r','\n':
     if text=="quit" {return}
+    if text!="" && os.Getenv("BP_FAKE_IGNORE_FIRST_ENTER")=="1" {os.Unsetenv("BP_FAKE_IGNORE_FIRST_ENTER");continue}
     if strings.HasPrefix(text,"__bp_whoami") {
      c:=exec.Command("bp","whoami");c.Env=os.Environ()
      if fields:=strings.Fields(text);len(fields)>1 {c.Env=append(c.Env,"CODEX_THREAD_ID="+fields[1])}
@@ -1467,6 +1468,26 @@ class LocalCLITest(unittest.TestCase):
         self.assertFalse(who["authority"], who)
         os.write(fd, b"\x03")
         self.wait_closed("writer-test")
+
+    def test_wrapped_claude_message_submits_after_ignored_first_enter(self):
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        received = self.root / "wrapped-received.jsonl"
+        self.env.update(BP_FAKE_VIM="insert", BP_FAKE_BUSY=str(self.root / "absent"),
+                        BP_FAKE_RECEIVED=str(received), BP_FAKE_IGNORE_FIRST_ENTER="1")
+        fd = self.start("claude", "wrapped-test")
+        time.sleep(2.1)  # let the attached-client idle guard expire before delivery
+        message = "First row of a queued report.\nSecond row stays in the composer.\nFinal row must be submitted only once."
+        result = subprocess.run([self.binary, "msg", "wrapped-test", message], env=self.env,
+                                capture_output=True, text=True, timeout=20)
+        if not received.exists():
+            screen = subprocess.check_output([self.tmux, "-S", self.socket, "capture-pane", "-ep", "-t", "=wrapped-test:"], text=True)
+            result.stderr += "\n" + repr(screen)
+        self.assertTrue(received.exists(), result.stdout + result.stderr)
+        rows = [json.loads(line) for line in received.read_text().splitlines()]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertTrue(rows[0].endswith(message), rows)
+        os.write(fd, b"\x03")
+        self.wait_closed("wrapped-test")
 
     def test_immediate_delivery_has_durable_channel_and_binding(self):
         shutil.copyfile(self.fake_tui, self.bin / "claude")

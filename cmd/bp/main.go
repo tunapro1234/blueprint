@@ -46,6 +46,8 @@ bp status [--json] | bp tree
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
 bp setup                      # local shell integration (bash/zsh)
+bp onboard [--cli <command>] [--prepare] [-- arguments...]
+bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]
 bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]
@@ -285,6 +287,10 @@ func (a *app) run(args []string) error {
 			identity.Identity
 			Authority bool `json:"authority"`
 		}{who, who.Authoritative()})
+	case "onboard":
+		return a.onboard(args[1:])
+	case "book":
+		return a.showBook(args[1:])
 	case "setup":
 		return a.localSetup(args[1:])
 	case "status":

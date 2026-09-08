@@ -174,6 +174,15 @@ install_local() {
     mv "$local_candidate" "$local_bin/bp"
     "$local_bin/bp" setup
     say "installed $local_bin/bp; no remote setup required"
+    if [ "${BP_ONBOARD:-auto}" = skip ]; then
+        say "onboarding skipped; run bp onboard when ready"
+    elif [ ! -f "${BP_HOME:-$HOME/.blueprint}/main/onboarding.json" ]; then
+        if [ -z "${TMUX:-}" ] && ( : </dev/tty ) 2>/dev/null; then
+            "$local_bin/bp" onboard </dev/tty >/dev/tty 2>/dev/tty
+        else
+            say "run bp onboard in a terminal to choose your CLI and start the main agent"
+        fi
+    fi
 }
 
 tmux_is_configured() {

@@ -7,3 +7,6 @@
 /.codex/
 /install
 **/__pycache__/
+
+# Nested development worktrees have their own Git history.
+/.worktrees/

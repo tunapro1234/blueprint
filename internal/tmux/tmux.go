@@ -1990,8 +1990,7 @@ func (o OpenOptions) Validate() error {
 }
 
 const (
-	legacyOnboarding   = "Selam, sen %s agentisin (ismine gore calisirsin; proje detayini kullanici sonra verebilir). Bu COK-SERVISLI bir sunucu (nginx 80/443 public + Cloudflare, Docker+systemd: gitea, mail, probot, kitap...). Orchestrator=server-main, evi /srv/server-main. ONCE OKU: /srv/server-main/AGENT-ONBOARDING.md (server + PORT kurallari) ve /srv/server-main/agentbook.json (agentlar + iletisim). DIGER AGENTLARLA KONUSMA: bp msg <ad> <mesaj> — cevabi okumak icin bp peek <ad>, filo icin bp status. Elle tmux send-keys KULLANMA (bp mesgul-kontrolu ve kuyrugu atlanir). bp'nin tum komutlari ve kurallari: /srv/blueprint/README.md (ya da bp help). Model ve filo kurallari: Codex icin /root/.codex/AGENTS.md, Claude icin /root/.claude/CLAUDE.md - uygula. UYARI1 ghost-text: soluk oneri gercek degil. UYARI2 vim modu: submit icin cogu zaman fazladan Enter (bp msg bunu kendi halleder). Okuyunca kisa hazirim de."
-	portableOnboarding = "Sen '%s' agentisin. Diger agentlarla iletisim: bp msg <ad> <mesaj>."
+	portableOnboarding = "You are the '%s' bp agent. Follow the user's instructions and the agent rules in your own working directory. Read bp help, bp config path and bp book to learn this machine's configuration and coordinator; do not assume server-specific paths or privileges. Use bp status, bp msg and bp qstat for communication; let the queue preserve busy agents and user input. Do not manually type into other panes. Briefly report readiness in the user's language."
 )
 
 // mungeProjectPath replicates Claude Code's cwd -> project-dir encoding: every
@@ -2387,9 +2386,6 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	if !opts.NoPrompt {
 		onboarding := portableOnboarding
-		if opts.Legacy {
-			onboarding = legacyOnboarding
-		}
 		if err := c.Send(ctx, session, fmt.Sprintf(onboarding, session)); err != nil {
 			if warn != nil {
 				warn("WARNING: could not send onboarding prompt: " + err.Error())

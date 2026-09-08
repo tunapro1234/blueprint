@@ -97,26 +97,62 @@ configure_remote() {
 }
 
 install_client_binary() {
-    client_platform
-    install_dir="$HOME/.local/bin"
-    target_binary="$install_dir/bp"
-    download_url="https://bp.tunapro.xyz/bp-$PLATFORM"
-    temp_binary=$(mktemp "${TMPDIR:-/tmp}/bp.XXXXXX")
-    trap 'rm -f "$temp_binary"' EXIT HUP INT TERM
-
-    if ! command -v curl >/dev/null 2>&1; then
-        say "error: curl is required"
-        exit 1
-    fi
-    say "downloading $download_url"
-    curl -fsSL "$download_url" -o "$temp_binary"
-    chmod 755 "$temp_binary"
-    mkdir -p "$install_dir"
-    mv "$temp_binary" "$target_binary"
-    trap - EXIT HUP INT TERM
-
+    fetch_verified_release
     configure_remote
-    say "installed $target_binary"
+    install_dir="$HOME/.local/bin"
+    mkdir -p "$install_dir"
+    if [ -e "$install_dir/bp" ]; then
+        backup_binary=$(mktemp "$install_dir/bp.before-client.XXXXXX")
+        cp -p "$install_dir/bp" "$backup_binary"
+    fi
+    candidate_binary=$(mktemp "$install_dir/.bp-client.XXXXXX")
+    cp "$local_tmp/bp" "$candidate_binary"
+    chmod 755 "$candidate_binary"
+    mv "$candidate_binary" "$install_dir/bp"
+    say "installed $install_dir/bp (signature and SHA-256 verified)"
+}
+
+fetch_verified_release() {
+    client_platform
+    local_tmp=$(mktemp -d "${TMPDIR:-/tmp}/bp-install.XXXXXX")
+    trap 'rm -rf "$local_tmp"' EXIT HUP INT TERM
+    if [ -n "${BP_LOCAL_BINARY:-}" ]; then
+        cp "$BP_LOCAL_BINARY" "$local_tmp/bp"
+    else
+        command -v curl >/dev/null 2>&1 || { say "error: curl is required"; exit 1; }
+        local_base=https://bp.tunapro.xyz
+        local_version=${BP_VERSION:-$(curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/latest.version")}
+        printf '%s' "$local_version" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { say "error: invalid release version"; exit 1; }
+        release_base="$local_base/releases/v$local_version"
+        curl --proto '=https' --proto-redir '=https' -fsSL "$release_base/checksums.txt" -o "$local_tmp/checksums"
+        curl --proto '=https' --proto-redir '=https' -fsSL "$release_base/checksums.sig" -o "$local_tmp/checksums.sig"
+        cat >"$local_tmp/release.pub" <<'BP_RELEASE_PUBLIC_KEY'
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAs72CR5QTdrLCQfDS6dHh/igbOIL6gw5ayGufCHnADUw=
+-----END PUBLIC KEY-----
+BP_RELEASE_PUBLIC_KEY
+        release_openssl=openssl
+        for candidate_ssl in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+            if [ -x "$candidate_ssl" ]; then release_openssl=$candidate_ssl; break; fi
+        done
+        "$release_openssl" pkeyutl -verify -pubin -inkey "$local_tmp/release.pub" -rawin -in "$local_tmp/checksums" -sigfile "$local_tmp/checksums.sig" >/dev/null 2>&1 || {
+            say "error: release signature could not be verified; OpenSSL with Ed25519 support is required (macOS: brew install openssl@3)"; exit 1;
+        }
+        [ "$(head -n 1 "$local_tmp/checksums")" = "# bp-release $local_version" ] || { say "error: signed release version mismatch"; exit 1; }
+        curl --proto '=https' --proto-redir '=https' -fsSL "$release_base/bp-$PLATFORM" -o "$local_tmp/bp"
+        expected=$(awk -v name="bp-$PLATFORM" '$2 == name {print $1}' "$local_tmp/checksums")
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual=$(sha256sum "$local_tmp/bp" | awk '{print $1}')
+        else
+            actual=$(shasum -a 256 "$local_tmp/bp" | awk '{print $1}')
+        fi
+        [ -n "$expected" ] && [ "$expected" = "$actual" ] || { say "error: SHA-256 mismatch"; exit 1; }
+    fi
+    chmod 755 "$local_tmp/bp"
+    case "$("$local_tmp/bp" help)" in
+        *'bp setup'*'bp config path|check'*'bp run '*) ;;
+        *) say "error: published binary does not support local YAML setup yet; keeping your installation"; exit 1 ;;
+    esac
 }
 
 # Local mode installs no daemon or remote peer and does not edit tmux options.
@@ -140,29 +176,10 @@ install_local() {
                 ;;
         esac
     fi
-    local_tmp=$(mktemp -d "${TMPDIR:-/tmp}/bp-install.XXXXXX")
-    trap 'rm -rf "$local_tmp"' EXIT HUP INT TERM
-    if [ -n "${BP_LOCAL_BINARY:-}" ]; then
-        cp "$BP_LOCAL_BINARY" "$local_tmp/bp"
-    else
-        command -v curl >/dev/null 2>&1 || { say "error: curl is required"; exit 1; }
-        local_base=https://bp.tunapro.xyz
-        curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/bp-$PLATFORM" -o "$local_tmp/bp"
-        curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/checksums.txt" -o "$local_tmp/checksums"
-        expected=$(awk -v name="bp-$PLATFORM" '$2 == name {print $1}' "$local_tmp/checksums")
-        if command -v sha256sum >/dev/null 2>&1; then
-            actual=$(sha256sum "$local_tmp/bp" | awk '{print $1}')
-        else
-            actual=$(shasum -a 256 "$local_tmp/bp" | awk '{print $1}')
-        fi
-        [ -n "$expected" ] && [ "$expected" = "$actual" ] || { say "error: SHA-256 mismatch"; exit 1; }
-    fi
-    chmod 755 "$local_tmp/bp"
-    case "$("$local_tmp/bp" help)" in
-        *'bp setup'*'bp config path|check'*'bp run '*) ;;
-        *) say "error: published binary does not support local YAML setup yet; keeping your installation"; exit 1 ;;
-    esac
+    fetch_verified_release
+    "$local_tmp/bp" setup --check || { say "error: installation preflight failed; existing binary preserved"; exit 1; }
     local_bin="$HOME/.local/bin"
+    local_backup=
     mkdir -p "$local_bin"
     if [ -e "$local_bin/bp" ]; then
         local_backup=$(mktemp "$local_bin/bp.before-local.XXXXXX")
@@ -172,7 +189,19 @@ install_local() {
     cp "$local_tmp/bp" "$local_candidate"
     chmod 755 "$local_candidate"
     mv "$local_candidate" "$local_bin/bp"
-    "$local_bin/bp" setup
+    if ! "$local_bin/bp" setup; then
+        if [ -n "$local_backup" ]; then
+            restore_candidate=$(mktemp "$local_bin/.bp-restore.XXXXXX")
+            cp -p "$local_backup" "$restore_candidate"
+            mv "$restore_candidate" "$local_bin/bp"
+            say "error: setup failed; previous binary restored ($local_backup)"
+        else
+            failed_install=$(mktemp "$local_bin/bp.failed-install.XXXXXX")
+            mv "$local_bin/bp" "$failed_install"
+            say "error: setup failed; unsuccessful binary retained at $failed_install"
+        fi
+        exit 1
+    fi
     say "installed $local_bin/bp; no remote setup required"
     if [ "${BP_ONBOARD:-auto}" = skip ]; then
         say "onboarding skipped; run bp onboard when ready"

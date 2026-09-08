@@ -198,3 +198,10 @@ Bu koruma aynı BP_HOME ve tmux sunucusundaki `bp run claude -c` ve UUID'li
 olduğu için yeniden bağlanmaz. BP dışındaki Claude süreçlerini veya TUI içinden
 sonradan `/resume` ile başka konuşmaya geçişi kilitlemez. Eski kayıt/transkriptler
 silinmez; var olan çoklu writer'lar otomatik olarak birleştirilmez.
+
+## Güncelleme bildirimi
+
+`updateCheck: true` yerel interaktif açılışlarda günde en fazla bir arka plan
+kontrolünü etkinleştirir. Hazır önbellekte yeni sürüm varsa terminalde kısa
+bildirim çıkar; agent mesajı veya model çağrısı oluşturulmaz. `false` bunu kapatır.
+`bp update --check --json` elle, makine okunur kontrol sağlar.

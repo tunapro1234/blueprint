@@ -36,6 +36,13 @@ unset -f _bp_install_function
 `
 
 func (a *app) localSetup(args []string) error {
+	if len(args) == 1 && args[0] == "--check" {
+		return a.setupCheck()
+	}
+	if len(args) == 1 && args[0] == "--disable" {
+		return a.disableSetup()
+	}
+
 	if a.config.InvalidConfig != "" {
 		return fmt.Errorf("fix the existing config before setup: %s", a.config.InvalidConfig)
 	}

@@ -42,10 +42,11 @@ import (
 
 const usage = `blueprint (bp) — agent infrastructure CLI
 
+bp version [--json] | bp update [--check] [--json] | bp doctor [--json]
 bp status [--json] | bp tree
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
-bp setup                      # local shell integration (bash/zsh)
+bp setup [--check|--disable]   # local shell integration (bash/zsh)
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
@@ -172,6 +173,13 @@ func (a *app) releasePane(name string) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		if err := printVersion(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "_observe" {
 		if err := observe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "bp observation:", err)
@@ -181,6 +189,15 @@ func main() {
 	}
 	ctx := context.Background()
 	config, err := bpconfig.Load()
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		if err := doctor(config, err, os.Args[2:]); err != nil {
+			if !errors.Is(err, errReported) {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		os.Exit(1)
@@ -287,6 +304,8 @@ func (a *app) run(args []string) error {
 			identity.Identity
 			Authority bool `json:"authority"`
 		}{who, who.Authoritative()})
+	case "update":
+		return a.update(args[1:])
 	case "onboard":
 		return a.onboard(args[1:])
 	case "book":
@@ -1100,6 +1119,14 @@ func (a *app) open(args []string) error {
 		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
+	absolute, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	dir, err = filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return fmt.Errorf("open directory: %w", err)
+	}
 	for _, positional := range []string{name, dir} {
 		if err := rejectFlag("open", positional); err != nil {
 			return err

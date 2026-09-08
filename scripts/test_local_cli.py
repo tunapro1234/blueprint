@@ -190,7 +190,7 @@ class LocalCLITest(unittest.TestCase):
         for cli in ["codex", "claude", "opencode", "hermes"]:
             (self.bin / cli).write_text(FAKE)
             (self.bin / cli).chmod(0o755)
-        self.env = dict(os.environ, HOME=str(self.root), BP_HOME=str(self.root / ".blueprint"),
+        self.env = dict(os.environ, BP_NO_UPDATE_CHECK="1", HOME=str(self.root), BP_HOME=str(self.root / ".blueprint"),
                         PATH=str(self.bin) + os.pathsep + os.environ["PATH"], TERM="xterm-256color", SHELL="/bin/bash")
         for key in ["TMUX", "TMUX_PANE", "BP_SESSION", "AGENT", "AGENTBOOK", "ZDOTDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CODEX_THREAD_ID"]:
             self.env.pop(key, None)
@@ -360,6 +360,88 @@ class LocalCLITest(unittest.TestCase):
         self.assertEqual(len(agents["agents"]), 1)
         os.write(fd, b"quit\r")
         self.wait_closed("main")
+
+    def test_version_and_doctor_with_broken_configuration(self):
+        config = self.root / ".blueprint/config.yaml"
+        config.parent.mkdir()
+        config.write_text("bar: [broken\n")
+        result = subprocess.run([self.binary, "version", "--json"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["version"], "1.6.0")
+        result = subprocess.run([self.binary, "doctor", "--json"], env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        report = json.loads(result.stdout)
+        self.assertFalse(report["ok"])
+        self.assertFalse(next(c for c in report["checks"] if c["name"] == "config")["ok"])
+
+    def test_disable_preserves_aliases_and_records(self):
+        rc = self.root / ".bashrc"
+        rc.write_text('alias claude="claude --dangerously-skip-permissions"\n')
+        subprocess.run([self.binary, "setup"], env=self.env, check=True, capture_output=True)
+        book = self.root / ".blueprint/agentbook.json"
+        before = book.read_bytes()
+        subprocess.run([self.binary, "setup", "--disable"], env=self.env, check=True, capture_output=True)
+        self.assertEqual(before, book.read_bytes())
+        result = subprocess.run(["bash", "-ic", "type claude"], env=self.env, capture_output=True, text=True)
+        self.assertIn("dangerously-skip-permissions", result.stdout)
+        self.assertNotIn("_bp_agent", (self.root / ".config/bp/shell.sh").read_text())
+
+    @unittest.skipUnless(shutil.which("openssl"), "OpenSSL required")
+    def test_signed_installer_rejects_tampering_before_replacement(self):
+        import hashlib
+        fixtures = self.root / "release-fixtures"
+        fixtures.mkdir()
+        private = fixtures / "private.pem"
+        public = fixtures / "public.pem"
+        subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)], check=True, capture_output=True)
+        subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-out", str(public)], check=True, capture_output=True)
+        candidate = fixtures / "bp-linux-amd64"
+        shutil.copyfile(self.binary, candidate)
+        (fixtures / "latest.version").write_text("1.6.0\n")
+        checksums = fixtures / "checksums.txt"
+        checksums.write_text("# bp-release 1.6.0\n" + hashlib.sha256(candidate.read_bytes()).hexdigest() + "  bp-linux-amd64\n")
+        subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(private), "-rawin", "-in", str(checksums), "-out", str(fixtures / "checksums.sig")], check=True, capture_output=True)
+        installer = self.root / "install-test.sh"
+        installer.write_text((REPO / "install.sh").read_text().replace((REPO / "internal/release/release.pub").read_text().strip(), public.read_text().strip()))
+        curl = self.bin / "curl"
+        curl.write_text('#!/usr/bin/env python3\nimport os,sys,pathlib,urllib.parse\na=sys.argv[1:]\nu=next(x for x in a if x.startswith("https://"))\np=pathlib.Path(os.environ["BP_TEST_RELEASE"]) / pathlib.Path(urllib.parse.urlparse(u).path).name\ndata=p.read_bytes()\nif "-o" in a: pathlib.Path(a[a.index("-o")+1]).write_bytes(data)\nelse: sys.stdout.buffer.write(data)\n')
+        curl.chmod(0o755)
+        env = dict(self.env, BP_TEST_RELEASE=str(fixtures), BP_ONBOARD="skip")
+        target = self.root / ".local/bin/bp"
+        result = subprocess.run(["sh", str(installer), "--local"], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        original = target.read_bytes()
+        candidate.write_bytes(b"tampered executable")
+        result = subprocess.run(["sh", str(installer), "--local"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("SHA-256 mismatch", result.stdout)
+        self.assertEqual(target.read_bytes(), original)
+        checksums.write_text("# bp-release 1.6.0\n" + "0"*64 + "  bp-linux-amd64\n")
+        result = subprocess.run(["sh", str(installer), "--local"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("signature", result.stdout)
+        self.assertEqual(target.read_bytes(), original)
+
+    def test_installer_setup_failure_restores_existing_binary(self):
+        target = self.root / ".local/bin/bp"
+        target.parent.mkdir(parents=True)
+        target.write_text("original-binary")
+        candidate = self.root / "candidate"
+        candidate.write_text("#!/bin/sh\ncase \"$1\" in\nhelp) echo 'bp setup bp config path|check bp run '; exit 0;;\nsetup) [ \"${2:-}\" = --check ]; exit $?;;\nesac\nexit 1\n")
+        candidate.chmod(0o755)
+        result = subprocess.run(["sh", str(REPO / "install.sh"), "--local"], env=dict(self.env, BP_LOCAL_BINARY=str(candidate), BP_ONBOARD="skip"), capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.read_text(), "original-binary")
+        self.assertIn("previous binary restored", result.stdout)
+
+    def test_installer_preflight_keeps_existing_binary(self):
+        target = self.root / ".local/bin/bp"
+        target.parent.mkdir(parents=True)
+        target.write_text("original-binary")
+        env = dict(self.env, BP_LOCAL_BINARY=self.binary, BP_ONBOARD="skip", SHELL="/bin/fish")
+        result = subprocess.run(["sh", str(REPO / "install.sh"), "--local"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.read_text(), "original-binary")
 
     def test_quit_closes_only_own_session_for_each_cli(self):
         for cli in ["codex", "claude", "opencode", "hermes"]:

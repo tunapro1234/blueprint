@@ -1,6 +1,6 @@
 {
   "name": "@tunapro/blueprint",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Blueprint agent infrastructure CLI",
   "license": "UNLICENSED",
   "repository": {
@@ -14,7 +14,8 @@
   "files": [
     "bin/bp.js",
     "install.js",
-    "README.md"
+    "README.md",
+    "release.pub"
   ],
   "scripts": {
     "postinstall": "node install.js"

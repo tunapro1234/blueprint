@@ -14,15 +14,9 @@ const filename = os && arch ? `bp-${os}-${arch}` : null;
 const binary = filename ? path.join(__dirname, filename) : null;
 
 if (!binary || !fs.existsSync(binary)) {
-  const suffix = filename || 'bp-<os>-<arch>';
   console.error(`The native bp binary is unavailable for ${process.platform}-${process.arch}.
-
-Reinstall @tunapro/blueprint, or install it manually:
-  mkdir -p ~/.local/bin
-  curl -fsSL https://bp.tunapro.xyz/${suffix} -o ~/.local/bin/bp
-  chmod 755 ~/.local/bin/bp
-
-Verify it against https://bp.tunapro.xyz/checksums.txt and add ~/.local/bin to PATH.`);
+Reinstall @tunapro/blueprint with install scripts enabled, or use the signed shell installer:
+  curl -fsSL https://bp.tunapro.xyz/install.sh | sh -s -- --local`);
   process.exit(1);
 }
 

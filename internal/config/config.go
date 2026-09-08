@@ -21,6 +21,7 @@ const LegacyHome = "/srv/blueprint"
 
 // Config contains all paths and feature switches that vary by machine.
 type Config struct {
+	UpdateCheck      bool         `json:"updateCheck" yaml:"updateCheck"`
 	LocalMouse       bool         `json:"localMouse" yaml:"localMouse"`
 	LocalObservation bool         `json:"localObservation" yaml:"localObservation"`
 	Path             string       `json:"-" yaml:"-"`
@@ -71,6 +72,7 @@ type FedConfig struct {
 }
 
 type overrides struct {
+	UpdateCheck      *bool         `json:"updateCheck" yaml:"updateCheck"`
 	LocalMouse       *bool         `json:"localMouse" yaml:"localMouse"`
 	LocalObservation *bool         `json:"localObservation" yaml:"localObservation"`
 	MsgqRoot         *string       `json:"msgqRoot" yaml:"msgqRoot"`
@@ -240,6 +242,7 @@ func defaults(home string, legacy bool) Config {
 			Bar:              bar,
 			LocalObservation: true,
 			LocalMouse:       true,
+			UpdateCheck:      true,
 		}
 	}
 	return Config{
@@ -251,12 +254,16 @@ func defaults(home string, legacy bool) Config {
 		Bar:              bar,
 		LocalObservation: true,
 		LocalMouse:       true,
+		UpdateCheck:      true,
 	}
 }
 
 func apply(result *Config, values overrides) {
 	if values.Bar != nil && values.Bar.DefaultColor != nil {
 		result.Bar.DefaultColor = *values.Bar.DefaultColor
+	}
+	if values.UpdateCheck != nil {
+		result.UpdateCheck = *values.UpdateCheck
 	}
 	if values.LocalMouse != nil {
 		result.LocalMouse = *values.LocalMouse

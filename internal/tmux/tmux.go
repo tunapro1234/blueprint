@@ -1955,6 +1955,9 @@ type OpenOptions struct {
 	NoSandbox bool   `json:"noSandbox,omitempty"`
 	NoPrompt  bool   `json:"-"`
 	Legacy    bool   `json:"-"`
+	// Launcher is an internal, shell-quoted wrapper for local managed sessions.
+	// It receives the complete native command as one argument.
+	Launcher string `json:"-"`
 }
 
 var codexThreadID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
@@ -2282,6 +2285,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	nativeOnboarding := opts.Codex && !opts.Resume && !opts.NoPrompt
 	if nativeOnboarding {
 		command += " " + shellQuote(fmt.Sprintf(portableOnboarding, session))
+	}
+	if opts.Launcher != "" {
+		command = "exec " + opts.Launcher + " " + shellQuote(command)
 	}
 	if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", command, "Enter"); err != nil {
 		return err

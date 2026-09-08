@@ -1277,6 +1277,58 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd,b"\x03")
         self.wait_closed("claude-test")
 
+    def test_managed_open_codex_uses_local_runtime_and_worker(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        self.env.update(BP_FAKE_VIM="insert", BP_FAKE_BUSY=str(self.root / "absent"),
+                        BP_FAKE_IDENTITY_RESULT=str(self.root / "managed-whoami.json"))
+        home = self.root / ".blueprint"
+        home.mkdir()
+        (home / "agentbook.json").write_text(json.dumps(dict(orchestrator="main", agents=[
+            dict(name="managed", folder=str(self.root), status="closed", parent="main", role="keep role")
+        ])))
+        result = subprocess.run([self.binary, "open", "managed", str(self.root), "--codex", "--no-prompt"],
+                                env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        entry = json.loads((home / "agentbook.json").read_text())["agents"][0]
+        self.assertEqual(entry["role"], "keep role")
+        self.assertEqual(entry["parent"], "main")
+        self.assertEqual(entry["localRuntime"]["harness"], "codex")
+        pid = entry["localRuntime"]["pid"]
+        pane_pid = int(subprocess.check_output([self.tmux, "-S", self.socket, "display-message", "-p", "-t", "=managed:", "#{pane_pid}"]))
+        self.assertEqual(pid, pane_pid)
+        children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+        self.assertTrue(any(b"_local-worker" in Path(f"/proc/{child}/cmdline").read_bytes() for child in children))
+        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        row = next(a for a in status["agents"] if a["name"] == "managed")
+        self.assertEqual(row["activity"]["state"], "idle", row)
+        self.assertFalse(row["activity"]["delivery_blocked"], row)
+        self.assertEqual(row["runtime"], "codex", row)
+        bar = subprocess.check_output([self.tmux, "-S", self.socket, "show-options", "-t", "=managed:", "status-right"], text=True)
+        self.assertIn("bar", bar)
+        thread = row["thread_id"]
+        subprocess.run([self.tmux, "-S", self.socket, "send-keys", "-t", "=managed:", "__bp_whoami " + thread, "Enter"], check=True)
+        identity = self.root / "managed-whoami.json"
+        deadline = time.monotonic() + 5
+        while not identity.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        who = json.loads(identity.read_text())
+        # A worker/held writer lock does not authenticate an individual tool call.
+        self.assertFalse(who["authority"], who)
+        self.assertEqual(who["Label"], "managed?", who)
+        subprocess.run([self.tmux, "-S", self.socket, "send-keys", "-t", "=managed:", "C-c"], check=True)
+        self.wait_closed("managed")
+        resumed = subprocess.run([self.binary, "open", "managed", str(self.root), "--codex", "--resume", "--thread", thread],
+                                 env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        current = json.loads((home / "agentbook.json").read_text())["agents"][0]
+        self.assertNotEqual(current["localRuntime"]["pid"], pid)
+        self.assertEqual(current["launch"]["resumeId"], thread)
+        self.assertEqual(current["role"], "keep role")
+        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+        row = next(a for a in status["agents"] if a["name"] == "managed")
+        self.assertEqual(row["thread_id"], thread)
+        self.assertFalse(row["activity"]["delivery_blocked"], row)
+
     def test_unpinned_server_codex_binds_writer_and_delivers(self):
         received = self.root / "received.jsonl"
         shutil.copyfile(self.fake_tui, self.bin / "codex")

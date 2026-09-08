@@ -201,6 +201,13 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 		}
 	}
 	var checks []doctorCheck
+	// HasSession deliberately returns false on any tmux error. Do not turn a
+	// denied socket into a reassuring "no active writer" diagnostic.
+	if _, err := client.Sessions(ctx); err != nil &&
+		(strings.Contains(strings.ToLower(err.Error()), "operation not permitted") || strings.Contains(strings.ToLower(err.Error()), "permission denied")) {
+		return []doctorCheck{{Name: "tmux_access", Agent: selected, Detail: err.Error(),
+			Next: "Run bp doctor from the outer terminal and compare access. A Codex sandbox can deny the tmux socket even while the agent is alive. Do not remove writer locks or disable the whole sandbox to repair observations; raw tmux socket access also permits host command execution."}}
+	}
 	for _, name := range fleet.SortedNames() {
 		if selected != "" && name != selected {
 			continue

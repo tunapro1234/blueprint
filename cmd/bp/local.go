@@ -271,6 +271,37 @@ func (a *app) localRun(args []string) error {
 // localSession replaces itself with the CLI. tmux sees the real harness as its
 // foreground process, and no supervising shell remains when that process exits.
 func (a *app) localSession(args []string) error {
+	return a.startLocalSession(args, false)
+}
+
+// managedSession uses the same lifetime, observations and bar as bp run,
+// preserving the hierarchy already registered by bp open.
+func (a *app) managedSession(args []string) error {
+	if len(args) != 3 || args[1] != "codex" || !identity.ValidName(args[0]) {
+		return fmt.Errorf("invalid managed session")
+	}
+	_, path, err := a.prepareLocalObservation(args[1], nil)
+	if err != nil {
+		return err
+	}
+	exitDir := filepath.Dir(path)
+	if path == "" {
+		root := filepath.Join(a.config.StateDir, "local")
+		if err := os.MkdirAll(root, 0700); err != nil {
+			return err
+		}
+		exitDir, err = os.MkdirTemp(root, "run-")
+		if err != nil {
+			return err
+		}
+	}
+	if err := os.Setenv("BP_EXIT_REPORT", filepath.Join(exitDir, "exit.json")); err != nil {
+		return err
+	}
+	return a.startLocalSession([]string{args[0], args[1], path, "/bin/sh", "-c", "exec env " + args[2]}, true)
+}
+
+func (a *app) startLocalSession(args []string, managed bool) error {
 	if len(args) < 4 || os.Getenv("TMUX") == "" || !identity.ValidName(args[0]) || !localHarness(args[1]) || !filepath.IsAbs(args[3]) {
 		return fmt.Errorf("invalid internal session invocation")
 	}
@@ -313,7 +344,11 @@ func (a *app) localSession(args []string) error {
 			return err
 		}
 	}
-	if err := book.SetStatus(a.config.Agentbooks, name, "open", cwd, book.Registration{Role: "local CLI", Parent: fleet.Root, Local: local}); err != nil {
+	reg := book.Registration{Role: "local CLI", Parent: fleet.Root, Local: local}
+	if managed {
+		reg.Role, reg.Parent = "", ""
+	}
+	if err := book.SetStatus(a.config.Agentbooks, name, "open", cwd, reg); err != nil {
 		return err
 	}
 	defer book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{}) // exec failure only

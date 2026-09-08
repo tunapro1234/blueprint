@@ -251,3 +251,21 @@ bu denetimi atlaması doğru olmaz. Remote Codex'te yürütücü TUI değil app-
 loaded thread ve writer sahipliği ayrıca doğrulanmalı. Proje dosyalarını taşımak,
 konuşmanın çalışma dizinini değiştirmekten ayrı ve açıkça seçilen bir işlem olmalı.
 Şu aşamada gerçek kullanıcı konuşmasıyla taşıma testi yapılmadı.
+
+## Local Codex launch and sandbox diagnostics
+
+Local `bp open --codex` (including explicit resume) uses the same session worker
+and bar setup as `bp run codex`. The managed role and parent stay intact. Codex
+observations come from the native writer lock and transcript; an observation path
+in the book does not imply that Codex writes a Claude-style `observation.json`.
+Existing running panes are not replaced by an update. Remote and legacy server
+launches retain their existing execution boundaries.
+
+If `bp doctor` reports `tmux_access`, run it from the outer terminal as well.
+A denied socket is not evidence that the agent exited. Codex's command sandbox
+can deny tmux access while the worker outside that sandbox still updates the bar.
+BP does not automatically disable the sandbox or allow the raw tmux socket:
+that socket can execute host commands, so it is broader than a status/message
+interface. See [Codex Unix socket permissions](https://learn.chatgpt.com/docs/permissions#unix-sockets).
+A readable agent label or running worker alone also does not grant sender
+authority; missing per-execution thread evidence remains explicitly unverified.

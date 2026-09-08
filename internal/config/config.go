@@ -109,8 +109,16 @@ func loadWith(getenv func(string) string, stat func(string) (os.FileInfo, error)
 func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo, error), userHome func() (string, error), readFile func(string) ([]byte, error), warning io.Writer) (Config, error) {
 	home := getenv("BP_HOME")
 	if home == "" {
-		if info, err := stat(LegacyHome); err == nil && info.IsDir() {
-			home = LegacyHome
+		// A server installation explicitly selects its home. Merely cloning the
+		// repository under /srv/blueprint must never enable server integrations.
+		data, err := readFile("/etc/blueprint/home")
+		if err == nil {
+			home = strings.TrimSpace(string(data))
+			if !filepath.IsAbs(home) || strings.ContainsAny(home, "\r\n\x00") {
+				return Config{}, fmt.Errorf("invalid /etc/blueprint/home: expected one absolute directory")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Config{}, fmt.Errorf("read /etc/blueprint/home: %w", err)
 		} else {
 			user, err := userHome()
 			if err != nil {
@@ -119,6 +127,7 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 			home = filepath.Join(user, ".blueprint")
 		}
 	}
+
 	home = filepath.Clean(home)
 	legacy := home == LegacyHome
 	result := defaults(home, legacy)

@@ -205,3 +205,10 @@ silinmez; var olan çoklu writer'lar otomatik olarak birleştirilmez.
 kontrolünü etkinleştirir. Hazır önbellekte yeni sürüm varsa terminalde kısa
 bildirim çıkar; agent mesajı veya model çağrısı oluşturulmaz. `false` bunu kapatır.
 `bp update --check --json` elle, makine okunur kontrol sağlar.
+
+Machine mode is explicit: `BP_HOME` selects a configuration directory. Without it,
+bp reads an optional `/etc/blueprint/home` selector written by `install.sh --server`;
+otherwise it uses `~/.blueprint`. A checkout at `/srv/blueprint` alone does not
+activate server integrations. Local installs are the default; `--client` and
+`--server` must be selected explicitly. On a configured server, set `BP_HOME` to
+your personal configuration directory to use a separate local installation.

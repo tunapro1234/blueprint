@@ -33,8 +33,9 @@ Finish the initial pass with a short explanation of what is ready, what you lear
 `
 
 type onboardingState struct {
-	CLI   string `json:"cli"`
-	Agent string `json:"agent"`
+	CLI   string   `json:"cli"`
+	Agent string   `json:"agent"`
+	Args  []string `json:"args,omitempty"`
 }
 
 func writeNewOnboardFile(path string, data []byte) error {
@@ -47,6 +48,37 @@ func writeNewOnboardFile(path string, data []byte) error {
 	}
 	_, err = f.Write(data)
 	return errors.Join(err, f.Close())
+}
+
+// writeOnboardingState atomically replaces bp-owned launch metadata. The
+// adjacent Markdown files remain create-only because they may contain user
+// edits, but a later explicit CLI choice must become the next default.
+func writeOnboardingState(path string, state onboardingState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	f, err := os.CreateTemp(filepath.Dir(path), ".onboarding-")
+	if err != nil {
+		return err
+	}
+	temporary := f.Name()
+	defer os.Remove(temporary)
+	if err = f.Chmod(0600); err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 func (a *app) showBook(args []string) error {
@@ -141,6 +173,9 @@ func (a *app) onboard(args []string) error {
 	if cli != "codex" && cli != "claude" && cli != "opencode" && cli != "custom" {
 		return fmt.Errorf("unsupported onboarding CLI %q; for another executable use --cli custom -- /path/to/command [args...]", cli)
 	}
+	if cli == "custom" && len(extra) == 0 && previous.CLI == "custom" {
+		extra = append([]string(nil), previous.Args...)
+	}
 	if cli == "custom" && len(extra) == 0 {
 		if prepare {
 			return fmt.Errorf("custom onboarding requires -- /path/to/command [args...] {prompt}")
@@ -166,6 +201,18 @@ func (a *app) onboard(args []string) error {
 			extra = append(extra, option)
 		}
 		extra = append(extra, "{prompt}")
+	}
+	if cli == "custom" {
+		hasPrompt := false
+		for _, arg := range extra[1:] {
+			if arg == "{prompt}" {
+				hasPrompt = true
+				break
+			}
+		}
+		if !hasPrompt {
+			return fmt.Errorf("custom CLI needs a {prompt} argument placeholder to deliver onboarding safely")
+		}
 	}
 	program := cli
 	if cli == "custom" {
@@ -209,8 +256,11 @@ func (a *app) onboard(args []string) error {
 	if err := writeNewOnboardFile(filepath.Join(workspace, "environment.json"), append(data, '\n')); err != nil {
 		return err
 	}
-	state, _ := json.Marshal(onboardingState{CLI: cli, Agent: name})
-	if err := writeNewOnboardFile(statePath, append(state, '\n')); err != nil {
+	state := onboardingState{CLI: cli, Agent: name}
+	if cli == "custom" {
+		state.Args = append([]string(nil), extra...)
+	}
+	if err := writeOnboardingState(statePath, state); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.out, "bp: coordinator %s; onboarding workspace %s\n", name, workspace)
@@ -243,7 +293,7 @@ func (a *app) onboard(args []string) error {
 			}
 		}
 		if !replaced {
-			return fmt.Errorf("custom CLI needs a {prompt} argument placeholder to deliver onboarding safely; prepared files are preserved")
+			return fmt.Errorf("custom CLI needs a {prompt} argument placeholder to deliver onboarding safely")
 		}
 	} else {
 		launch = append(launch, prompt)

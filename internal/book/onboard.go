@@ -55,7 +55,7 @@ func EnsureLocalCoordinator(paths []string, folder string) (string, error) {
 		}
 	}
 	raw["orchestrator"] = "main"
-	raw["agents"] = append(agents, map[string]any{"name": "main", "folder": folder, "role": "machine coordinator", "status": "closed"})
+	raw["agents"] = append(agents, map[string]any{"name": "main", "folder": folder, "role": "machine coordinator", "status": "closed", "colorOverride": "160"})
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err

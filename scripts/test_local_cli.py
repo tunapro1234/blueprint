@@ -1126,6 +1126,56 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd, b"\x03")
         self.wait_closed("codex-test")
 
+    def test_transcript_confirmed_delivery_closes_while_busy_and_preserves_draft(self):
+        import datetime
+        for cli in ["claude", "codex"]:
+            with self.subTest(cli=cli):
+                busy = self.root / (cli + "-busy")
+                busy.touch()
+                received = self.root / (cli + "-confirmed-received.jsonl")
+                shutil.copyfile(self.fake_tui, self.bin / cli)
+                self.env.update(BP_FAKE_VIM="insert", BP_FAKE_HARNESS=cli,
+                                BP_FAKE_BUSY=str(busy), BP_FAKE_RECEIVED=str(received))
+                name = cli + "-confirmed"
+                fd = self.start(cli, name)
+                draft = "private user draft stays here"
+                os.write(fd, draft.encode())
+                self.read_until(fd, draft.encode())
+                result = subprocess.run([self.binary, "msg", name,
+                    "Delivery confirmation fixture: this complete instruction already reached the old turn and must never be pasted or cleaned again."],
+                    env=self.env, capture_output=True, text=True, timeout=15)
+                channel = re.search(r"CHANNEL=(q[0-9]+)", result.stdout)
+                self.assertIsNotNone(channel, result.stdout + result.stderr)
+                channel = channel.group(1)
+                queued = json.loads(subprocess.check_output([self.binary, "qstat", channel, "--json"], env=self.env))
+                state = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+                activity = next(a for a in state["agents"] if a["name"] == name)["activity"]
+                path = Path(activity["transcript_path"])
+                stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                if cli == "claude":
+                    row = dict(type="user", timestamp=stamp, sessionId=activity["thread_id"],
+                               message=dict(role="user", content=queued["msg"]))
+                else:
+                    row = dict(type="response_item", timestamp=stamp, payload=dict(type="message", role="user",
+                               content=[dict(type="input_text", text=queued["msg"])]))
+                with path.open("a") as stream: stream.write(json.dumps(row) + "\n")
+                done = self.root / ".blueprint/msgq/done" / (channel + ".json")
+                deadline = time.monotonic() + 12
+                while not done.exists() and time.monotonic() < deadline: time.sleep(.1)
+                self.assertTrue(done.exists(), "confirmed delivery still waits for a busy composer")
+                record = json.loads(done.read_text())
+                self.assertTrue(record["status"].startswith("delivered"), record)
+                self.assertFalse(record.get("cleanup"), record)
+                self.assertFalse(record.get("reason"), record)
+                # The next idle pass must not run a deferred cleanup on this draft.
+                busy.unlink()
+                time.sleep(1.2)
+                pane = subprocess.check_output([self.tmux, "-S", self.socket, "capture-pane", "-pt", name], text=True)
+                self.assertIn(draft, pane)
+                self.assertFalse(received.exists(), "confirmation submitted a second message")
+                os.write(fd, b"\x03")
+                self.wait_closed(name)
+
     def test_manual_compact_delivers_without_another_user_turn(self):
         import datetime
         received = self.root / "received.jsonl"

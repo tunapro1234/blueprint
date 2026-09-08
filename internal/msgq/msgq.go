@@ -68,13 +68,8 @@ type Message struct {
 	// (exponential backoff after a proven failure). The transcript witness still
 	// runs on every pass — waiting to retry is not waiting to notice.
 	NextTry float64 `json:"nextTry,omitempty"`
-	// Cleanup marks a record the transcript has PROVEN delivered but whose copy is
-	// still hanging in the target's composer, unerased. Such a record is not closed
-	// and never pasted again: closing it would destroy the only evidence that the
-	// hanging text is ours, and the agent's next turn would submit it as a
-	// byte-identical duplicate (measured twice on op-main, 2026-08-17, 441
-	// characters each). Every later pass retries the clearing; the witnessWindow
-	// ceiling closes the record if the pane never frees up.
+	// Cleanup is legacy proof that the transcript already confirmed delivery.
+	// Such pending records are finalized without touching any current composer.
 	Cleanup bool `json:"cleanup,omitempty"`
 	// ForceBusy marks a record whose sender KNOWS the target is busy and wants it
 	// delivered anyway (bp msg --force-busy). It is a queue flag and nothing else:
@@ -211,10 +206,6 @@ const (
 	// noticeHeadRunes is how much of the message the sender's notice quotes —
 	// enough to recognise WHICH message, not enough to re-deliver it by accident.
 	noticeHeadRunes = 60
-	// cleanupReason is what a record says while it is delivered-but-uncleared: the
-	// transcript proved the text arrived, and a copy of it is still hanging in the
-	// composer where nothing but bp may erase it.
-	cleanupReason = "teslim edildi (transcript); composer'da asili kopya temizlenemedi, temizlik bekleniyor"
 	// forceReason is what a --force-busy record says while it waits. It is written
 	// at enqueue time so a force record is never the uninformative "still busy":
 	// the whole point of the flag is that busy was expected.
@@ -501,12 +492,9 @@ func (q *Queue) Status(id string) (string, error) {
 		if seconds < 0 {
 			seconds = 0
 		}
-		// Delivered, but still holding the pane: the queue is not waiting to send
-		// this one, it is waiting to CLEAN UP after it. Saying "PENDING" alone here
-		// would send the operator looking for a delivery that already happened.
+		// Legacy cleanup or failed finalization: delivery itself is already proven.
 		if message.Cleanup {
-			return fmt.Sprintf("DELIVERED (transcript), temizlik bekliyor: %s — %s (%d seconds queued); bak: bp peek %s",
-				message.To, message.Reason, seconds, message.To), nil
+			return fmt.Sprintf("DELIVERED (transcript), kuyruk kaydi kapatilacak: %s (%d seconds queued)", message.To, seconds), nil
 		}
 		// A record nobody will paste again must SAY so. Reporting it as an
 		// ordinary "PENDING" would suggest the queue is still trying, and the
@@ -567,12 +555,8 @@ type Target interface {
 	// ErrUnverified and the record goes to the transcript witness rather than
 	// being reported as sent.
 	SendForce(context.Context, string, string) error
-	// ClearDelivered erases a composer that provably holds one of texts, and
-	// nothing else. Dispatch calls it in exactly one situation: the transcript
-	// proved a message already arrived, and the same text is STILL hanging in the
-	// composer. Once the record is closed nothing can recognise that text as ours
-	// again, so leaving it would block the target permanently — the deadlock, back
-	// from the other end.
+	// ClearDelivered is used only for unconfirmed torn-paste recovery under
+	// the pane/turn guards. Confirmed delivery never authorizes composer edits.
 	ClearDelivered(context.Context, string, []string) (bool, error)
 	// SubmitStuck presses Enter on a composer holding one of texts EXACTLY, and
 	// reports whether it cleared. Dispatch uses it for the one case the witness
@@ -602,8 +586,7 @@ func (q *Queue) PendingFor(to string) []string {
 		// caller uses these texts to decide what it may press ENTER on, and this
 		// one has already been delivered: submitting the copy hanging in the
 		// composer would produce the duplicate the Cleanup state exists to prevent.
-		// It stays invisible to the send path and is erased by Dispatch instead,
-		// which pushes the new message into the queue behind it — the right order.
+		// Dispatch finalizes legacy cleanup records without touching the composer.
 		if rec.Cleanup || messagetext.Validate(rec.Msg) != nil || messagetext.Label(rec.From) != nil {
 			continue
 		}
@@ -1224,7 +1207,7 @@ func lines(records []record) ([]string, map[string][]record) {
 // WITNESS still runs for each of them — a witness is proof of a past delivery, not
 // a new one, so letting it close a young record cannot reorder anything — but every
 // ACTION that touches the pane (Send, the never-paste-again settlement, a backoff
-// retry, erasing a delivered copy) is applied only to the record at the HEAD. While
+// retry, torn-paste recovery) is applied only to the record at the HEAD. While
 // the head stays pending, the records behind it are skipped with a reason that
 // names it.
 //
@@ -1244,16 +1227,15 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		line.block(rec.ID)
 		return
 	}
-	if !target.HasSession(ctx, rec.To) {
-		q.remember(rec.path, rec.Message, "target closed; waiting for it to reopen", report)
+	// Delivery is a past fact, independent of the current pane, runtime or turn.
+	// Legacy cleanup records already contain this proof, even after a restart.
+	witnessed := rec.Cleanup || (q.Witness != nil && q.Witness(rec.To, rec.Msg, time.Unix(0, int64(rec.TS*1e9))))
+	if witnessed {
+		q.settleDelivered(rec, line, report)
 		return
 	}
-	// The transcript is the witness, and it is asked FIRST — before the pane, before
-	// the line. Whether the message already arrived has nothing to do with what the
-	// composer looks like now or with whose turn it is to be delivered.
-	witnessed := q.Witness != nil && q.Witness(rec.To, rec.Msg, time.Unix(0, int64(rec.TS*1e9)))
-	if witnessed || rec.Cleanup {
-		q.settleDelivered(ctx, target, rec, line, report)
+	if !target.HasSession(ctx, rec.To) {
+		q.remember(rec.path, rec.Message, "target closed; waiting for it to reopen", report)
 		return
 	}
 	if held := line.hold(); held != "" && !q.forceReleased(rec, line) {
@@ -1571,84 +1553,26 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	}
 }
 
-// settleDelivered closes a record the transcript has PROVEN delivered — but not
-// before the composer is clean.
-//
-// The order of those two steps is the fix. It used to close the record first and
-// then ask the pane to drop the copy that may still be hanging in the composer from
-// a paste whose Enter never registered; when that clearing could not run — a pane
-// that had begun a turn answers ErrBusy — the record was already gone, so nothing
-// could recognise the text as ours any more, and the agent's next turn submitted
-// it: a byte-identical duplicate (op-main, 2026-08-17, the same 441 characters at
-// 13:03:37 and 13:07:27). So the copy is dealt with FIRST. A record whose copy
-// could not be cleared stays PENDING under the Cleanup flag — never pasted again,
-// retried every pass, holding its line — and the witnessWindow ceiling closes it if
-// the pane never frees up, because a record must not wait forever either.
-func (q *Queue) settleDelivered(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
-	if line.delivered != "" {
-		// A paste went into this composer earlier in this pass. Pressing C-u on it
-		// now could erase that message instead of the delivered copy, so the
-		// cleanup — and with it the close — waits for the next pass.
-		q.remember(rec.path, rec.Message, deliveredThisPassReason(line.delivered), report)
-		line.block(rec.ID)
-		return
-	}
-	release, err := q.lockPane(rec.To)
-	if err != nil {
-		q.remember(rec.path, rec.Message, paneLockReason(err), report)
-		line.block(rec.ID)
-		return
-	}
-	cleared, clearErr := target.ClearDelivered(ctx, rec.To, []string{rec.Msg})
-	release()
-	if clearErr == nil {
-		// Either the hanging copy was erased, or there was nothing of ours in the
-		// composer at all. Both mean the record can be closed without leaving an
-		// unattributable copy behind.
-		if err := q.finish(rec.path, rec.Message, "delivered (found in transcript)"); err != nil {
-			if report != nil {
-				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
-			}
-			line.block(rec.ID)
-			return
-		}
-		if report != nil {
-			report(fmt.Sprintf("delivered earlier: %s -> %s (transcript'te bulundu, tekrar yazilmadi)", rec.ID, rec.To))
-			if cleared {
-				report(fmt.Sprintf("msgq: %s composer'inda asili duran teslim edilmis metin C-u ile temizlendi (%s)", rec.To, rec.ID))
-			}
-		}
-		return
-	}
-	// The copy could not be cleared, and the pane would not even say what it is
-	// holding (ErrBusy is answered before the composer is read). Assume the worst —
-	// a copy of a delivered message sitting in the composer — and keep the record,
-	// which is the only thing that can still identify that text as ours.
-	if q.Now().Sub(time.Unix(0, int64(rec.TS*1e9))) >= witnessWindow {
-		if err := q.finish(rec.path, rec.Message, "delivered (found in transcript)"); err != nil {
-			if report != nil {
-				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
-			}
-			line.block(rec.ID)
-			return
-		}
-		if report != nil {
-			report(fmt.Sprintf("msgq: %s teslim edildi ama composer'daki kopya %s icinde temizlenemedi (%v); elle bak: bp peek %s",
-				rec.ID, witnessWindow, clearErr, rec.To))
-		}
-		return
-	}
+// A transcript witness proves delivery, not ownership of today's composer.
+// Close delivery immediately. Never schedule C-u/Enter against a later turn or
+// runtime: even identical text could now be a user's draft in another session.
+func (q *Queue) settleDelivered(rec record, line *lineState, report func(string)) {
 	message := rec.Message
-	message.Cleanup, message.NextTry = true, 0
-	message.Reason = cleanupReason
-	q.update(rec.path, message, report)
-	if !rec.Cleanup && report != nil {
-		// Said once, when the state is entered: every later pass repeats the attempt
-		// silently until it works or the ceiling closes the record.
-		report(fmt.Sprintf("msgq: %s teslim edildi (transcript) ama %s composer'indaki kopya temizlenemedi (%v); kayit temizlik icin acik tutuluyor",
-			rec.ID, rec.To, clearErr))
+	message.Cleanup, message.NextTry = false, 0
+	if err := q.finish(rec.path, message, "delivered (found in transcript)"); err != nil {
+		// Preserve proof if the terminal write failed and the witness disappears
+		// after a session switch. Cleanup remains a read-compatible no-repaste flag.
+		message.Cleanup = true
+		q.update(rec.path, message, report)
+		line.block(rec.ID)
+		if report != nil {
+			report(fmt.Sprintf("msgq: could not finish confirmed delivery %s: %v", rec.ID, err))
+		}
+		return
 	}
-	line.block(rec.ID)
+	if report != nil {
+		report(fmt.Sprintf("delivered earlier: %s -> %s (found in transcript; composer untouched)", rec.ID, rec.To))
+	}
 }
 
 // Delivery records are evidence. Retention is explicit, never a dispatch side effect.

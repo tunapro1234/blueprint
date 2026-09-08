@@ -1,5 +1,7 @@
 """Quota-free real-tmux tests. Every process uses a private socket and fake CLIs."""
 import json
+import http.server
+import threading
 import re
 import datetime as dt
 import os
@@ -176,7 +178,12 @@ class LocalCLITest(unittest.TestCase):
     def setUpClass(cls):
         cls.build = tempfile.TemporaryDirectory(prefix="bp-test-build-")
         cls.binary = str(Path(cls.build.name) / "bp")
-        subprocess.run(["go", "build", "-o", cls.binary, "./cmd/bp"], cwd=REPO, check=True)
+        cls.coverage_dir = os.environ.get("BP_TEST_COVERAGE_DIR")
+        build_flags = []
+        if cls.coverage_dir:
+            Path(cls.coverage_dir).mkdir(parents=True, exist_ok=True)
+            build_flags = ["-cover", "-coverpkg=blueprint/..."]
+        subprocess.run(["go", "build", *build_flags, "-o", cls.binary, "./cmd/bp"], cwd=REPO, check=True)
         source = Path(cls.build.name) / "fake.go"
         source.write_text(FAKE_TUI)
         cls.fake_tui = str(Path(cls.build.name) / "codex")
@@ -205,6 +212,8 @@ class LocalCLITest(unittest.TestCase):
                         PATH=str(self.bin) + os.pathsep + os.environ["PATH"], TERM="xterm-256color", SHELL="/bin/bash")
         for key in ["TMUX", "TMUX_PANE", "BP_SESSION", "AGENT", "AGENTBOOK", "ZDOTDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CODEX_THREAD_ID"]:
             self.env.pop(key, None)
+        if self.coverage_dir:
+            self.env["GOCOVERDIR"] = self.coverage_dir
         observer = self.root / "native-observer.py"
         observer.write_text(OBSERVER)
         self.env["BP_FAKE_OBSERVER"] = str(observer)
@@ -517,6 +526,117 @@ class LocalCLITest(unittest.TestCase):
         self.read_until(second, b"FAKE_READY")
         panes = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True).splitlines()
         self.assertEqual(len(panes), 1)
+
+    def piped_installer(self, shell="/bin/sh", interactive=True):
+        # Serve the actual installer through curl, with a compiled local binary
+        # fixture. Signature/download failures have separate installer tests.
+        content = (REPO / "install.sh").read_bytes()
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+            def log_message(self, *_):
+                pass
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        def stop_server():
+            server.shutdown()
+            worker.join()
+            server.server_close()
+        self.addCleanup(stop_server)
+        env = dict(self.env, BP_LOCAL_BINARY=self.binary,
+                   BP_TEST_INSTALLER_URL="http://127.0.0.1:%d/install.sh" % server.server_port)
+        env.pop("BP_ONBOARD", None)
+        # Optional release smoke: same PTY path, but download signed public bits.
+        if os.environ.get("BP_TEST_PUBLIC_INSTALLER_URL"):
+            env["BP_TEST_INSTALLER_URL"] = os.environ["BP_TEST_PUBLIC_INSTALLER_URL"]
+            env["BP_VERSION"] = os.environ["BP_TEST_PUBLIC_VERSION"]
+            env.pop("BP_LOCAL_BINARY", None)
+        command = 'curl -fsSL "$BP_TEST_INSTALLER_URL" | sh -s -- --local'
+        if not interactive:
+            worker.start()
+            return subprocess.run([shell, "-c", command], env=env, capture_output=True,
+                                  text=True, start_new_session=True, timeout=20)
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(self.root)
+            os.execve(shell, [shell, "-c", command], env)
+        worker.start()
+        self.children.append((pid, fd))
+        return fd
+
+    def check_first_install_terminal(self, cli, shell="/bin/sh"):
+        fd = self.piped_installer(shell=shell)
+        self.read_until(fd, b"Which CLI")
+        os.write(fd, (cli + "\n").encode())
+        self.read_until(fd, b"FAKE_READY")
+        self.assertTrue(self.alive("main"))
+        # Successful launch alone does not prove terminal input/output works.
+        os.write(fd, b"quit\r")
+        self.wait_closed("main")
+
+    def test_piped_first_install_onboarding_has_real_terminal(self):
+        self.check_first_install_terminal("claude")
+
+    def test_piped_bash_install_claude_input_and_exit(self):
+        self.check_first_install_terminal("claude", "/bin/bash")
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh required")
+    def test_piped_zsh_install_codex_input_and_exit(self):
+        self.check_first_install_terminal("codex", shutil.which("zsh"))
+
+    def test_piped_install_opencode_input_and_exit(self):
+        self.check_first_install_terminal("opencode")
+
+    def test_piped_install_without_controlling_terminal_is_noninteractive(self):
+        result = self.piped_installer(interactive=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("run bp onboard in a terminal", result.stdout)
+        self.assertNotIn("Which CLI", result.stdout)
+        self.assertFalse(self.alive("main"))
+        self.assertTrue((self.root / ".local/bin/bp").is_file())
+
+    def test_piped_install_without_terminal_discovery_keeps_install(self):
+        (self.bin / "ps").write_text("#!/bin/sh\nexit 1\n")
+        (self.bin / "ps").chmod(0o755)
+        fd = self.piped_installer()
+        self.read_until(fd, b"run bp onboard in a terminal")
+        self.assertFalse(self.alive("main"))
+        self.assertTrue((self.root / ".local/bin/bp").is_file())
+
+    def test_piped_invalid_onboarding_choice_does_not_undo_install(self):
+        fd = self.piped_installer()
+        self.read_until(fd, b"Which CLI")
+        os.write(fd, b"nonexistent-cli\n")
+        self.read_until(fd, b"bp is installed; onboarding did not finish")
+        self.assertFalse(self.alive("main"))
+        self.assertTrue((self.root / ".local/bin/bp").is_file())
+
+    def test_piped_reinstall_preserves_live_agent_draft_and_config(self):
+        original = self.start("claude", "existing-work")
+        os.write(original, b"unfinished user input")
+        config = self.root / ".blueprint/config.yaml"
+        config.write_text("# user setting\nbar:\n  widgets: [model]\n")
+        before_config = config.read_bytes()
+        before_pids = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"])
+        fd = self.piped_installer()
+        self.read_until(fd, b"existing installation preserved")
+        self.assertEqual(config.read_bytes(), before_config)
+        self.assertEqual(subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"]), before_pids)
+        pane = subprocess.check_output([self.tmux, "-S", self.socket, "capture-pane", "-p", "-t", "existing-work"], text=True)
+        self.assertIn("unfinished user input", pane)
+        self.assertFalse(self.alive("main"))
+
+    def test_piped_reinstall_does_not_start_onboarding_without_marker(self):
+        binary = self.root / ".local/bin/bp"
+        binary.parent.mkdir(parents=True)
+        shutil.copy2(self.binary, binary)
+        fd = self.piped_installer()
+        self.read_until(fd, b"existing installation preserved")
+        self.assertFalse((self.root / ".blueprint/main/onboarding.json").exists())
+        self.assertFalse(self.alive("main"))
 
     def test_onboard_starts_one_main_and_repeated_call_attaches(self):
         capture = self.root / "launch-args.json"

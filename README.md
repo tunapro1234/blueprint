@@ -14,7 +14,9 @@ curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/ins
 On first interactive installation, bp asks which CLI to use and opens a `main`
 coordinator with a generic onboarding prompt. It learns the machine's setup through
 a small, scoped inspection and helps configure bp. Non-interactive installation
-prints the next command instead of starting an agent.
+prints the next command instead of starting an agent. Reinstallation and updates
+preserve existing agents and do not automatically start onboarding; use `bp onboard`
+when you explicitly want to configure the coordinator.
 
 ```sh
 bp onboard                         # choose a CLI and start/attach the coordinator

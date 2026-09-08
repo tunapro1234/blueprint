@@ -17,6 +17,7 @@ Machine paths, agentbooks and optional services come from configuration.
 | `internal/codexrpc` | Shared Codex app-server observations |
 | `internal/daemon` | Optional server scheduling and queue dispatch |
 | `internal/fed` | Existing HTTP hub/client federation |
+| `internal/p2p` | Authenticated libp2p transport, discovery/relay, durable outgoing channels |
 
 ## Local startup
 
@@ -31,6 +32,11 @@ Owner lookup and creation are serialized. An existing owner is attached; multipl
 live owners produce an error. Physical cwd paths prevent symlink aliases from
 creating mismatched registry folders. This does not lock processes outside bp or
 native in-TUI conversation switching.
+
+Codex resume also selects a UUID before creating a pane. It routes only to an
+owner with a held writer lock, and rejects an unmatched active writer before
+launching. Remote TUI argv is not proof of current ownership. Explicit `--remote`
+continues through the native app-server flow.
 
 Fresh Codex openings receive onboarding as a native startup prompt. This avoids
 waiting for a transcript that may only appear after the first user turn. Existing
@@ -66,3 +72,12 @@ The optional daemon supervises configured jobs and dispatches queues. Updating t
 CLI binary does not update an already-running daemon or local worker. Verify the
 actual executable identity separately. Shared Codex app-servers and agent processes
 have independent lifetimes and should not be restarted as part of routine bp updates.
+
+## Optional P2P transport
+
+A separate `bp p2p serve` worker owns the machine key, network host and outgoing
+channel retries. It calls the receiver's existing queue guards; network waits do
+not block local dispatch. Peer ID plus channel ID maps idempotently to a durable
+queue receipt. Acceptance and verified delivery are separate states. The receiver
+controls its peer/target allowlist and creates external provenance; a peer's
+claimed agent name never grants local authority. See [P2P](docs/p2p.md).

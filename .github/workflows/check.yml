@@ -24,5 +24,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y tmux zsh
       - run: go test ./...
       - run: go vet ./...
+      - run: go test -race ./internal/p2p ./internal/msgq
       - run: python3 -m unittest scripts.test_local_cli scripts.test_publish_release scripts.test_runtime_usage scripts.test_migrate_codex_book
       - run: npm --prefix npm test

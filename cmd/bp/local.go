@@ -398,6 +398,11 @@ func (a *app) localWorker(args []string) error {
 	if err != nil || parent <= 1 {
 		return fmt.Errorf("invalid worker parent")
 	}
+	if a.config.P2P != nil && a.config.P2P.Enabled {
+		if err := a.ensureP2P(); err != nil {
+			fmt.Fprintln(a.err, "p2p:", err)
+		}
+	}
 	defer func() {
 		if err := book.SetStatus(a.config.Agentbooks, args[0], "closed", "", book.Registration{}); err != nil {
 			fmt.Fprintln(a.err, "record closed session:", err)

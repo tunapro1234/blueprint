@@ -36,3 +36,14 @@ waBridge: false
 
 # Check signed releases in the background at most daily; never starts a model turn.
 updateCheck: true
+
+# P2P is opt-in. First print this machine's public identity: bp p2p id
+# See docs/p2p.md for peer allowlists and rendezvous configuration.
+# p2p:
+#   enabled: true
+#   mdns: false
+#   rendezvous: [/dns4/your-relay.example/tcp/443/wss/p2p/RELAY_PEER_ID]
+#   peers:
+#     laptop:
+#       id: LAPTOP_PEER_ID
+#       expose: [main] # only these LOCAL agents may receive from laptop

@@ -323,6 +323,66 @@ class LocalCLITest(unittest.TestCase):
         os.write(reopened, b"\x03")
         self.wait_closed("hypr-codex")
 
+    def test_p2p_channel_survives_sender_restart_and_busy_real_tmux(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        busy = self.root / "p2p-busy"
+        busy.touch()
+        received = self.root / "p2p-received.jsonl"
+        self.env.update(BP_FAKE_BUSY=str(busy), BP_FAKE_RECEIVED=str(received))
+        fd = self.start("codex", "codex-test")
+        sender_home = self.root / "sender"
+        sender_home.mkdir()
+        sender_env = dict(self.env, HOME=str(sender_home), BP_HOME=str(sender_home / ".blueprint"))
+        def run(env, *args):
+            return subprocess.run([self.binary, *args], env=env, capture_output=True, text=True, timeout=20, check=True)
+        receiver_id = run(self.env, "p2p", "id").stdout.strip()
+        sender_id = run(sender_env, "p2p", "id").stdout.strip()
+        (self.root / ".blueprint/config.json").write_text(json.dumps({"p2p": {
+            "enabled": True, "listen": ["/ip4/127.0.0.1/tcp/0"],
+            "peers": {"sender": {"id": sender_id, "expose": ["codex-test"]}}}}))
+        started = []
+        try:
+            run(self.env, "p2p", "start")
+            started.append(self.env)
+            receiver = json.loads(run(self.env, "p2p", "status", "--json").stdout)
+            (sender_home / ".blueprint/config.json").write_text(json.dumps({"p2p": {
+                "enabled": True, "listen": ["/ip4/127.0.0.1/tcp/0"],
+                "peers": {"receiver": {"id": receiver_id, "addresses": receiver["addresses"]}}}}))
+            result = run(sender_env, "msg", "codex-test@receiver", "p2p busy receiver exact-once fixture")
+            started.append(sender_env)
+            match = re.search(r"RESULT=queued CHANNEL=(p[0-9a-f]{32})", result.stdout)
+            self.assertIsNotNone(match, result.stdout)
+            channel = match.group(1)
+            def state():
+                return json.loads(run(sender_env, "qstat", channel, "--json").stdout)
+            deadline = time.monotonic() + 10
+            while state()["state"] != "accepted" and time.monotonic() < deadline:
+                time.sleep(0.1)
+            receipt = state()
+            self.assertEqual(receipt["state"], "accepted", receipt)
+            self.assertFalse(received.exists(), "P2P interrupted a busy agent")
+            inbound = json.loads(run(self.env, "qstat", receipt["queue_id"], "--json").stdout)
+            self.assertEqual(inbound["origin"]["peer_id"], sender_id)
+            self.assertFalse(inbound["origin"]["agent_verified"])
+            run(sender_env, "p2p", "stop")
+            busy.unlink()
+            deadline = time.monotonic() + 12
+            while not received.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertTrue(received.exists(), "receiver did not deliver while sender was offline")
+            run(sender_env, "p2p", "start")
+            deadline = time.monotonic() + 12
+            while state()["state"] != "delivered" and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertEqual(state()["state"], "delivered", state())
+            messages = [json.loads(line) for line in received.read_text().splitlines()]
+            self.assertEqual(len(messages), 1, messages)
+            self.assertTrue(messages[0].endswith("p2p busy receiver exact-once fixture"))
+        finally:
+            for env in reversed(started):
+                subprocess.run([self.binary, "p2p", "stop"], env=env, capture_output=True, timeout=20)
+        os.write(fd, b"\x03")
+        self.wait_closed("codex-test")
 
     def test_local_codex_identity_is_readable_without_granting_authority(self):
         shutil.copyfile(self.fake_tui, self.bin / "codex")

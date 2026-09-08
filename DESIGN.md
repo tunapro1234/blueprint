@@ -60,6 +60,11 @@ draft and modal guards before writing to a pane. Per-pane and dispatch locks pre
 competing bp writers. Delivery records distinguish verified outcomes from uncertainty.
 Unknown state remains unknown; empty screen content is not affirmative idle evidence.
 
+A transcript-confirmed delivery is terminal even while the recipient is busy. It
+does not authorize editing a current composer or cleaning it on a later pass.
+Legacy pending cleanup records finalize without pane input. A remaining copy is
+protected as a draft, so later deliveries wait until the composer is cleared.
+
 ## Onboarding
 
 `bp setup` installs shell integration. `bp onboard` prepares a private machine-local

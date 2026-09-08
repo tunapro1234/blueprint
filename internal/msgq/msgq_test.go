@@ -405,52 +405,57 @@ func TestDispatchClosesAMessageTheTranscriptAlreadyHas(t *testing.T) {
 	}
 }
 
-func TestWitnessClearsTheSameTextStillHangingInTheComposer(t *testing.T) {
-	// The failure mode this closes: the transcript proves the message arrived, so
-	// the record is closed — and the very same text is still hanging in the
-	// composer from the paste whose Enter never registered. Once the record is
-	// gone nothing can recognise that text as ours, it reads as foreign, and the
-	// target is blocked forever. Both proofs are in hand at this moment, so the
-	// composer is cleared here, out loud.
-	q := New(t.TempDir())
-	q.Now = time.Now
-	q.Witness = func(_, text string, _ time.Time) bool { return text == stuckText }
-	id, err := q.Enqueue("target", "sender", stuckText)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := &fakeTarget{alive: true, pane: composerPane(stuckText)}
-	var reports []string
-	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
-		t.Fatal(err)
-	}
-	if len(target.sent) != 0 {
-		t.Fatalf("an already-delivered message was pasted again: %v", target.sent)
-	}
-	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
-		t.Fatalf("record was not closed: %v", err)
-	}
-	if len(target.cleared) != 1 {
-		t.Fatalf("the hanging text was left behind: cleared=%v", target.cleared)
-	}
-	if bptmux.Typing(target.pane) {
-		t.Fatalf("composer is still holding text after the record closed: %q", target.pane)
-	}
-	if !strings.Contains(strings.Join(reports, "\n"), "C-u ile temizlendi") {
-		t.Fatalf("the clearing was not reported: %v", reports)
-	}
-
-	// And the target is usable again: the next message goes in normally instead of
-	// queueing forever behind text nobody can identify.
-	q.Witness = func(string, string, time.Time) bool { return false }
-	if _, err := q.Enqueue("target", "sender", "[server-main] sonraki mesaj normal gitmeli"); err != nil {
-		t.Fatal(err)
-	}
-	if err := q.Dispatch(context.Background(), target, nil); err != nil {
-		t.Fatal(err)
-	}
-	if len(target.sent) != 1 {
-		t.Fatalf("the target stayed blocked after the cleanup: sent=%v", target.sent)
+func TestWitnessClosesDeliveryWithoutTouchingAnyComposer(t *testing.T) {
+	for _, mode := range []string{"exact", "foreign", "working", "closed", "modal", "torn"} {
+		t.Run(mode, func(t *testing.T) {
+			q := New(t.TempDir())
+			q.Witness = func(string, string, time.Time) bool { return true }
+			id, err := q.Enqueue("target", "sender", stuckText)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pane := composerPane(stuckText)
+			switch mode {
+			case "foreign":
+				pane = composerPane("my new draft")
+			case "working":
+				pane = "✻ Working… (23s · Esc to interrupt)\n" + pane
+			case "modal":
+				pane += "\nEsc to cancel"
+			case "torn":
+				pane = composerPane(stuckText[:len(stuckText)-10])
+			}
+			target := &fakeTarget{alive: mode != "closed", pane: pane, clearErr: bptmux.ErrBusy}
+			for i := 0; i < 2; i++ {
+				if err = q.Dispatch(context.Background(), target, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			done, err := read(filepath.Join(q.done(), id+".json"))
+			if err != nil || !strings.HasPrefix(done.Status, "delivered") || done.Cleanup {
+				t.Fatal(done, err)
+			}
+			if _, err = os.Stat(filepath.Join(q.pending(), id+".json")); !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if target.pane != pane || target.calls != 0 || len(target.cleared) != 0 || len(target.submitted) != 0 {
+				t.Fatal("confirmed delivery touched composer", target)
+			}
+			if len(q.PendingFor("target")) != 0 {
+				t.Fatal("delivered text exposed for resubmission")
+			}
+			// Finalization must not let the follower submit or erase the old copy.
+			q.Witness = func(string, string, time.Time) bool { return false }
+			if _, err = q.Enqueue("target", "sender", "a different queued instruction"); err != nil {
+				t.Fatal(err)
+			}
+			if err = q.Dispatch(context.Background(), target, nil); err != nil {
+				t.Fatal(err)
+			}
+			if target.pane != pane || target.calls != 0 || len(target.cleared) != 0 || len(target.submitted) != 0 {
+				t.Fatal("follower touched protected composer")
+			}
+		})
 	}
 }
 
@@ -1230,89 +1235,72 @@ func TestWitnessClosesAYoungRecordWhileTheHeadWaits(t *testing.T) {
 	}
 }
 
-func TestWitnessKeepsTheRecordUntilTheHangingCopyIsCleared(t *testing.T) {
-	// The last link of the duplicate chain (op-main, 2026-08-17: the same 441
-	// characters at 13:03:37 and 13:07:27). The transcript proves the message
-	// arrived, so the record used to close on the spot — and the copy still hanging
-	// in the composer was then unattributable, so the agent's next turn submitted
-	// it. Now the cleanup comes FIRST: a copy that could not be cleared keeps the
-	// record open, which is the only thing that can still identify that text as ours.
-	clock := time.Date(2026, 8, 17, 13, 3, 37, 0, time.Local)
-	q := fifoQueue(t, &clock)
+func TestLegacyCleanupFinalizesAfterRuntimeSwitchAndNeverTouchesLaterDraft(t *testing.T) {
+	q := New(t.TempDir())
 	id, err := q.Enqueue("target", "sender", stuckText)
 	if err != nil {
 		t.Fatal(err)
 	}
-	q.Witness = func(_, text string, _ time.Time) bool { return text == stuckText }
-	target := &fakeTarget{alive: true, pane: composerPane(stuckText), clearErr: bptmux.ErrBusy}
-	var reports []string
-	clock = clock.Add(30 * time.Second)
-	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
-		t.Fatal(err)
+	path := filepath.Join(q.pending(), id+".json")
+	rec, _ := read(path)
+	rec.Cleanup = true
+	rec.Reason = "legacy cleanup pending"
+	q.update(path, rec, nil)
+	// Old Codex transcript is no longer bound; the same pane now hosts Claude.
+	q.Witness = func(string, string, time.Time) bool {
+		t.Fatal("legacy delivery proof should not need current thread")
+		return false
 	}
-	record, err := read(filepath.Join(q.pending(), id+".json"))
-	if err != nil {
-		t.Fatalf("record was closed while its copy was still hanging: %v", err)
-	}
-	if !record.Cleanup || record.Reason != cleanupReason {
-		t.Fatalf("record=%+v", record)
-	}
-	if !strings.Contains(strings.Join(reports, "\n"), "temizlenemedi") {
-		t.Fatalf("reports=%v", reports)
-	}
-	// While in that state the record is invisible to the send path: its text must
-	// never be submitted again, so nothing may press Enter on the copy.
-	if texts := q.PendingFor("target"); len(texts) != 0 {
-		t.Fatalf("a delivered copy was offered to the send path: %v", texts)
-	}
-	status, err := q.Status(id)
-	if err != nil || !strings.Contains(status, "temizlik bekliyor") {
-		t.Fatalf("status=%q err=%v", status, err)
-	}
-
-	// The pane frees up: the copy is erased and the record closes for real.
-	target.clearErr = nil
-	clock = clock.Add(30 * time.Second)
+	target := &fakeTarget{alive: true, pane: composerPane("new Claude user draft")}
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
-		t.Fatalf("record was not closed after the cleanup: %v", err)
+	done, err := read(filepath.Join(q.done(), id+".json"))
+	if err != nil || !strings.HasPrefix(done.Status, "delivered") || done.Cleanup || done.Reason != "" || done.LastWaitReason != "legacy cleanup pending" {
+		t.Fatal(done, err)
 	}
-	if len(target.sent) != 0 || target.calls != 0 {
-		t.Fatalf("the delivered text was pasted again: %v", target.sent)
+	target.pane = composerPane(stuckText) // even exact text in a later session is not owned
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
 	}
-	if bptmux.Typing(target.pane) {
-		t.Fatalf("the copy is still in the composer: %q", target.pane)
+	if len(target.cleared) != 0 || len(target.submitted) != 0 || target.calls != 0 || target.pane != composerPane(stuckText) {
+		t.Fatal("legacy cleanup touched later session")
 	}
 }
 
-func TestWitnessStopsWaitingForACleanupThatNeverHappens(t *testing.T) {
-	// A record cannot be held forever either: if the pane never frees up, the
-	// witnessWindow ceiling closes the record and says so out loud, so the operator
-	// hears about a composer only a human can clear.
-	clock := time.Date(2026, 8, 17, 13, 0, 0, 0, time.Local)
-	q := fifoQueue(t, &clock)
+func TestConfirmedDeliverySurvivesTerminalWriteFailure(t *testing.T) {
+	q := New(t.TempDir())
+	q.Witness = func(string, string, time.Time) bool { return true }
 	id, err := q.Enqueue("target", "sender", stuckText)
 	if err != nil {
 		t.Fatal(err)
 	}
-	q.Witness = func(string, string, time.Time) bool { return true }
-	target := &fakeTarget{alive: true, pane: composerPane(stuckText), clearErr: bptmux.ErrBusy}
-	clock = clock.Add(30 * time.Second)
+	// Obstruct only the done directory, leaving the pending evidence writable.
+	if err = os.WriteFile(q.done(), []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(stuckText)}
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	clock = clock.Add(witnessWindow)
-	var reports []string
-	if err = q.Dispatch(context.Background(), target, func(m string) { reports = append(reports, m) }); err != nil {
+	rec, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil || !rec.Cleanup {
+		t.Fatal(rec, err)
+	}
+	if err = os.Rename(q.done(), q.done()+"-obstruction"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
-		t.Fatalf("record was held past the ceiling: %v", err)
+	q.Witness = func(string, string, time.Time) bool { return false }
+	target.pane = composerPane("new thread draft")
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(reports, "\n"), "elle bak") {
-		t.Fatalf("the uncleared copy was not reported: %v", reports)
+	done, err := read(filepath.Join(q.done(), id+".json"))
+	if err != nil || !strings.HasPrefix(done.Status, "delivered") {
+		t.Fatal(done, err)
+	}
+	if len(target.cleared) != 0 || len(target.submitted) != 0 || target.calls != 0 {
+		t.Fatal("failed finalization caused pane action")
 	}
 }
 

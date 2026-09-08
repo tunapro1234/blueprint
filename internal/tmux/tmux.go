@@ -1075,24 +1075,6 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	return c.clearWithCtrlU(ctx, session, nil)
 }
 
-// ClearDelivered erases a composer that provably holds text which has ALREADY
-// been delivered, and only then.
-//
-// It exists because proof arriving late is still proof. When the queue's
-// transcript witness finds a message in the agent's own session file, and the
-// same text is still sitting in the composer, both facts together are decisive:
-// the text is OURS (it matches a record, by the same comparison and the same
-// 32-character thresholds as every other judgment here) and it has already
-// reached the agent. Leaving it there would be the deadlock all over again from
-// the other end — the record is gone, so nothing can recognise the text as ours
-// any more, and every later message queues behind it forever.
-//
-// texts are the messages known to be delivered. Without a match in that set
-// nothing is touched: no proof, no keys. Enter is never pressed here — the
-// message has landed already, and pressing it would deliver a second copy.
-//
-// Reports whether it actually cleared anything, so the caller can say so out
-// loud instead of clearing a human's composer in silence.
 // SubmitStuck presses ENTER on a composer that provably holds one of texts
 // EXACTLY, and does nothing else. It reports whether the composer then cleared.
 //
@@ -1159,6 +1141,8 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 	return true, nil
 }
 
+// ClearDelivered is the legacy name of the guarded torn-paste eraser.
+// The queue uses it only for unconfirmed recovery, never after a delivery witness.
 func (c *Client) ClearDelivered(ctx context.Context, session string, texts []string) (bool, error) {
 	if err := messagetext.Validate(texts...); err != nil {
 		return false, err

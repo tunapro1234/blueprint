@@ -127,6 +127,7 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 				From:      test.from,
 				Known:     test.known,
 				Ancestors: test.ancestors,
+				Origin:    func(context.Context) identity.Origin { return identity.Origin{} },
 			})
 			text := strings.SplitN(test.wantText, "] ", 2)[1]
 			if got := Format(who.Label, text); got != test.wantText {

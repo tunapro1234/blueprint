@@ -134,13 +134,19 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 	if origin.ThreadID != "" {
 		if opts.Thread != nil {
 			if who := opts.Thread(ctx, origin.ThreadID); who.Label != "" {
-				if origin.Verified {
+				if who.Source == "codex-local-hint" {
+					if who.Inferred() {
+						who.ThreadID, who.Certain = origin.ThreadID, false
+						return who
+					}
+					// Local runtime evidence is intentionally only a hint. Refuse
+					// one whose visible label does not confess that uncertainty.
+				} else if origin.Verified {
 					return who
-				}
-				// A registry match can provide a readable hint without proving
-				// this caller owns the thread. Keep the UUID in diagnostics and
-				// never turn this display label into hierarchy/force authority.
-				if who.Certain && (who.Source == "codex-thread" || who.Source == "codex-subagent") {
+				} else if who.Certain && (who.Source == "codex-thread" || who.Source == "codex-subagent") {
+					// A registry match can provide a readable hint without proving
+					// this caller owns the thread. Keep the UUID in diagnostics and
+					// never turn this display label into hierarchy/force authority.
 					who.Label += "?"
 					who.ThreadID, who.Certain, who.Source = origin.ThreadID, false, "codex-unverified"
 					return who
@@ -148,6 +154,9 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 			}
 		}
 		return Identity{Label: "codex?:" + sanitize(origin.ThreadID), ThreadID: origin.ThreadID, Source: "codex-unverified"}
+	}
+	if origin.CodexDetected {
+		return Identity{Label: Unknown, Source: "codex-unverified"}
 	}
 	if os.Getenv("TMUX") != "" && client != nil {
 		if value, err := client.DisplaySession(ctx); err == nil {

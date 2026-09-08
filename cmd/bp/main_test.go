@@ -55,10 +55,11 @@ func TestWhatsAppSendIgnoresNtfyFailure(t *testing.T) {
 	outbox := t.TempDir()
 	output, errOutput := testOutput(t), testOutput(t)
 	a := &app{
-		ctx:    context.Background(),
-		config: bpconfig.Config{WAOutbox: outbox, Ntfy: &ntfy.Config{URL: server.URL, Topic: "alerts"}},
-		out:    output,
-		err:    errOutput,
+		ctx:         context.Background(),
+		originProbe: func(context.Context) identity.Origin { return identity.Origin{} },
+		config:      bpconfig.Config{WAOutbox: outbox, Ntfy: &ntfy.Config{URL: server.URL, Topic: "alerts"}},
+		out:         output,
+		err:         errOutput,
 	}
 	if err := a.whatsapp([]string{"send", "hello"}); err != nil {
 		t.Fatal(err)
@@ -1464,7 +1465,7 @@ func TestSenderPrecedence(t *testing.T) {
 			for _, key := range []string{"AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
 				t.Setenv(key, test.env[key])
 			}
-			a := &app{ctx: context.Background(), tmux: bptmux.New()}
+			a := &app{ctx: context.Background(), tmux: bptmux.New(), originProbe: func(context.Context) identity.Origin { return identity.Origin{} }}
 			if test.session != "" {
 				a.tmux = sessionTmux(t, test.session)
 			}
@@ -1511,11 +1512,12 @@ func TestWhatsAppSendFrom(t *testing.T) {
 		t.Helper()
 		errOutput := testOutput(t)
 		return &app{
-			ctx:    context.Background(),
-			config: bpconfig.Config{WAOutbox: outbox},
-			tmux:   bptmux.New(),
-			out:    testOutput(t),
-			err:    errOutput,
+			ctx:         context.Background(),
+			originProbe: func(context.Context) identity.Origin { return identity.Origin{} },
+			config:      bpconfig.Config{WAOutbox: outbox},
+			tmux:        bptmux.New(),
+			out:         testOutput(t),
+			err:         errOutput,
 		}, errOutput
 	}
 	clearEnv := func(t *testing.T) {

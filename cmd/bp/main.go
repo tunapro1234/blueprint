@@ -1,6 +1,7 @@
 package main
 
 import (
+	"blueprint/internal/messagetext"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/buildinfo"
 	bpcache "blueprint/internal/cache"
 	"blueprint/internal/codexauth"
 	"blueprint/internal/codexrpc"
@@ -41,7 +43,12 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp status [--json] | bp tree
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-sandbox] [--no-prompt]
+bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
+bp whoami                     # sender identity and authority evidence (JSON)
+bp setup                      # local shell integration (bash/zsh)
+bp config path|check           # settings file location / validation
+bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -61,7 +68,7 @@ bp compact [--idle-hours N] [--min-ctx N] [--apply]   # policy: idle+full claude
 bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]
                              # lists by default; nothing is sent without --apply
 bp remote [<name>...]        # print or open /remote-control (default: every live claude agent)
-bp q | bp qstat <channel-id> | bp qcancel <channel-id>
+bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] [--from <label>] <message...>
                              # --from states the sender outside tmux (cron, scripts);
@@ -80,12 +87,14 @@ bp fed status|ping|token|log [n]
 bp daemon`
 
 type app struct {
-	ctx    context.Context
-	config bpconfig.Config
-	tmux   *bptmux.Client
-	queue  *msgq.Queue
-	out    *os.File
-	err    *os.File
+	resolveSender func() identity.Identity
+	originProbe   func(context.Context) identity.Origin
+	ctx           context.Context
+	config        bpconfig.Config
+	tmux          *bptmux.Client
+	queue         *msgq.Queue
+	out           *os.File
+	err           *os.File
 
 	loadFleet      func() (book.Fleet, map[string]book.State, error)
 	loadCodex      func() []codexrpc.Thread
@@ -161,6 +170,13 @@ func (a *app) releasePane(name string) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "_observe" {
+		if err := observe(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "bp observation:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx := context.Background()
 	config, err := bpconfig.Load()
 	if err != nil {
@@ -197,6 +213,8 @@ func deliveryReason(err error, sentinel error) string {
 func helpRequested(args []string) bool {
 	rest := args[1:]
 	switch args[0] {
+	case "run", "_session", "_local-worker":
+		return false // remaining flags belong to the wrapped CLI
 	case "msg", "announce", "wa":
 		for index, arg := range rest {
 			if !strings.HasPrefix(arg, "-") {
@@ -237,6 +255,38 @@ func (a *app) run(args []string) error {
 		return fmt.Errorf("federation disabled because config.json is invalid: %s", a.config.InvalidConfig)
 	}
 	switch args[0] {
+	case "config":
+		if len(args) != 2 || (args[1] != "path" && args[1] != "check") {
+			return fmt.Errorf("usage: bp config path|check")
+		}
+		if a.config.InvalidConfig != "" {
+			return fmt.Errorf("invalid configuration: %s", a.config.InvalidConfig)
+		}
+		if a.config.Path == "" {
+			fmt.Fprintf(a.out, "No config file; using defaults. bp setup creates %s\n", filepath.Join(a.config.Home, "config.yaml"))
+		} else if args[1] == "path" {
+			fmt.Fprintln(a.out, a.config.Path)
+		} else {
+			fmt.Fprintf(a.out, "OK: %s\n", a.config.Path)
+		}
+		return nil
+	case "run":
+		return a.localRun(args[1:])
+	case "_session":
+		return a.localSession(args[1:])
+	case "_local-worker":
+		return a.localWorker(args[1:])
+	case "whoami":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: bp whoami")
+		}
+		who := a.senderIdentity()
+		return json.NewEncoder(a.out).Encode(struct {
+			identity.Identity
+			Authority bool `json:"authority"`
+		}{who, who.Authoritative()})
+	case "setup":
+		return a.localSetup(args[1:])
 	case "status":
 		return a.status(args[1:])
 	case "tree":
@@ -258,7 +308,12 @@ func (a *app) run(args []string) error {
 	case "remote":
 		return a.remote(args[1:])
 	case "q":
-		return a.queueList(args[1:])
+		if len(args) == 2 && args[1] == "--retry" {
+			a.dispatchNow() // Existing queue only; normal runtime/composer gates apply.
+		} else if len(args) != 1 {
+			return fmt.Errorf("usage: bp q [--retry]")
+		}
+		return a.queueList(nil)
 	case "qstat":
 		return a.queueStatus(args[1:])
 	case "qcancel":
@@ -290,6 +345,8 @@ func (a *app) run(args []string) error {
 		return a.image(args[1:])
 	case "bar":
 		return a.bar(args[1:])
+	case "color":
+		return a.color(args[1:])
 	case "name":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: bp name <agent>")
@@ -587,6 +644,9 @@ func mismatchMark(mismatch string) string {
 // tmuxStateLabel names what tmux shows for an agent: the same four words the
 // human table and the JSON output both report.
 func tmuxStateLabel(state book.State, alive bool) string {
+	if alive && state.Runtime != nil && state.Runtime.Activity != nil {
+		return state.Runtime.Activity.State
+	}
 	switch {
 	case !alive:
 		return "closed"
@@ -614,7 +674,7 @@ func (a *app) status(args []string) error {
 	if err != nil {
 		return err
 	}
-	cacheStates := a.cacheStates(fleet)
+	cacheStates := a.cacheStates(fleet, states)
 	if asJSON {
 		return a.statusJSON(fleet, states, cacheStates)
 	}
@@ -630,17 +690,18 @@ func (a *app) status(args []string) error {
 		cacheText, talkText := "-", "-"
 		if state, ok := cacheStates[name]; ok {
 			if state.Known {
-				temperature := "cold"
-				if state.Age < time.Hour {
-					temperature = "warm"
-				}
-				cacheText = fmt.Sprintf("%s %s %s", temperature, shortAge(state.Age), humanTokens(state.CtxTokens))
+				temperature, elapsed := state.CacheHint()
+				cacheText = fmt.Sprintf("%s %s %s", temperature, shortAge(elapsed), humanTokens(state.CtxTokens))
 			}
 			if state.LastHumanAge >= 0 {
 				talkText = shortAge(state.LastHumanAge)
 			}
 		}
-		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", name, tmuxState, cacheText, talkText, bookState, mark)
+		label := a.nativeName(fleet.Agents[name], state.Runtime)
+		if label != name {
+			label += " (" + name + ")"
+		}
+		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", label, tmuxState, cacheText, talkText, bookState, mark)
 	}
 	a.renderCodexStatus(a.codexThreads())
 	return nil
@@ -650,14 +711,23 @@ func (a *app) status(args []string) error {
 // merely unknown are omitted rather than sent as zeros: a zero token count or a
 // zero age would read as a measured fact.
 type statusReport struct {
-	Agents        []statusAgent  `json:"agents"`
-	Codex         []statusThread `json:"codex,omitempty"`
-	CodexUnloaded int            `json:"codex_unloaded,omitempty"`
+	Daemon             *buildinfo.Identity `json:"daemon,omitempty"`
+	DaemonVerification string              `json:"daemon_verification"`
+	SchemaVersion      int                 `json:"schema_version"`
+	ObservedAt         time.Time           `json:"observed_at"`
+	Producer           runtimeProducer     `json:"producer"`
+	Agents             []statusAgent       `json:"agents"`
+	Codex              []statusThread      `json:"codex,omitempty"`
+	CodexUnloaded      int                 `json:"codex_unloaded,omitempty"`
 }
 
 type statusAgent struct {
-	Name string `json:"name"`
-	Tmux string `json:"tmux"`
+	Activity    *bpcache.Activity `json:"activity,omitempty"`
+	UsageAt     *time.Time        `json:"usage_observed_at,omitempty"`
+	UsageScope  string            `json:"usage_scope,omitempty"`
+	Name        string            `json:"name"`
+	DisplayName string            `json:"display_name,omitempty"`
+	Tmux        string            `json:"tmux"`
 	// Mismatch is written only when tmux and the book disagree, so a consumer can
 	// treat the field's presence as the alarm.
 	Mismatch string `json:"mismatch,omitempty"`
@@ -666,15 +736,24 @@ type statusAgent struct {
 	// live sessions. They exist so the next "has the screen signature drifted?"
 	// question can be answered from outside with one `bp status --json` instead
 	// of by measuring the composite and guessing which gate spoke (2026-08-18).
-	BusyScreen          *bool  `json:"busy_screen,omitempty"`
-	BusyTurnOpen        *bool  `json:"busy_turnopen,omitempty"`
-	Status              string `json:"status,omitempty"`
-	Folder              string `json:"folder,omitempty"`
-	Parent              string `json:"parent,omitempty"`
-	CtxTokens           *int   `json:"ctx_tokens,omitempty"`
-	CacheAgeSeconds     *int64 `json:"cache_age_seconds,omitempty"`
-	LastHumanAgeSeconds *int64 `json:"last_human_age_seconds,omitempty"`
-	Model               string `json:"model,omitempty"`
+	BusyScreen          *bool    `json:"busy_screen,omitempty"`
+	BusyTurnOpen        *bool    `json:"busy_turnopen,omitempty"`
+	Status              string   `json:"status,omitempty"`
+	Folder              string   `json:"folder,omitempty"`
+	Parent              string   `json:"parent,omitempty"`
+	AgentbookPaths      []string `json:"agentbook_paths,omitempty"`
+	CtxTokens           *int     `json:"ctx_tokens,omitempty"`
+	CacheAgeSeconds     *int64   `json:"cache_age_seconds,omitempty"`
+	CacheTTLSeconds     int64    `json:"cache_ttl_seconds,omitempty"`
+	CacheEstimate       string   `json:"cache_estimate,omitempty"`
+	LastHumanAgeSeconds *int64   `json:"last_human_age_seconds,omitempty"`
+	Model               string   `json:"model,omitempty"`
+	Effort              string   `json:"effort,omitempty"`
+	ServiceTier         string   `json:"service_tier,omitempty"`
+	ThreadID            string   `json:"thread_id,omitempty"`
+	Runtime             string   `json:"runtime,omitempty"`
+	RuntimeError        string   `json:"runtime_error,omitempty"`
+	ContextWindow       int      `json:"context_window,omitempty"`
 }
 
 type statusThread struct {
@@ -686,33 +765,54 @@ type statusThread struct {
 }
 
 func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State) error {
-	report := statusReport{Agents: make([]statusAgent, 0, len(fleet.Agents))}
+	report := statusReport{SchemaVersion: 2, ObservedAt: time.Now().UTC(), Producer: currentProducer(), Agents: make([]statusAgent, 0, len(fleet.Agents))}
+	report.Daemon, report.DaemonVerification = buildinfo.Recorded(filepath.Join(a.config.StateDir, "daemon-runtime.json"))
 	for _, name := range fleet.SortedNames() {
 		state, alive := states[name]
 		agent := fleet.Agents[name]
 		row := statusAgent{
-			Name:     name,
-			Tmux:     tmuxStateLabel(state, alive),
-			Mismatch: bookMismatch(agent.Status, alive),
-			Status:   agent.Status,
-			Folder:   agent.Folder,
-			Parent:   fleet.Parents[name],
+			Name:           name,
+			Tmux:           tmuxStateLabel(state, alive),
+			Mismatch:       bookMismatch(agent.Status, alive),
+			Status:         agent.Status,
+			Folder:         agent.Folder,
+			Parent:         fleet.Parents[name],
+			AgentbookPaths: fleet.Sources[name],
+		}
+		if state.Runtime != nil {
+			row.DisplayName = a.nativeName(agent, state.Runtime)
+			row.Activity = state.Runtime.Activity
 		}
 		if alive {
 			screen, turn := state.ScreenBusy, state.TurnBusy
 			row.BusyScreen, row.BusyTurnOpen = &screen, &turn
+			if row.Activity != nil {
+				row.BusyScreen, row.BusyTurnOpen = row.Activity.ScreenBusy, row.Activity.TurnBusy
+			}
 		}
 		if cacheState, ok := cacheStates[name]; ok {
+			if !cacheState.UsageAt.IsZero() {
+				stamp := cacheState.UsageAt
+				row.UsageAt = &stamp
+			}
+			if cacheState.Known {
+				row.UsageScope = "last_context_snapshot"
+			}
 			if cacheState.Known {
 				tokens := cacheState.CtxTokens
 				age := int64(cacheState.Age / time.Second)
 				row.CtxTokens, row.CacheAgeSeconds = &tokens, &age
+				if cacheState.CacheTTL > 0 {
+					row.CacheTTLSeconds = int64(cacheState.CacheTTL / time.Second)
+					row.CacheEstimate, _ = cacheState.CacheHint()
+				}
 			}
 			if cacheState.LastHumanAge >= 0 {
 				lastHuman := int64(cacheState.LastHumanAge / time.Second)
 				row.LastHumanAgeSeconds = &lastHuman
 			}
-			row.Model = cacheState.Model
+			row.Model, row.ServiceTier = cacheState.Model, cacheState.ServiceTier
+			row.Effort, row.ThreadID, row.Runtime, row.RuntimeError, row.ContextWindow = cacheState.Effort, cacheState.ThreadID, cacheState.Runtime, cacheState.RuntimeError, cacheState.Window
 		}
 		report.Agents = append(report.Agents, row)
 	}
@@ -722,9 +822,6 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 		row := statusThread{Name: codexName(thread), State: codexState(thread.Status), CWD: thread.CWD}
 		if usage := thread.TokenUsage; usage != nil {
 			used := usage.Last.TotalTokens
-			if used == 0 {
-				used = usage.Total.TotalTokens
-			}
 			row.CtxTokens = &used
 			if usage.ModelContextWindow != nil && *usage.ModelContextWindow > 0 {
 				window := *usage.ModelContextWindow
@@ -738,25 +835,20 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 	return encoder.Encode(report)
 }
 
-func (a *app) cacheStates(fleet book.Fleet) map[string]bpcache.State {
-	folders := make(map[string]string, len(fleet.Agents))
+func (a *app) cacheStates(fleet book.Fleet, observed map[string]book.State) map[string]bpcache.State {
+	states := make(map[string]bpcache.State, len(fleet.Agents))
+	folders := map[string]string{}
 	for name, agent := range fleet.Agents {
-		folders[name] = agent.Folder
-	}
-	done := make(chan map[string]bpcache.State, 1)
-	go func() {
-		if a.loadCache != nil {
-			done <- a.loadCache(folders)
-			return
+		if runtime := observed[name].Runtime; runtime != nil {
+			states[name] = *runtime
+		} else {
+			folders[name] = agent.Folder
 		}
-		done <- bpcache.Fleet(bptmux.ClaudeProjectsRoot(), folders)
-	}()
-	select {
-	case states := <-done:
-		return states
-	case <-time.After(time.Second):
-		return nil
 	}
+	for name, state := range a.readCache(folders) {
+		states[name] = state
+	}
+	return states
 }
 
 func (a *app) tree(args []string) error {
@@ -977,9 +1069,6 @@ func codexContext(usage *codexrpc.ThreadTokenUsage) string {
 		return "-"
 	}
 	used := usage.Last.TotalTokens
-	if used == 0 {
-		used = usage.Total.TotalTokens
-	}
 	if usage.ModelContextWindow != nil && *usage.ModelContextWindow > 0 {
 		return humanTokens(int(used)) + "/" + humanTokens(int(*usage.ModelContextWindow))
 	}
@@ -1002,7 +1091,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex] [--hermes] [--no-sandbox] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]")
 	}
 	name, dir := args[0], args[1]
 	for _, positional := range []string{name, dir} {
@@ -1010,7 +1099,16 @@ func (a *app) open(args []string) error {
 			return err
 		}
 	}
-	opts := bptmux.OpenOptions{Legacy: a.config.Legacy}
+	opts := bptmux.OpenOptions{Legacy: a.config.Legacy, Codex: true}
+	// Reopening preserves a registered launch; explicit flags can select a new one.
+	stored, _ := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	if launch := stored.Agents[name].Launch; launch != nil {
+		opts = *launch
+		opts.Legacy = a.config.Legacy
+		opts.Resume = opts.ResumeID != ""
+	}
+	harness := ""
+	resumeRequested, threadExplicit := false, false
 	worktreeTopic := ""
 	reg := book.Registration{}
 	for index := 2; index < len(args); index++ {
@@ -1018,14 +1116,38 @@ func (a *app) open(args []string) error {
 		switch arg {
 		case "--resume":
 			opts.Resume = true
-		case "--codex":
-			opts.Codex = true
-		case "--hermes":
-			// Launches the Hermes Agent TUI instead of claude, on the Codex
-			// precedent: a command override and nothing else. Hermes keeps no
-			// Claude-style session files, so --resume has nothing to resume and is
-			// ignored for it (see OpenOptions.Hermes).
-			opts.Hermes = true
+			resumeRequested = true
+		case "--codex", "--claude", "--hermes":
+			if harness != "" && harness != arg {
+				return fmt.Errorf("choose one harness")
+			}
+			harness = arg
+			changed := opts.Codex != (arg == "--codex") || opts.Hermes != (arg == "--hermes")
+			if changed {
+				if !threadExplicit {
+					opts.ResumeID = ""
+				}
+				opts.Resume = resumeRequested
+				opts.Remote, opts.NoSandbox = "", false
+			}
+			opts.Codex, opts.Hermes = arg == "--codex", arg == "--hermes"
+			if !opts.Codex {
+				opts.Remote, opts.NoSandbox = "", false
+			}
+		case "--remote":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--remote requires a unix:// endpoint")
+			}
+			index++
+			opts.Remote = args[index]
+		case "--thread":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--thread requires a thread id")
+			}
+			index++
+			opts.ResumeID = args[index]
+			opts.Resume = true
+			resumeRequested, threadExplicit = true, true
 		case "--no-sandbox":
 			// Codex only, and opt-in on purpose: it turns off BOTH sandboxes (our
 			// bwrap wrapper and codex's own). The default stays as it is for every
@@ -1057,6 +1179,9 @@ func (a *app) open(args []string) error {
 		default:
 			return fmt.Errorf("unknown open option: %s", arg)
 		}
+	}
+	if err := opts.Validate(); err != nil {
+		return err
 	}
 	// The fleet answers two questions below: is --parent a real agent, and does
 	// this folder sit under the parent's. Only the first is worth failing over
@@ -1130,6 +1255,29 @@ func (a *app) open(args []string) error {
 			fmt.Fprintln(a.out, hint)
 		}
 	}
+	if !opts.Codex && !opts.Hermes && opts.Resume {
+		path, err := bptmux.ResolveSessionPath(bptmux.ClaudeProjectsRoot(), dir, name, opts.ResumeID)
+		if err != nil {
+			return err
+		}
+		opts.ResumeID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		opts.NoPrompt = true
+	}
+	if opts.Codex && opts.Resume {
+		path, ok := bpcache.CodexPath(bptmux.CodexProcessInfo(0).Home, dir, opts.ResumeID)
+		if !ok {
+			return fmt.Errorf("no matching Codex thread for %s; refusing to open a different conversation", name)
+		}
+		opts.ResumeID = bpcache.CodexID(path)
+		if opts.ResumeID == "" {
+			return fmt.Errorf("Codex thread has no readable identity")
+		}
+		opts.NoPrompt = true
+	}
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	reg.Launch = &opts
 	// The session comes up before the book can record it, so the gap between the
 	// two used to be a lie: a timeout or a Ctrl-C in between left the book saying
 	// "closed" over an agent that was really running, and a reader of bp status
@@ -1139,6 +1287,10 @@ func (a *app) open(args []string) error {
 	reg.Sender = a.sender()
 	if err := book.SetStatus(a.config.Agentbooks, name, "opening", dir, reg); err != nil {
 		return err
+	}
+	previousRollout := ""
+	if opts.Codex && !opts.Resume {
+		previousRollout, _ = bpcache.CodexPath(bptmux.CodexProcessInfo(0).Home, dir, "")
 	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		// Roll back only while tmux can still be believed. A cancelled or timed-out
@@ -1151,6 +1303,20 @@ func (a *app) open(args []string) error {
 			}
 		}
 		return err
+	}
+	if opts.Codex && !opts.Resume {
+		if path, ok := bpcache.CodexPath(bptmux.CodexProcessInfo(0).Home, dir, ""); ok && path != previousRollout {
+			opts.ResumeID = bpcache.CodexID(path)
+		}
+	}
+	if !opts.Codex && !opts.Hermes && opts.ResumeID == "" {
+		if process, err := a.tmux.PaneProcess(a.ctx, name); err == nil {
+			if id, err := bptmux.ClaudeProcessSession(process.PID, dir); err == nil && id != "" {
+				if _, err := bptmux.ResolveSessionPath(bptmux.ClaudeProjectsRoot(), dir, name, id); err == nil {
+					opts.ResumeID = id
+				}
+			}
+		}
 	}
 	if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
 		return err
@@ -1332,32 +1498,37 @@ func (a *app) close(args []string) error {
 	return book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{Sender: a.sender()})
 }
 
-// sender names the caller for in-fleet traffic: the "[sender]" envelope on
-// bp msg, the registrations bp writes into the agentbooks, and the hierarchy
-// gates on announce/compact/slash commands. It shares one resolver with
-// WhatsApp (internal/identity) so the tmux-outside-a-pane trap has a single
-// home, but it asks for a different tail:
-//
-//   - no process-tree inference. An inferred label would be a stranger to the
-//     agentbook, so bp announce and bp compact would start refusing the daemon
-//     and cron ("sender X is not in the agentbook hierarchy").
-//   - "server-main" stays the last resort. For agent-to-agent traffic the
-//     daemon, cron and root shells ARE the server, and their envelope has read
-//     "[server-main]" by design; relabelling it silently would change what
-//     every agent sees on messages that carry orders. WhatsApp is the opposite
-//     case and keeps no such default.
-func (a *app) sender() string {
-	return a.senderIdentity().Label
+// sender uses the same verified identity for envelopes and hierarchy gates.
+func (a *app) sender() string { return a.senderIdentity().Label }
+
+func (a *app) identityOptions() identity.Options {
+	return identity.Options{Known: a.knownAgent, Origin: a.originProbe, Thread: func(ctx context.Context, id string) identity.Identity {
+		home := bptmux.CodexProcessInfo(0).Home
+		return book.ThreadIdentity(ctx, a.config.Agentbooks, home, id)
+	}}
 }
 
-// senderIdentity is sender() with the confidence kept. Only one caller needs it
-// — the --force-busy gate, which must know whether the label was STATED (a tmux
-// session, --from, AGENT, a login name) or merely fallen back to.
 func (a *app) senderIdentity() identity.Identity {
-	return identity.Resolve(a.ctx, a.session(), identity.Options{
-		Known:    a.knownAgent,
-		Fallback: "server-main",
-	})
+	if a.resolveSender != nil {
+		return a.resolveSender()
+	}
+	who := identity.Resolve(a.ctx, a.session(), a.identityOptions())
+	// A read-only book override must not redefine the hierarchy for a verified
+	// sender. Use the installation's configured books for authority.
+	if override := os.Getenv("AGENTBOOK"); override != "" {
+		configured := false
+		for _, path := range a.config.Agentbooks {
+			if filepath.Clean(path) == filepath.Clean(override) {
+				configured = true
+			}
+		}
+		if !configured {
+			who.Label = "scope?:" + who.Label
+			who.Certain = false
+			who.Source = "unverified-book-override"
+		}
+	}
+	return who
 }
 
 // session hands the resolver a tmux client, or a genuinely nil interface when
@@ -1393,7 +1564,21 @@ func (a *app) readCache(folders map[string]string) map[string]bpcache.State {
 	if a.loadCache != nil {
 		return a.loadCache(folders)
 	}
-	return bpcache.Fleet(bptmux.ClaudeProjectsRoot(), folders)
+	states := make(map[string]bpcache.State, len(folders))
+	fleet, _ := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	for name, folder := range folders {
+		agent := fleet.Agents[name]
+		agent.Name = name
+		agent.Folder = folder
+		if a.tmux != nil {
+			fleet.Agents[name] = agent
+			state := book.RuntimeFor(a.ctx, a.tmux, fleet, name)
+			states[name] = state
+			continue
+		}
+		states[name] = bpcache.Read(bptmux.ClaudeProjectsRoot(), folder, name)
+	}
+	return states
 }
 
 // flushPending delivers the announcements that piled up while an agent was closed,
@@ -1439,7 +1624,7 @@ func (a *app) flushPending(name string) error {
 		// Unconfirmed, but the digest may well be in the pane: keeping the
 		// entries would repeat every announcement on the next flush. Clear them
 		// and let the caller report the doubt.
-		if clearErr := pending.Clear(a.config.StateDir, name); clearErr != nil {
+		if clearErr := pending.Acknowledge(a.config.StateDir, name, entries); clearErr != nil {
 			return clearErr
 		}
 		// And leave the queue something it can recognise. If that paste is HANGING
@@ -1457,7 +1642,7 @@ func (a *app) flushPending(name string) error {
 		}
 		return err
 	}
-	return pending.Clear(a.config.StateDir, name)
+	return pending.Acknowledge(a.config.StateDir, name, entries)
 }
 
 var istanbul = time.FixedZone("Europe/Istanbul", 3*60*60)
@@ -1545,7 +1730,11 @@ func (a *app) message(args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: bp msg [--force-busy] <name> <message...>")
 	}
-	name, message := args[0], strings.TrimSpace(strings.Join(args[1:], " "))
+	name, raw := args[0], strings.Join(args[1:], " ")
+	if err := messagetext.Validate(raw); err != nil {
+		return err
+	}
+	message := strings.TrimSpace(raw)
 	if err := rejectFlag("msg", name); err != nil {
 		return err
 	}
@@ -1565,14 +1754,25 @@ func (a *app) message(args []string) error {
 		}
 		return a.federatedMessage(target, peer, message)
 	}
+	resolved, err := a.resolveNativeTarget(name)
+	if err != nil {
+		return err
+	}
+	name = resolved
 	who := a.senderIdentity()
 	sender := who.Label
+	if err := messagetext.Label(sender); err != nil {
+		return err
+	}
 	if force {
 		if err := a.allowForceBusy(who); err != nil {
 			return err
 		}
 	}
 	if strings.HasPrefix(message, "/") {
+		if !who.Authoritative() {
+			return fmt.Errorf("slash command refused: sender identity is not verified (%s)", who.Source)
+		}
 		// A bare slash command executes in the target CLI with no envelope and
 		// no visible origin (a prefix would break the command). The only
 		// authority for that is the hierarchy: root and ancestors may drive
@@ -1640,7 +1840,7 @@ func (a *app) message(args []string) error {
 		return nil
 	}
 	if force {
-		return a.forceMessage(name, sender, message, attachPending && len(entries) > 0)
+		return a.forceMessage(name, sender, message, entries)
 	}
 	queued, channelID, err := a.deliver(name, sender, message)
 	notReady, unverified := errors.Is(err, bptmux.ErrNotReady), errors.Is(err, bptmux.ErrUnverified)
@@ -1659,7 +1859,7 @@ func (a *app) message(args []string) error {
 	// pane or the queue, so pending is cleared in every one of those cases —
 	// leaving it would repeat the whole digest on the next delivery.
 	if attachPending && len(entries) > 0 {
-		if err := pending.Clear(a.config.StateDir, name); err != nil {
+		if err := pending.Acknowledge(a.config.StateDir, name, entries); err != nil {
 			return err
 		}
 	}
@@ -1704,11 +1904,8 @@ func (a *app) message(args []string) error {
 		a.resultLine("delivered", "")
 		return nil
 	}
-	fmt.Fprintf(a.out, "BUSY: queued (channel: %s). Check: bp qstat %s\n", channelID, channelID)
-	// "BUSY" is the honest word only when the agent is actually working. When the
-	// hold-up is a composer bp refuses to touch — an unreadable paste chip, someone
-	// else's text — say so on the spot, or the operator walks away believing the
-	// agent is mid-turn and comes back days later to a queue that never moved.
+	fmt.Fprintf(a.out, "QUEUED (channel: %s). Check: bp qstat %s\n", channelID, channelID)
+	// A queued message is not evidence the agent is working; print the cause.
 	if why := a.queue.Reason(channelID); why != "" {
 		fmt.Fprintf(a.out, "BEKLEME SEBEBI: %s — bak: bp peek %s\n", why, name)
 	}
@@ -1718,15 +1915,9 @@ func (a *app) message(args []string) error {
 
 // allowForceBusy decides who may put a message in front of a busy agent.
 //
-// The honest description of this gate: it is not a security boundary and cannot
-// be one. The primary identity signal is the caller's tmux session name, which
-// the tmux server states and the caller cannot forge — but --from and AGENT are
-// self-declared, and on a single-root machine every agent can set them, skip bp
-// altogether and type into any pane with tmux send-keys. So this stops habit and
-// accident (an agent reaching for --force-busy because its message feels urgent),
-// not an adversary. An unforgeable answer would need a daemon socket and
-// SO_PEERCRED, and even that, on a machine where everything runs as root, would
-// be open to exactly the same agents.
+// It accepts only a verified main-agent identity. AGENT/--from/login labels,
+// inherited app-server panes and CLI subagents do not establish that authority.
+// Same-UID/root processes still require OS isolation for an adversarial boundary.
 //
 // What it protects is the property that makes the flag safe at all: forced
 // messages are RARE. The plumbing that carries Tuna's own words (the WhatsApp
@@ -1741,10 +1932,9 @@ func (a *app) allowForceBusy(who identity.Identity) error {
 	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil && fleet.Root != "" {
 		root = fleet.Root
 	}
-	if who.Certain {
-		// "whatsapp" is the identity the bridge actually pins (bridge.js sets
-		// AGENT=whatsapp so it never falls through to a DisplaySession guess);
-		// "wa" stays for the shell alias and hand runs.
+	if who.Authoritative() {
+		// These are the existing plumbing labels. The bridge's AGENT value
+		// alone no longer establishes one of these identities.
 		for _, allowed := range []string{root, "bp", "wa", "whatsapp"} {
 			if who.Label == allowed {
 				return nil
@@ -1763,7 +1953,7 @@ func (a *app) allowForceBusy(who identity.Identity) error {
 // transcript witness — lives in the dispatch path, and the bridge that used to
 // paste into busy panes by hand had none of it. Forcing is therefore a flag on a
 // record, never a shortcut around the delivery.
-func (a *app) forceMessage(name, sender, message string, clearPending bool) error {
+func (a *app) forceMessage(name, sender, message string, entries []pending.Entry) error {
 	waiting := 0
 	if rows, err := a.queue.List(); err == nil {
 		for _, row := range rows {
@@ -1780,8 +1970,8 @@ func (a *app) forceMessage(name, sender, message string, clearPending bool) erro
 	}
 	// The digest travelled inside this message, so the spool is cleared exactly as
 	// on the ordinary path — leaving it would repeat every announcement.
-	if clearPending {
-		if err := pending.Clear(a.config.StateDir, name); err != nil {
+	if len(entries) > 0 {
+		if err := pending.Acknowledge(a.config.StateDir, name, entries); err != nil {
 			return err
 		}
 	}
@@ -1821,6 +2011,7 @@ func (a *app) dispatchNow() {
 		a.queue.CanWitness = book.CanWitness
 		a.queue.HasTranscript = book.TranscriptExists(a.config.Agentbooks, projects)
 		a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
+		a.queue.RuntimeBlock = book.RuntimeBlockProbe(a.config.Agentbooks)
 	}
 	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
 		fmt.Fprintf(a.err, "WARNING: teslim pass'i calistirilamadi: %v\n", err)
@@ -1919,6 +2110,12 @@ func (a *app) federatedMessage(target, peer, message string) error {
 }
 
 func (a *app) deliver(name, sender, message string) (queued bool, channelID string, err error) {
+	if err := messagetext.Validate(message); err != nil {
+		return false, "", err
+	}
+	if err := messagetext.Label(sender); err != nil {
+		return false, "", err
+	}
 	if a.deliverMessage != nil {
 		return a.deliverMessage(name, sender, message)
 	}
@@ -1967,7 +2164,8 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	// the screen has nothing to show because the agent is streaming an answer.
 	// Everything that follows types into the pane, so this is exactly where a
 	// wrong "idle" costs something.
-	if (!bptmux.Typing(pane) || ours) && !bptmux.Busy(pane) && !a.turnOpen(name) {
+	runtimeReason := a.deliveryRuntimeReason(name)
+	if (!bptmux.Typing(pane) || ours) && !bptmux.Busy(pane) && runtimeReason == "" {
 		finished, sendErr := a.tmux.SendWithPending(a.ctx, name, message, pendingTexts)
 		// A queued message that was hanging in the composer and has now been
 		// submitted: close its record, or the queue would paste it again.
@@ -2004,6 +2202,9 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	// chip, or someone else's text, is a state only a human can clear, and it must
 	// not hide behind "still busy" for four days.
 	why := bptmux.ComposerBlockReason(pane, append([]string{message}, pendingTexts...))
+	if runtimeReason != "" {
+		why = runtimeReason
+	}
 	if busyLate {
 		why = bptmux.BlockedByBusyPane
 	}
@@ -2080,7 +2281,17 @@ func (a *app) announce(args []string) error {
 	if len(words) == 0 {
 		return fmt.Errorf("usage: bp announce <message...>")
 	}
-	sender := a.sender()
+	if err := messagetext.Validate(strings.Join(words, " ")); err != nil {
+		return err
+	}
+	who := a.senderIdentity()
+	if !who.Authoritative() {
+		return fmt.Errorf("sender identity is not verified (%s)", who.Source)
+	}
+	sender := who.Label
+	if err := messagetext.Label(sender); err != nil {
+		return err
+	}
 	fleet, states, err := a.fleet()
 	if err != nil {
 		return err
@@ -2089,11 +2300,7 @@ func (a *app) announce(args []string) error {
 		return fmt.Errorf("sender %s is not in the agentbook hierarchy", sender)
 	}
 	targets := announcementCandidates(fleet, sender)
-	folders := make(map[string]string, len(targets))
-	for _, target := range targets {
-		folders[target] = fleet.Agents[target].Folder
-	}
-	cacheStates := a.readCache(folders)
+	cacheStates := a.cacheStates(fleet, states)
 	messageText := strings.Join(words, " ")
 	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, messageText)
 	var tally deliveryTally
@@ -2101,7 +2308,8 @@ func (a *app) announce(args []string) error {
 	for _, target := range targets {
 		cacheState := cacheStates[target]
 		live := states[target].Alive
-		if !live || !cacheState.Known || cacheState.Age >= time.Hour {
+		hint, _ := cacheState.CacheHint()
+		if !live || hint != "warm~" {
 			deferred++
 			coldCost += cacheState.CtxTokens
 			if !dryRun {
@@ -2120,7 +2328,7 @@ func (a *app) announce(args []string) error {
 	}
 	if dryRun {
 		fmt.Fprintf(a.out, "would send: %d, would defer: %d\n", warm, deferred)
-		fmt.Fprintf(a.out, "cold reread cost: ~%s tokens (%d targets: %d warm, %d cold)\n", humanTokens(coldCost), len(targets), warm, deferred)
+		fmt.Fprintf(a.out, "deferred context: ~%s tokens (%d targets: %d estimated warm, %d cold/unknown)\n", humanTokens(coldCost), len(targets), warm, deferred)
 		return nil
 	}
 	fmt.Fprintf(a.out, "sent: %d, deferred: %d\n", tally.sent+len(tally.channels), deferred)
@@ -2388,8 +2596,8 @@ func decisionRow(name string, state bpcache.State) compactDecision {
 func policyDecisions(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, commands map[string]string, lastCompact map[string]time.Time, opts compactOptions, now time.Time) []compactDecision {
 	rows := make([]compactDecision, 0, len(fleet.Order))
 	for _, name := range fleet.Order {
-		if name == "server-main" {
-			continue // hard safety exclusion, always applied
+		if name == "server-main" || name == fleet.Root {
+			continue // never compact the orchestrator
 		}
 		state := cacheStates[name]
 		row := decisionRow(name, state)
@@ -2543,6 +2751,16 @@ func (a *app) paneBusy(name string) bool {
 // never load an agentbook, and so a test can stub it. A missing probe (nothing
 // resolvable, an app assembled without config) answers false and leaves the
 // screen's verdict standing.
+func (a *app) deliveryRuntimeReason(name string) string {
+	if a.turnOpenProbe != nil || len(a.config.Agentbooks) == 0 {
+		if a.turnOpen(name) {
+			return "runtime blocked"
+		}
+		return ""
+	}
+	return book.RuntimeBlockProbe(a.config.Agentbooks)(name, false)
+}
+
 func (a *app) turnOpen(name string) bool {
 	if a.turnOpenProbe == nil {
 		if len(a.config.Agentbooks) == 0 {
@@ -2599,7 +2817,14 @@ func (a *app) compact(args []string) error {
 	if err != nil {
 		return err
 	}
-	sender := a.sender()
+	who := a.senderIdentity()
+	if !who.Authoritative() {
+		return fmt.Errorf("sender identity is not verified (%s)", who.Source)
+	}
+	sender := who.Label
+	if err := messagetext.Label(sender); err != nil {
+		return err
+	}
 	fleet, states, err := a.fleet()
 	if err != nil {
 		return err
@@ -2627,6 +2852,11 @@ func (a *app) compact(args []string) error {
 			return err
 		}
 		rows = policyDecisions(fleet, states, cacheStates, commands, lastCompact, opts, time.Now())
+		for index := range rows {
+			if sender != fleet.Root && !fleet.IsDescendant(rows[index].Name, sender) {
+				rows[index].Send, rows[index].Reason = false, "hiyerarsi disinda"
+			}
+		}
 	}
 	// The pane is the last word on "is this agent working": book state is a
 	// snapshot taken before the fleet was walked, and someone may be typing.
@@ -2813,7 +3043,11 @@ func (a *app) peek(args []string) error {
 			return fmt.Errorf("invalid line count: %s", args[1])
 		}
 	}
-	pane, err := a.tmux.Capture(a.ctx, args[0])
+	name, err := a.resolveNativeTarget(args[0])
+	if err != nil {
+		return err
+	}
+	pane, err := a.tmux.Capture(a.ctx, name)
 	if err != nil {
 		return err
 	}
@@ -2882,7 +3116,9 @@ func (a *app) whatsapp(args []string) error {
 				return err
 			}
 		}
-		who := wa.Agent(a.ctx, a.session(), identity.Options{From: from, Known: a.knownAgent})
+		identityOpts := a.identityOptions()
+		identityOpts.From = from
+		who := wa.Agent(a.ctx, a.session(), identityOpts)
 		agent := who.Label
 		if !who.Certain {
 			// The label is all the attribution a phone gets. Say so on stderr

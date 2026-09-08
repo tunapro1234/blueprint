@@ -992,7 +992,7 @@ func TestOpenNoSandboxTurnsOffBothSandboxes(t *testing.T) {
 			if got := strings.Contains(joined, "--dangerously-bypass-approvals-and-sandbox"); got != tc.wantFlag {
 				t.Fatalf("bypass flag=%v, want %v:\n%s", got, tc.wantFlag, joined)
 			}
-			if got := strings.Contains(joined, "codex -c model_reasoning_effort") || strings.Contains(joined, "codex --dangerously"); got != tc.wantCodex {
+			if got := strings.Contains(joined, "codex Enter") || strings.Contains(joined, "codex --dangerously"); got != tc.wantCodex {
 				t.Fatalf("codex launch=%v, want %v:\n%s", got, tc.wantCodex, joined)
 			}
 		})

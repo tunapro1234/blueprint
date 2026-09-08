@@ -178,3 +178,31 @@ func TestOpenStillRefusesAPythonPaneThatIsNotHermes(t *testing.T) {
 		t.Fatalf("a foreign python pane was touched: new=%d mutations=%v", h.newSessions, h.mutations)
 	}
 }
+
+func TestCodexResumeLaunchPreservesThreadAndSettings(t *testing.T) {
+	id := "01a0617e-29f9-79a3-be66-72ea1dec4718"
+	for _, remote := range []string{"", "unix://"} {
+		h := &openHarness{paneCommand: "zsh", capture: modernCodexPane("Ask Codex to do anything")}
+		opts := OpenOptions{Codex: true, Resume: true, ResumeID: id, Remote: remote, NoSandbox: remote != "", NoPrompt: true}
+		if err := openClient(h).Open(context.Background(), "agent", "/srv/agent", opts, nil); err != nil {
+			t.Fatal(err)
+		}
+		launch := strings.Join(h.mutations, "\n")
+		if !strings.Contains(launch, "resume '"+id+"'") {
+			t.Fatalf("lost thread: %s", launch)
+		}
+		for _, bad := range []string{"model_reasoning_effort", "--model", "service_tier", "/rename", "/remote-control"} {
+			if strings.Contains(launch, bad) {
+				t.Fatalf("overrode thread settings: %s", launch)
+			}
+		}
+	}
+}
+
+func TestRemoteSandboxRefusalPrecedesAnyMutation(t *testing.T) {
+	h := &openHarness{paneCommand: "zsh"}
+	err := openClient(h).Open(context.Background(), "agent", "/srv/agent", OpenOptions{Codex: true, Remote: "unix://"}, nil)
+	if err == nil || len(h.mutations) > 0 {
+		t.Fatalf("sandbox escape was not refused: %v %v", err, h.mutations)
+	}
+}

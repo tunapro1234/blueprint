@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/buildinfo"
 	"blueprint/internal/cache"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
@@ -53,17 +54,15 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// draws nothing at all while a long answer streams, so the screen gate alone
 	// lets the queue paste into a working agent; this is what closes that window.
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
+	queue.RuntimeBlock = book.RuntimeBlockProbe(cfg.Agentbooks)
 	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
-	// Both halves are then WIDENED to codex agents, whose record is a rollout
-	// rather than a Claude transcript (see codexwitness.go). The Claude answer is
-	// still asked first and still decides on its own; this only adds an answer
-	// where there used to be none.
-	queue.Witness = service.witness(queue.Witness)
-	queue.HasTranscript = service.hasTranscript(queue.HasTranscript)
 	return service
 }
 
 func (s *Service) Run(ctx context.Context) {
+	if err := buildinfo.Record(filepath.Join(s.config.StateDir, "daemon-runtime.json")); err != nil {
+		s.log.Printf("record daemon identity: %v", err)
+	}
 	s.startFederation(ctx)
 	s.startLoop(ctx, "msgq", 5*time.Second, 30*time.Second, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "msgq", interval, func() error {
@@ -73,13 +72,9 @@ func (s *Service) Run(ctx context.Context) {
 	s.startLoop(ctx, "keepalive", 30*time.Second, 2*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "keepalive", interval, func() error { return s.keepalive(run) })
 	})
-	if path, ok := s.usageBinary("usage-policy"); ok {
-		s.startLoop(ctx, "usage-policy", time.Minute, 10*time.Minute, func(run context.Context, interval time.Duration) {
-			s.tracked(run, "usage-policy", interval, func() error {
-				return command(run, path)
-			})
-		})
-	}
+	// Legacy usage-policy can type /model and /effort directly into tmux.
+	// Model changes belong to the operator; bp policy status remains available.
+
 	if path, ok := s.usageBinary("usage-pulse"); ok {
 		s.startLoop(ctx, "usage-pulse-chain", 90*time.Second, 5*time.Minute, func(run context.Context, interval time.Duration) {
 			steps := []struct {
@@ -387,18 +382,35 @@ func commandDirEnv(ctx context.Context, dir string, extraEnv []string, args ...s
 }
 
 func (s *Service) keepalive(ctx context.Context) error {
-	if s.tmux.HasSession(ctx, "server-main") {
-		return nil
-	}
-	s.log.Print("server-main tmux is missing; opening it")
-	dir := s.config.Home
-	if s.config.Legacy {
-		dir = "/srv"
-	}
-	if err := s.tmux.Open(ctx, "server-main", dir, bptmux.OpenOptions{Resume: true, NoPrompt: true, Legacy: s.config.Legacy}, func(message string) { s.log.Print(message) }); err != nil {
+	fleet, err := book.LoadFleet(book.Paths(s.config.Agentbooks))
+	if err != nil {
 		return err
 	}
-	return book.SetStatus(s.config.Agentbooks, "server-main", "open", dir, book.Registration{})
+	name := fleet.Root
+	if s.tmux.HasSession(ctx, name) {
+		return nil
+	}
+	agent := fleet.Agents[name]
+	// No guessed cwd, harness, permissions or fresh conversation after a crash.
+	if agent.Launch == nil {
+		return fmt.Errorf("keepalive: %s has no recorded launch; manual recovery required", name)
+	}
+	opts := *agent.Launch
+	opts.NoPrompt, opts.Legacy, opts.Resume = true, s.config.Legacy, true
+	if opts.Codex {
+		if opts.ResumeID == "" {
+			return fmt.Errorf("keepalive: %s has no recorded Codex thread", name)
+		}
+		opts.Resume = true
+	}
+	dir := book.FirstPath(agent.Folder)
+	if dir == "" {
+		return fmt.Errorf("keepalive: %s has no workspace", name)
+	}
+	if err := s.tmux.Open(ctx, name, dir, opts, func(message string) { s.log.Print(message) }); err != nil {
+		return err
+	}
+	return book.SetStatus(s.config.Agentbooks, name, "open", dir, book.Registration{})
 }
 
 // --- busy-sanity: a watchdog for the busy DETECTOR, not for the agents --------
@@ -626,7 +638,8 @@ func (s *Service) busySanity(ctx context.Context) error {
 		// makes agreement mean anything: a Codex pane (no session file) or an agent
 		// missing from the book answers false here and simply contributes nothing
 		// in either direction.
-		if book.TurnOpen(projects, fleet.Agents[session].Folder, session, now) {
+		runtime := book.RuntimeFor(ctx, s.tmux, fleet, session)
+		if runtime.Activity != nil && runtime.Activity.TurnBusy != nil && *runtime.Activity.TurnBusy && runtime.Activity.State != "unknown" {
 			samples++
 			if screen {
 				agreed = true

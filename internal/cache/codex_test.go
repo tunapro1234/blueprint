@@ -140,3 +140,70 @@ func TestReadCodexWidensTailPastRecordLargerThanWindow(t *testing.T) {
 		t.Fatalf("state=%+v, want the token_count behind the oversized record", state)
 	}
 }
+
+func TestCodexMetricsSurviveToolOutputAndPartialWrites(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "sessions/2026/09/05/rollout-session.jsonl")
+	now := time.Now()
+	writeRollout(t, path, "/work", now.Add(-time.Minute), 123456, 258400)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := json.NewEncoder(f)
+	for _, row := range []any{
+		map[string]any{"type": "turn_context", "payload": map[string]any{"model": "gpt-6-astra", "effort": "high", "service_tier": "priority"}},
+		map[string]any{"type": "response_item", "timestamp": now.Format(time.RFC3339Nano), "payload": map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "please check this"}}}},
+		map[string]any{"type": "event_msg", "timestamp": now.Format(time.RFC3339Nano), "payload": map[string]any{"type": "task_started"}},
+	} {
+		if err := enc.Encode(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Many COMPLETE rows used to stop readTail widening, hiding token_count.
+	for i := 0; i < 20; i++ {
+		_ = enc.Encode(map[string]any{"type": "response_item", "payload": map[string]any{"type": "function_call_output", "output": strings.Repeat("x", 64000)}})
+	}
+	_, _ = f.WriteString(`{"type":"event_msg","payload":{"type":"token_count","info":`)
+	_ = f.Close()
+	got := ReadCodex(home, "/work")
+	if !got.Known || got.CtxTokens != 123456 || got.Model != "gpt-6-astra" || got.Effort != "high" || !got.Busy || got.LastHumanAge < 0 {
+		t.Fatalf("lost metrics: %+v", got)
+	}
+	if got.Age < 50*time.Second {
+		t.Fatalf("tool activity reset usage age: %v", got.Age)
+	}
+}
+
+func TestCodexIgnoresExecAndSubagentSessions(t *testing.T) {
+	home := t.TempDir()
+	day := filepath.Join(home, "sessions/2026/09/05")
+	writeRollout(t, filepath.Join(day, "rollout-owner.jsonl"), "/work", time.Now().Add(-time.Minute), 123, 0)
+	for name, source := range map[string]any{"exec": "exec", "child": map[string]any{"subagent": map[string]any{"thread_spawn": map[string]any{"parent_thread_id": "owner"}}}} {
+		row := map[string]any{"type": "session_meta", "payload": map[string]any{"cwd": "/work", "source": source}}
+		data, _ := json.Marshal(row)
+		_ = os.WriteFile(filepath.Join(day, "rollout-"+name+".jsonl"), append(data, '\n'), 0600)
+	}
+	if got := ReadCodex(home, "/work"); !got.Known || got.CtxTokens != 123 {
+		t.Fatalf("selected helper: %+v", got)
+	}
+	if _, ok := CodexPath(home, "/work", "missing"); ok {
+		t.Fatal("missing pinned thread fell back to another session")
+	}
+}
+
+func TestReverseRolloutSkipsGiantRecordWithoutLosingEarlierRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	data := "first\n" + strings.Repeat("x", maxTailSize+65536) + "\nlast\n"
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var rows []string
+	ScanCodexReverse(path, func(row []byte) bool {
+		rows = append(rows, string(row))
+		return true
+	})
+	if strings.Join(rows, ",") != "last,first" {
+		t.Fatalf("wrong rows after giant record: count=%d", len(rows))
+	}
+}

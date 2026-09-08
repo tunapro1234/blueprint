@@ -43,10 +43,11 @@ const InferMark = "?"
 
 // Identity is a label plus how much the label is worth.
 type Identity struct {
-	Label string
-	// Certain is true only when the sender was stated by something with
-	// standing (the tmux server, an explicit flag, AGENT, a login name) rather
-	// than guessed from the process tree.
+	Label    string
+	ThreadID string
+	Parent   string
+	// Certain records attribution confidence, not execution authority.
+	// Authoritative separately excludes declarations and CLI subagents.
 	Certain bool
 	// Source names the signal that won, for diagnostics and warnings.
 	Source string
@@ -57,6 +58,8 @@ func (i Identity) Inferred() bool { return strings.Contains(i.Label, InferMark) 
 
 // Options tunes the resolution for a given call site.
 type Options struct {
+	Origin func(context.Context) Origin
+	Thread func(context.Context, string) Identity
 	// From is a sender stated by the caller (bp wa send --from). It is honored
 	// only outside tmux: inside a pane the pane's own session wins, so an agent
 	// cannot sign as somebody else. An invalid value is ignored here; call
@@ -119,22 +122,33 @@ func ValidFrom(value string) error {
 	return nil
 }
 
-// Resolve names the sender. Precedence, most authoritative first:
-//
-//  1. the tmux session of the calling pane — authoritative and unforgeable,
-//     because it comes from the tmux server and not from the caller's
-//     environment. Consulted only when TMUX is set.
-//  2. an explicit From (outside tmux only).
-//  3. AGENT, with agent-name shape.
-//  4. SUDO_USER, then USER/LOGNAME: a human ran this.
-//  5. a confessing guess from the process tree, when Options.Infer is set.
-//  6. Options.Fallback, else Unknown.
-//
-// Steps 1-4 are Certain. "server-main" is never produced here; a call site that
-// wants it must ask for it by name through Fallback.
+// Resolve separates a verified pane/thread from a self-declared label. Codex
+// never falls back to inherited tmux, AGENT or login names. Other unverified
+// agent claims are visibly marked and cannot carry hierarchy authority.
 func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
-	// The gate is the whole fix: with no TMUX, display-message answers for an
-	// attached spectator, so we must not even ask.
+	probe := opts.Origin
+	if probe == nil {
+		probe = CodexOrigin
+	}
+	origin := probe(ctx)
+	if origin.ThreadID != "" {
+		if opts.Thread != nil {
+			if who := opts.Thread(ctx, origin.ThreadID); who.Label != "" {
+				if origin.Verified {
+					return who
+				}
+				// A registry match can provide a readable hint without proving
+				// this caller owns the thread. Keep the UUID in diagnostics and
+				// never turn this display label into hierarchy/force authority.
+				if who.Certain && (who.Source == "codex-thread" || who.Source == "codex-subagent") {
+					who.Label += "?"
+					who.ThreadID, who.Certain, who.Source = origin.ThreadID, false, "codex-unverified"
+					return who
+				}
+			}
+		}
+		return Identity{Label: "codex?:" + sanitize(origin.ThreadID), ThreadID: origin.ThreadID, Source: "codex-unverified"}
+	}
 	if os.Getenv("TMUX") != "" && client != nil {
 		if value, err := client.DisplaySession(ctx); err == nil {
 			if value = strings.TrimSpace(value); value != "" {
@@ -143,10 +157,13 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 		}
 	}
 	if opts.From != "" && ValidFrom(opts.From) == nil {
+		if ValidName(opts.From) {
+			return Identity{Label: "declared?:" + opts.From, Source: "--from"}
+		}
 		return Identity{Label: opts.From, Certain: true, Source: "--from"}
 	}
 	if value := os.Getenv("AGENT"); value != "" && ValidName(value) {
-		return Identity{Label: value, Certain: true, Source: "AGENT"}
+		return Identity{Label: "agent?:" + value, Source: "AGENT"}
 	}
 	// Root login is disabled on the box, so people SSH as themselves and reach
 	// bp through sudo: these name that human.
@@ -155,7 +172,7 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 		if value == "" || value == "root" || !ValidName(value) {
 			continue
 		}
-		if opts.Known != nil && opts.Known(value) {
+		if value == "server-main" || opts.Known != nil && opts.Known(value) {
 			// A login name that happens to be an agent's name must not inherit
 			// that agent's standing.
 			return Identity{Label: "user" + InferMark + ":" + value, Source: key + "-collision"}
@@ -168,7 +185,7 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 		}
 	}
 	if opts.Fallback != "" {
-		return Identity{Label: opts.Fallback, Source: "fallback"}
+		return Identity{Label: "fallback?:" + sanitize(opts.Fallback), Source: "fallback"}
 	}
 	return Identity{Label: Unknown, Source: "none"}
 }
@@ -327,4 +344,10 @@ func procParent(pid int) (int, bool) {
 		return parent, true
 	}
 	return 0, false
+}
+
+// Authoritative permits existing hierarchy/force gates only for verified main
+// agents. A subagent can be attributed without inheriting its parent's powers.
+func (i Identity) Authoritative() bool {
+	return i.Certain && i.Parent == "" && (i.Source == "tmux" || i.Source == "codex-thread")
 }

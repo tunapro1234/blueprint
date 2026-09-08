@@ -1,6 +1,7 @@
 package pending
 
 import (
+	"blueprint/internal/messagetext"
 	"bufio"
 	"encoding/json"
 	"errors"
@@ -9,12 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 )
 
 const (
-	maxAge   = 7 * 24 * time.Hour
-	maxItems = 20
+
 	// maxRecordBytes bounds one spooled record, on both sides of the store.
 	// The spool is line-delimited, so a record longer than the reader's line
 	// buffer makes the WHOLE file unreadable: bufio.Scanner returns ErrTooLong
@@ -34,6 +33,9 @@ type Entry struct {
 }
 
 func Append(dir, agent string, entry Entry) error {
+	if err := validate(entry); err != nil {
+		return err
+	}
 	// json.Marshal escapes newlines, so one record is always exactly one line
 	// however many line breaks the message text carries.
 	data, err := json.Marshal(entry)
@@ -102,9 +104,6 @@ func Load(dir, agent string) ([]Entry, int, error) {
 		return nil, 0, err
 	}
 	entries, dropped := view(live, total)
-	if err := rewrite(file, entries); err != nil {
-		return nil, 0, err
-	}
 	return entries, dropped, nil
 }
 
@@ -147,7 +146,11 @@ func Stat(dir, agent string) (items int, over int, err error) {
 	return len(entries), dropped, err
 }
 
-func Clear(dir, agent string) error {
+func Clear(dir, agent string) error { return Acknowledge(dir, agent, nil) }
+
+// Acknowledge removes only the delivered snapshot, preserving messages appended
+// while delivery was in flight. Archive before clearing, under the spool lock.
+func Acknowledge(dir, agent string, delivered []Entry) error {
 	file, err := os.OpenFile(path(dir, agent), os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return err
@@ -157,7 +160,51 @@ func Clear(dir, agent string) error {
 		return err
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	return rewrite(file, nil)
+	entries, _, err := scan(file)
+	if err != nil {
+		return err
+	}
+	counts := map[Entry]int{}
+	for _, entry := range delivered {
+		counts[entry]++
+	}
+	var kept, acked []Entry
+	for _, entry := range entries {
+		if delivered == nil || counts[entry] > 0 {
+			acked = append(acked, entry)
+			counts[entry]--
+		} else {
+			kept = append(kept, entry)
+		}
+	}
+	if len(acked) == 0 {
+		return nil
+	}
+	history := filepath.Join(dir, "pending-history")
+	if err := os.MkdirAll(history, 0755); err != nil {
+		return err
+	}
+	archive, err := os.OpenFile(filepath.Join(history, agent+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(archive)
+	for _, entry := range acked {
+		if err = enc.Encode(entry); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = archive.Sync()
+	}
+	closeErr := archive.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return rewrite(file, kept)
 }
 
 func Counts(dir string) (agents int, items int, err error) {
@@ -194,7 +241,6 @@ func scan(file *os.File) (live []Entry, total int, err error) {
 	if _, err := file.Seek(0, 0); err != nil {
 		return nil, 0, err
 	}
-	cutoff := time.Now().Add(-maxAge).Unix()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxRecordBytes)
 	for scanner.Scan() {
@@ -205,10 +251,11 @@ func scan(file *os.File) (live []Entry, total int, err error) {
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			return nil, 0, err
 		}
-		total++
-		if entry.TS >= cutoff {
-			live = append(live, entry)
+		if err := validate(entry); err != nil {
+			return nil, 0, err
 		}
+		total++
+		live = append(live, entry)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
@@ -218,14 +265,7 @@ func scan(file *os.File) (live []Entry, total int, err error) {
 
 // view applies the delivery view to a scanned spool: the newest maxItems live
 // entries, plus how many records a delivery would drop (aged out and over cap).
-func view(live []Entry, total int) ([]Entry, int) {
-	dropped := total - len(live)
-	if len(live) > maxItems {
-		dropped += len(live) - maxItems
-		live = live[len(live)-maxItems:]
-	}
-	return live, dropped
-}
+func view(live []Entry, total int) ([]Entry, int) { return live, 0 }
 
 func rewrite(file *os.File, entries []Entry) error {
 	if err := file.Truncate(0); err != nil {
@@ -241,4 +281,11 @@ func rewrite(file *os.File, entries []Entry) error {
 		}
 	}
 	return file.Sync()
+}
+
+func validate(entry Entry) error {
+	if err := messagetext.Label(entry.From); err != nil {
+		return err
+	}
+	return messagetext.Validate(entry.Text, entry.Kind)
 }

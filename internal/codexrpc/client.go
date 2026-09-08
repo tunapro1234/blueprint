@@ -40,12 +40,15 @@ func (e *RPCError) Error() string {
 
 // Thread is the read-only part of a thread/list entry used by blueprint.
 type Thread struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	AgentNickname string            `json:"agentNickname"`
-	CWD           string            `json:"cwd"`
-	Status        ThreadStatus      `json:"status"`
-	TokenUsage    *ThreadTokenUsage `json:"tokenUsage,omitempty"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	AgentNickname   string            `json:"agentNickname"`
+	Path            string            `json:"path"`
+	Model           string            `json:"model"`
+	ReasoningEffort string            `json:"reasoningEffort"`
+	CWD             string            `json:"cwd"`
+	Status          ThreadStatus      `json:"status"`
+	TokenUsage      *ThreadTokenUsage `json:"tokenUsage,omitempty"`
 }
 
 type ThreadStatus struct {
@@ -126,6 +129,10 @@ func connect(ctx context.Context, conn messageConn) (*Client, error) {
 	if err != nil {
 		_ = c.Close()
 		return nil, fmt.Errorf("initialize codex app-server: %w", err)
+	}
+	if err := c.conn.WriteMessage([]byte(`{"method":"initialized"}`)); err != nil {
+		_ = c.Close()
+		return nil, err
 	}
 	return c, nil
 }
@@ -241,6 +248,9 @@ func (c *Client) readLoop() {
 			return
 		}
 		if len(message.ID) > 0 && string(message.ID) != "null" {
+			if message.Method != "" {
+				continue
+			} // server requests are not responses to our ids
 			var id uint64
 			if err := json.Unmarshal(message.ID, &id); err != nil {
 				// Not one of our ids, so this is a server-to-client request
@@ -371,4 +381,13 @@ func (c *stdioConn) Close() error {
 		}
 	}
 	return result
+}
+
+// ThreadRead observes a thread without resuming, subscribing, or creating a writer.
+func (c *Client) ThreadRead(ctx context.Context, id string) (Thread, error) {
+	var result struct {
+		Thread Thread `json:"thread"`
+	}
+	err := c.call(ctx, "thread/read", map[string]any{"threadId": id, "includeTurns": false}, &result)
+	return result.Thread, err
 }

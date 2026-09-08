@@ -12,9 +12,9 @@ import (
 )
 
 type Config struct {
-	URL   string `json:"url"`
-	Topic string `json:"topic"`
-	Token string `json:"token,omitempty"`
+	URL   string `json:"url" yaml:"url"`
+	Topic string `json:"topic" yaml:"topic"`
+	Token string `json:"token,omitempty" yaml:"token,omitempty"`
 }
 
 var client = &http.Client{Timeout: 10 * time.Second}

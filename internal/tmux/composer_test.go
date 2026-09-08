@@ -144,8 +144,6 @@ func TestComposerBoxRefusesUnfamiliarStructures(t *testing.T) {
 	}{
 		{"only one border above the status line", collapsedPane()},
 		{"no status footer", "  transcript\n" + boxBorderTop + "\n\u276f yazi\n" + boxBorderBottom + "\n"},
-		{"codex pane", "  \u203a \n  gpt-5.6-sol low \u00b7 /tmp\n"},
-		{"codex pane with text", "\u203a taslak mesaj\n  gpt-5.6-sol low \u00b7 /tmp\n"},
 		{"no composer at all", "just some output\n"},
 		{"marker on a continuation row", "  x\n" + boxBorderTop + "\n\u276f birinci\n\u276f ikinci\n" + boxBorderBottom + "\n" + boxStatus + "\n"},
 		{"no marker on the first row", "  x\n" + boxBorderTop + "\n  birinci\n" + boxBorderBottom + "\n" + boxStatus + "\n"},

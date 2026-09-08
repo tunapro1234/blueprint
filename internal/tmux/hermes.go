@@ -48,11 +48,8 @@ import (
 //     The same message pasted with `-p` (tmux emits the bracketed-paste
 //     markers, which Hermes honours) stayed in the composer as three rendered
 //     rows and went out whole on ONE Enter. So the Hermes path pastes bracketed;
-//     see hermesPaste and Client.inject. The flag is NOT turned on globally:
-//     tmux only emits the markers when the application asked for them, but
-//     Claude's chip thresholds and Codex's expand-then-submit mechanics were
-//     measured under the current unbracketed paste and there is no reason to
-//     re-open them here.
+//     see Client.inject. Claude and Codex now use the same bracketed transport
+//     so Vim Normal receives text rather than editing commands.
 //
 //  4. THERE IS NO PASTE CHIP. A multi-line paste is rendered as raw continuation
 //     rows between the two rules, so the FULL box view (hermesComposerBox) is the

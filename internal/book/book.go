@@ -1,6 +1,7 @@
 package book
 
 import (
+	"blueprint/internal/cache"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,14 +17,19 @@ import (
 )
 
 type Agent struct {
-	Name     string `json:"name"`
-	Folder   string `json:"folder,omitempty"`
-	Parent   string `json:"parent,omitempty"`
-	Class    string `json:"class,omitempty"`
-	Role     string `json:"role,omitempty"`
-	Status   string `json:"status,omitempty"`
-	Nickname string `json:"nickname,omitempty"`
-	Color    string `json:"color,omitempty"`
+	Local            *cache.LocalBinding `json:"localRuntime,omitempty"`
+	IdentityThreadID string              `json:"identityThreadId,omitempty"`
+	Name             string              `json:"name"`
+	Launch           *bptmux.OpenOptions `json:"launch,omitempty"`
+	Folder           string              `json:"folder,omitempty"`
+	Parent           string              `json:"parent,omitempty"`
+	Class            string              `json:"class,omitempty"`
+	Role             string              `json:"role,omitempty"`
+	Status           string              `json:"status,omitempty"`
+	Nickname         string              `json:"nickname,omitempty"`
+	Color            string              `json:"color,omitempty"`
+	ColorOverride    string              `json:"colorOverride,omitempty"`
+	NativeTitle      *NativeTitle        `json:"nativeTitle,omitempty"`
 }
 
 type File struct {
@@ -56,11 +62,12 @@ type Fleet struct {
 	Agents  map[string]Agent
 	Order   []string
 	Parents map[string]string
+	Sources map[string][]string
 	Root    string
 }
 
 func LoadFleet(paths []string) (Fleet, error) {
-	fleet := Fleet{Agents: map[string]Agent{}, Parents: map[string]string{}, Root: "server-main"}
+	fleet := Fleet{Agents: map[string]Agent{}, Parents: map[string]string{}, Sources: map[string][]string{}, Root: "server-main"}
 	loaded := 0
 	for _, path := range paths {
 		file, err := Load(path)
@@ -81,6 +88,7 @@ func LoadFleet(paths []string) (Fleet, error) {
 			if invalidName(agent.Name) {
 				continue
 			}
+			fleet.Sources[agent.Name] = append(fleet.Sources[agent.Name], path)
 			if existing, ok := fleet.Agents[agent.Name]; ok {
 				agent = merge(existing, agent)
 			} else {
@@ -110,6 +118,23 @@ func LoadFleet(paths []string) (Fleet, error) {
 }
 
 func merge(old, next Agent) Agent {
+	if next.Local != nil {
+		old.Local = next.Local
+	}
+	if next.IdentityThreadID != "" {
+		if old.IdentityThreadID != "" && old.IdentityThreadID != next.IdentityThreadID {
+			old.IdentityThreadID = "ambiguous"
+		} else {
+			old.IdentityThreadID = next.IdentityThreadID
+		}
+	}
+	if old.Launch != nil && next.Launch != nil && old.Launch.ResumeID != "" && next.Launch.ResumeID != "" && old.Launch.ResumeID != next.Launch.ResumeID {
+		old.IdentityThreadID = "ambiguous"
+	}
+
+	if next.Launch != nil {
+		old.Launch = next.Launch
+	}
 	if next.Folder != "" {
 		old.Folder = next.Folder
 	}
@@ -130,6 +155,12 @@ func merge(old, next Agent) Agent {
 	}
 	if next.Color != "" {
 		old.Color = next.Color
+	}
+	if next.ColorOverride != "" {
+		old.ColorOverride = next.ColorOverride
+	}
+	if next.NativeTitle != nil {
+		old.NativeTitle = next.NativeTitle
 	}
 	return old
 }
@@ -267,6 +298,22 @@ func SetColor(paths []string, name, colour string) error {
 			return false
 		}
 		agent["color"] = colour
+		return true
+	})
+}
+
+// SetColorOverride stores an explicit bp accent without losing the native color.
+// An empty value restores automatic native/cached color selection.
+func SetColorOverride(paths []string, name, colour string) error {
+	return mutate(paths, name, func(agent map[string]any) bool {
+		if current, _ := agent["colorOverride"].(string); current == colour {
+			return false
+		}
+		if colour == "" {
+			delete(agent, "colorOverride")
+		} else {
+			agent["colorOverride"] = colour
+		}
 		return true
 	})
 }
@@ -503,6 +550,8 @@ func writeBook(target string, raw map[string]any, mode os.FileMode) error {
 // Sender is only a fallback parent; Parent and Role are explicit pins (bp open
 // --parent / --role) and, when set, beat anything inference would produce.
 type Registration struct {
+	Local  *cache.LocalBinding
+	Launch *bptmux.OpenOptions
 	Sender string
 	Parent string
 	Role   string
@@ -590,6 +639,22 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 			// Explicit pins correct an existing entry in place — in its own
 			// book, never as a second entry elsewhere.
 			pinned := false
+			if reg.Local != nil {
+				agent["localRuntime"] = reg.Local
+				pinned = true
+			} else if reg.Role == "local CLI" || reg.Launch != nil {
+				if _, exists := agent["localRuntime"]; exists {
+					delete(agent, "localRuntime")
+					pinned = true
+				}
+			}
+			if reg.Launch != nil {
+				agent["launch"] = reg.Launch
+				if !reg.Launch.Codex {
+					delete(agent, "identityThreadId") // Codex-only binding cannot survive a harness switch.
+				}
+				pinned = true
+			}
 			if current, _ := agent["parent"].(string); reg.Parent != "" && current != reg.Parent {
 				agent["parent"] = reg.Parent
 				pinned = true
@@ -602,12 +667,21 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 				return nil
 			}
 			agent["status"] = status
+			if folder != "" {
+				agent["folder"] = folder
+			}
 			found = true
 			break
 		}
 	}
 	if !found {
 		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": role, "status": status}
+		if reg.Local != nil {
+			agent["localRuntime"] = reg.Local
+		}
+		if reg.Launch != nil {
+			agent["launch"] = reg.Launch
+		}
 		if parent != "" {
 			agent["parent"] = parent
 		}
@@ -619,8 +693,9 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 }
 
 type State struct {
-	Alive bool
-	Busy  bool
+	Runtime *cache.State
+	Alive   bool
+	Busy    bool
 	// ScreenBusy and TurnBusy are the two gates Busy is composed of, kept
 	// separately because a composite that hides its components cannot be
 	// diagnosed from outside. On 2026-08-18 an operator measured `bp status`
@@ -642,42 +717,19 @@ func LiveStates(ctx context.Context, client *bptmux.Client, fleet *Fleet) (map[s
 		return nil, err
 	}
 	fleet.AddLive(sessions)
-	commands, err := client.Commands(ctx)
-	if err != nil {
-		commands = nil // degrade to Dead=false rather than failing status
-	}
 	states := make(map[string]State, len(sessions))
-	projectsRoot := bptmux.ClaudeProjectsRoot()
-	now := time.Now()
 	for _, name := range sessions {
-		pane, captureErr := client.Capture(ctx, name)
-		// Busy is the OR of both gates, so the column means the same thing here as
-		// it does in the queue. The screen is asked first and settles most rows;
-		// the transcript is only read when the screen says idle, which is what
-		// makes a streaming turn — invisible on screen for minutes at a time —
-		// show up as busy instead of as an agent waiting for work. The extra cost
-		// is one stat per idle agent, and a bounded tail read only for the ones
-		// whose session file was touched in the last quarter of an hour.
-		screenBusy := captureErr == nil && bptmux.Busy(pane)
-		// Both gates are evaluated even when the screen already said busy: the
-		// per-gate fields in `bp status --json` exist precisely so the two can be
-		// compared from outside, and a short-circuited TurnOpen would make the
-		// comparison lie for every screen-busy row. The extra cost is one stat.
-		turnBusy := TurnOpen(projectsRoot, fleet.Agents[name].Folder, name, now)
-		states[name] = State{
-			Alive:      true,
-			Busy:       screenBusy || turnBusy,
-			ScreenBusy: screenBusy,
-			TurnBusy:   turnBusy,
-			// Dead is decided on the command AND the screen. The screen half is
-			// there for Hermes, whose pane reports "python" (measured 2026-08-22 in
-			// blueprint-hermes-test): on the command alone every live Hermes agent
-			// would be listed as a dead shell, and `bp status` saying "dead" about a
-			// working agent is the kind of wrong that gets acted on. pane is empty
-			// when the capture failed, and IsAgentPane then falls back to the
-			// command — the answer this line used to give.
-			Dead: commands != nil && !bptmux.IsAgentPane(commands[name], pane),
+		runtime := RuntimeFor(ctx, client, *fleet, name)
+		a := runtime.Activity
+		st := State{Alive: true, Busy: a.DeliveryBlocked, Dead: a.State == "dead", Runtime: &runtime}
+		if a.ScreenBusy != nil {
+			st.ScreenBusy = *a.ScreenBusy
 		}
+		if a.TurnBusy != nil {
+			st.TurnBusy = *a.TurnBusy
+		}
+		states[name] = st
 	}
+
 	return states, nil
 }

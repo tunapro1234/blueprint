@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -61,18 +62,45 @@ func readTail(file *os.File, size int64) ([]byte, bool) {
 var digestPrefix = regexp.MustCompile(`^\[\d+ birikmis duyuru`)
 
 type State struct {
-	Age          time.Duration
+	Activity  *Activity
+	UsageAt   time.Time
+	TurnAt    time.Time
+	TurnKnown bool
+	Age       time.Duration
+	// CacheTTL is known only from the latest request's explicit write breakdown.
+	// CacheAge starts at its first observed message chunk, not its final chunk.
+	// Neither proves that a future request will reuse the same prefix.
+	CacheTTL     time.Duration
+	CacheAge     time.Duration
 	CtxTokens    int
 	LastHumanAge time.Duration
 	Known        bool
 	// Model is what the session actually ran last, read from the assistant
 	// records. Settings files only hold the configured default: /model changes
 	// a live session without touching them, so they cannot be trusted for this.
-	Model string
+	Model        string
+	Effort       string
+	ServiceTier  string
+	ThreadID     string
+	Path         string
+	Busy         bool
+	Runtime      string
+	RuntimeError string
 	// Window is the model's context window when the session reports one
 	// (codex does, claude does not). Zero means unknown: absolute thresholds
 	// apply instead of percentages.
 	Window int
+}
+
+// CacheHint labels estimates explicitly. A usage timestamp alone is not a TTL.
+func (s State) CacheHint() (string, time.Duration) {
+	if !s.Known || s.CacheTTL <= 0 {
+		return "age", s.Age
+	}
+	if s.CacheAge < s.CacheTTL {
+		return "warm~", s.CacheAge
+	}
+	return "cold~", s.CacheAge
 }
 
 // FolderPath is the one place a caller's folder string becomes a path. An
@@ -100,6 +128,11 @@ func Read(projectsRoot, folder, agent string) State {
 	if !ok {
 		return State{LastHumanAge: -1}
 	}
+	return ReadClaudePath(path)
+}
+
+// ReadClaudePath reads metrics only from the caller's resolved session.
+func ReadClaudePath(path string) State {
 	file, err := os.Open(path)
 	if err != nil {
 		return State{LastHumanAge: -1}
@@ -114,41 +147,94 @@ func Read(projectsRoot, folder, agent string) State {
 		return State{LastHumanAge: -1}
 	}
 
-	var usageTime, humanTime time.Time
+	var usageTime, humanTime, compactTime time.Time
+	var cacheTime time.Time
+	var cacheTTL time.Duration
+	messageStarts := make(map[string]time.Time)
 	ctxTokens := 0
-	model := ""
+	model, effort := "", ""
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var record struct {
-			Type      string          `json:"type"`
+			Type             string `json:"type"`
+			Subtype          string `json:"subtype"`
+			IsCompactSummary bool   `json:"isCompactSummary"`
+			IsSidechain      bool   `json:"isSidechain"`
+			CompactMetadata  *struct {
+				PostTokens *int `json:"postTokens"`
+			} `json:"compactMetadata"`
 			Timestamp string          `json:"timestamp"`
 			Message   json.RawMessage `json:"message"`
 			Role      string          `json:"role"`
 			Content   json.RawMessage `json:"content"`
+			Effort    json.RawMessage `json:"effort"`
 		}
 		if json.Unmarshal(line, &record) != nil {
 			continue
 		}
+		if record.IsSidechain {
+			continue
+		}
+		if record.Type == "system" && record.Subtype == "compact_boundary" {
+			compactTime, _ = parseTime(record.Timestamp)
+			usageTime, ctxTokens = time.Time{}, 0
+			cacheTime, cacheTTL = time.Time{}, 0
+			if record.CompactMetadata != nil && record.CompactMetadata.PostTokens != nil && *record.CompactMetadata.PostTokens >= 0 {
+				usageTime, ctxTokens = compactTime, *record.CompactMetadata.PostTokens
+			}
+			continue
+		}
 		var message struct {
+			ID      string          `json:"id"`
 			Role    string          `json:"role"`
 			Model   string          `json:"model"`
 			Content json.RawMessage `json:"content"`
 			Usage   *struct {
+				Input         int `json:"input_tokens"`
 				CacheRead     int `json:"cache_read_input_tokens"`
 				CacheCreation int `json:"cache_creation_input_tokens"`
+				Creation      struct {
+					Hour int `json:"ephemeral_1h_input_tokens"`
+					Five int `json:"ephemeral_5m_input_tokens"`
+				} `json:"cache_creation"`
 			} `json:"usage"`
 		}
 		_ = json.Unmarshal(record.Message, &message)
+		if stamp, ok := parseTime(record.Timestamp); ok && message.ID != "" {
+			if previous, exists := messageStarts[message.ID]; !exists || stamp.Before(previous) {
+				messageStarts[message.ID] = stamp
+			}
+		}
 		// "<synthetic>" marks interrupt/error placeholders, not a real turn.
 		if message.Model != "" && message.Model != "<synthetic>" {
 			model = message.Model
+			// Claude stores effort on the outer assistant record. Keep it paired
+			// with this model/turn; an older turn or another agent's global
+			// default cannot fill an absent value. Unknown shapes don't discard
+			// otherwise valid token usage in the record.
+			effort = ""
+			if record.Type == "assistant" || message.Role == "assistant" {
+				_ = json.Unmarshal(record.Effort, &effort)
+			}
 		}
 		if message.Usage != nil {
-			if timestamp, ok := parseTime(record.Timestamp); ok {
+			if timestamp, ok := parseTime(record.Timestamp); ok && (compactTime.IsZero() || timestamp.After(compactTime)) {
 				usageTime = timestamp
-				ctxTokens = message.Usage.CacheRead + message.Usage.CacheCreation
+				ctxTokens = message.Usage.Input + message.Usage.CacheRead + message.Usage.CacheCreation
+				cacheTTL, cacheTime = 0, timestamp
+				if start, ok := messageStarts[message.ID]; ok {
+					cacheTime = start
+				}
+				// Mixed/absent TTLs and read-only hits do not establish the
+				// lifetime of the current prefix. Do not infer it from auth/model.
+				c := message.Usage.Creation
+				if c.Hour > 0 && c.Five == 0 && c.Hour == message.Usage.CacheCreation {
+					cacheTTL = time.Hour
+				} else if c.Five > 0 && c.Hour == 0 && c.Five == message.Usage.CacheCreation {
+					cacheTTL = 5 * time.Minute
+				}
 			}
 		}
 		if record.Type != "user" && record.Role != "user" && message.Role != "user" {
@@ -159,7 +245,7 @@ func Read(projectsRoot, folder, agent string) State {
 			content = record.Content
 		}
 		text := contentText(content)
-		if automatic(text) {
+		if record.IsCompactSummary || strings.TrimSpace(text) == "" || automatic(text) {
 			continue
 		}
 		if timestamp, ok := parseTime(record.Timestamp); ok {
@@ -167,8 +253,11 @@ func Read(projectsRoot, folder, agent string) State {
 		}
 	}
 
-	result := State{CtxTokens: ctxTokens, LastHumanAge: -1, Model: model}
+	result := State{CtxTokens: ctxTokens, LastHumanAge: -1, Model: model, Effort: effort, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: usageTime}
 	now := time.Now()
+	if cacheTTL > 0 {
+		result.CacheTTL, result.CacheAge = cacheTTL, age(now, cacheTime)
+	}
 	if !usageTime.IsZero() {
 		result.Known = true
 		result.Age = age(now, usageTime)

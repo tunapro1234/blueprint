@@ -1,6 +1,7 @@
 package msgq
 
 import (
+	"blueprint/internal/messagetext"
 	"context"
 	"encoding/json"
 	"errors"
@@ -122,8 +123,9 @@ type Queue struct {
 	// pasted into a working agent. This one asks the target's own transcript
 	// instead of the screen; the daemon binds book.TurnOpenProbe here. A queue
 	// with no probe behaves exactly as before.
-	TurnOpen func(to string) bool
-	mu       sync.Mutex
+	RuntimeBlock func(to string, force bool) string
+	TurnOpen     func(to string) bool
+	mu           sync.Mutex
 }
 
 func New(root string) *Queue {
@@ -280,6 +282,12 @@ type enqueueOptions struct {
 // of its own (the notice to a sender whose delivery could not be verified);
 // calling the exported entry point from there would deadlock against itself.
 func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (string, error) {
+	if err := messagetext.Validate(text); err != nil {
+		return "", err
+	}
+	if err := messagetext.Label(from); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
 		return "", err
 	}
@@ -309,7 +317,13 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 	id := base
 	for suffix := 1; ; suffix++ {
 		path := filepath.Join(q.pending(), id+".json")
-		err = os.Link(tmpName, path)
+		if _, doneErr := os.Stat(filepath.Join(q.done(), id+".json")); doneErr == nil {
+			err = os.ErrExist
+		} else if !os.IsNotExist(doneErr) {
+			return "", doneErr
+		} else {
+			err = os.Link(tmpName, path)
+		}
 		if errors.Is(err, os.ErrExist) {
 			id = fmt.Sprintf("%s-%d", base, suffix)
 			message.ID = id
@@ -549,7 +563,7 @@ func (q *Queue) PendingFor(to string) []string {
 		// composer would produce the duplicate the Cleanup state exists to prevent.
 		// It stays invisible to the send path and is erased by Dispatch instead,
 		// which pushes the new message into the queue behind it — the right order.
-		if rec.Cleanup {
+		if rec.Cleanup || messagetext.Validate(rec.Msg) != nil || messagetext.Label(rec.From) != nil {
 			continue
 		}
 		texts = append(texts, rec.Msg)
@@ -748,7 +762,27 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 	if rec.ForceBusy {
 		return false, nil
 	}
+	release, err := q.lockPane(rec.To)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	if q.TurnOpen != nil && q.TurnOpen(rec.To) {
+		return false, nil
+	}
 	return target.SubmitStuck(ctx, rec.To, []string{rec.Msg})
+}
+
+func (q *Queue) clearTornPaste(ctx context.Context, target Target, rec record) (bool, error) {
+	release, err := q.lockPane(rec.To)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	if q.TurnOpen != nil && q.TurnOpen(rec.To) {
+		return false, nil
+	}
+	return target.ClearDelivered(ctx, rec.To, []string{rec.Msg})
 }
 
 // settleUnrepasted handles a record that may never be pasted again: it waits for
@@ -1143,12 +1177,18 @@ func lines(records []record) ([]string, map[string][]record) {
 // "DUR/IPTAL" correction after the instruction it cancelled, and fifteen minutes of
 // silence would have been the cheaper failure by far.
 func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
+	// Legacy records must not authorize Enter, cleanup, or a fresh paste.
+	err := messagetext.Validate(rec.Msg)
+	if err == nil {
+		err = messagetext.Label(rec.From)
+	}
+	if err != nil {
+		q.remember(rec.path, rec.Message, "blocked: "+err.Error(), report)
+		line.block(rec.ID)
+		return
+	}
 	if !target.HasSession(ctx, rec.To) {
-		// A closed target cancels the record without touching any pane, so it is
-		// neither an action nor a reason to hold the line.
-		if err := q.finish(rec.path, rec.Message, "canceled (target closed)"); err != nil && report != nil {
-			report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
-		}
+		q.remember(rec.path, rec.Message, "target closed; waiting for it to reopen", report)
 		return
 	}
 	// The transcript is the witness, and it is asked FIRST — before the pane, before
@@ -1198,7 +1238,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// telling a human to press Enter, and Enter delivered 81 characters
 			// of a 716-character instruction.
 			if rec.TornClears < tornClearMax {
-				if cleared, err := target.ClearDelivered(ctx, rec.To, []string{rec.Msg}); err == nil && cleared {
+				if cleared, err := q.clearTornPaste(ctx, target, rec); err == nil && cleared {
 					message := rec.Message
 					message.NoRepaste = false
 					message.TornClears++
@@ -1324,7 +1364,14 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// refuses this too and is the real guarantee; the check is repeated here so the
 	// record gets the honest "pane calisiyor" reason a human can read in `bp q`
 	// instead of a delivery error.
-	if (!rec.ForceBusy || bptmux.HermesPane(pane)) && (bptmux.Busy(pane) || (q.TurnOpen != nil && q.TurnOpen(rec.To))) {
+	if q.RuntimeBlock != nil {
+		if reason := q.RuntimeBlock(rec.To, rec.ForceBusy); reason != "" {
+			q.remember(rec.path, rec.Message, reason, report)
+			line.block(rec.ID)
+			return
+		}
+	}
+	if (!rec.ForceBusy || bptmux.HermesPane(pane)) && (bptmux.Busy(pane) || (q.RuntimeBlock == nil && q.TurnOpen != nil && q.TurnOpen(rec.To))) {
 		q.remember(rec.path, rec.Message, bptmux.BlockedByBusyPane, report)
 		line.block(rec.ID)
 		return
@@ -1547,20 +1594,8 @@ func (q *Queue) settleDelivered(ctx context.Context, target Target, rec record, 
 	line.block(rec.ID)
 }
 
-func (q *Queue) Cleanup() error {
-	paths, err := filepath.Glob(filepath.Join(q.done(), "q*.json"))
-	if err != nil {
-		return err
-	}
-	cutoff := q.Now().Add(-48 * time.Hour)
-	for _, path := range paths {
-		info, statErr := os.Stat(path)
-		if statErr == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(path)
-		}
-	}
-	return nil
-}
+// Delivery records are evidence. Retention is explicit, never a dispatch side effect.
+func (q *Queue) Cleanup() error { return nil }
 
 func (q *Queue) Run(ctx context.Context, interval time.Duration, target Target, report func(string)) {
 	ticker := time.NewTicker(interval)

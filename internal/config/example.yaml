@@ -1,0 +1,35 @@
+# bp ayarları — değişiklikler sonraki bp komutunda okunur.
+# Dosya: ~/.blueprint/config.yaml (BP_HOME ayarlıysa o klasörde).
+# Göreli yollar bu dosyanın klasörüne göredir; ~/ ev klasörüdür.
+# config.json / config.yml ile birlikte kullanmayın; tek etkin dosya seçin.
+
+agentbooks: [agentbook.json]
+msgqRoot: msgq
+stateDir: state
+
+# Yerel CLI oturum/model/context gözlemi. Konuşmalar kendi CLI klasöründe kalır.
+localObservation: true
+
+# bp yerel tmux oturumlarında fareyle kaydırma ve seçim.
+localMouse: true
+
+# Alt çubuk: liste sırası ekran sırasıdır. [] bütün widget'ları gizler.
+# ctx: context, temp: cache tahmini/ölçüm yaşı, queue: bekleyen mesajlar,
+# model: model/effort, quota: kullanılan kota, talk: son mesaj yaşı, clock: saat.
+bar:
+  # defaultColor: purple # bilgisayar varsayılanı; agenta özel bp color önceliklidir
+  context: used # kullanılan context; kalan miktar için remaining
+  widgets: [ctx, temp, queue, model, quota]
+
+# İsteğe bağlı entegrasyonlar varsayılan olarak kapalıdır.
+waBridge: false
+# usageHistory: ~/usage/history.jsonl
+# codex:
+#   sockets: [~/.codex/app-server-control/app-server-control.sock]
+# ntfy:
+#   url: https://ntfy.example.com
+#   topic: bp
+#   token: ""
+
+# Kontrol: bp config check
+# Etkin dosya: bp config path

@@ -90,7 +90,7 @@ func codexRuntime(ctx context.Context, pid int, agent Agent, a *cache.Activity) 
 }
 
 func needsCodexWriterBinding(info bptmux.CodexProcess, agent Agent) bool {
-	return info.Remote == "" && (agent.Launch == nil || agent.Launch.Remote == "")
+	return info.Remote == "" && (info.Observed || agent.Launch == nil || agent.Launch.Remote == "")
 }
 
 func readCodexRuntime(ctx context.Context, info bptmux.CodexProcess, agent Agent, a *cache.Activity) cache.State {
@@ -107,7 +107,7 @@ func readCodexRuntime(ctx context.Context, info bptmux.CodexProcess, agent Agent
 		}
 		id, binding = candidate.id, candidate.source
 	}
-	if agent.Launch != nil && info.Remote == "" {
+	if agent.Launch != nil && info.Remote == "" && !info.Observed {
 		info.Remote = agent.Launch.Remote
 	}
 	explicitRemote := info.Remote != ""

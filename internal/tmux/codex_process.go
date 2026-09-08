@@ -9,9 +9,16 @@ import (
 
 // CodexProcess contains connection hints only. A remote TUI's argv is not
 // evidence of the model, token usage, or execution policy of its server.
-type CodexProcess struct{ Home, ThreadID, Remote string }
+type CodexProcess struct {
+	Home, ThreadID, Remote string
+	Observed               bool // native Codex argv was read; an empty Remote means embedded
+}
 
 func CodexProcessInfo(pid int) CodexProcess {
+	return codexProcessInfo(pid, "/proc")
+}
+
+func codexProcessInfo(pid int, procRoot string) CodexProcess {
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
 		user, _ := os.UserHomeDir()
@@ -24,14 +31,20 @@ func CodexProcessInfo(pid int) CodexProcess {
 		if pids[i] <= 0 {
 			continue
 		}
-		env, _ := os.ReadFile(filepath.Join("/proc", p, "environ"))
+		env, _ := os.ReadFile(filepath.Join(procRoot, p, "environ"))
 		for _, entry := range strings.Split(string(env), "\x00") {
 			key, value, _ := strings.Cut(entry, "=")
 			if key == "CODEX_HOME" && value != "" {
 				result.Home = value
 			}
 		}
-		data, _ := os.ReadFile(filepath.Join("/proc", p, "cmdline"))
+		data, commandErr := os.ReadFile(filepath.Join(procRoot, p, "cmdline"))
+		executable, executableErr := os.Readlink(filepath.Join(procRoot, p, "exe"))
+		native := executableErr == nil && filepath.Base(strings.TrimSuffix(executable, " (deleted)")) == "codex"
+		if native && commandErr == nil && len(data) > 0 {
+			// Wrapper/tool descendants cannot override the native CLI's mode.
+			result.ThreadID, result.Remote, result.Observed = "", "", true
+		}
 		args := strings.Split(string(data), "\x00")
 		for j, arg := range args {
 			if arg == "--remote" && j+1 < len(args) {
@@ -44,7 +57,10 @@ func CodexProcessInfo(pid int) CodexProcess {
 				result.ThreadID = args[j+1]
 			}
 		}
-		children, _ := os.ReadFile(filepath.Join("/proc", p, "task", p, "children"))
+		if native {
+			return result
+		}
+		children, _ := os.ReadFile(filepath.Join(procRoot, p, "task", p, "children"))
 		for _, child := range strings.Fields(string(children)) {
 			n, _ := strconv.Atoi(child)
 			if n > 0 {

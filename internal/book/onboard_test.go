@@ -22,7 +22,7 @@ func TestOnboardingPreservesBookAndExistingCoordinator(t *testing.T) {
 		t.Fatal(string(data))
 	}
 	file, _ := Load(path)
-	if len(file.Agents) != 2 || file.Agents[0].Parent != "main" || file.Agents[0].Color != "red" {
+	if len(file.Agents) != 2 || file.Agents[0].Parent != "main" || file.Agents[0].Color != "red" || file.Agents[1].ColorOverride != "160" {
 		t.Fatal(file)
 	}
 	os.WriteFile(path, []byte(`{"orchestrator":"mine","agents":[{"name":"mine","folder":"/owned"}]}`), 0600)

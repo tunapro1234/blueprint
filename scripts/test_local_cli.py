@@ -1277,6 +1277,17 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd,b"\x03")
         self.wait_closed("claude-test")
 
+    @unittest.skipUnless(shutil.which("node"), "Node required for npm Codex launcher regression")
+    def test_managed_open_npm_codex_keeps_native_child_observable(self):
+        wrapper = self.root / "npm-codex"
+        wrapper.write_text("#!" + shutil.which("node") + "\n" +
+                           "const cp=require('child_process');const child=cp.spawn(" + json.dumps(self.fake_tui) +
+                           ",process.argv.slice(2),{stdio:'inherit'});" +
+                           "child.on('exit',code=>process.exit(code===null?1:code));\n")
+        wrapper.chmod(0o755)
+        self.fake_tui = str(wrapper)
+        self.test_managed_open_codex_uses_local_runtime_and_worker()
+
     def test_managed_open_codex_uses_local_runtime_and_worker(self):
         shutil.copyfile(self.fake_tui, self.bin / "codex")
         self.env.update(BP_FAKE_VIM="insert", BP_FAKE_BUSY=str(self.root / "absent"),

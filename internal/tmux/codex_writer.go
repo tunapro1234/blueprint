@@ -26,6 +26,14 @@ func CodexWriterIDs(ctx context.Context, panePID int, home string) ([]string, er
 		base := filepath.Join("/proc", strconv.Itoa(pid))
 		comm, err := os.ReadFile(filepath.Join(base, "comm"))
 		name := strings.TrimSpace(string(comm))
+		// A shebang launcher named codex can retain "codex" in comm while
+		// /proc/exe is Node. It owns no writer lock; inspect its native child.
+		if executable, e := os.Readlink(filepath.Join(base, "exe")); e == nil {
+			switch actual := filepath.Base(strings.TrimSuffix(executable, " (deleted)")); actual {
+			case "node", "sh", "bash", "zsh", "bwrap":
+				name = actual
+			}
+		}
 		if err != nil {
 			out, e := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "comm=").Output()
 			if e != nil {

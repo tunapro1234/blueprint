@@ -190,6 +190,13 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 	client := bptmux.New()
 	if selected != "" {
 		if _, ok := fleet.Agents[selected]; !ok {
+			if rows, err := book.Archives(cfg.Agentbooks); err == nil {
+				for _, row := range rows {
+					if row.Agent.Name == selected {
+						return []doctorCheck{{Name: "archive", Agent: selected, OK: true, Detail: "registration archived in " + row.Path + "; native history remains intact", Next: "bp restore " + selected}}
+					}
+				}
+			}
 			return []doctorCheck{{Name: "agent", Detail: "agent not registered: " + selected, Next: "bp book --json"}}
 		}
 	}

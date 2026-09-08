@@ -210,6 +210,9 @@ func (a *app) localRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
+		return err
+	}
 	// Only our window runs this launcher. Exiting the agent exits the pane;
 	// there is no interactive shell underneath it and no global tmux changes.
 	cliArgs, observationPath, err := a.prepareLocalObservation(args[0], args[1:])

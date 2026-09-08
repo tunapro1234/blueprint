@@ -64,6 +64,23 @@ preserved in a private `exit.json` and printed after tmux exits; `bp doctor --ag
 Native Claude
 and Codex `/rename` changes update the display name without changing authority.
 
+Archive a closed registration without deleting its conversation:
+
+```sh
+bp archive work
+bp archive --list --json
+bp restore work
+```
+
+Archived records stay in their original agentbook with an `archivedAt` timestamp;
+they leave active BP lists but retain their name, launch metadata and native
+conversation files. Restore makes the record available again without launching a
+CLI. Native resume pickers are not modified. Exit the agent first; a coordinator,
+an agent with children, or an agent with pending messages cannot be archived.
+Remote Codex threads must also be confirmed unloaded. Restore an archived parent
+before its children. `bp open` and named local launches require an explicit
+restore instead of silently reusing an archived name.
+
 ## Configure
 
 Settings live in `~/.blueprint/config.yaml`, or under `BP_HOME`. Shell integration
@@ -163,3 +180,8 @@ python3 -m unittest scripts.test_local_cli
 
 Server-only integrations are optional. [P2P messaging](docs/p2p.md) is opt-in and uses
 libp2p with your own rendezvous/relay and explicit peer permissions.
+
+
+Report bugs and feature requests in [GitHub Issues](https://github.com/tunapro1234/blueprint/issues).
+For a session problem, include the BP version, `bp doctor --agent <name> --json`
+output and relevant channel ID; distinguish automatic delivery from a manual Enter.

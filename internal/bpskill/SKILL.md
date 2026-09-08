@@ -29,6 +29,12 @@ sandboxed TUI to an unrestricted daemon does not preserve its sandbox.
 `bp color <agent> --json` reads the accent; `bp color <agent> <color>` changes it.
 Native rename/display labels and agent authority are separate.
 
+`bp archive <name>` hides a closed registration from active lists while keeping
+its metadata and native history. Use `bp archive --list --json` and
+`bp restore <name>` to inspect or restore it. Do not close a working agent or
+cancel pending messages merely to satisfy archive checks. Archiving does not
+remove a conversation from the native CLI's resume picker.
+
 ## Messages
 
 Before sending, check `bp whoami` and the recipient's status/peek. Use

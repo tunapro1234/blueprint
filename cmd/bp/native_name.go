@@ -92,6 +92,9 @@ func (a *app) liveName(name string) string {
 // Canonical names always win. A unique live title is a convenience address;
 // resolve it before hierarchy and delivery gates, keeping the canonical identity.
 func (a *app) resolveNativeTarget(name string) (string, error) {
+	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
+		return "", err
+	}
 	if a.tmux == nil || a.hasSession(name) {
 		return name, nil
 	}

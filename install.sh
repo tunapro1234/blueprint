@@ -172,6 +172,10 @@ BP_RELEASE_PUBLIC_KEY
 install_local() {
     BP_HOME=${BP_HOME:-$HOME/.blueprint}
     export BP_HOME
+    local_existing=no
+    if [ -e "$HOME/.local/bin/bp" ] || [ -f "$BP_HOME/agentbook.json" ]; then
+        local_existing=yes
+    fi
     client_platform
     if ! command -v tmux >/dev/null 2>&1; then
         if [ "$YES" != 1 ]; then
@@ -225,9 +229,21 @@ install_local() {
     [ -z "$local_backup" ] || say "previous binary backup: $local_backup"
     if [ "${BP_ONBOARD:-auto}" = skip ]; then
         say "onboarding skipped; run bp onboard when ready"
-    elif [ ! -f "${BP_HOME:-$HOME/.blueprint}/main/onboarding.json" ]; then
-        if [ -z "${TMUX:-}" ] && ( : </dev/tty ) 2>/dev/null; then
-            "$local_bin/bp" onboard </dev/tty >/dev/tty 2>/dev/tty
+    elif [ "$local_existing" = yes ]; then
+        say "existing installation preserved; run bp onboard explicitly if you want to configure a main agent"
+    elif [ ! -f "$BP_HOME/main/onboarding.json" ]; then
+        # tmux needs the actual terminal device name, not the /dev/tty alias.
+        # stdin is the installer pipe in curl | sh, so `tty` cannot identify it.
+        # tmux also writes through fd 0: open read/write, then duplicate it.
+        terminal_name=$(ps -o tty= -p "$$" 2>/dev/null | tr -d '[:space:]') || terminal_name=
+        terminal_device=
+        case "$terminal_name" in
+            pts/*|tty*) terminal_device=/dev/$terminal_name ;;
+        esac
+        if [ -z "${TMUX:-}" ] && [ -n "$terminal_device" ] && [ -c "$terminal_device" ] && [ -r "$terminal_device" ] && [ -w "$terminal_device" ]; then
+            if ! "$local_bin/bp" onboard 0<>"$terminal_device" 1>&0 2>&0; then
+                say "bp is installed; onboarding did not finish. Run bp onboard from your terminal to continue."
+            fi
         else
             say "run bp onboard in a terminal to choose your CLI and start the main agent"
         fi

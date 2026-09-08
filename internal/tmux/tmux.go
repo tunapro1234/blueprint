@@ -489,7 +489,14 @@ func Busy(pane string) bool {
 			return true
 		}
 	}
-	for _, line := range strings.Split(strings.ToLower(pane), "\n") {
+	interruptRows := strings.Split(pane, "\n")
+	if CodexPane(pane) {
+		// Codex history can quote an old Working row. Only the live composer
+		// region is evidence; scanning the entire transcript creates false busy.
+		interruptRows = busyRegion(pane)
+	}
+	for _, raw := range interruptRows {
+		line := strings.ToLower(ansiSeq.ReplaceAllString(raw, ""))
 		if !strings.Contains(line, "esc to interrupt") || strings.Contains(line, "shell") {
 			continue
 		}
@@ -2285,6 +2292,13 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if opts.Hermes {
 		command = hermesBin
 	}
+	// A brand-new Codex may not persist a rollout until its first user turn.
+	// Supply that first prompt through the native CLI, before a user can type
+	// into the TUI, instead of waiting for transcript evidence it must create.
+	nativeOnboarding := opts.Codex && !opts.Resume && !opts.NoPrompt
+	if nativeOnboarding {
+		command += " " + shellQuote(fmt.Sprintf(portableOnboarding, session))
+	}
 	if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", command, "Enter"); err != nil {
 		return err
 	}
@@ -2384,7 +2398,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 			warn("WARNING: " + session + " --no-sandbox istendi ama pane komutu hala \"bwrap\": CODEX_BWRAPPED=1 komuta ulasmamis. Agent bu haliyle git olmayan bir dizinde komut calistiramaz; bp close " + session + " ile kapatip yeniden acmayi dene.")
 		}
 	}
-	if !opts.NoPrompt {
+	if !opts.NoPrompt && !nativeOnboarding {
 		onboarding := portableOnboarding
 		if err := c.Send(ctx, session, fmt.Sprintf(onboarding, session)); err != nil {
 			if warn != nil {

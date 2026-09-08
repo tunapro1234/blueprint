@@ -14,7 +14,7 @@ case ":$PATH:" in
   *) export PATH="$HOME/.local/bin:$PATH" ;;
 esac
 _bp_agent() {
-  if [ -n "${TMUX:-}" ] || [ -n "${BP_SESSION:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+  if [ -n "${TMUX:-}" ] || [ -n "${BP_SESSION:-}" ] || [ ! -t 0 ] || [ ! -t 1 ] || ! command -v bp >/dev/null 2>&1; then
     command "$@"
   else
     command bp run "$@"

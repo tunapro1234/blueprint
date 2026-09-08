@@ -45,6 +45,7 @@ func main() {
   c:=exec.Command("python3",append([]string{observer,filepath.Base(os.Args[0])},os.Args[1:]...)...); c.Stderr=os.Stderr
   out,e:=c.Output();if e!=nil{panic(e)}
   if path:=strings.TrimSpace(string(out));path!="" {
+   os.Setenv("CODEX_THREAD_ID",strings.TrimSuffix(filepath.Base(path),".lock"))
    f,e:=os.OpenFile(path,os.O_CREATE|os.O_RDWR,0600);if e!=nil{panic(e)};defer f.Close()
    if e=syscall.Flock(int(f.Fd()),syscall.LOCK_EX);e!=nil{panic(e)}
   }
@@ -86,6 +87,13 @@ func main() {
    case 21:text=""
    case '\r','\n':
     if text=="quit" {return}
+    if strings.HasPrefix(text,"__bp_whoami") {
+     c:=exec.Command("bp","whoami");c.Env=os.Environ()
+     if fields:=strings.Fields(text);len(fields)>1 {c.Env=append(c.Env,"CODEX_THREAD_ID="+fields[1])}
+     out,e:=c.CombinedOutput();if e!=nil {panic(string(out))}
+     if e=os.WriteFile(os.Getenv("BP_FAKE_IDENTITY_RESULT"),out,0600);e!=nil {panic(e)}
+     text="";continue
+    }
     f,e:=os.OpenFile(os.Getenv("BP_FAKE_RECEIVED"),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600)
     if e!=nil {panic(e)}; _=json.NewEncoder(f).Encode(text); _=f.Close()
     if path,e:=os.ReadFile(filepath.Join(os.Getenv("HOME"),fmt.Sprintf("native-%d-transcript",os.Getpid())));e==nil {
@@ -255,6 +263,33 @@ class LocalCLITest(unittest.TestCase):
         self.children.append((pid, fd))
         return fd
 
+    def test_local_codex_identity_is_readable_without_granting_authority(self):
+        shutil.copyfile(self.fake_tui, self.bin / "codex")
+        result = self.root / "identity-result.json"
+        self.env["BP_FAKE_IDENTITY_RESULT"] = str(result)
+        fd = self.start("codex", "my-codex")
+        status = json.loads(subprocess.check_output([self.binary,"status","--json"],env=self.env))
+        root = next(a["thread_id"] for a in status["agents"] if a["name"] == "my-codex")
+        child = "22222222-2222-2222-2222-222222222222"
+        parent_path = next((self.root / ".codex/sessions").glob("**/*-"+root+".jsonl"))
+        child_path = parent_path.parent / ("rollout-child-"+child+".jsonl")
+        child_path.write_text(json.dumps({"type":"session_meta","payload":{"id":child,
+            "source":{"subagent":{"thread_spawn":{"parent_thread_id":root}}}}})+"\n")
+        for thread, label in [(root,"my-codex?"),(child,"my-codex/subagent:"+child+"?")]:
+            os.write(fd,("__bp_whoami "+thread+"\r").encode())
+            deadline = time.monotonic()+5
+            observed = {}
+            while time.monotonic()<deadline:
+                if result.exists():
+                    observed = json.loads(result.read_text())
+                    if observed.get("ThreadID")==thread: break
+                time.sleep(.05)
+            self.assertEqual(observed.get("Label"),label,observed)
+            self.assertFalse(observed.get("Certain"),observed)
+            self.assertFalse(observed.get("authority"),observed)
+        os.write(fd,b"quit\r")
+        self.wait_closed("my-codex")
+
     def test_continue_reuses_live_owner_and_symlink(self):
         shutil.copyfile(self.fake_tui, self.bin / "claude")
         self.start("claude", "advice")
@@ -367,7 +402,7 @@ class LocalCLITest(unittest.TestCase):
         config.write_text("bar: [broken\n")
         result = subprocess.run([self.binary, "version", "--json"], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)["version"], "1.6.0")
+        self.assertEqual(json.loads(result.stdout)["version"], (REPO / "internal/release/version.txt").read_text().strip())
         result = subprocess.run([self.binary, "doctor", "--json"], env=self.env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         report = json.loads(result.stdout)
@@ -433,6 +468,23 @@ class LocalCLITest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(target.read_text(), "original-binary")
         self.assertIn("previous binary restored", result.stdout)
+
+    def test_installer_does_not_install_dependencies_without_opt_in(self):
+        dependency_bin = self.root / "dependency-bin"
+        dependency_bin.mkdir()
+        (dependency_bin / "uname").write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n')
+        (dependency_bin / "uname").chmod(0o755)
+        marker = self.root / "package-manager-was-called"
+        for name in ["apt-get", "brew", "sudo"]:
+            command = dependency_bin / name
+            command.write_text('#!/bin/sh\n/bin/touch "' + str(marker) + '"\n')
+            command.chmod(0o755)
+        result = subprocess.run(["/bin/sh", str(REPO / "install.sh")],
+            env=dict(self.env, PATH=str(dependency_bin), BP_LOCAL_BINARY=self.binary), capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("tmux is required", result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / ".local/bin/bp").exists())
 
     def test_installer_preflight_keeps_existing_binary(self):
         target = self.root / ".local/bin/bp"
@@ -532,6 +584,22 @@ class LocalCLITest(unittest.TestCase):
                                 env=dict(env, BP_FAKE_BATCH="1"), capture_output=True, text=True)
         self.assertEqual(result.returncode, 37)
         self.assertEqual(json.loads(result.stdout), ["--version"])
+
+    def test_shell_wrappers_fall_back_after_bp_uninstall(self):
+        subprocess.run([self.binary, "setup", "--shell", "bash"], env=self.env,
+                       capture_output=True, check=True)
+        native = self.root / "native-only"
+        native.mkdir()
+        cli = native / "claude"
+        cli.write_text('#!/bin/sh\nprintf "NATIVE_AFTER_UNINSTALL:%s\\n" "$*"\n')
+        cli.chmod(0o755)
+        pid, fd = pty.fork()
+        if pid == 0:
+            env = dict(self.env, PATH=str(native))
+            os.execve("/bin/bash", ["bash", "--noprofile", "--norc", "-c",
+                '. "$HOME/.config/bp/shell.sh"; claude --continue'], env)
+        self.children.append((pid, fd))
+        self.read_until(fd, b"NATIVE_AFTER_UNINSTALL:--continue")
 
     def test_existing_aliases_keep_options_and_wrap_in_bash_and_zsh(self):
         for shell in ["bash", "zsh"]:

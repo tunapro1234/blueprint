@@ -23,7 +23,12 @@ func TestLegacyModeSelection(t *testing.T) {
 			return fakeFileInfo{}, nil
 		},
 		func() (string, error) { return "", errors.New("must not be called") },
-		func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		func(path string) ([]byte, error) {
+			if path == "/etc/blueprint/home" {
+				return []byte(LegacyHome + "\n"), nil
+			}
+			return nil, os.ErrNotExist
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +105,7 @@ func TestConfigOverridesLegacyDefaults(t *testing.T) {
 func TestNonLegacyDefaults(t *testing.T) {
 	config, err := loadWith(
 		func(string) string { return "" },
-		func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+		func(string) (os.FileInfo, error) { return fakeFileInfo{}, nil },
 		func() (string, error) { return "/Users/example", nil },
 		func(string) ([]byte, error) { return nil, os.ErrNotExist },
 	)
@@ -191,5 +196,42 @@ func TestFederationConfigRequiresLoopbackHubListener(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "loopback") {
 		t.Fatalf("error=%v, want loopback validation error", err)
+	}
+}
+
+func TestMachineSelectorIsExplicitAndBPHomeWins(t *testing.T) {
+	for _, tc := range []struct {
+		name, override, selector string
+		bad                      bool
+	}{
+		{"local override", "/home/user/personal-bp", LegacyHome, false},
+		{"relative selector", "", "relative/path", true},
+		{"empty selector", "", "", true},
+		{"multiline selector", "", "/first\n/second", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadWith(func(k string) string {
+				if k == "BP_HOME" {
+					return tc.override
+				}
+				return ""
+			}, os.Stat,
+				func() (string, error) { return "/home/user", nil },
+				func(path string) ([]byte, error) {
+					if path == "/etc/blueprint/home" {
+						return []byte(tc.selector), nil
+					}
+					return nil, os.ErrNotExist
+				})
+			if tc.bad {
+				if err == nil {
+					t.Fatalf("invalid selector accepted: %+v", cfg)
+				}
+				return
+			}
+			if err != nil || cfg.Home != tc.override || cfg.Legacy || cfg.WABridge {
+				t.Fatalf("%+v %v", cfg, err)
+			}
+		})
 	}
 }

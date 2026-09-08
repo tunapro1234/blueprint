@@ -52,6 +52,9 @@ func (a *app) update(args []string) error {
 	if jsonOutput && !check {
 		return fmt.Errorf("--json requires --check")
 	}
+	if !check && npmManagedExecutable() {
+		return fmt.Errorf("npm-managed installation: run npm install -g @tunapro/blueprint@latest; bp update --check remains available")
+	}
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
 	checker := release.Default()
@@ -81,7 +84,7 @@ func (a *app) update(args []string) error {
 	if check || !result.Available {
 		if !jsonOutput {
 			if result.Available {
-				fmt.Fprintf(a.out, "bp %s available (installed %s); run bp update\n", result.Latest, result.Current)
+				fmt.Fprintf(a.out, "bp %s available (installed %s); run %s\n", result.Latest, result.Current, updateCommand())
 			} else {
 				fmt.Fprintf(a.out, "bp %s is current; latest published %s\n", result.Current, result.Latest)
 			}
@@ -122,7 +125,7 @@ func (a *app) updateNotice() {
 	data, _ := os.ReadFile(filepath.Join(a.config.StateDir, "update.json"))
 	_ = json.Unmarshal(data, &cached)
 	if cached.Error == "" && release.Newer(cached.Latest, release.Version()) {
-		fmt.Fprintf(a.out, "bp: %s available — run bp update\n", cached.Latest)
+		fmt.Fprintf(a.out, "bp: %s available — run %s\n", cached.Latest, updateCommand())
 	}
 	if !cached.CheckedAt.IsZero() && time.Since(cached.CheckedAt) < 24*time.Hour {
 		return
@@ -174,6 +177,30 @@ func (a *app) updateNotice() {
 	if cmd.Start() == nil {
 		go cmd.Wait()
 	}
+}
+
+func npmManagedExecutable() bool {
+	self, err := os.Executable()
+	return err == nil && npmManagedPath(self)
+}
+
+func npmManagedPath(self string) bool {
+	resolved, err := filepath.EvalSymlinks(self)
+	if err != nil || filepath.Base(resolved) != release.Platform() || filepath.Base(filepath.Dir(resolved)) != "bin" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(resolved)), "package.json"))
+	var pkg struct {
+		Name string `json:"name"`
+	}
+	return err == nil && json.Unmarshal(data, &pkg) == nil && pkg.Name == "@tunapro/blueprint"
+}
+
+func updateCommand() string {
+	if npmManagedExecutable() {
+		return "npm install -g @tunapro/blueprint@latest"
+	}
+	return "bp update"
 }
 
 func (a *app) setupCheck() error {

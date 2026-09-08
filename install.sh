@@ -9,6 +9,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --yes|-y) YES=1 ;;
         --local) INSTALL_MODE=local ;;
+        --server) INSTALL_MODE=server ;;
         --client) INSTALL_MODE=client ;;
         *) printf 'error: unknown option: %s\n' "$1" >&2; exit 1 ;;
     esac
@@ -22,6 +23,10 @@ say() {
 link_server_binary() {
     source_binary="$SERVER_ROOT/bp"
     target_binary=/usr/local/bin/bp
+    if [ -e /etc/blueprint/home ] && [ "$(cat /etc/blueprint/home)" != "$SERVER_ROOT" ]; then
+        say "error: /etc/blueprint/home selects another installation; preserving it"
+        exit 1
+    fi
 
     if [ ! -x "$source_binary" ]; then
         if ! command -v make >/dev/null 2>&1; then
@@ -39,6 +44,14 @@ link_server_binary() {
     else
         say "error: cannot write /usr/local/bin; rerun as root"
         exit 1
+    fi
+    # Explicit machine selection preserves server behavior for existing agents.
+    if [ -w /etc ]; then
+        mkdir -p /etc/blueprint
+        printf '%s\n' "$SERVER_ROOT" >/etc/blueprint/home
+    else
+        sudo mkdir -p /etc/blueprint
+        printf '%s\n' "$SERVER_ROOT" | sudo tee /etc/blueprint/home >/dev/null
     fi
     say "installed $target_binary -> $source_binary"
 }
@@ -157,8 +170,14 @@ BP_RELEASE_PUBLIC_KEY
 
 # Local mode installs no daemon or remote peer and does not edit tmux options.
 install_local() {
+    BP_HOME=${BP_HOME:-$HOME/.blueprint}
+    export BP_HOME
     client_platform
     if ! command -v tmux >/dev/null 2>&1; then
+        if [ "$YES" != 1 ]; then
+            say "error: tmux is required; install it with your package manager, or rerun with --yes to allow dependency installation"
+            exit 1
+        fi
         case "$(uname -s)" in
             Darwin)
                 command -v brew >/dev/null 2>&1 || { say "error: tmux is missing; install Homebrew, then rerun this command"; exit 1; }
@@ -203,6 +222,7 @@ install_local() {
         exit 1
     fi
     say "installed $local_bin/bp; no remote setup required"
+    [ -z "$local_backup" ] || say "previous binary backup: $local_backup"
     if [ "${BP_ONBOARD:-auto}" = skip ]; then
         say "onboarding skipped; run bp onboard when ready"
     elif [ ! -f "${BP_HOME:-$HOME/.blueprint}/main/onboarding.json" ]; then
@@ -284,15 +304,7 @@ case "$INSTALL_MODE" in
     server) link_server_binary; ACTIVE_MODE=server ;;
     client) install_client_binary; ACTIVE_MODE=client ;;
     local) install_local; exit 0 ;;
-    "")
-        if [ -d "$SERVER_ROOT" ]; then
-            link_server_binary
-            ACTIVE_MODE=server
-        else
-            install_local
-            exit 0
-        fi
-        ;;
+    "") install_local; exit 0 ;;
     *) say "error: BP_INSTALL_MODE must be server, client or local"; exit 1 ;;
 esac
 

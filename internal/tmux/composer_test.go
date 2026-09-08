@@ -610,8 +610,8 @@ func TestSendTreatsAScreenFillingBoxAsUnreadableRatherThanDamaged(t *testing.T) 
 	// its top border) has no room to grow, so the TUI is SCROLLING inside it: the
 	// rows we can read are a window, not the content. Reading that as damage would
 	// clear, re-paste and queue the same message forever, so the box is treated as
-	// unreadable and the existing single-row logic decides — here, an Enter that
-	// submits.
+	// unreadable. A prefix alone cannot authorize Enter: the hidden rows may
+	// include a user's draft. Retain the paste without clearing or submitting it.
 	rows := []string{"❯ " + stuckMessage[:20]}
 	for i := 0; i < 6; i++ {
 		rows = append(rows, "  devam satiri "+strings.Repeat("x", 20))
@@ -625,14 +625,14 @@ func TestSendTreatsAScreenFillingBoxAsUnreadableRatherThanDamaged(t *testing.T) 
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if _, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil); err != nil {
-		t.Fatalf("err=%v, want the message submitted rather than repaired forever", err)
+	if _, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("err=%v, want unreadable ownership left unverified", err)
 	}
 	if got := countKey(h.mutations, "C-u"); got != 0 {
 		t.Fatalf("a scrolling box was treated as damage and cleared: %v", h.mutations)
 	}
-	if got := countEnter(h.mutations); got != 1 {
-		t.Fatalf("expected 1 Enter, got %d: %v", got, h.mutations)
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("a partial composer received Enter: %v", h.mutations)
 	}
 }
 

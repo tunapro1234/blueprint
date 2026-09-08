@@ -551,11 +551,12 @@ func writeBook(target string, raw map[string]any, mode os.FileMode) error {
 // Sender is only a fallback parent; Parent and Role are explicit pins (bp open
 // --parent / --role) and, when set, beat anything inference would produce.
 type Registration struct {
-	Local  *cache.LocalBinding
-	Launch *bptmux.OpenOptions
-	Sender string
-	Parent string
-	Role   string
+	ClearLocal bool
+	Local      *cache.LocalBinding
+	Launch     *bptmux.OpenOptions
+	Sender     string
+	Parent     string
+	Role       string
 }
 
 // SetStatus records an agent's status in whichever book holds it, creating the
@@ -649,7 +650,7 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 			if reg.Local != nil {
 				agent["localRuntime"] = reg.Local
 				pinned = true
-			} else if reg.Role == "local CLI" || reg.Launch != nil {
+			} else if reg.ClearLocal || reg.Launch != nil {
 				if _, exists := agent["localRuntime"]; exists {
 					delete(agent, "localRuntime")
 					pinned = true

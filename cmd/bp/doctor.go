@@ -228,8 +228,8 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			}
 			continue
 		}
-		if entry.Role == "local CLI" {
-			probe := &app{ctx: ctx, config: cfg, tmux: client}
+		probe := &app{ctx: ctx, config: cfg, tmux: client}
+		if probe.ownsLocalSession(name, entry) {
 			currentID := probe.resumeTmuxID(name)
 			paths, _ := filepath.Glob(filepath.Join(cfg.StateDir, "local-resume", "*.json"))
 			for _, path := range paths {

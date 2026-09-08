@@ -259,6 +259,11 @@ BP uses the verified registered caller, or the local coordinator when the caller
 is unverified. Sharing a folder with another agent never selects the parent.
 Reopening an existing registration preserves its parent unless explicitly changed.
 
+`role` is descriptive text. Custom roles do not disable local bar maintenance,
+rename refreshes or doctor checks. BP identifies its sessions from the matching
+local runtime PID/state path, or the session installation marker when observation
+is disabled. Changing a role does not clear runtime observations.
+
 Local `bp open --codex` (including explicit resume) uses the same session worker
 and bar setup as `bp run codex`. The managed role and parent stay intact. Codex
 observations come from the native writer lock and transcript; an observation path

@@ -172,7 +172,7 @@ func (a *app) rename(args []string) error {
 		return err
 	}
 	if liveOld && !dry {
-		if entry, ok := fleet.Agents[old]; ok && entry.Role == "local CLI" {
+		if entry, ok := fleet.Agents[old]; ok && a.ownsLocalSession(name, entry) {
 			if err := a.configureLocalBar(name); err != nil {
 				return err
 			}

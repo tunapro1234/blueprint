@@ -135,6 +135,35 @@ func (a *app) localRun(args []string) error {
 		return err
 	}
 	var resumeGuard *localResumeGuard
+	if args[0] == "codex" {
+		resolved, guard, existing, handled, err := a.routeCodexResume(args[1:], cwd)
+		if err != nil {
+			return err
+		}
+		if guard != nil {
+			defer guard.close()
+		}
+		if existing != "" {
+			if err := a.recordClaudeResume(guard); err != nil {
+				return err
+			}
+			guard.close()
+			return a.attachLocal(existing)
+		}
+		if handled {
+			return nil
+		}
+		if guard != nil {
+			if name == "" && guard.name != "" {
+				name = guard.name
+			}
+			resumeGuard = guard
+			if guard.cwd != "" {
+				cwd = guard.cwd
+			}
+			args = append([]string{"codex"}, resolved...)
+		}
+	}
 	if args[0] == "claude" {
 		thread, resolved, err := claudeResumeArgs(args[1:], logicalCWD, bptmux.ClaudeProjectsRoot())
 		if err != nil {
@@ -170,6 +199,9 @@ func (a *app) localRun(args []string) error {
 			folder = folder[:28]
 		}
 		name = args[0] + "-" + folder + "-" + hex.EncodeToString(suffix[:])
+	}
+	if resumeGuard != nil {
+		resumeGuard.name = name
 	}
 	if err := a.initLocalBook(); err != nil {
 		return err

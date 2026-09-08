@@ -140,6 +140,7 @@ type localResumeClaim struct {
 type localResumeGuard struct {
 	file                    *os.File
 	claimPath, thread, name string
+	cwd                     string
 }
 
 func (g *localResumeGuard) close() {
@@ -262,7 +263,7 @@ func (a *app) guardClaudeResume(thread, requested, cwd string) (*localResumeGuar
 func (a *app) recordClaudeResume(g *localResumeGuard) error {
 	id := a.resumeTmuxID(g.name)
 	if id == "" {
-		return fmt.Errorf("new Claude pane exited before ownership could be recorded")
+		return fmt.Errorf("new agent pane exited before ownership could be recorded")
 	}
 	data, _ := json.Marshal(localResumeClaim{Name: g.name, TmuxID: id})
 	return os.WriteFile(g.claimPath, data, 0600)

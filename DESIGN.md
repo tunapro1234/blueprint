@@ -65,6 +65,10 @@ does not authorize editing a current composer or cleaning it on a later pass.
 Legacy pending cleanup records finalize without pane input. A remaining copy is
 protected as a draft, so later deliveries wait until the composer is cleared.
 
+Online sends share the queue path and persist attempt intent before input.
+Recovery requires the original runtime/thread/pane binding. See
+[message delivery](docs/message-delivery.md) for the scenario matrix and limits.
+
 ## Onboarding
 
 `bp setup` installs shell integration. `bp onboard` prepares a private machine-local

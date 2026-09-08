@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"blueprint/internal/messagetext"
 )
@@ -89,4 +90,39 @@ func (q *Queue) Record(id string) (Message, error) {
 		return read(filepath.Join(q.done(), id+".json"))
 	}
 	return m, err
+}
+
+// EnqueueUnique serializes the local in-flight duplicate check with publication.
+// Completed records are not deduplicated: repeating a completed instruction can
+// be intentional. Transport retries use EnqueueOnce's explicit key instead.
+func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Duration) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := os.MkdirAll(q.pending(), 0755); err != nil {
+		return "", err
+	}
+	lock, err := os.OpenFile(filepath.Join(q.Root, ".enqueue-local.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return "", err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	records, _, err := q.pendingRecords()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range records {
+		age := q.Now().Sub(time.Unix(0, int64(r.TS*1e9)))
+		if r.To == to && r.From == from && r.Msg == text && r.ForceBusy == force && age >= -time.Minute && age <= within {
+			return r.ID, nil
+		}
+	}
+	options := enqueueOptions{force: force}
+	if force {
+		options.reason = forceReason
+	}
+	return q.enqueueLocked(to, from, text, options)
 }

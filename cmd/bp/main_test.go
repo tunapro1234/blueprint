@@ -2114,9 +2114,8 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		if !errors.Is(err, errReported) {
 			t.Fatalf("err=%v, want errReported (non-zero exit, no duplicate line)", err)
 		}
-		want := "gonderildi ama DOGRULANAMADI: alp — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek alp ile bak\nRESULT=unverified\n"
-		if got := readTestOutput(t, out); got != want {
-			t.Fatalf("output=%q, want %q", got, want)
+		if got := readTestOutput(t, out); !strings.Contains(got, "RESULT=unverified CHANNEL=q") {
+			t.Fatalf("uncertain send lost its channel: %q", got)
 		}
 		if records := queuedMessages(t, msgqRoot); len(records) != 0 {
 			t.Fatalf("unverified send was queued (would duplicate): %v", records)
@@ -2271,55 +2270,32 @@ func deliverApp(t *testing.T, client *bptmux.Client) *app {
 	}
 }
 
-// The deadlock, from the CLI side. A message bp queued earlier is still hanging
-// in the composer because its Enter never registered. The old gate read that as
-// "the agent is busy" and queued the new message behind it — for four days. Now
-// the hanging text is recognised as ours, submitted, and its queue record closed;
-// the new message is delivered in the same pass and NOTHING is queued.
-func TestDeliverFinishesAHangingQueuedPasteInsteadOfQueueingBehindIt(t *testing.T) {
+// A queued head is delivered first. The fresh message must keep its own channel
+// and wait for another pass instead of sending two instructions in one call.
+func TestDeliverRespectsExistingQueueHead(t *testing.T) {
 	hanging := "[ada] onceki kuyruk mesaji: bar chip renklerini kontrol eder misin"
 	fresh := "[server-main] yeni mesaj: roadmap hedef sistemi bolumunu bugun bitirelim"
-	client, calls := scriptedPanes(t,
-		deliverPane(hanging), // deliver's own look at the pane
-		deliverPane(hanging), // Send's pre-send gate: ours, whole -> Enter
-		deliverPane(""),      // submitted
-		deliverPane(""),      // readyToSend pass 1
-		deliverPane(""),      // readyToSend pass 2
-		deliverPane(fresh),   // our paste landed whole -> Enter
-		deliverPane(""),      // submitted
-	)
+	client, calls := scriptedPanes(t, deliverPane(hanging), deliverPane(hanging), deliverPane(hanging), deliverPane(""))
 	a := deliverApp(t, client)
-	channel, err := a.queue.Enqueue("worker", "ada", hanging)
+	head, err := a.queue.Enqueue("worker", "ada", hanging)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	queued, _, err := a.deliver("worker", "server-main", fresh)
-	if err != nil {
-		t.Fatalf("err=%v, want a clean delivery", err)
+	queued, id, err := a.deliver("worker", "server-main", fresh)
+	if err != nil || !queued || id == "" || id == head {
+		t.Fatal(queued, id, err)
 	}
-	if queued {
-		t.Fatal("the message was queued behind our own hanging paste again")
+	if status, done := a.queue.Finished(head); !done || !strings.HasPrefix(status, "delivered") {
+		t.Fatal(status, done)
 	}
-	if left := a.queue.PendingFor("worker"); len(left) != 0 {
-		t.Fatalf("queue still holds %d record(s) for worker: %v", len(left), left)
+	if got := strings.Count(calls(), "send-keys -t =worker: Enter"); got != 1 {
+		t.Fatal("multiple messages submitted in one pass", calls())
 	}
-	status, err := a.queue.Status(channel)
-	if err != nil {
-		t.Fatal(err)
+	if strings.Contains(calls(), "paste-buffer") {
+		t.Fatal("new message pasted before its turn", calls())
 	}
-	if !strings.Contains(status, "DELIVERED") {
-		t.Fatalf("the hanging record was not closed: %q", status)
-	}
-	log := calls()
-	if got := strings.Count(log, "send-keys -t =worker: Enter"); got != 2 {
-		t.Fatalf("expected 2 Enter presses (hanging paste, then ours), got %d:\n%s", got, log)
-	}
-	if got := strings.Count(log, "paste-buffer"); got != 1 {
-		t.Fatalf("expected exactly 1 paste (the hanging text is never re-pasted), got %d:\n%s", got, log)
-	}
-	if strings.Contains(log, "Escape") {
-		t.Fatalf("Escape was sent to an agent pane:\n%s", log)
+	if rec, err := a.queue.Record(id); err != nil || rec.Status != "" {
+		t.Fatal(rec, err)
 	}
 }
 
@@ -2475,6 +2451,7 @@ func TestMessageResendsAfterTheDuplicateWindow(t *testing.T) {
 			return false, "", nil
 		},
 	}
+	a.resolveSender = func() identity.Identity { return identity.Identity{Label: "ada", Source: "tmux", Certain: true} }
 	if err := a.message([]string{"alp", "ayni metin"}); err != nil {
 		t.Fatal(err)
 	}

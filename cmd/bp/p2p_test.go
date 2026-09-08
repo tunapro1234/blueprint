@@ -42,6 +42,7 @@ func TestP2PCLIChannelContract(t *testing.T) {
 	}
 	output := testOutput(t)
 	a := &app{ctx: ctx, config: bpconfig.Config{StateDir: root, P2P: &cfg}, queue: q, out: output, err: testOutput(t), originProbe: func(context.Context) identity.Origin { return identity.Origin{} }}
+	a.resolveSender = func() identity.Identity { return identity.Identity{Label: "test-sender", Source: "test-caller"} }
 	if e := a.message([]string{"agent@laptop", "hello"}); e != nil {
 		t.Fatal(e)
 	}

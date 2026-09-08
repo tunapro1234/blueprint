@@ -55,6 +55,7 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// lets the queue paste into a working agent; this is what closes that window.
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	queue.RuntimeBlock = book.RuntimeBlockProbe(cfg.Agentbooks)
+	queue.Binding = book.DeliveryBindingProbe(cfg.Agentbooks)
 	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 	return service
 }

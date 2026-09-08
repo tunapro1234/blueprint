@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -358,4 +359,28 @@ func completeTranscriptTail(path string) bool {
 	last := make([]byte, 1)
 	_, err = f.ReadAt(last, s.Size()-1)
 	return err == nil && last[0] == '\n'
+}
+
+// DeliveryBindingProbe scopes paste recovery to the observed runtime/thread/pane.
+// This is input ownership telemetry, never sender authority.
+func DeliveryBindingProbe(paths []string) func(string) string {
+	return func(name string) string {
+		fleet, err := LoadFleet(Paths(paths))
+		if err != nil {
+			return ""
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client := bptmux.New()
+		state := RuntimeFor(ctx, client, fleet, name)
+		a := state.Activity
+		if a == nil || a.ThreadID == "" || a.Binding == "" || a.Reason != "" || (a.State != "idle" && a.State != "working") {
+			return ""
+		}
+		process, err := client.PaneProcess(ctx, name)
+		if err != nil {
+			return ""
+		}
+		return state.Runtime + ":" + a.ThreadID + ":" + strconv.Itoa(process.PID)
+	}
 }

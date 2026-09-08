@@ -25,7 +25,8 @@ type Message struct {
 	TS   float64 `json:"ts"`
 	// Origin is receiver-authored provenance, distinct from display labels and
 	// local hierarchy authority. Remote agent claims never establish authority.
-	Origin *Origin `json:"origin,omitempty"`
+	Origin *Origin         `json:"origin,omitempty"`
+	Sender *SenderEvidence `json:"sender_evidence,omitempty"`
 	// Reason says WHY the message is still waiting, in words the operator can act
 	// on ("composer'da okunamayan bir paste var (chip)"). It is refreshed on every
 	// dispatch pass that has to skip the target, and cleared when the pane frees
@@ -55,7 +56,8 @@ type Message struct {
 	// Such a record is not closed either: only the transcript witness may settle
 	// it, or the timeout below. It is the single flag that separates "we do not
 	// know" from "we know it failed".
-	NoRepaste bool `json:"noRepaste,omitempty"`
+	NoRepaste      bool   `json:"noRepaste,omitempty"`
+	AttemptBinding string `json:"attempt_binding,omitempty"`
 	// TornClears counts the times bp erased a MUTILATED copy of this message from
 	// the target's composer and allowed it to be sent again. Bounded by
 	// tornClearMax: a paste that tears repeatedly is a pane problem, not
@@ -91,6 +93,18 @@ type Message struct {
 	ForcedAt float64 `json:"forcedAt,omitempty"`
 }
 
+// SenderEvidence is captured by the local sending bp, separate from remote
+// receiver-authored Origin. Context labels and thread claims confer no authority.
+type SenderEvidence struct {
+	Label     string `json:"label"`
+	ThreadID  string `json:"thread_id,omitempty"`
+	Parent    string `json:"parent,omitempty"`
+	Source    string `json:"source"`
+	Certain   bool   `json:"certain"`
+	Authority bool   `json:"authority"`
+	PID       int    `json:"pid"`
+}
+
 type Origin struct {
 	Transport         string `json:"transport"`
 	PeerID            string `json:"peer_id"`
@@ -105,8 +119,9 @@ type Origin struct {
 }
 
 type Queue struct {
-	Root string
-	Now  func() time.Time
+	Root   string
+	Sender *SenderEvidence
+	Now    func() time.Time
 	// Witness, when set, reports whether a message has ALREADY reached the target
 	// — read out of the agent's own transcript, not off the screen. Dispatch asks
 	// it before pasting a queued message again, because a message can land
@@ -137,6 +152,8 @@ type Queue struct {
 	// pasted into a working agent. This one asks the target's own transcript
 	// instead of the screen; the daemon binds book.TurnOpenProbe here. A queue
 	// with no probe behaves exactly as before.
+	// Binding identifies the verified runtime/thread/pane incarnation for recovery.
+	Binding      func(to string) string
 	RuntimeBlock func(to string, force bool) string
 	TurnOpen     func(to string) bool
 	mu           sync.Mutex
@@ -315,6 +332,10 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 	}
 	message := Message{ID: base, To: to, From: from, Msg: text, TS: float64(now.UnixNano()) / 1e9,
 		Reason: opts.reason, NoRepaste: opts.noRepaste, ForceBusy: opts.force}
+	if q.Sender != nil && q.Sender.Label == from {
+		evidence := *q.Sender
+		message.Sender = &evidence
+	}
 	if err = json.NewEncoder(tmp).Encode(message); err == nil {
 		err = tmp.Sync()
 	}
@@ -683,6 +704,15 @@ func (q *Queue) Finished(id string) (string, bool) {
 func (q *Queue) Cancel(id string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("delivery pass in progress; cancellation not applied, check bp qstat %s and retry: %w", id, err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	path := filepath.Join(q.pending(), id+".json")
 	message, err := read(path)
 	if err != nil {
@@ -794,6 +824,9 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 	if q.TurnOpen != nil && q.TurnOpen(rec.To) {
 		return false, nil
 	}
+	if reason := q.recoveryBlock(rec); reason != "" {
+		return false, fmt.Errorf("%s", reason)
+	}
 	return target.SubmitStuck(ctx, rec.To, []string{rec.Msg})
 }
 
@@ -806,7 +839,25 @@ func (q *Queue) clearTornPaste(ctx context.Context, target Target, rec record) (
 	if q.TurnOpen != nil && q.TurnOpen(rec.To) {
 		return false, nil
 	}
+	if reason := q.recoveryBlock(rec); reason != "" {
+		return false, fmt.Errorf("%s", reason)
+	}
 	return target.ClearDelivered(ctx, rec.To, []string{rec.Msg})
+}
+
+func (q *Queue) recoveryBlock(rec record) string {
+	if q.RuntimeBlock != nil {
+		if reason := q.RuntimeBlock(rec.To, false); reason != "" {
+			return reason
+		}
+	}
+	if q.Binding == nil || rec.AttemptBinding == "" {
+		return "recovery blocked: no verified original delivery binding"
+	}
+	if current := q.Binding(rec.To); current == "" || current != rec.AttemptBinding {
+		return "recovery blocked: target runtime/thread/pane changed or is unknown"
+	}
+	return ""
 }
 
 // settleUnrepasted handles a record that may never be pasted again: it waits for
@@ -987,7 +1038,10 @@ func writePending(path string, message Message) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return syncQueueDir(filepath.Dir(path))
 }
 
 func (q *Queue) finish(path string, message Message, status string) error {
@@ -1246,6 +1300,14 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// above is its only way to a "delivered" close; everything below exists to put
 	// text into a pane, and for this record that is precisely what must not happen.
 	if rec.NoRepaste {
+		if reason := q.recoveryBlock(rec); !rec.ForceBusy && reason != "" {
+			q.remember(rec.path, rec.Message, reason, report)
+			// Unknown delivery cannot authorize keys; let ordinary expiry report it.
+			if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {
+				line.block(rec.ID)
+			}
+			return
+		}
 		// Before waiting the window out: is the text simply sitting in the
 		// composer, never submitted? The witness above already said it is not in
 		// the transcript, so if the box holds it EXACTLY then the delivery never
@@ -1450,6 +1512,24 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	if message.ForceBusy {
 		deliver = target.SendForce
 	}
+	intent := message
+	intent.NoRepaste, intent.Reason = true, unverifiedReason
+	if q.Binding != nil {
+		intent.AttemptBinding = q.Binding(rec.To)
+		if intent.AttemptBinding == "" {
+			q.remember(rec.path, message, "runtime unknown: delivery binding unavailable", report)
+			line.block(rec.ID)
+			return
+		}
+	}
+	if err := writePending(rec.path, intent); err != nil {
+		line.block(rec.ID)
+		if report != nil {
+			report(fmt.Sprintf("msgq: send intent not durable for %s; no input sent: %v", rec.ID, err))
+		}
+		return
+	}
+	message.AttemptBinding = intent.AttemptBinding
 	err = deliver(ctx, rec.To, message.Msg)
 	// The moment a forced text reached the pane, recorded whatever the verdict on it
 	// was: delivered, unconfirmed, or provably broken all mean keystrokes went in,
@@ -1462,6 +1542,11 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	}
 	if err != nil {
 		line.block(rec.ID)
+		message.AttemptBinding = intent.AttemptBinding
+		if errors.Is(err, bptmux.ErrNotAgent) || errors.Is(err, bptmux.ErrTyping) || errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrDialog) {
+			message.Reason = err.Error()
+			q.update(rec.path, message, report)
+		}
 		if errors.Is(err, bptmux.ErrNotAgent) {
 			// The target dropped to a shell: leave the message PENDING (never lose
 			// it, never type into the shell) and report the skip. A later pass

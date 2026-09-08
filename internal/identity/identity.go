@@ -51,6 +51,7 @@ type Identity struct {
 	Certain bool
 	// Source names the signal that won, for diagnostics and warnings.
 	Source string
+	Reason string
 }
 
 // Inferred reports whether the label confesses a guess.
@@ -59,6 +60,8 @@ func (i Identity) Inferred() bool { return strings.Contains(i.Label, InferMark) 
 // Options tunes the resolution for a given call site.
 type Options struct {
 	Origin func(context.Context) Origin
+	// Pane supplies a kernel-ancestry-verified context, never thread authority.
+	Pane   func(context.Context) (string, error)
 	Thread func(context.Context, string) Identity
 	// From is a sender stated by the caller (bp wa send --from). It is honored
 	// only outside tmux: inside a pane the pane's own session wins, so an agent
@@ -156,13 +159,23 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 		return Identity{Label: "codex?:" + sanitize(origin.ThreadID), ThreadID: origin.ThreadID, Source: "codex-unverified"}
 	}
 	if origin.CodexDetected {
-		return Identity{Label: Unknown, Source: "codex-unverified"}
+		return Identity{Label: Unknown, Source: "codex-unverified", Reason: "Codex caller has no thread evidence"}
 	}
 	if os.Getenv("TMUX") != "" && client != nil {
 		if value, err := client.DisplaySession(ctx); err == nil {
 			if value = strings.TrimSpace(value); value != "" {
 				return Identity{Label: value, Certain: true, Source: "tmux"}
 			}
+		}
+	}
+	reason := "no usable sender evidence"
+	if opts.Pane != nil {
+		if name, err := opts.Pane(ctx); err == nil && ValidName(name) && opts.Known != nil && opts.Known(name) {
+			// CLI subagents can share this process. A readable parent context is
+			// useful, but cannot grant that agent's hierarchy or force rights.
+			return Identity{Label: name + "?", Parent: name, Source: "pane-process-context"}
+		} else if err != nil {
+			reason = err.Error()
 		}
 	}
 	if opts.From != "" && ValidFrom(opts.From) == nil {
@@ -196,7 +209,7 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 	if opts.Fallback != "" {
 		return Identity{Label: "fallback?:" + sanitize(opts.Fallback), Source: "fallback"}
 	}
-	return Identity{Label: Unknown, Source: "none"}
+	return Identity{Label: Unknown, Source: "none", Reason: reason}
 }
 
 // interpreters are programs that say nothing about who is calling: the script

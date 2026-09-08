@@ -165,27 +165,7 @@ func (a *app) localRun(args []string) error {
 		}
 	}
 	if args[0] == "claude" {
-		selectedCWD := ""
-		thread, resolved, err := claudeResumeArgs(args[1:], logicalCWD, bptmux.ClaudeProjectsRoot(), func(target string) (string, error) {
-			sessions, err := claudeResumeSessions(bptmux.ClaudeProjectsRoot())
-			if err != nil {
-				return "", err
-			}
-			id, err := chooseResumeSession("Claude", sessions, false, target, os.Stdin, a.out)
-			for _, session := range sessions {
-				if session.ID == id {
-					selectedCWD = session.CWD
-					break
-				}
-			}
-			return id, err
-		})
-		if errors.Is(err, errResumeCanceled) {
-			return nil
-		}
-		if selectedCWD != "" {
-			cwd = physicalPath(selectedCWD)
-		}
+		thread, resolved, err := claudeResumeArgs(args[1:], logicalCWD, bptmux.ClaudeProjectsRoot())
 		if err != nil {
 			return err
 		}

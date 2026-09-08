@@ -19,8 +19,6 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
-var errResumeCanceled = errors.New("resume canceled")
-
 var claudeResumeUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
 func physicalPath(path string) string {
@@ -33,7 +31,7 @@ func physicalPath(path string) string {
 // Resolve -c once, then pass an explicit UUID to Claude. Otherwise another
 // process can change what "latest" means between our check and native startup.
 // This is launch routing only; it grants no identity or hierarchy authority.
-func claudeResumeArgs(args []string, cwd, projects string, resolve ...func(string) (string, error)) (string, []string, error) {
+func claudeResumeArgs(args []string, cwd, projects string) (string, []string, error) {
 	rest := make([]string, 0, len(args))
 	id, continuing := "", false
 	fork, picker := false, false
@@ -75,17 +73,9 @@ func claudeResumeArgs(args []string, cwd, projects string, resolve ...func(strin
 		return "", args, nil
 	}
 	if picker || (id != "" && !claudeResumeUUID.MatchString(id)) {
-		if len(resolve) == 0 {
-			return "", nil, fmt.Errorf("Claude resume selection needs an interactive resolver")
-		}
-		var err error
-		id, err = resolve[0](id)
-		if err != nil {
-			return "", nil, err
-		}
-		if id == "" {
-			return "", nil, errResumeCanceled
-		}
+		// Let Claude own its interactive picker and title lookup. Its callbacks
+		// identify the selected conversation after startup; bp never reads keys.
+		return "", args, nil
 	}
 
 	if id == "" {

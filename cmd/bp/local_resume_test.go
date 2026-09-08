@@ -47,9 +47,10 @@ func TestClaudeResumeResolution(t *testing.T) {
 	if err != nil || got != "" || !reflect.DeepEqual(args, unchanged) {
 		t.Fatalf("prompt parsed as flag: %s %v %v", got, unchanged, err)
 	}
-	for _, args := range [][]string{{"--resume"}, {"--resume", "some-title"}} {
-		if _, _, err := claudeResumeArgs(args, alias, projects); err == nil {
-			t.Fatal("unresolved resume was allowed", args)
+	for _, args := range [][]string{{"--resume"}, {"-r"}, {"--resume="}, {"--resume", "some-title"}, {"--dangerously-skip-permissions", "--resume", "--model", "selected"}} {
+		id, got, err := claudeResumeArgs(args, alias, projects)
+		if err != nil || id != "" || !reflect.DeepEqual(got, args) {
+			t.Fatal("native resume arguments changed", args, id, got, err)
 		}
 	}
 	fork := []string{"-c", "--fork-session"}

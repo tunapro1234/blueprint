@@ -49,14 +49,18 @@ bp color work purple
 Messages wait when the target is working, its state is uncertain, or the user is
 typing. A transport acknowledgement alone is not proof of agent delivery.
 
-`claude --resume` (or `-r`) opens a numbered conversation list; a name or UUID
-can also be supplied directly. Selecting an open conversation attaches to its
-existing pane. `claude -c` reattaches to an existing bp owner of the conversation. If old duplicate
-owners exist, bp reports them without choosing or closing a pane. `codex resume` selects the conversation before opening a pane and attaches to
-its existing kernel-verified writer when possible. BP currently uses a numbered
-selector; `--last` and UUID/name selectors are also supported. An unmatched active
-writer is reported without closing it; shared app-server connections retain the
-native `--remote` flow. Native Claude
+`claude --resume` (or `-r`) and `codex resume` open the CLI's own interactive
+resume screen inside tmux. Search, selection, cancellation and named-session
+lookup belong to the native CLI; bp does not replace the picker or read its keys.
+The temporary bp session is observed after selection, using Claude's callbacks
+or Codex's writer lock. Until then its conversation is unknown and messages wait.
+
+For explicit UUIDs, `claude -c` and `codex resume --last`, bp can attach to an
+existing verified owner before starting another CLI. This pre-launch routing does
+not apply to a selection made inside a native picker: the CLI's own active-writer
+checks and errors remain in effect. bp does not close an existing writer or
+silently transfer ownership. Shared app-server connections retain `--remote`.
+Native Claude
 and Codex `/rename` changes update the display name without changing authority.
 
 ## Configure

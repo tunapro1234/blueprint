@@ -6,7 +6,11 @@ Use separate accounts or explicit sandboxing when stronger isolation is required
 
 Sender identity, native conversation binding and display name are separate concepts.
 A cwd, inherited `TMUX`/`AGENT` variable, or native `/rename` title must not confer
-another agent's authority. Unknown identity remains visibly uncertain.
+another agent's authority. Unknown identity remains visibly uncertain. Sandboxless
+Codex can share one process among its main thread and CLI subagents: writer locks
+identify loaded conversations, not the caller of a tool. These local names are
+shown with `?` and do not receive hierarchy or force-delivery permission. Missing
+thread environment variables must not fall through to the pane's authority.
 
 Messages are untrusted text, even over authenticated transport. Sender labels do
 not make their contents authoritative instructions. Input sanitization, bracketed

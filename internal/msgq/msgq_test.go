@@ -3,6 +3,7 @@ package msgq
 import (
 	"blueprint/internal/messagetext"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -545,6 +546,11 @@ func TestDispatchDropsAStaleReasonWhenThePaneFreesUp(t *testing.T) {
 	if len(target.sent) != 1 {
 		t.Fatalf("sent=%v", target.sent)
 	}
+	archived, err := read(filepath.Join(q.done(), rows[0].ID+".json"))
+	if err != nil || archived.Status != "delivered" || archived.Reason != "" || archived.LastWaitReason != rows[0].Reason {
+		t.Fatalf("delivery retained stale current reason or lost history: %+v err=%v", archived, err)
+	}
+
 }
 
 func TestDispatchDeliversWhenTheTranscriptHasNothing(t *testing.T) {
@@ -2244,5 +2250,33 @@ func TestUnknownRuntimeBlocksNormalAndForcedDelivery(t *testing.T) {
 		if target.calls != 0 || len(target.forced) != 0 || rec.Reason != "runtime unknown: missing thread binding" {
 			t.Fatalf("unknown bypassed or misreported: %+v %+v", rec, target)
 		}
+	}
+}
+
+func TestReadDeliveredSeparatesLegacyWaitWithoutRewritingRecord(t *testing.T) {
+	for _, status := range []string{"delivered", "delivered (found in transcript)", "delivered (unverified)", "canceled (by operator)", ""} {
+		t.Run(status, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "record.json")
+			data, _ := json.Marshal(Message{ID: "q1", Status: status, Reason: "runtime working", NextTry: 123})
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verified := status == "delivered" || status == "delivered (found in transcript)"
+			if verified {
+				if got.Reason != "" || got.LastWaitReason != "runtime working" || got.NextTry != 0 {
+					t.Fatalf("%+v", got)
+				}
+			} else if got.Reason != "runtime working" || got.LastWaitReason != "" {
+				t.Fatalf("%+v", got)
+			}
+			after, _ := os.ReadFile(path)
+			if string(after) != string(data) {
+				t.Fatal("read modified historical record")
+			}
+		})
 	}
 }

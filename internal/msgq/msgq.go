@@ -34,9 +34,12 @@ type Message struct {
 	// message sat for four days behind bp's own hanging paste while `bp qstat`
 	// reported "is still busy" at an idle agent. A reason turns that into a
 	// one-glance fix.
-	Reason   string  `json:"reason,omitempty"`
-	Status   string  `json:"status,omitempty"`
-	Finished float64 `json:"finished,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	// LastWaitReason preserves diagnostics after successful delivery without
+	// presenting an obsolete wait as the message's current state.
+	LastWaitReason string  `json:"last_wait_reason,omitempty"`
+	Status         string  `json:"status,omitempty"`
+	Finished       float64 `json:"finished,omitempty"`
 	// Attempts counts the deliveries that came back as PROVEN failures
 	// (bptmux.ErrNotReady). It exists to bound them: the same message was pasted
 	// into the same pane every 30 seconds for as long as the screen kept
@@ -374,7 +377,19 @@ func read(path string) (Message, error) {
 		}
 	}
 	message.Status = englishStatus(message.Status)
+	message.clearDeliveredWait()
 	return message, err
+}
+
+func (message *Message) clearDeliveredWait() {
+	if message.Status != "delivered" && (!strings.HasPrefix(message.Status, "delivered (") || message.Status == "delivered (unverified)") {
+		return
+	}
+	if message.Reason != "" {
+		message.LastWaitReason = message.Reason
+		message.Reason = ""
+	}
+	message.NextTry = 0
 }
 
 func englishStatus(status string) string {
@@ -971,6 +986,7 @@ func (q *Queue) finish(path string, message Message, status string) error {
 		return err
 	}
 	message.Status = status
+	message.clearDeliveredWait()
 	message.Finished = float64(q.Now().UnixNano()) / 1e9
 	target := filepath.Join(q.done(), message.ID+".json")
 	tmp, err := os.CreateTemp(q.done(), ".done-*.json")

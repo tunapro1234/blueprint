@@ -40,6 +40,8 @@ func knownSet(names ...string) func(string) bool {
 	}
 }
 
+func noCodexOrigin(context.Context) Origin { return Origin{} }
+
 func TestResolvePrecedence(t *testing.T) {
 	const inTmux = "/tmp/tmux-0/default,4242,0"
 
@@ -181,6 +183,9 @@ func TestResolvePrecedence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			setEnv(t, test.env)
+			if test.opts.Origin == nil {
+				test.opts.Origin = noCodexOrigin
+			}
 			client := &fakeSession{name: test.session, err: test.sessionErr}
 			got := Resolve(context.Background(), client, test.opts)
 			if got.Label != test.wantLabel || got.Certain != test.wantCertain || got.Source != test.wantSource {
@@ -207,6 +212,7 @@ func TestResolveNeverConsultsTmuxOutsidePane(t *testing.T) {
 		{Infer: true, Ancestors: fixedAncestors([]string{"/usr/sbin/CRON", "-f"})},
 		{Fallback: "server-main"},
 	} {
+		opts.Origin = noCodexOrigin
 		setEnv(t, map[string]string{"TMUX": ""})
 		client := &fakeSession{name: "server-main"}
 		got := Resolve(context.Background(), client, opts)
@@ -231,7 +237,7 @@ func TestInferredLabelsAreNeverAgentShaped(t *testing.T) {
 	}
 	for _, chain := range chains {
 		setEnv(t, map[string]string{"TMUX": ""})
-		got := Resolve(context.Background(), &fakeSession{}, Options{Infer: true, Ancestors: fixedAncestors(chain...)})
+		got := Resolve(context.Background(), &fakeSession{}, Options{Origin: noCodexOrigin, Infer: true, Ancestors: fixedAncestors(chain...)})
 		if got.Certain {
 			t.Fatalf("chain %v produced a certain identity: %+v", chain, got)
 		}

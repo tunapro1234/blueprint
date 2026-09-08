@@ -1537,7 +1537,13 @@ func (a *app) sender() string { return a.senderIdentity().Label }
 func (a *app) identityOptions() identity.Options {
 	return identity.Options{Known: a.knownAgent, Origin: a.originProbe, Thread: func(ctx context.Context, id string) identity.Identity {
 		home := bptmux.CodexProcessInfo(0).Home
-		return book.ThreadIdentity(ctx, a.config.Agentbooks, home, id)
+		who := book.ThreadIdentity(ctx, a.config.Agentbooks, home, id)
+		if !who.Certain {
+			if hint := book.LocalThreadHint(ctx, a.tmux, a.config.Agentbooks, home, id); hint.Label != "" {
+				return hint
+			}
+		}
+		return who
 	}}
 }
 

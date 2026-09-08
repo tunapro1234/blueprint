@@ -254,6 +254,11 @@ konuşmanın çalışma dizinini değiştirmekten ayrı ve açıkça seçilen bi
 
 ## Local Codex launch and sandbox diagnostics
 
+For new local `bp open` registrations, an explicit `--parent` wins; otherwise
+BP uses the verified registered caller, or the local coordinator when the caller
+is unverified. Sharing a folder with another agent never selects the parent.
+Reopening an existing registration preserves its parent unless explicitly changed.
+
 Local `bp open --codex` (including explicit resume) uses the same session worker
 and bar setup as `bp run codex`. The managed role and parent stay intact. Codex
 observations come from the native writer lock and transcript; an observation path

@@ -1245,6 +1245,17 @@ func (a *app) open(args []string) error {
 			return fmt.Errorf("unknown parent: %s", reg.Parent)
 		}
 	}
+	if !a.config.Legacy && fleetErr == nil && reg.Parent == "" {
+		if _, registered := fleet.Agents[name]; !registered {
+			// Local users routinely share a cwd. It cannot select a parent:
+			// an unrelated, closed record may have the exact same folder.
+			reg.Parent = fleet.Root
+			who := a.senderIdentity()
+			if _, known := fleet.Agents[who.Label]; known && who.Authoritative() {
+				reg.Parent = who.Label
+			}
+		}
+	}
 	if a.tmux.HasSession(a.ctx, name) {
 		// "Session exists" is not "agent running": a crashed CLI leaves the
 		// tmux session up as a bare shell. Only a live agent pane counts as

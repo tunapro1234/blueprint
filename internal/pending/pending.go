@@ -284,7 +284,7 @@ func rewrite(file *os.File, entries []Entry) error {
 }
 
 func validate(entry Entry) error {
-	if err := messagetext.Label(entry.From); err != nil {
+	if err := messagetext.Sender(entry.From); err != nil {
 		return err
 	}
 	return messagetext.Validate(entry.Text, entry.Kind)

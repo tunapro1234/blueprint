@@ -44,6 +44,10 @@ target, not the sender. Remote `origin` remains receiver-authored provenance:
 authenticated peer identity and claimed agent identity are separate facts.
 Historical records are retained unchanged; absent evidence is not reconstructed
 from a message's subject.
+Legacy pending records with a bare unknown sender cannot submit or recover input;
+they remain stored with an explicit block reason. Existing transcript proof can
+still settle a past delivery. An offline digest containing an anonymous legacy
+entry is refused without changing the spool.
 
 ## Scenario coverage
 
@@ -68,6 +72,7 @@ cover adapters, queue transitions, process evidence and transport retries.
 | Queued head plus new message | New message cannot use a faster delivery path | CLI FIFO regression; one delivery per target/pass |
 | Cancel races with dispatcher | Refuse an in-progress cancel; no false success | Two independent queue instances sharing the OS lock |
 | Runtime/identity environment absent | No guessed authority or anonymous send | Missing-TMUX real process ancestry; unknown sender refusal |
+| Legacy anonymous queue/spool record | Preserve evidence, block input; past witness may settle | Empty/unknown sender with first-send and recovery fixtures; fails on 1.7.5 |
 | Remote retry/lost ACK/restart | Same remote channel, same local receipt | libp2p tests; public relay path separately tested in 1.7.1 |
 | Offline local target | Retain existing offline spool until opening | Existing spool tests; this legacy path still lacks per-message channel IDs |
 | Upgrade with open sessions | Compare running executable, not only installed version | Host service SHA checks; old laptop workers do not auto-upgrade |

@@ -868,7 +868,6 @@ func TestUnsettledRecordKeepsQuietWhenThereIsNobodyToTell(t *testing.T) {
 	// telling itself, or an agent being told about the message it sent to itself,
 	// is noise at best and a loop at worst.
 	for _, tc := range []struct{ name, from, to string }{
-		{"no sender recorded", "", "target"},
 		{"bp is its own sender", "bp", "target"},
 		{"sender is the target", "target", "target"},
 	} {

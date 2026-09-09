@@ -95,7 +95,9 @@ func codexComposerBox(pane string) (string, int, bool) {
 	lines := strings.Split(pane, "\n")
 	footer := -1
 	for i, line := range lines {
-		if codexFooter.MatchString(stripSpace1(StripDim(line))) {
+		// Dim styling is structural here, not a placeholder: dropping it can
+		// remove the separator between model and cwd.
+		if codexFooter.MatchString(stripSpace1(ansiSeq.ReplaceAllString(line, ""))) {
 			footer = i // the LAST footer: the live one, never a transcript quote
 		}
 	}

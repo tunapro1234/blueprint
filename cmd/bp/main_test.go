@@ -1447,12 +1447,12 @@ func TestSenderPrecedence(t *testing.T) {
 			want: identity.Unknown,
 		},
 		{
-			name: "daemon and cron keep the default",
+			name: "root scripts retain uncertain provenance",
 			env:  map[string]string{"USER": "root", "LOGNAME": "root"},
 			want: identity.Unknown,
 		},
 		{
-			name: "empty environment keeps the default",
+			name: "empty environment cannot become agent authority",
 			want: identity.Unknown,
 		},
 	}
@@ -1469,8 +1469,13 @@ func TestSenderPrecedence(t *testing.T) {
 			if test.session != "" {
 				a.tmux = sessionTmux(t, test.session)
 			}
-			if got := a.sender(); got != test.want {
-				t.Fatalf("sender()=%q, want %q", got, test.want)
+			who := a.senderIdentity()
+			if test.want == identity.Unknown && who.Source == "process-tree" {
+				if !who.Inferred() || who.Certain || who.Authoritative() {
+					t.Fatalf("unsafe script provenance: %+v", who)
+				}
+			} else if who.Label != test.want {
+				t.Fatalf("sender()=%q, want %q", who.Label, test.want)
 			}
 		})
 	}

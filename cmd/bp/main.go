@@ -1582,7 +1582,8 @@ func (a *app) close(args []string) error {
 func (a *app) sender() string { return a.senderIdentity().Label }
 
 func (a *app) identityOptions() identity.Options {
-	return identity.Options{Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
+	// Process ancestry supplies an explicitly uncertain script/cron label, never authority.
+	return identity.Options{Infer: true, Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
 		if a.tmux == nil {
 			return "", fmt.Errorf("tmux client unavailable")
 		}

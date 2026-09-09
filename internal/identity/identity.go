@@ -73,9 +73,8 @@ type Options struct {
 	// that agent's identity: a plausible-but-wrong name is more dangerous than
 	// "unknown". Nil means "nothing is known".
 	Known func(string) bool
-	// Infer allows the last-ditch guess from the process tree. Call sites whose
-	// label carries authority (bp msg envelopes, hierarchy gates) leave it off
-	// and set Fallback instead.
+	// Infer allows explicitly uncertain process-tree attribution for scripts.
+	// These labels never establish hierarchy, slash-command or force authority.
 	Infer bool
 	// Fallback is the label of last resort, used only when every signal above
 	// is silent. Empty means Unknown. This is where a call site may keep a

@@ -185,3 +185,8 @@ libp2p with your own rendezvous/relay and explicit peer permissions.
 Report bugs and feature requests in [GitHub Issues](https://github.com/tunapro1234/blueprint/issues).
 For a session problem, include the BP version, `bp doctor --agent <name> --json`
 output and relevant channel ID; distinguish automatic delivery from a manual Enter.
+
+## License
+
+Blueprint is licensed under the [GNU General Public License v3.0](LICENSE)
+(SPDX: `GPL-3.0-only`).

@@ -20,3 +20,8 @@ The postinstall step requires direct HTTPS access to `bp.tunapro.xyz`. Node's
 download does not use npm's proxy configuration; configure direct egress and, when
 needed, Node's `NODE_EXTRA_CA_CERTS` setting. Installing with lifecycle scripts
 disabled leaves the native binary unavailable, and `bp` reports how to reinstall it.
+
+## License
+
+Blueprint is licensed under the [GNU General Public License v3.0](LICENSE)
+(SPDX: `GPL-3.0-only`).

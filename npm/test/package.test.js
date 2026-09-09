@@ -22,7 +22,7 @@ test('actual tarball runs signed postinstall and uninstalls from a private prefi
   fs.mkdirSync(source);
   fs.mkdirSync(packDirectory);
   fs.mkdirSync(path.join(source, 'bin'));
-  for (const name of ['README.md', 'install.js', 'package.json']) {
+  for (const name of ['LICENSE', 'README.md', 'install.js', 'package.json']) {
     fs.copyFileSync(path.join(PACKAGE_ROOT, name), path.join(source, name));
   }
   fs.copyFileSync(path.join(PACKAGE_ROOT, 'bin', 'bp.js'), path.join(source, 'bin', 'bp.js'));

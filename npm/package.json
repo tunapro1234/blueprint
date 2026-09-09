@@ -2,7 +2,7 @@
   "name": "@tunapro/blueprint",
   "version": "1.8.5",
   "description": "Blueprint agent infrastructure CLI",
-  "license": "UNLICENSED",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tunapro1234/blueprint.git",
@@ -16,6 +16,7 @@
     "bp": "bin/bp.js"
   },
   "files": [
+    "LICENSE",
     "bin/bp.js",
     "install.js",
     "README.md",

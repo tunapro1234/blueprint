@@ -1579,7 +1579,15 @@ class LocalCLITest(unittest.TestCase):
         busy.unlink()
         result = subprocess.run([self.binary, "q", "--retry"], env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        current = json.loads(subprocess.check_output([self.binary, "qstat", stale["id"], "--json"], env=self.env))
+        # Dispatch is deliberately nonblocking when the worker holds its lock.
+        # q --retry returning does not promise this record was processed yet.
+        deadline = time.monotonic() + 5
+        while True:
+            current = json.loads(subprocess.check_output([self.binary, "qstat", stale["id"], "--json"], env=self.env))
+            self.assertEqual(len(received.read_text().splitlines()), 1, "old attempt submitted a new session draft")
+            if "changed" in current.get("reason", "") or time.monotonic() >= deadline:
+                break
+            time.sleep(.1)
         self.assertIn("changed", current.get("reason", ""), current)
         self.assertEqual(len(received.read_text().splitlines()), 1, "old attempt submitted a new session draft")
         pane = subprocess.check_output([self.tmux, "-S", self.socket, "capture-pane", "-pt", "resume-test"], text=True)

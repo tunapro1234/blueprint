@@ -264,3 +264,35 @@ func TestAnonymousMessageIsRefusedBeforeSpoolOrDelivery(t *testing.T) {
 		}
 	}
 }
+
+func TestSchedulerMessagesHaveAttributionWithoutAuthority(t *testing.T) {
+	for _, key := range []string{"TMUX", "TMUX_PANE", "AGENT", "SUDO_USER", "USER", "LOGNAME", "CODEX_THREAD_ID", "AGENTBOOK"} {
+		t.Setenv(key, "")
+	}
+	a, _ := identityFixture(t)
+	t.Setenv("TMUX", "")
+	t.Setenv("AGENT", "")
+	a.originProbe = func(context.Context) identity.Origin { return identity.Origin{} }
+	opts := a.identityOptions()
+	opts.Ancestors = func() [][]string {
+		return [][]string{{"/bin/bash", "/srv/server-main/bin/health-watch.sh"}, {"/usr/sbin/cron", "-f"}}
+	}
+	who := identity.Resolve(a.ctx, nil, opts)
+	if who.Label != "cron?:health-watch.sh" || who.Certain || who.Authoritative() {
+		t.Fatalf("unsafe or missing scheduler identity: %+v", who)
+	}
+	a.resolveSender = func() identity.Identity { return who }
+	if err := a.message([]string{"target", "health-watch: isolated scheduler alarm"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _, err := pending.Load(a.config.StateDir, "target")
+	if err != nil || len(entries) != 1 || entries[0].From != who.Label {
+		t.Fatalf("alarm not attributed: %+v %v", entries, err)
+	}
+	if a.allowForceBusy(who) == nil {
+		t.Fatal("scheduler gained force authority")
+	}
+	if a.message([]string{"target", "/compact"}) == nil {
+		t.Fatal("scheduler gained slash authority")
+	}
+}

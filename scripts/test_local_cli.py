@@ -88,7 +88,7 @@ func main() {
   if filepath.Base(os.Args[0])=="claude" {
    frame+="────────────────────────────────────────\r\n❯ "+strings.ReplaceAll(text,"\n","\r\n")+"\r\n────────────────────────────────────────\r\n  -- "+strings.ToUpper(mode)+" -- ⏵⏵ bypass permissions on"
   } else {
-   frame+="› "+strings.ReplaceAll(prompt,"\n","\r\n")+"\r\n  gpt-6-astra high · /work     Vim: "+mode
+   frame+="› "+strings.ReplaceAll(prompt,"\n","\r\n")+"\r\n  gpt-6-astra high \x1b[2m· \x1b[0m/work     Vim: "+mode
   }
   if title!="" { frame+=fmt.Sprintf("\x1b[48;5;135m %s \x1b[0m",title) }
   if frame!=previous {fmt.Print("\x1b[2J\x1b[H"+frame); previous=frame}

@@ -14,7 +14,7 @@ const ARTIFACTS = [
   'bp-darwin-amd64',
   'bp-darwin-arm64'
 ];
-const PACKED_FILES = ['README.md', 'bin/bp.js', 'install.js', 'package.json', 'release.pub'];
+const PACKED_FILES = ['LICENSE', 'README.md', 'bin/bp.js', 'install.js', 'package.json', 'release.pub'];
 
 function packageDetails(packageDir) {
   const pkg = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));

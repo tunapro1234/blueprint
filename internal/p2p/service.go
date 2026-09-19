@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -51,7 +52,7 @@ func SocketPath(root string) string { return statePath(root, "control.sock") }
 
 // Serve runs only transport and the caller's ordinary guarded queue dispatcher.
 // The local control socket is private; no network endpoint can issue BP commands.
-func (n *Node) Serve(ctx context.Context, dispatch func()) error {
+func (n *Node) Serve(ctx context.Context, dispatch func([]string)) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	socket := SocketPath(n.Root)
@@ -157,18 +158,32 @@ func (n *Node) Serve(ctx context.Context, dispatch func()) error {
 		<-discovered
 		<-transferred
 	}()
-	ticker := time.NewTicker(time.Second)
+	retry := n.inboundRetry
+	if retry <= 0 {
+		retry = 30 * time.Second
+	}
+	ticker := time.NewTicker(retry)
 	defer ticker.Stop()
+	dispatchPending := func() {
+		if dispatch != nil {
+			if targets := n.pendingInboundTargets(); len(targets) > 0 {
+				dispatch(targets)
+			}
+		}
+	}
+	// Recover accepted inbound records after a service restart without waiting
+	// for the remote sender to retry.
+	dispatchPending()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case e := <-done:
 			return e
+		case <-n.inbound:
+			dispatchPending()
 		case <-ticker.C:
-			if dispatch != nil && n.pendingInbound() {
-				dispatch()
-			}
+			dispatchPending()
 		}
 	}
 }
@@ -204,18 +219,24 @@ func LogPath(root string) string { return filepath.Join(root, "p2p", "service.lo
 
 // A relay with no inbound messages must not repeatedly probe the whole local
 // fleet. Once P2P work exists, the normal dispatcher still owns all ordering.
-func (n *Node) pendingInbound() bool {
+func (n *Node) pendingInboundTargets() []string {
 	rows, err := n.Queue.List()
 	if err != nil {
 		if n.Log != nil {
 			fmt.Fprintln(n.Log, "p2p inbound:", err)
 		}
-		return false
+		return nil
 	}
+	seen := make(map[string]struct{})
 	for _, m := range rows {
 		if m.Origin != nil && m.Origin.Transport == "libp2p" {
-			return true
+			seen[m.To] = struct{}{}
 		}
 	}
-	return false
+	targets := make([]string, 0, len(seen))
+	for target := range seen {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	return targets
 }

@@ -31,7 +31,8 @@ type fakeTarget struct {
 	// type into a working pane.
 	forced []string
 	// sessions, when non-nil, overrides alive per session name.
-	sessions map[string]bool
+	sessions     map[string]bool
+	sessionsSeen []string
 }
 
 func TestRecoveryDoesNotSubmitOrClearAnActiveRemoteTurn(t *testing.T) {
@@ -51,6 +52,7 @@ func TestRecoveryDoesNotSubmitOrClearAnActiveRemoteTurn(t *testing.T) {
 }
 
 func (f *fakeTarget) HasSession(_ context.Context, name string) bool {
+	f.sessionsSeen = append(f.sessionsSeen, name)
 	// sessions, when set, answers per name — the notice-home tests need a world
 	// where the TARGET exists but the sender's label does not (the real shape:
 	// the bridge signs "whatsapp", its session is "server-whatsapp").
@@ -58,6 +60,34 @@ func (f *fakeTarget) HasSession(_ context.Context, name string) bool {
 		return f.sessions[name]
 	}
 	return f.alive
+}
+
+func TestDispatchTargetsPreservesSelectedFIFOAndSkipsOtherAgents(t *testing.T) {
+	q := newBoundTestQueue(t.TempDir())
+	if _, err := q.Enqueue("probot-main", "sender", "unrelated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Enqueue("probot-finance", "sender", "older local message"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.EnqueueOnceOrigin("peer:channel", "probot-finance", "external:para@laptop", "new p2p message", &Origin{Transport: "libp2p"}); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	if err := q.DispatchTargets(context.Background(), target, []string{"probot-finance"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range target.sessionsSeen {
+		if got != "probot-finance" {
+			t.Fatalf("probed session %q; unrelated target must be skipped", got)
+		}
+	}
+	if len(target.sessionsSeen) == 0 {
+		t.Fatal("selected target was not probed")
+	}
+	if got := strings.Join(target.sent, ","); got != "probot-finance:older local message" {
+		t.Fatalf("sent %q; selected line FIFO was not preserved", got)
+	}
 }
 func (f *fakeTarget) Capture(context.Context, string) (string, error) { return f.pane, nil }
 func (f *fakeTarget) Send(_ context.Context, to, text string) error {

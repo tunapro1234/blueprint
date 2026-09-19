@@ -2112,6 +2112,16 @@ func (a *app) forceMessage(name, sender, message string, entries []pending.Entry
 // mid-pass this call does nothing at all and the daemon delivers within its
 // tick; that race needs no coordination beyond the lock itself.
 func (a *app) dispatchNow() {
+	a.prepareDispatch()
+	if a.queue == nil || a.tmux == nil {
+		return
+	}
+	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
+		fmt.Fprintf(a.err, "WARNING: teslim pass'i calistirilamadi: %v\n", err)
+	}
+}
+
+func (a *app) prepareDispatch() {
 	if a.queue == nil || a.tmux == nil {
 		return
 	}
@@ -2124,9 +2134,6 @@ func (a *app) dispatchNow() {
 		a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
 		a.queue.RuntimeBlock = book.RuntimeBlockProbe(a.config.Agentbooks)
 		a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
-	}
-	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
-		fmt.Fprintf(a.err, "WARNING: teslim pass'i calistirilamadi: %v\n", err)
 	}
 }
 

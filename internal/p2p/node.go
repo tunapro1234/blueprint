@@ -29,19 +29,21 @@ type presence struct {
 	Expires   time.Time
 }
 type Node struct {
-	Host        host.Host
-	Root        string
-	Config      Config
-	Queue       *msgq.Queue
-	Log         io.Writer
-	lock        *os.File
-	mdns        mdns.Service
-	relay       io.Closer
-	mu          sync.Mutex
-	discovery   map[peer.ID]presence
-	stepMu      sync.Mutex
-	discoveryMu sync.Mutex
-	ctx         context.Context
+	Host         host.Host
+	Root         string
+	Config       Config
+	Queue        *msgq.Queue
+	Log          io.Writer
+	lock         *os.File
+	mdns         mdns.Service
+	relay        io.Closer
+	mu           sync.Mutex
+	discovery    map[peer.ID]presence
+	stepMu       sync.Mutex
+	discoveryMu  sync.Mutex
+	ctx          context.Context
+	inbound      chan struct{}
+	inboundRetry time.Duration
 }
 
 func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, error) {
@@ -78,7 +80,8 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 		lock.Close()
 		return nil, err
 	}
-	n := &Node{Host: h, Root: root, Config: cfg, Queue: q, Log: os.Stderr, lock: lock, discovery: map[peer.ID]presence{}, ctx: ctx}
+	n := &Node{Host: h, Root: root, Config: cfg, Queue: q, Log: os.Stderr, lock: lock, discovery: map[peer.ID]presence{}, ctx: ctx,
+		inbound: make(chan struct{}, 1), inboundRetry: 30 * time.Second}
 	if cfg.Relay {
 		r := relay.DefaultResources()
 		r.MaxReservations = 128
@@ -239,9 +242,19 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 			res.State = "failed"
 			res.Reason = m.Status
 		}
+		if p == MessageProtocol && res.State == "accepted" {
+			n.signalInbound()
+		}
 	}
 	if err := writeFrame(s, res); err != nil {
 		_ = s.Reset()
+	}
+}
+
+func (n *Node) signalInbound() {
+	select {
+	case n.inbound <- struct{}{}:
+	default:
 	}
 }
 

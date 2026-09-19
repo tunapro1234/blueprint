@@ -1188,6 +1188,22 @@ func (q *Queue) lockPane(session string) (func(), error) {
 // Dispatch makes one pass in send-time order. Busy or typed composers remain
 // pending, and a target's queue is drained strictly in order: see dispatchRecord.
 func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)) error {
+	return q.dispatch(ctx, target, nil, report)
+}
+
+// DispatchTargets runs the ordinary guarded dispatcher for only the named
+// target lines. Records earlier in each selected target's line are retained, so
+// a transport-specific wakeup cannot jump the local FIFO. Unrelated agents are
+// never captured or probed.
+func (q *Queue) DispatchTargets(ctx context.Context, target Target, targets []string, report func(string)) error {
+	selected := make(map[string]struct{}, len(targets))
+	for _, name := range targets {
+		selected[name] = struct{}{}
+	}
+	return q.dispatch(ctx, target, selected, report)
+}
+
+func (q *Queue) dispatch(ctx context.Context, target Target, selected map[string]struct{}, report func(string)) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.Root, 0755); err != nil {
@@ -1218,6 +1234,11 @@ func (q *Queue) Dispatch(ctx context.Context, target Target, report func(string)
 	// records in it are only comparable with each other.
 	targets, byTarget := lines(records)
 	for _, to := range targets {
+		if selected != nil {
+			if _, ok := selected[to]; !ok {
+				continue
+			}
+		}
 		line := &lineState{}
 		for _, rec := range byTarget[to] {
 			q.dispatchRecord(ctx, target, rec, line, report)

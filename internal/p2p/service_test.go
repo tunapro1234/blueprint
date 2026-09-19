@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,22 +34,38 @@ func TestLocalControlAndWorkerShutdown(t *testing.T) {
 	n.Log = io.Discard
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var passes atomic.Int32
+	passes := make(chan []string, 4)
 	done := make(chan error, 1)
-	go func() { done <- n.Serve(ctx, func() { passes.Add(1) }) }()
+	go func() { done <- n.Serve(ctx, func(targets []string) { passes <- targets }) }()
 	var info Info
 	waitFor(t, func() bool { return Control(ctx, root, http.MethodGet, "/status", &info) == nil })
 	if info.ID != n.Host.ID().String() {
 		t.Fatal("wrong local service identity")
 	}
-	time.Sleep(1100 * time.Millisecond)
-	if passes.Load() != 0 {
-		t.Fatal("idle relay probed unrelated local agents")
+	select {
+	case targets := <-passes:
+		t.Fatalf("idle relay probed local agents: %v", targets)
+	case <-time.After(1100 * time.Millisecond):
 	}
 	if _, err := n.Queue.EnqueueOnceOrigin("fixture", "agent", "external:fixture@test", "hello", &msgq.Origin{Transport: "libp2p"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return passes.Load() > 0 })
+	n.signalInbound()
+	select {
+	case targets := <-passes:
+		if len(targets) != 1 || targets[0] != "agent" {
+			t.Fatalf("dispatch targets=%v want [agent]", targets)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new inbound message did not wake dispatcher")
+	}
+	// A blocked inbound record remains pending, but it must not recreate the old
+	// one-pass-per-second tmux probe loop. Recovery uses the 30-second interval.
+	select {
+	case targets := <-passes:
+		t.Fatalf("persistent inbound record spun dispatcher: %v", targets)
+	case <-time.After(1100 * time.Millisecond):
+	}
 	if e := Control(ctx, root, http.MethodGet, "/stop", nil); e == nil {
 		t.Fatal("GET stopped service")
 	}

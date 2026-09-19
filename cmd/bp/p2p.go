@@ -117,9 +117,22 @@ func (a *app) p2pCommand(args []string) error {
 		}
 		defer n.Close()
 		n.Log = a.err
-		return n.Serve(ctx, a.dispatchNow)
+		return n.Serve(ctx, a.dispatchP2P)
 	default:
 		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|serve")
+	}
+}
+
+// dispatchP2P keeps a transport wakeup scoped to target lines that actually
+// contain inbound P2P work. The queue still walks earlier local records in each
+// selected line, preserving FIFO without probing unrelated panes.
+func (a *app) dispatchP2P(targets []string) {
+	a.prepareDispatch()
+	if a.queue == nil || a.tmux == nil {
+		return
+	}
+	if err := a.queue.DispatchTargets(a.ctx, a.tmux, targets, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
+		fmt.Fprintf(a.err, "WARNING: P2P teslim pass'i calistirilamadi: %v\n", err)
 	}
 }
 

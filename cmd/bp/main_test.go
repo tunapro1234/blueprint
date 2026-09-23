@@ -1499,12 +1499,15 @@ func TestSenderNeverAsksTmuxOutsidePane(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	a := &app{ctx: context.Background(), tmux: &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}}
+	a.ancestors = func() [][]string { return nil } // independent of the test runner's process tree
 
 	if got := a.sender(); got != identity.Unknown {
 		t.Fatalf("sender()=%q, want an unknown sender", got)
 	}
-	if data, err := os.ReadFile(marker); err == nil {
-		t.Fatalf("tmux was consulted with TMUX empty: %q", data)
+	// Kernel-ancestry pane lookup (list-panes) is allowed: it answers for this
+	// process, not for whichever client is attached. display-message is not.
+	if data, err := os.ReadFile(marker); err == nil && strings.Contains(string(data), "display") {
+		t.Fatalf("tmux was asked for the attached session with TMUX empty: %q", data)
 	}
 }
 
@@ -2675,6 +2678,7 @@ func TestForceBusyRefusesAnUnestablishedSender(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	a := forceApp(t, testOutput(t))
+	a.ancestors = func() [][]string { return nil } // independent of the test runner's process tree
 	if got := a.sender(); got != identity.Unknown {
 		t.Fatalf("fixture is not the fallback case: sender()=%q", got)
 	}

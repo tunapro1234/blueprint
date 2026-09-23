@@ -1979,9 +1979,12 @@ type OpenOptions struct {
 	// reasoning effort, --search, --yolo, …). They are recorded so a revive or
 	// resume comes back in the same mode rather than the harness default
 	// (#25), and are passed verbatim after the harness binary.
-	Args     []string `json:"args,omitempty"`
-	NoPrompt bool     `json:"-"`
-	Legacy   bool     `json:"-"`
+	Args []string `json:"args,omitempty"`
+	// Progress, when set, receives one line per launch step and names what a
+	// slow launch is waiting on, instead of a silent multi-minute wait (#22).
+	Progress func(string) `json:"-"`
+	NoPrompt bool         `json:"-"`
+	Legacy   bool         `json:"-"`
 	// Launcher is an internal, shell-quoted wrapper for local managed sessions.
 	// It receives the complete native command as one argument.
 	Launcher string `json:"-"`
@@ -2183,6 +2186,23 @@ func launchArgs(command string, args []string) string {
 		out = append(out, shellQuote(arg))
 	}
 	return strings.Join(out, " ")
+}
+
+// launchWait names what a booting harness is visibly waiting on, or "" while
+// it is simply starting. Only for display: nothing here answers a prompt.
+func launchWait(pane string) string {
+	lower := strings.ToLower(pane)
+	switch {
+	case strings.Contains(lower, "trust") && (strings.Contains(lower, "folder") || strings.Contains(lower, "directory") || strings.Contains(lower, "workspace")):
+		return "harness trust prompt"
+	case RemoteControlMenu(pane):
+		return "remote-control menu"
+	case strings.Contains(lower, "resume from summary") || strings.Contains(lower, "resume full session"):
+		return "resume choice"
+	case strings.Contains(lower, "enter to confirm") || strings.Contains(lower, "esc to cancel"):
+		return "an interactive prompt"
+	}
+	return ""
 }
 
 // paneDead reports whether the session's target pane has exited but is kept
@@ -2420,14 +2440,24 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", command, "Enter"); err != nil {
 		return err
 	}
+	progress := func(string) {}
+	if opts.Progress != nil {
+		progress = opts.Progress
+	}
+	progress("harness started in tmux session " + session)
 
 	ready, picked, trusted := false, false, false
+	waiting := ""
 	for i := 0; i < 45; i++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		pane, err := c.Capture(ctx, session)
 		if err == nil {
+			if state := launchWait(pane); state != "" && state != waiting {
+				waiting = state
+				progress("waiting: " + state + " (bp peek " + session + ")")
+			}
 			lower := strings.ToLower(pane)
 			if opts.Hermes {
 				// Readiness for Hermes is the idle composer placeholder: the one
@@ -2485,6 +2515,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if !ready {
 		return c.notReady(ctx, session, created)
 	}
+	progress("harness ready")
 	c.Sleep(time.Second)
 	if !opts.Codex && !opts.Hermes {
 		_ = c.Send(ctx, session, "/rename "+session)

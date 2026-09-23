@@ -1349,6 +1349,18 @@ func (a *app) open(args []string) error {
 		return err
 	}
 	reg.Launch = &opts
+	// Reviving used to print nothing until it finished or timed out minutes
+	// later; each step now reports with its elapsed time on stderr, and a wait
+	// names what it is waiting on (#22).
+	started := time.Now()
+	opts.Progress = func(step string) {
+		fmt.Fprintf(a.err, "bp open %s: %5.1fs %s\n", name, time.Since(started).Seconds(), step)
+	}
+	thread := opts.ResumeID
+	if thread == "" {
+		thread = "new conversation"
+	}
+	opts.Progress(fmt.Sprintf("record resolved (%s, %s, %s)", launchHarnessName(opts), thread, dir))
 	// The session comes up before the book can record it, so the gap between the
 	// two used to be a lie: a timeout or a Ctrl-C in between left the book saying
 	// "closed" over an agent that was really running, and a reader of bp status
@@ -1439,8 +1451,19 @@ func (a *app) open(args []string) error {
 			fmt.Fprintf(a.err, "WARNING: pending messages for %s were not delivered: %v\n", name, err)
 		}
 	}
+	opts.Progress("agent open")
 	fmt.Fprintf(a.out, "%s opened%s\n", name, rc)
 	return nil
+}
+
+func launchHarnessName(opts bptmux.OpenOptions) string {
+	switch {
+	case opts.Codex:
+		return "codex"
+	case opts.Hermes:
+		return "hermes"
+	}
+	return "claude"
 }
 
 // applyOpenBar gives a session bp open touched the same bar bp run sets up.

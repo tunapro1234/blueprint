@@ -70,6 +70,9 @@ func (s *Service) Run(ctx context.Context) {
 			return s.queue.Dispatch(run, s.tmux, func(message string) { s.log.Print(message) })
 		})
 	})
+	s.startLoop(ctx, "agentbook-reconcile", 10*time.Second, time.Minute, func(run context.Context, interval time.Duration) {
+		s.tracked(run, "agentbook-reconcile", interval, func() error { return s.reconcileExitedAgents(run) })
+	})
 	s.startLoop(ctx, "keepalive", 30*time.Second, 2*time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "keepalive", interval, func() error { return s.keepalive(run) })
 	})
@@ -209,6 +212,25 @@ func (s *Service) Run(ctx context.Context) {
 	}
 	<-ctx.Done()
 	s.wg.Wait()
+}
+
+func (s *Service) reconcileExitedAgents(ctx context.Context) error {
+	sessions, err := s.tmux.Sessions(ctx)
+	if err != nil {
+		return err
+	}
+	live := make(map[string]bool, len(sessions))
+	for _, name := range sessions {
+		live[name] = true
+	}
+	_, err = book.ReconcileClosed(book.Paths(s.config.Agentbooks), live, func(pid int) bool {
+		if pid <= 1 {
+			return false
+		}
+		err := syscall.Kill(pid, 0)
+		return err == nil || err == syscall.EPERM
+	}, time.Now())
+	return err
 }
 
 func (s *Service) startFederation(ctx context.Context) {

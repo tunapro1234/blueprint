@@ -267,6 +267,11 @@ func (q *Queue) Enqueue(to, from, text string) (string, error) {
 func (q *Queue) EnqueueReason(to, from, text, reason string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	releaseRecords, err := q.lockRecords()
+	if err != nil {
+		return "", err
+	}
+	defer releaseRecords()
 	return q.enqueueLocked(to, from, text, enqueueOptions{reason: reason})
 }
 
@@ -281,6 +286,11 @@ func (q *Queue) EnqueueReason(to, from, text, reason string) (string, error) {
 func (q *Queue) EnqueueForce(to, from, text string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	releaseRecords, err := q.lockRecords()
+	if err != nil {
+		return "", err
+	}
+	defer releaseRecords()
 	return q.enqueueLocked(to, from, text, enqueueOptions{reason: forceReason, force: true})
 }
 
@@ -292,6 +302,11 @@ func (q *Queue) EnqueueForce(to, from, text string) (string, error) {
 func (q *Queue) EnqueueUnverified(to, from, text string) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	releaseRecords, err := q.lockRecords()
+	if err != nil {
+		return "", err
+	}
+	defer releaseRecords()
 	return q.enqueueLocked(to, from, text, enqueueOptions{reason: unverifiedReason, noRepaste: true})
 }
 
@@ -380,6 +395,116 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 		}
 		return id, nil
 	}
+}
+
+func (q *Queue) lockRecords() (func(), error) {
+	if err := os.MkdirAll(q.Root, 0755); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(q.Root, ".records.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}
+
+// PendingForTarget lists pending channels for rename preview. The records are
+// copied in queue order; callers must not treat this read as a reservation.
+func (q *Queue) PendingForTarget(to string) ([]Message, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	rows, bad, err := q.pendingRecords()
+	if err != nil {
+		return nil, err
+	}
+	if len(bad) != 0 {
+		return nil, fmt.Errorf("%s: %w", bad[0].path, bad[0].err)
+	}
+	var messages []Message
+	for _, row := range rows {
+		if row.To == to {
+			messages = append(messages, row.Message)
+		}
+	}
+	return messages, nil
+}
+
+// RenameTarget migrates pending messages to a new agent name. It takes the
+// dispatcher lock first (matching Dispatch's lock order) so no delivery pass
+// can hold a stale target while the files are rewritten, then an enqueue lock
+// so concurrent senders cannot add another old-name record mid-scan.
+var renameLockWait = 30 * time.Second
+
+func (q *Queue) RenameTarget(old, name string) ([]string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if err := os.MkdirAll(q.Root, 0755); err != nil {
+		return nil, err
+	}
+	dispatch, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	defer dispatch.Close()
+	// Wait out a running delivery pass instead of failing fast: by the time
+	// this runs the agentbook already carries the new name, so a refusal here
+	// would strand the pending channels on a name nothing resolves any more.
+	deadline := time.Now().Add(renameLockWait)
+	for {
+		err := syscall.Flock(int(dispatch.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("queue delivery pass still running after %s: %w", renameLockWait, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	defer syscall.Flock(int(dispatch.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	releaseRecords, err := q.lockRecords()
+	if err != nil {
+		return nil, err
+	}
+	defer releaseRecords()
+	rows, bad, err := q.pendingRecords()
+	if err != nil {
+		return nil, err
+	}
+	if len(bad) != 0 {
+		return nil, fmt.Errorf("%s: %w", bad[0].path, bad[0].err)
+	}
+	var changed []record
+	for _, row := range rows {
+		if row.To != old {
+			continue
+		}
+		row.To = name
+		if !row.NoRepaste && !row.ForceBusy && row.Reason != "" {
+			row.LastWaitReason = row.Reason
+			row.Reason = ""
+		}
+		if err := writePending(row.path, row.Message); err != nil {
+			var rollbackErr error
+			for index := len(changed) - 1; index >= 0; index-- {
+				changed[index].To = old
+				rollbackErr = errors.Join(rollbackErr, writePending(changed[index].path, changed[index].Message))
+			}
+			return nil, errors.Join(fmt.Errorf("rename pending channel %s: %w", row.ID, err), rollbackErr)
+		}
+		changed = append(changed, row)
+	}
+	changes := make([]string, 0, len(changed))
+	for _, row := range changed {
+		changes = append(changes, fmt.Sprintf("msgq channel %s: target %s -> %s", row.ID, old, name))
+	}
+	return changes, nil
 }
 
 func read(path string) (Message, error) {

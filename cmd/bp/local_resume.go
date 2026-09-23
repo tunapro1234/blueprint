@@ -21,6 +21,8 @@ import (
 
 var claudeResumeUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
+var errManagedSessionUnavailable = errors.New("managed session unavailable")
+
 func physicalPath(path string) string {
 	if real, err := filepath.EvalSymlinks(path); err == nil {
 		return real
@@ -260,7 +262,18 @@ func (a *app) guardClaudeResume(thread, requested, cwd string) (*localResumeGuar
 		g.name = "claude-" + thread
 	}
 	if a.tmux.HasSession(a.ctx, g.name) {
-		return fail(fmt.Errorf("tmux name %s is already occupied by another session", g.name))
+		return fail(fmt.Errorf("%w: tmux name %s is already occupied by another session", errManagedSessionUnavailable, g.name))
+	}
+	if g.name != "" {
+		archived, err := book.IsArchived(book.Paths(a.config.Agentbooks), g.name)
+		if err != nil {
+			return fail(err)
+		}
+		if archived && requested == "" {
+			g.name = ""
+		} else if archived {
+			return fail(fmt.Errorf("%w: %s is archived", errManagedSessionUnavailable, g.name))
+		}
 	}
 	return g, "", nil
 }

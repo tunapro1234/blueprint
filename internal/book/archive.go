@@ -112,7 +112,7 @@ func SetArchived(paths []string, name string, archive bool, check func(Agent) er
 				continue
 			}
 			if target != "" {
-				return fmt.Errorf("%s has multiple registrations; resolve its source books before archiving/restoring", name)
+				return fmt.Errorf("%s has multiple registrations; to move its archived row out of the way, run: bp rename %s <free-name> --archived", name, name)
 			}
 			target, raw, record = path, doc, row
 			encoded, _ := json.Marshal(row)

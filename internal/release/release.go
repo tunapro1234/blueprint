@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -42,9 +43,12 @@ type Manifest struct {
 	SHA256    map[string]string `json:"sha256"`
 }
 type Checker struct {
-	Base string
-	HTTP *http.Client
-	Key  ed25519.PublicKey
+	Base          string
+	HTTP          *http.Client
+	Key           ed25519.PublicKey
+	StallTimeout  time.Duration
+	DownloadRetry int
+	RetryBackoff  time.Duration
 }
 
 func Default() *Checker {
@@ -53,7 +57,14 @@ func Default() *Checker {
 	if err != nil {
 		panic(err)
 	}
-	return &Checker{Base: BaseURL, HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+	return &Checker{Base: BaseURL, HTTP: &http.Client{Transport: transport, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 		if r.URL.Scheme != "https" {
 			return fmt.Errorf("non-HTTPS redirect refused")
 		}
@@ -61,27 +72,98 @@ func Default() *Checker {
 			return fmt.Errorf("too many redirects")
 		}
 		return nil
-	}}, Key: value.(ed25519.PublicKey)}
+	}}, Key: value.(ed25519.PublicKey), StallTimeout: 20 * time.Second, DownloadRetry: 2, RetryBackoff: 250 * time.Millisecond}
 }
 func (c *Checker) get(ctx context.Context, path string, limit int64) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.Base, "/")+"/"+path, nil)
+	url := strings.TrimRight(c.Base, "/") + "/" + path
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	response, err := c.HTTP.Do(request)
+	client := c.HTTP
+	if client == nil {
+		client = Default().HTTP
+	}
+	response, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("GET %s after 0 bytes: %w", url, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		return nil, fmt.Errorf("release download: HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("GET %s after 0 bytes: HTTP %d", url, response.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	data, err := readWithStall(ctx, response.Body, limit+1, c.bodyStallTimeout())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("GET %s after %d bytes: %w", url, len(data), err)
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("release response too large")
+		return nil, fmt.Errorf("GET %s after %d bytes: release response too large", url, len(data))
+	}
+	return data, nil
+}
+
+func (c *Checker) bodyStallTimeout() time.Duration {
+	if c.StallTimeout > 0 {
+		return c.StallTimeout
+	}
+	return 20 * time.Second
+}
+
+type bodyRead struct {
+	n   int
+	err error
+}
+
+// readWithStall bounds each individual body read rather than the total download
+// time. A progressing large file may take as long as it needs; a stalled one
+// fails with the number of bytes collected so far.
+func readWithStall(ctx context.Context, body io.ReadCloser, limit int64, stall time.Duration) ([]byte, error) {
+	data := make([]byte, 0, min(limit, 64<<10))
+	buf := make([]byte, 32<<10)
+	for int64(len(data)) < limit {
+		next := buf
+		if remaining := limit - int64(len(data)); int64(len(next)) > remaining {
+			next = next[:remaining]
+		}
+		result := make(chan bodyRead, 1)
+		go func() {
+			n, err := body.Read(next)
+			result <- bodyRead{n: n, err: err}
+		}()
+		timer := time.NewTimer(stall)
+		select {
+		case read := <-result:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			if read.n > 0 {
+				data = append(data, next[:read.n]...)
+			}
+			if read.err != nil {
+				if read.err == io.EOF {
+					return data, nil
+				}
+				return data, read.err
+			}
+			if read.n == 0 {
+				continue
+			}
+		case <-ctx.Done():
+			_ = body.Close()
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return data, ctx.Err()
+		case <-timer.C:
+			_ = body.Close()
+			return data, fmt.Errorf("body stalled for %s", stall)
+		}
 	}
 	return data, nil
 }
@@ -146,14 +228,39 @@ func (c *Checker) Download(ctx context.Context, m Manifest, name string) ([]byte
 	if !ok {
 		return nil, fmt.Errorf("release does not contain %s", name)
 	}
-	data, err := c.get(ctx, "releases/v"+m.Version+"/"+name, 64<<20)
-	if err != nil {
-		return nil, err
+	path := "releases/v" + m.Version + "/" + name
+	url := strings.TrimRight(c.Base, "/") + "/" + path
+	retries := c.DownloadRetry
+	if retries < 0 {
+		retries = 0
 	}
-	if fmt.Sprintf("%x", sha256.Sum256(data)) != sum {
-		return nil, fmt.Errorf("SHA-256 mismatch for %s", name)
+	backoff := c.RetryBackoff
+	if backoff <= 0 {
+		backoff = 250 * time.Millisecond
 	}
-	return data, nil
+	var last error
+	for attempt := 0; attempt <= retries; attempt++ {
+		data, err := c.get(ctx, path, 64<<20)
+		if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sum {
+			return data, nil
+		}
+		if err == nil {
+			err = fmt.Errorf("GET %s after %d bytes: SHA-256 mismatch", url, len(data))
+		}
+		last = err
+		if attempt == retries {
+			break
+		}
+		delay := backoff << attempt
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("download %s canceled after attempt %d: %w", url, attempt+1, ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return nil, fmt.Errorf("download %s failed after %d attempts: %w", url, retries+1, last)
 }
 
 // Replace retains the previous executable. Failed setup restores it atomically.

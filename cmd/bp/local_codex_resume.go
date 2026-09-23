@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"blueprint/internal/book"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -209,6 +210,20 @@ func (a *app) routeCodexResume(args []string, cwd string) ([]string, *localResum
 	if len(owners) == 1 {
 		guard.name = owners[0]
 		return args, guard, owners[0], true, nil
+	}
+	if guard.name != "" {
+		archived, err := book.IsArchived(book.Paths(a.config.Agentbooks), guard.name)
+		if err != nil {
+			guard.close()
+			return nil, nil, "", true, err
+		}
+		if archived {
+			guard.name = ""
+		} else if a.tmux.HasSession(a.ctx, guard.name) {
+			name := guard.name
+			guard.close()
+			return nil, nil, "", true, fmt.Errorf("%w: tmux name %s is occupied by another session", errManagedSessionUnavailable, name)
+		}
 	}
 	if f, err := os.OpenFile(filepath.Join(home, "thread-writer-locks", thread+".lock"), os.O_RDWR, 0); err == nil {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)

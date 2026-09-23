@@ -23,7 +23,7 @@ func waitFor(t *testing.T, f func() bool) {
 	}
 }
 
-func TestLocalControlAndWorkerShutdown(t *testing.T) {
+func TestIssue19InboundDispatchTargetsAndBoundedRecovery(t *testing.T) {
 	// Short root avoids platform sockaddr_un path-length limits.
 	root := t.TempDir()
 	n, e := New(context.Background(), root, Config{Listen: []string{"/ip4/127.0.0.1/tcp/0"}}, msgq.New(filepath.Join(root, "q")))
@@ -46,6 +46,11 @@ func TestLocalControlAndWorkerShutdown(t *testing.T) {
 	case targets := <-passes:
 		t.Fatalf("idle relay probed local agents: %v", targets)
 	case <-time.After(1100 * time.Millisecond):
+	}
+	// A local message for another agent must not turn this inbound wake-up into
+	// a full-fleet probe; only the peer-supplied target has new inbound work.
+	if _, e := n.Queue.Enqueue("unrelated", "local", "local queue item"); e != nil {
+		t.Fatal(e)
 	}
 	if _, err := n.Queue.EnqueueOnceOrigin("fixture", "agent", "external:fixture@test", "hello", &msgq.Origin{Transport: "libp2p"}); err != nil {
 		t.Fatal(err)

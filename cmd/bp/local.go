@@ -92,12 +92,26 @@ func (a *app) initLocalBook() error {
 }
 
 func (a *app) localRun(args []string) error {
-	name := ""
-	if len(args) >= 2 && args[0] == "--name" {
-		name, args = args[1], args[2:]
+	name, parent, role := "", "", ""
+	// bp's own options come before the harness; everything after it belongs to
+	// the native CLI. --parent/--role mirror bp open, so a coordinator can
+	// launch with native flags AND place the agent in the right tree (#23).
+options:
+	for len(args) >= 2 {
+		switch args[0] {
+		case "--name":
+			name = args[1]
+		case "--parent":
+			parent = args[1]
+		case "--role":
+			role = args[1]
+		default:
+			break options
+		}
+		args = args[2:]
 	}
 	if len(args) == 0 || !localHarness(args[0]) {
-		return fmt.Errorf("usage: bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]")
+		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] <codex|claude|opencode|hermes> [arguments...]")
 	}
 	programName := args[0]
 	if programName == "custom" {
@@ -213,6 +227,15 @@ func (a *app) localRun(args []string) error {
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
 		return err
 	}
+	if parent != "" {
+		fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+		if err != nil {
+			return err
+		}
+		if _, ok := fleet.Agents[parent]; !ok || parent == name {
+			return fmt.Errorf("unknown parent: %s", parent)
+		}
+	}
 	// Only our window runs this launcher. Exiting the agent exits the pane;
 	// there is no interactive shell underneath it and no global tmux changes.
 	cliArgs, observationPath, err := a.prepareLocalObservation(args[0], args[1:])
@@ -235,6 +258,11 @@ func (a *app) localRun(args []string) error {
 	command = append(command, cliArgs...)
 	for index := range command {
 		command[index] = quoteShell(command[index])
+	}
+	// Placement travels on the launcher's own environment, not the session's,
+	// so nothing else started in this tmux session inherits it.
+	if parent != "" || role != "" {
+		command = append([]string{"env", "BP_RUN_PARENT=" + quoteShell(parent), "BP_RUN_ROLE=" + quoteShell(role)}, command...)
 	}
 	argv := []string{"new-session", "-s", name, "-c", cwd, "-e", "BP_EXIT_REPORT=" + exitReport}
 	if resumeGuard != nil {
@@ -357,7 +385,10 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 			return err
 		}
 	}
-	reg := book.Registration{Role: "local CLI", Parent: fleet.Root, Local: local, ClearLocal: local == nil}
+	reg := book.Registration{Local: local, ClearLocal: local == nil}
+	reg.Parent, reg.Role = localPlacement(fleet, name, os.Getenv("BP_RUN_PARENT"), os.Getenv("BP_RUN_ROLE"))
+	os.Unsetenv("BP_RUN_PARENT")
+	os.Unsetenv("BP_RUN_ROLE")
 	if managed {
 		reg.Role, reg.Parent = "", ""
 	} else if launch := nativeLaunch(args[1], args[4:]); launch != nil {
@@ -404,6 +435,22 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 	}
 	env := append(os.Environ(), "BP_SESSION="+name, "AGENT="+name)
 	return syscall.Exec(args[3], args[3:], env)
+}
+
+// localPlacement decides the parent and role a bp run registration writes;
+// empty means "leave what is on record". Explicit --parent/--role win. A
+// relaunch keeps the placement already on record — resetting it to the root
+// silently moved agents out of their tree (#23). A new record starts under the
+// root as a "local CLI".
+func localPlacement(fleet book.Fleet, name, parent, role string) (string, string) {
+	existing, known := fleet.Agents[name]
+	if parent == "" && (!known || existing.Parent == "") && name != fleet.Root {
+		parent = fleet.Root
+	}
+	if role == "" && (!known || existing.Role == "") {
+		role = "local CLI"
+	}
+	return parent, role
 }
 
 // configureLocalBar changes only this bp-owned session's display. Explicit env

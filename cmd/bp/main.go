@@ -53,6 +53,7 @@ bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]
 bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp reparent <agent> <new-parent>
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -94,14 +95,14 @@ bp daemon`
 type app struct {
 	resolveSender func() identity.Identity
 	// ancestors overrides the process chain used for uncertain sender labels.
-	ancestors func() [][]string
-	originProbe   func(context.Context) identity.Origin
-	ctx           context.Context
-	config        bpconfig.Config
-	tmux          *bptmux.Client
-	queue         *msgq.Queue
-	out           *os.File
-	err           *os.File
+	ancestors   func() [][]string
+	originProbe func(context.Context) identity.Origin
+	ctx         context.Context
+	config      bpconfig.Config
+	tmux        *bptmux.Client
+	queue       *msgq.Queue
+	out         *os.File
+	err         *os.File
 
 	loadFleet      func() (book.Fleet, map[string]book.State, error)
 	loadCodex      func() []codexrpc.Thread
@@ -334,6 +335,8 @@ func (a *app) run(args []string) error {
 		return a.archive(args[1:], false)
 	case "rename":
 		return a.rename(args[1:])
+	case "reparent":
+		return a.reparent(args[1:])
 	case "msg":
 		return a.message(args[1:])
 	case "announce":

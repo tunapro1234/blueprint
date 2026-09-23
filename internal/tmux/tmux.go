@@ -2162,6 +2162,51 @@ func UniqueSessionPath(projectsRoot, dir, agent, id string) (string, bool) {
 	return path, err == nil
 }
 
+// paneDead reports whether the session's target pane has exited but is kept
+// on screen by remain-on-exit.
+func (c *Client) paneDead(ctx context.Context, session string) bool {
+	out, err := c.run(ctx, nil, "display-message", "-p", "-t", "="+session+":", "#{pane_dead}")
+	return err == nil && strings.TrimSpace(string(out)) == "1"
+}
+
+// notReady turns a readiness timeout into something the operator can act on
+// (#6). The bare "agent did not become ready" hid the actual cause, usually a
+// first-run modal on the pane, and the retained session kept a harness blocked
+// on it indefinitely — for a --resume launch, holding a second writer on a
+// conversation the user may reopen elsewhere. The pane tail goes into the
+// error, and a session this call created is removed so nothing is left
+// waiting on a prompt nobody will see. A pre-existing session is left alone.
+func (c *Client) notReady(ctx context.Context, session string, created bool) error {
+	pane, _ := c.Capture(ctx, session)
+	var tail []string
+	for _, line := range strings.Split(ansiSeq.ReplaceAllString(pane, ""), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			tail = append(tail, line)
+		}
+	}
+	if len(tail) > 8 {
+		tail = tail[len(tail)-8:]
+	}
+	lower := strings.ToLower(pane)
+	reason := "agent did not become ready"
+	if strings.Contains(lower, "trust") && (strings.Contains(lower, "folder") || strings.Contains(lower, "directory") || strings.Contains(lower, "workspace")) {
+		reason = "harness is waiting on its first-run trust prompt; answer it once in the harness (or trust the directory in its config) and reopen"
+	} else if strings.Contains(lower, "enter to confirm") || strings.Contains(lower, "esc to cancel") || strings.Contains(lower, "enter to select") {
+		reason = "harness is waiting on an interactive prompt"
+	}
+	where := "session " + session + " retained; inspect with bp peek " + session + ", remove with bp close " + session
+	if created {
+		if _, err := c.run(ctx, nil, "kill-session", "-t", "="+session); err == nil {
+			where = "session " + session + " removed so it does not hold the prompt"
+		}
+	}
+	snippet := ""
+	if len(tail) > 0 {
+		snippet = "\n  pane: " + strings.Join(tail, "\n  pane: ")
+	}
+	return fmt.Errorf("%s (%s)%s", reason, where, snippet)
+}
+
 // ClaudeSessionPathForID locates a process-verified session without requiring
 // its mutable display title to equal the stable orchestration name.
 func ClaudeSessionPathForID(projectsRoot, dir, id string) (string, error) {
@@ -2237,7 +2282,20 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if opts.Codex && opts.Resume && opts.ResumeID == "" {
 		return fmt.Errorf("Codex resume requires a verified thread id")
 	}
-	if c.HasSession(ctx, session) {
+	created := false
+	if c.HasSession(ctx, session) && c.paneDead(ctx, session) {
+		// A managed launcher keeps the final frame (remain-on-exit) after the
+		// harness exits, e.g. a /exit to restart on a new CLI release. That pane
+		// runs nothing, so neither the agent nor the shell branch below applies
+		// and re-entry used to fail on "pane runs bp" (#20). Respawn the pane in
+		// place with a fresh shell under the same session name and launch into it.
+		if warn != nil {
+			warn(session + ": dead pane in existing session; respawning agent in place")
+		}
+		if _, err := c.run(ctx, nil, "respawn-pane", "-k", "-t", "="+session+":", "-c", dir); err != nil {
+			return err
+		}
+	} else if c.HasSession(ctx, session) {
 		process, err := c.PaneProcess(ctx, session)
 		if err != nil {
 			return nil // unreadable pane: assume open rather than double-launch
@@ -2277,6 +2335,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		if _, err := c.run(ctx, nil, create...); err != nil {
 			return err
 		}
+		created = true
 	}
 	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
 	// hostname yerine agent adi gorunur).
@@ -2383,7 +2442,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		c.Sleep(2 * time.Second)
 	}
 	if !ready {
-		return fmt.Errorf("agent did not become ready; session retained for inspection")
+		return c.notReady(ctx, session, created)
 	}
 	c.Sleep(time.Second)
 	if !opts.Codex && !opts.Hermes {

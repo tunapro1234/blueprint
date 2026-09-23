@@ -93,6 +93,8 @@ bp daemon`
 
 type app struct {
 	resolveSender func() identity.Identity
+	// ancestors overrides the process chain used for uncertain sender labels.
+	ancestors func() [][]string
 	originProbe   func(context.Context) identity.Origin
 	ctx           context.Context
 	config        bpconfig.Config
@@ -1583,7 +1585,7 @@ func (a *app) sender() string { return a.senderIdentity().Label }
 
 func (a *app) identityOptions() identity.Options {
 	// Process ancestry supplies an explicitly uncertain script/cron label, never authority.
-	return identity.Options{Infer: true, Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
+	return identity.Options{Infer: true, Ancestors: a.ancestors, Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
 		if a.tmux == nil {
 			return "", fmt.Errorf("tmux client unavailable")
 		}

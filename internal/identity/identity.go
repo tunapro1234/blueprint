@@ -291,6 +291,14 @@ func scriptish(arg string) bool {
 	if arg == "" || strings.HasPrefix(arg, "-") {
 		return false
 	}
+	// A shell's -c command string is not a script: its last path is whatever
+	// the command happens to mention. Claude Code runs every tool command as
+	// `zsh -c '… pwd -P >| /tmp/claude-<id>-cwd'`, and taking that path's base
+	// labelled messages "zsh?:claude-e558-cwd" — a session-shaped name that
+	// was not the sender (issue #9).
+	if strings.ContainsAny(arg, " \t\n") {
+		return false
+	}
 	base := program(arg)
 	if base == "" || base == "bp" || interpreters[strings.ToLower(base)] {
 		return false

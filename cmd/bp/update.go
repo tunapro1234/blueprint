@@ -56,9 +56,9 @@ func (a *app) update(args []string) error {
 		return fmt.Errorf("npm-managed installation: run npm install -g @tunapro/blueprint@latest; bp update --check remains available")
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
-	defer cancel()
 	checker := release.Default()
 	m, err := checker.Latest(ctx)
+	cancel()
 	result := updateResult{Current: release.Version(), Latest: m.Version, Available: release.Newer(m.Version, release.Version()), CheckedAt: time.Now().UTC()}
 	if err != nil {
 		result.Error = err.Error()
@@ -98,7 +98,7 @@ func (a *app) update(args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := checker.Download(ctx, m, release.Platform())
+	data, err := checker.Download(a.ctx, m, release.Platform())
 	if err != nil {
 		return err
 	}

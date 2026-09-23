@@ -52,13 +52,13 @@ bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp reparent <agent> <new-parent>
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
-bp rename <old-name> <new-name> [--dry-run] [--no-retitle]
+bp rename <old-name> <new-name> [--dry-run] [--no-retitle] [--archived]
                              # --no-retitle: skip typing /rename into the pane, so an
                              # agent can rename ITSELF (its own pane is always busy).
                              # The transcript keeps the OLD title until that agent
@@ -113,6 +113,8 @@ type app struct {
 	capturePane    func(string) (string, error)
 	clearPane      func(string) error
 	turnOpenProbe  func(string) bool
+	execNative     func(string, []string, []string) error
+	interactive    func() bool
 
 	// paneLocks counts the pane locks this process is holding, per session. It
 	// exists because the lock is an flock and flock is NOT reentrant even within one
@@ -710,6 +712,9 @@ func (a *app) status(args []string) error {
 		}
 		asJSON = true
 	}
+	if err := a.reconcileDeadAgents(); err != nil {
+		return err
+	}
 	fleet, states, err := a.fleet()
 	if err != nil {
 		return err
@@ -745,6 +750,23 @@ func (a *app) status(args []string) error {
 	}
 	a.renderCodexStatus(a.codexThreads())
 	return nil
+}
+
+func (a *app) reconcileDeadAgents() error {
+	paths := book.Paths(a.config.Agentbooks)
+	if len(paths) == 0 || a.tmux == nil || a.loadFleet != nil {
+		return nil
+	}
+	sessions, err := a.tmux.Sessions(a.ctx)
+	if err != nil {
+		return err
+	}
+	live := make(map[string]bool, len(sessions))
+	for _, name := range sessions {
+		live[name] = true
+	}
+	_, err = book.ReconcileClosed(paths, live, processIsLive, time.Now())
+	return err
 }
 
 // statusReport is the machine-readable shape of bp status. Numbers that are
@@ -1134,7 +1156,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1163,6 +1185,7 @@ func (a *app) open(args []string) error {
 	}
 	harness := ""
 	resumeRequested, threadExplicit := false, false
+	rebind := false
 	worktreeTopic := ""
 	reg := book.Registration{}
 	for index := 2; index < len(args); index++ {
@@ -1209,6 +1232,8 @@ func (a *app) open(args []string) error {
 			opts.NoSandbox = true
 		case "--no-prompt":
 			opts.NoPrompt = true
+		case "--rebind":
+			rebind = true
 		case "--worktree":
 			if index+1 >= len(args) {
 				return fmt.Errorf("--worktree requires a topic")
@@ -1242,6 +1267,9 @@ func (a *app) open(args []string) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
+	if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, rebind); err != nil {
+		return err
+	}
 	// The fleet answers two questions below: is --parent a real agent, and does
 	// this folder sit under the parent's. Only the first is worth failing over
 	// — a typo'd parent would register the agent under a name nobody reads, so
@@ -1264,6 +1292,11 @@ func (a *app) open(args []string) error {
 			if _, known := fleet.Agents[who.Label]; known && who.Authoritative() {
 				reg.Parent = who.Label
 			}
+		}
+	}
+	if rebind && a.tmux.HasSession(a.ctx, name) {
+		if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, false); err != nil {
+			return fmt.Errorf("cannot rebind a live tmux session; close it before retrying: %w", err)
 		}
 	}
 	if a.tmux.HasSession(a.ctx, name) {
@@ -1346,6 +1379,9 @@ func (a *app) open(args []string) error {
 		opts.NoPrompt = true
 	}
 	if err := opts.Validate(); err != nil {
+		return err
+	}
+	if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, rebind); err != nil {
 		return err
 	}
 	reg.Launch = &opts
@@ -1628,15 +1664,34 @@ func (a *app) close(args []string) error {
 	if err := rejectFlag("close", name); err != nil {
 		return err
 	}
-	if a.tmux.HasSession(a.ctx, name) {
+	before, registered, err := book.RecordStatus(a.config.Agentbooks, name)
+	if err != nil {
+		return err
+	}
+	hadSession := a.tmux.HasSession(a.ctx, name)
+	if !hadSession && (!registered || before == "closed") {
+		fmt.Fprintf(a.out, "%s: already closed, no change\n", name)
+		return nil
+	}
+	if hadSession {
 		if err := a.tmux.Close(a.ctx, name); err != nil {
 			return err
 		}
-		fmt.Fprintf(a.out, "%s closed (history remains in JSONL)\n", name)
-	} else {
-		fmt.Fprintf(a.out, "%s is already closed\n", name)
 	}
-	return book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{Sender: a.sender()})
+	if err := book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{Sender: a.sender()}); err != nil {
+		return err
+	}
+	if !registered {
+		before = "unregistered"
+	} else if before == "" {
+		before = "unset"
+	}
+	if hadSession && before == "closed" {
+		fmt.Fprintf(a.out, "%s: tmux session closed; agentbook already closed\n", name)
+	} else {
+		fmt.Fprintf(a.out, "%s: %s -> closed\n", name, before)
+	}
+	return nil
 }
 
 // sender uses the same verified identity for envelopes and hierarchy gates.
@@ -3142,6 +3197,31 @@ func (a *app) queueStatus(args []string) error {
 	}
 	if len(args) != 1 {
 		return fmt.Errorf("usage: bp qstat <channel-id>")
+	}
+	message, recordErr := a.queue.Record(args[0])
+	if recordErr == nil && message.Status == "" {
+		records, err := book.Records(a.config.Agentbooks)
+		if err != nil {
+			return err
+		}
+		active, archived := false, false
+		for _, record := range records {
+			if record.Agent.Name != message.To {
+				continue
+			}
+			if record.Agent.ArchivedAt != "" {
+				archived = true
+			} else {
+				active = true
+			}
+		}
+		if !active {
+			if archived {
+				fmt.Fprintf(a.out, "PENDING: target %s is archived in the agentbook; it cannot reopen until restored\n", message.To)
+			} else {
+				fmt.Fprintf(a.out, "PENDING: target %s has no agentbook registration; it cannot reopen under this name\n", message.To)
+			}
+		}
 	}
 	status, err := a.queue.Status(args[0])
 	if err == nil {

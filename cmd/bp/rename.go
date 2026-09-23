@@ -14,6 +14,7 @@ import (
 
 	"blueprint/internal/book"
 	"blueprint/internal/identity"
+	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -48,6 +49,7 @@ import (
 func (a *app) rename(args []string) error {
 	dry := false
 	noRetitle := false
+	archivedOnly := false
 	var positional []string
 	for _, arg := range args {
 		switch arg {
@@ -67,6 +69,8 @@ func (a *app) rename(args []string) error {
 			// "transcript okunamadi", and `bp open --resume` finds no prior
 			// conversation to resume. So it is allowed, and it says so loudly.
 			noRetitle = true
+		case "--archived":
+			archivedOnly = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown flag: %s", arg)
@@ -75,7 +79,7 @@ func (a *app) rename(args []string) error {
 		}
 	}
 	if len(positional) != 2 {
-		return fmt.Errorf("usage: bp rename <old-name> <new-name> [--dry-run] [--no-retitle]")
+		return fmt.Errorf("usage: bp rename <old-name> <new-name> [--dry-run] [--no-retitle] [--archived]")
 	}
 	old, name := positional[0], positional[1]
 	if old == name {
@@ -83,6 +87,42 @@ func (a *app) rename(args []string) error {
 	}
 	if !validAgentName(name) {
 		return fmt.Errorf("invalid agent name: %s (allowed: letters, digits, . _ -)", name)
+	}
+	if archivedOnly {
+		if dry {
+			if err := book.RenameConflict(a.config.Agentbooks, old, name); err != nil {
+				fmt.Fprintf(a.out, "dry run collision: %v\n", err)
+				return err
+			}
+			records, err := book.Records(a.config.Agentbooks)
+			if err != nil {
+				return err
+			}
+			var archived []book.Record
+			for _, record := range records {
+				if record.Agent.Name == old && record.Agent.ArchivedAt != "" {
+					archived = append(archived, record)
+				}
+			}
+			if len(archived) != 1 {
+				return fmt.Errorf("expected one archived registration named %s, found %d", old, len(archived))
+			}
+			fmt.Fprintf(a.out, "would update %s: archived name %s -> %s\n", filepath.Base(archived[0].Path), old, name)
+			fmt.Fprintln(a.out, "dry run: nothing was changed")
+			return nil
+		}
+		changes, err := book.RenameArchived(a.config.Agentbooks, old, name)
+		if err != nil {
+			if dry {
+				fmt.Fprintf(a.out, "dry run collision: %v\n", err)
+			}
+			return err
+		}
+		for _, change := range changes {
+			fmt.Fprintf(a.out, "update %s\n", change)
+		}
+		fmt.Fprintf(a.out, "renamed archived registration %s -> %s\n", old, name)
+		return nil
 	}
 
 	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
@@ -97,12 +137,46 @@ func (a *app) rename(args []string) error {
 	if !knownOld && !liveOld {
 		return fmt.Errorf("no agent named %s (not in the agentbook, no tmux session)", old)
 	}
+	records, err := book.Records(a.config.Agentbooks)
+	if err != nil {
+		return err
+	}
+	archivedOld := 0
+	registrationCount := 0
+	for _, record := range records {
+		if record.Agent.Name == old {
+			registrationCount++
+			if record.Agent.ArchivedAt != "" {
+				archivedOld++
+			}
+		}
+	}
+	if archivedOld > 0 && registrationCount > 1 {
+		err := fmt.Errorf("%s has multiple registrations; resolve its archived row first with: bp rename %s <free-name> --archived", old, old)
+		if dry {
+			fmt.Fprintf(a.out, "dry run collision: %v\n", err)
+		}
+		return err
+	}
+	if err := book.RenameConflict(a.config.Agentbooks, old, name); err != nil {
+		if dry {
+			fmt.Fprintf(a.out, "dry run collision: %v\n", err)
+		}
+		return err
+	}
 	if knownNew || liveNew {
 		where := "the agentbook"
 		if liveNew {
 			where = "a tmux session"
 		}
 		return fmt.Errorf("%s is already taken by %s", name, where)
+	}
+	var pending []msgq.Message
+	if a.queue != nil {
+		pending, err = a.queue.PendingForTarget(old)
+		if err != nil {
+			return fmt.Errorf("inspect pending message queue: %w", err)
+		}
 	}
 
 	prefix := ""
@@ -160,6 +234,21 @@ func (a *app) rename(args []string) error {
 		changes, err := book.Rename(a.config.Agentbooks, old, name)
 		if err != nil {
 			return fmt.Errorf("agentbook: %w", err)
+		}
+		for _, change := range changes {
+			report("update %s", change)
+		}
+	}
+	if dry {
+		for _, message := range pending {
+			report("migrate pending msgq channel %s: target %s -> %s", message.ID, old, name)
+		}
+	} else if a.queue != nil {
+		// The book already says the new name; stopping here would also skip
+		// the claims and the retitle below. Warn loudly and finish the rename.
+		changes, err := a.queue.RenameTarget(old, name)
+		if err != nil {
+			fmt.Fprintf(a.err, "WARNING: pending messages for %s were NOT moved to %s: %v\n", old, name, err)
 		}
 		for _, change := range changes {
 			report("update %s", change)

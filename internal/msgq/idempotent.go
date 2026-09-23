@@ -43,6 +43,11 @@ func (q *Queue) EnqueueOnceOrigin(key, to, from, text string, origin *Origin) (M
 		return Message{}, err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	releaseRecords, err := q.lockRecords()
+	if err != nil {
+		return Message{}, err
+	}
+	defer releaseRecords()
 	id := fmt.Sprintf("qp%x", sha256.Sum256([]byte(key)))
 	if old, err := q.Record(id); err == nil {
 		// Peer aliases can change. The authenticated origin and original body,
@@ -110,6 +115,11 @@ func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Dur
 		return "", err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	releaseRecords, err := q.lockRecords()
+	if err != nil {
+		return "", err
+	}
+	defer releaseRecords()
 	records, _, err := q.pendingRecords()
 	if err != nil {
 		return "", err

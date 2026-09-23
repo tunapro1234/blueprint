@@ -69,6 +69,33 @@ func terminal(file *os.File) bool {
 
 func quoteShell(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
+func (a *app) nativeFallback(program, harness string, args []string, reason string) error {
+	hint := "command " + harness
+	if harness == "claude" {
+		for _, arg := range args {
+			if arg == "-c" || arg == "--continue" {
+				hint += " -c"
+				break
+			}
+		}
+	}
+	if a.err != nil {
+		fmt.Fprintf(a.err, "bp: managed session unavailable (%s); falling back to native CLI. Escape hatch: %s\n", reason, hint)
+	}
+	argv := append([]string{program}, args...)
+	if a.execNative != nil {
+		return a.execNative(program, argv, os.Environ())
+	}
+	return syscall.Exec(program, argv, os.Environ())
+}
+
+func (a *app) interactiveTerminal() bool {
+	if a.interactive != nil {
+		return a.interactive()
+	}
+	return terminal(os.Stdin) && terminal(a.out)
+}
+
 func (a *app) initLocalBook() error {
 	if a.config.Legacy {
 		return fmt.Errorf("bp run/setup is for local installations; use bp open here, or set a separate BP_HOME")
@@ -121,6 +148,7 @@ options:
 		programName = args[1]
 		args = append([]string{"custom"}, args[2:]...)
 	}
+	nativeArgs := append([]string(nil), args[1:]...)
 	program, err := exec.LookPath(programName)
 	if err != nil {
 		return fmt.Errorf("install %s first: %w", args[0], err)
@@ -129,12 +157,12 @@ options:
 	if err != nil {
 		return err
 	}
-	if os.Getenv("TMUX") != "" || !terminal(os.Stdin) || !terminal(a.out) || batchCommand(args[0], args[1:]) {
+	if os.Getenv("TMUX") != "" || !a.interactiveTerminal() || batchCommand(args[0], args[1:]) {
 		return syscall.Exec(program, append([]string{program}, args[1:]...), os.Environ())
 	}
 	a.updateNotice()
 	if _, err := exec.LookPath(a.tmux.Bin); err != nil {
-		return fmt.Errorf("tmux is required; rerun the local installer: %w", err)
+		return a.nativeFallback(program, programName, nativeArgs, "tmux is unavailable")
 	}
 	if name != "" && (!identity.ValidName(name) || len(name) > 64) {
 		return fmt.Errorf("invalid agent name: %s", name)
@@ -149,9 +177,13 @@ options:
 		return err
 	}
 	var resumeGuard *localResumeGuard
+	resumeThread := ""
 	if args[0] == "codex" {
 		resolved, guard, existing, handled, err := a.routeCodexResume(args[1:], cwd)
 		if err != nil {
+			if errors.Is(err, errManagedSessionUnavailable) {
+				return a.nativeFallback(program, programName, nativeArgs, err.Error())
+			}
 			return err
 		}
 		if guard != nil {
@@ -168,6 +200,7 @@ options:
 			return nil
 		}
 		if guard != nil {
+			resumeThread = guard.thread
 			if name == "" && guard.name != "" {
 				name = guard.name
 			}
@@ -184,9 +217,13 @@ options:
 			return err
 		}
 		if thread != "" {
+			resumeThread = thread
 			var existing string
 			resumeGuard, existing, err = a.guardClaudeResume(thread, name, cwd)
 			if err != nil {
+				if errors.Is(err, errManagedSessionUnavailable) {
+					return a.nativeFallback(program, programName, nativeArgs, err.Error())
+				}
 				return err
 			}
 			defer resumeGuard.close()
@@ -196,6 +233,21 @@ options:
 			}
 			name = resumeGuard.name
 			args = append([]string{"claude"}, resolved...)
+		}
+	}
+	if resumeThread != "" {
+		existing, attach, err := a.adoptNativeThread(resumeThread, name)
+		if err != nil {
+			return err
+		}
+		if existing != "" {
+			name = existing
+			if resumeGuard != nil {
+				resumeGuard.close()
+			}
+			if attach {
+				return a.attachLocal(existing)
+			}
 		}
 	}
 	if name == "" {
@@ -224,8 +276,10 @@ options:
 	if err != nil {
 		return err
 	}
-	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
+	if archived, err := book.IsArchived(a.config.Agentbooks, name); err != nil {
 		return err
+	} else if archived {
+		return a.nativeFallback(program, programName, nativeArgs, name+" is archived")
 	}
 	if parent != "" {
 		fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))

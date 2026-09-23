@@ -20,6 +20,7 @@ type Agent struct {
 	ArchivedAt       string              `json:"archivedAt,omitempty"`
 	Local            *cache.LocalBinding `json:"localRuntime,omitempty"`
 	IdentityThreadID string              `json:"identityThreadId,omitempty"`
+	StatusAt         time.Time           `json:"statusAt,omitempty"`
 	Name             string              `json:"name"`
 	Launch           *bptmux.OpenOptions `json:"launch,omitempty"`
 	Folder           string              `json:"folder,omitempty"`
@@ -65,6 +66,187 @@ type Fleet struct {
 	Parents map[string]string
 	Sources map[string][]string
 	Root    string
+}
+
+// Record is an agentbook registration together with the source file that owns
+// it. Unlike Fleet, Records includes archived rows and preserves duplicates so
+// commands that enforce namespace or binding uniqueness can reason about the
+// whole configured book set.
+type Record struct {
+	Agent Agent
+	Path  string
+}
+
+func Records(paths []string) ([]Record, error) {
+	var records []Record
+	for _, path := range Paths(paths) {
+		file, err := Load(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, agent := range file.Agents {
+			records = append(records, Record{Agent: agent, Path: path})
+		}
+	}
+	return records, nil
+}
+
+func IsArchived(paths []string, name string) (bool, error) {
+	records, err := Records(paths)
+	if err != nil {
+		return false, err
+	}
+	for _, record := range records {
+		if record.Agent.Name == name && record.Agent.ArchivedAt != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RecordStatus returns the visible registration's status when one exists. It
+// reads archived rows too: close/reporting must be based on the stored state,
+// not on Fleet's intentional archive filter.
+func RecordStatus(paths []string, name string) (string, bool, error) {
+	records, err := Records(paths)
+	if err != nil {
+		return "", false, err
+	}
+	status, found := "", false
+	for _, record := range records {
+		if record.Agent.Name != name {
+			continue
+		}
+		if found && record.Agent.Status != status {
+			return "", true, fmt.Errorf("%s has multiple registrations with different statuses", name)
+		}
+		status, found = record.Agent.Status, true
+	}
+	return status, found, nil
+}
+
+// CheckOpenBinding enforces the identity boundary for bp open. Rebinding the
+// named record requires an explicit flag, while a thread claimed by any other
+// record (including an archived row) is always refused.
+// codex reports which harness the caller is opening. A harness switch (a
+// Claude open over a Codex record, or the reverse) necessarily names a
+// different conversation, so it is not a silent rebind and is not refused.
+func CheckOpenBinding(paths []string, name, folder, thread string, codex, newConversation, rebind bool) error {
+	records, err := Records(paths)
+	if err != nil {
+		return err
+	}
+	folder = filepath.Clean(FirstPath(folder))
+	var existing *Agent
+	for index := range records {
+		record := &records[index]
+		if record.Agent.Name == name && record.Agent.ArchivedAt == "" {
+			copy := record.Agent
+			existing = &copy
+			break
+		}
+	}
+	if existing != nil && !rebind {
+		boundFolder := filepath.Clean(FirstPath(existing.Folder))
+		boundThreads := agentThreads(existing)
+		boundThread := ""
+		if len(boundThreads) > 0 {
+			boundThread = boundThreads[0]
+		}
+		folderChanged := boundFolder != "." && folder != "." && !sameFolder(boundFolder, folder)
+		harnessSwitch := existing.Launch != nil && existing.Launch.Codex != codex
+		threadChanged := !harnessSwitch && len(boundThreads) > 0 && (newConversation || thread != "" && !containsString(boundThreads, thread))
+		if folderChanged || threadChanged {
+			requestedThread := thread
+			if newConversation && requestedThread == "" {
+				requestedThread = "a new thread"
+			}
+			requestedFolder := folder
+			if requestedFolder == "." {
+				requestedFolder = existing.Folder
+			}
+			return fmt.Errorf("%s is bound to thread %s in %s; refusing to rebind to thread %s in %s (use --rebind to force)",
+				name, threadLabel(boundThread), displayFolder(existing.Folder), threadLabel(requestedThread), displayFolder(requestedFolder))
+		}
+	}
+	if thread != "" {
+		for _, record := range records {
+			if record.Agent.Name == name && record.Agent.ArchivedAt == "" || !containsString(agentThreads(&record.Agent), thread) {
+				continue
+			}
+			state := ""
+			if record.Agent.ArchivedAt != "" {
+				state = " (archived)"
+			}
+			return fmt.Errorf("thread %s is already bound to %s%s in %s", thread, record.Agent.Name, state, record.Path)
+		}
+	}
+	return nil
+}
+
+func agentThread(agent *Agent) string {
+	threads := agentThreads(agent)
+	if len(threads) != 0 {
+		return threads[0]
+	}
+	return ""
+}
+
+func agentThreads(agent *Agent) []string {
+	if agent == nil {
+		return nil
+	}
+	var threads []string
+	seen := map[string]bool{}
+	add := func(value string) {
+		if value != "" && value != "ambiguous" && !seen[value] {
+			seen[value] = true
+			threads = append(threads, value)
+		}
+	}
+	if agent.NativeTitle != nil && agent.NativeTitle.ThreadID != "" {
+		add(agent.NativeTitle.ThreadID)
+	}
+	add(agent.IdentityThreadID)
+	if agent.Launch != nil {
+		add(agent.Launch.ResumeID)
+	}
+	return threads
+}
+
+func sameFolder(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func threadLabel(thread string) string {
+	if thread == "" {
+		return "(unknown)"
+	}
+	return thread
+}
+
+func displayFolder(folder string) string {
+	if value := FirstPath(folder); value != "" {
+		return value
+	}
+	return "(unknown folder)"
 }
 
 func LoadFleet(paths []string) (Fleet, error) {
@@ -150,6 +332,9 @@ func merge(old, next Agent) Agent {
 	}
 	if next.Status != "" {
 		old.Status = next.Status
+	}
+	if !next.StatusAt.IsZero() {
+		old.StatusAt = next.StatusAt
 	}
 	if next.Nickname != "" {
 		old.Nickname = next.Nickname
@@ -328,6 +513,9 @@ func SetColorOverride(paths []string, name, colour string) error {
 // It returns one human-readable line per change, so `bp rename` can show what it
 // touched instead of asking the reader to trust it.
 func Rename(paths []string, old, name string) ([]string, error) {
+	if err := RenameConflict(paths, old, name); err != nil {
+		return nil, err
+	}
 	var changes []string
 	for _, path := range Paths(paths) {
 		if _, err := os.Stat(path); err != nil {
@@ -342,6 +530,69 @@ func Rename(paths []string, old, name string) ([]string, error) {
 		changes = append(changes, applied...)
 	}
 	return changes, nil
+}
+
+// RenameConflict reports whether name is already registered anywhere in the
+// configured books. Archived rows occupy the name space just like active rows.
+func RenameConflict(paths []string, old, name string) error {
+	records, err := Records(paths)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Agent.Name != name {
+			continue
+		}
+		if record.Agent.ArchivedAt != "" {
+			return fmt.Errorf("%s is taken by an archived record; restore it or choose another name (to move the archived row, run: bp rename %s <free-name> --archived)", name, name)
+		}
+		return fmt.Errorf("%s is already taken by an active agentbook record", name)
+	}
+	return nil
+}
+
+// RenameArchived moves the one archived row named old out of the way without
+// changing a live row, children, role text, or tmux state. This is the recovery
+// path for a name that has both an archived and an active registration.
+func RenameArchived(paths []string, old, name string) ([]string, error) {
+	if old == name {
+		return nil, fmt.Errorf("%s is already the name", name)
+	}
+	if err := RenameConflict(paths, old, name); err != nil {
+		return nil, err
+	}
+	records, err := Records(paths)
+	if err != nil {
+		return nil, err
+	}
+	var archived []Record
+	for _, record := range records {
+		if record.Agent.Name == old && record.Agent.ArchivedAt != "" {
+			archived = append(archived, record)
+		}
+	}
+	if len(archived) == 0 {
+		return nil, fmt.Errorf("no archived registration named %s", old)
+	}
+	if len(archived) != 1 {
+		return nil, fmt.Errorf("%s has %d archived registrations; resolve the source books manually before retrying", old, len(archived))
+	}
+	path := archived[0].Path
+	return editBook(path, func(raw map[string]any) []string {
+		agents, _ := raw["agents"].([]any)
+		for _, value := range agents {
+			agent, ok := value.(map[string]any)
+			if !ok || agent["name"] != old {
+				continue
+			}
+			if at, _ := agent["archivedAt"].(string); at == "" {
+				continue
+			}
+			agent["name"] = name
+			return []string{filepath.Base(path) + ": archived name " + old + " -> " + name}
+		}
+		return nil
+	})
 }
 
 // PreviewRename reports what Rename would change in an already-parsed book. The
@@ -675,6 +926,7 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 				return nil
 			}
 			agent["status"] = status
+			agent["statusAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 			if folder != "" {
 				agent["folder"] = folder
 			}
@@ -683,7 +935,7 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 		}
 	}
 	if !found {
-		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": role, "status": status}
+		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": role, "status": status, "statusAt": time.Now().UTC().Format(time.RFC3339Nano)}
 		if reg.Local != nil {
 			agent["localRuntime"] = reg.Local
 		}
@@ -698,6 +950,65 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 	raw["agents"] = agents
 	raw["updated"] = time.Now().Format("2006-01-02")
 	return writeBook(target, raw, info.Mode().Perm())
+}
+
+// ReconcileClosed repairs open/opening registrations whose tmux session and
+// recorded local process are both gone. A fresh opening marker is given a short
+// grace period because bp writes it just before creating its tmux session.
+// Missing statusAt values are legacy entries and are considered stale.
+func ReconcileClosed(paths []string, liveSessions map[string]bool, processAlive func(int) bool, now time.Time) ([]string, error) {
+	var changes []string
+	for _, path := range Paths(paths) {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return changes, err
+		}
+		applied, err := editBook(path, func(raw map[string]any) []string {
+			var changed []string
+			agents, _ := raw["agents"].([]any)
+			for _, value := range agents {
+				agent, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if archived, _ := agent["archivedAt"].(string); archived != "" {
+					continue
+				}
+				status, _ := agent["status"].(string)
+				if status != "open" && status != "opening" {
+					continue
+				}
+				name, _ := agent["name"].(string)
+				if name == "" || liveSessions[name] {
+					continue
+				}
+				var local cache.LocalBinding
+				if encoded, err := json.Marshal(agent["localRuntime"]); err == nil && string(encoded) != "null" {
+					_ = json.Unmarshal(encoded, &local)
+				}
+				if local.PID > 0 && processAlive != nil && processAlive(local.PID) {
+					continue
+				}
+				if status == "opening" {
+					if rawAt, _ := agent["statusAt"].(string); rawAt != "" {
+						if at, err := time.Parse(time.RFC3339Nano, rawAt); err == nil && now.Sub(at) < 2*time.Minute {
+							continue
+						}
+					}
+				}
+				agent["status"] = "closed"
+				agent["statusAt"] = now.UTC().Format(time.RFC3339Nano)
+				changed = append(changed, name+": "+status+" -> closed")
+			}
+			return changed
+		})
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return changes, err
+		}
+		changes = append(changes, applied...)
+	}
+	return changes, nil
 }
 
 type State struct {

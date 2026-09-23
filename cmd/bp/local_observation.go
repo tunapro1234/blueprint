@@ -20,7 +20,7 @@ import (
 // The CLI calls these observers itself. No prompt, model request, copied
 // conversation, global harness setting, or cwd-based session selection.
 func (a *app) prepareLocalObservation(harness string, args []string) ([]string, string, error) {
-	if !a.config.LocalObservation || (harness != "claude" && harness != "codex") {
+	if !a.config.LocalObservation || (harness != "claude" && harness != "codex" && harness != "opencode") {
 		return args, "", nil
 	}
 	if harness == "codex" {
@@ -44,7 +44,9 @@ func (a *app) prepareLocalObservation(harness string, args []string) ([]string, 
 	}
 	path := filepath.Join(dir, "observation.json")
 	command := quoteShell(self) + " _observe " + quoteShell(path) + " " + harness
-	if harness == "codex" {
+	if harness == "codex" || harness == "opencode" {
+		// No flag to add: the binding itself records harness, pid and cwd, so an
+		// opencode row is no longer name-only and its liveness is observable (#17).
 		return args, path, nil
 	}
 	settings, remaining, err := localClaudeSettings(args)

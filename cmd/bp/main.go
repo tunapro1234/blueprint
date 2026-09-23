@@ -51,7 +51,8 @@ bp setup [--check|--disable]   # local shell integration (bash/zsh)
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
-bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]
+bp run [--name <name>] [--parent <name>] [--role <text>] <codex|claude|opencode|hermes> [arguments...]
+                              # opencode is launch-only: bp open has no --opencode
 bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp reparent <agent> <new-parent>
 bp worktree add <repo-directory> <topic>
@@ -1717,10 +1718,17 @@ func (a *app) identityOptions() identity.Options {
 }
 
 func (a *app) senderIdentity() identity.Identity {
+	var who identity.Identity
 	if a.resolveSender != nil {
-		return a.resolveSender()
+		who = a.resolveSender()
+	} else {
+		who = identity.Resolve(a.ctx, a.session(), a.identityOptions())
 	}
-	who := identity.Resolve(a.ctx, a.session(), a.identityOptions())
+	// An unverified label must never read as an agent name (#9). The resolver
+	// already marks its guesses; this is the one exit every caller passes.
+	if !who.Certain && who.Label != identity.Unknown && identity.ValidName(who.Label) {
+		who.Label += identity.InferMark
+	}
 	// A read-only book override must not redefine the hierarchy for a verified
 	// sender. Use the installation's configured books for authority.
 	if override := os.Getenv("AGENTBOOK"); override != "" {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -273,7 +275,10 @@ func (a *app) rename(args []string) error {
 		report("update %s", change)
 	}
 
-	// 5. Live code references, reported but never edited.
+	// 5. Live code references, reported but never edited. The launch guard is
+	// released first: the scan reads a whole folder and must never keep every
+	// later bp open/run waiting (#17).
+	releaseClaims()
 	a.reportCodeReferences(fleet, old, name)
 
 	if dry {
@@ -600,6 +605,8 @@ func writeJSONFile(path string, raw map[string]any) error {
 // reference such as a hook's TARGET_AGENT breaks the moment the session is
 // renamed, and only a human can judge which hits are code and which are prose,
 // so this prints and never edits.
+var referenceScanTimeout = 10 * time.Second
+
 func (a *app) reportCodeReferences(fleet book.Fleet, old, name string) {
 	entry, ok := fleet.Agents[old]
 	if !ok || entry.Folder == "" {
@@ -607,6 +614,13 @@ func (a *app) reportCodeReferences(fleet book.Fleet, old, name string) {
 	}
 	folder := book.FirstPath(entry.Folder)
 	if folder == "" {
+		return
+	}
+	// A folder that is the home directory or / (bp run opencode registers the
+	// shell's cwd) is not the agent's project: grepping it takes unbounded time.
+	userHome, _ := os.UserHomeDir()
+	if clean := filepath.Clean(folder); clean == "/" || (userHome != "" && physicalPath(clean) == physicalPath(userHome)) {
+		fmt.Fprintf(a.out, "\nreference scan skipped: %s is not a project folder; check hooks/units for %q yourself.\n", folder, old)
 		return
 	}
 	// Transcripts and logs are history: they correctly hold the name the agent
@@ -618,8 +632,15 @@ func (a *app) reportCodeReferences(fleet book.Fleet, old, name string) {
 	for _, skip := range []string{"*.jsonl", "*.log", "*.log.*"} {
 		args = append(args, "--exclude="+skip)
 	}
-	cmd := exec.CommandContext(a.ctx, "grep", append(args, "--", old, folder)...)
+	ctx, cancel := context.WithTimeout(a.ctx, referenceScanTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "grep", append(args, "--", old, folder)...)
+	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		fmt.Fprintf(a.out, "\nreference scan of %s stopped after %s; check hooks/units for %q yourself.\n", folder, referenceScanTimeout, old)
+		return
+	}
 	hits := strings.Fields(strings.TrimSpace(string(out)))
 	if err != nil && len(hits) == 0 {
 		return // grep exits 1 when it finds nothing
@@ -661,7 +682,8 @@ func (a *app) prepareResumeRename(old, name string, dry bool) (func() error, fun
 			lock.Close()
 			return noop, release, fmt.Errorf("another BP launch is in progress; retry rename: %w", err)
 		}
-		release = func() { syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); lock.Close() }
+		var once sync.Once
+		release = func() { once.Do(func() { syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); lock.Close() }) }
 	}
 
 	changes := map[string]map[string]any{}

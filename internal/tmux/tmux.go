@@ -2200,7 +2200,13 @@ func ResolveSessionPath(projectsRoot, dir, agent, id string) (string, error) {
 		}
 		path := filepath.Join(root, entry.Name())
 		title, ok := ReadCustomTitle(path)
-		if !ok || title != agent {
+		// An explicit pin to a conversation that never got a title (never
+		// /rename'd, or auto-named by a plain `claude`) is the operator naming
+		// the thread directly; there is no other agent's title to protect.
+		// Refusing it left no bp-managed way to resume such a session (#20, #22).
+		// A title that names a DIFFERENT agent still refuses.
+		untitled := id != "" && (!ok || title == "")
+		if !untitled && (!ok || title != agent) {
 			continue
 		}
 		found = append(found, path)

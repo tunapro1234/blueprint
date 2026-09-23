@@ -47,13 +47,31 @@ func (a *app) finishLocalExit(name string, parent int, harness, reportPath strin
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	run := func(args ...string) ([]byte, error) { return exec.CommandContext(ctx, a.tmux.Bin, args...).Output() }
-	out, err := run("display-message", "-p", "-t", "="+name+":", "#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}")
-	if err != nil {
-		return
-	}
-	fields := strings.Split(strings.TrimSuffix(string(out), "\n"), "\t")
-	if len(fields) != 5 || fields[1] != strconv.Itoa(parent) || fields[2] != "1" || !regexp.MustCompile(`^%[0-9]+$`).MatchString(fields[0]) {
-		return
+	// The worker can notice its parent is gone before tmux marks the pane dead,
+	// and tmux can mark it dead (pty EOF) before it has reaped the exit status.
+	// Reading once left a "Pane is dead" corpse or a status-less false failure (#18).
+	var fields []string
+	for {
+		out, err := run("display-message", "-p", "-t", "="+name+":", "#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_dead_signal}")
+		if err != nil {
+			return
+		}
+		fields = strings.Split(strings.TrimSuffix(string(out), "\n"), "\t")
+		if len(fields) != 5 || fields[1] != strconv.Itoa(parent) || !regexp.MustCompile(`^%[0-9]+$`).MatchString(fields[0]) {
+			return
+		}
+		if fields[2] == "1" && (fields[3] != "" || fields[4] != "") {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			if fields[2] != "1" {
+				return
+			}
+		case <-time.After(100 * time.Millisecond):
+			continue
+		}
+		break
 	}
 	pane := fields[0]
 	report := localExitReport{Harness: harness, Status: fields[3], Signal: fields[4]}

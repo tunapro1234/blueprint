@@ -277,12 +277,19 @@ func (a *app) localSession(args []string) error {
 // managedSession uses the same lifetime, observations and bar as bp run,
 // preserving the hierarchy already registered by bp open.
 func (a *app) managedSession(args []string) error {
-	if len(args) != 3 || args[1] != "codex" || !identity.ValidName(args[0]) {
+	if len(args) != 3 || (args[1] != "codex" && args[1] != "claude") || !identity.ValidName(args[0]) {
 		return fmt.Errorf("invalid managed session")
 	}
-	_, path, err := a.prepareLocalObservation(args[1], nil)
+	extra, path, err := a.prepareLocalObservation(args[1], nil)
 	if err != nil {
 		return err
+	}
+	command := args[2]
+	// Claude observes through its --settings layer (a SessionStart hook and the
+	// status line), which bp open never passed: its panes had no run file and
+	// no worker, so their records stayed "opening" forever (#10).
+	for _, arg := range extra {
+		command += " " + quoteShell(arg)
 	}
 	exitDir := filepath.Dir(path)
 	if path == "" {
@@ -298,7 +305,9 @@ func (a *app) managedSession(args []string) error {
 	if err := os.Setenv("BP_EXIT_REPORT", filepath.Join(exitDir, "exit.json")); err != nil {
 		return err
 	}
-	return a.startLocalSession([]string{args[0], args[1], path, "/bin/sh", "-c", "exec env " + args[2]}, true)
+	// A non-interactive sh: the user's `alias claude=…` / `alias codex=…` are
+	// not expanded, so the harness receives exactly bp's argument list (#10).
+	return a.startLocalSession([]string{args[0], args[1], path, "/bin/sh", "-c", "exec env " + command}, true)
 }
 
 func (a *app) startLocalSession(args []string, managed bool) error {

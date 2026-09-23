@@ -1270,6 +1270,7 @@ func (a *app) open(args []string) error {
 		// unreadable pane leaves this exactly as it was.
 		pane, _ := a.tmux.Capture(a.ctx, name)
 		if perr != nil || bptmux.IsAgentPane(process.Command, pane) {
+			a.applyOpenBar(name)
 			// Nothing to launch — but explicit --parent/--role is a correction
 			// of the agentbook entry, so it still applies to a running agent.
 			if reg.Parent != "" || reg.Role != "" {
@@ -1354,7 +1355,15 @@ func (a *app) open(args []string) error {
 	if opts.Codex && !opts.Resume {
 		previousRollout, _ = bpcache.CodexPath(bptmux.CodexProcessInfo(0).Home, dir, "")
 	}
-	if !a.config.Legacy && opts.Codex && opts.Remote == "" {
+	// Claude and local Codex both start under the managed launcher bp run
+	// uses: runtime observation, the exit report and the bp bar come with it
+	// (#10, #13). Remote Codex cannot be observed locally; Hermes has its own
+	// readiness contract and no observation layer.
+	managedHarness := "claude"
+	if opts.Codex {
+		managedHarness = "codex"
+	}
+	if !a.config.Legacy && !opts.Hermes && opts.Remote == "" {
 		self, err := os.Executable()
 		if err != nil {
 			return err
@@ -1365,7 +1374,7 @@ func (a *app) open(args []string) error {
 				opts.Launcher += " " + key + "=" + quoteShell(value)
 			}
 		}
-		opts.Launcher += " " + quoteShell(self) + " _open-session " + quoteShell(name) + " codex"
+		opts.Launcher += " " + quoteShell(self) + " _open-session " + quoteShell(name) + " " + managedHarness
 	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		// Roll back only while tmux can still be believed. A cancelled or timed-out
@@ -1379,6 +1388,11 @@ func (a *app) open(args []string) error {
 		}
 		return err
 	}
+	// Open returns early for a session that already runs the agent (a reopen,
+	// or a helper reusing an orphaned session), so the managed launcher never
+	// ran there. The bar is session display only; applying it again is harmless
+	// and is the one place every bp open passes through (#13).
+	a.applyOpenBar(name)
 	if opts.Codex && !opts.Resume {
 		if path, ok := bpcache.CodexPath(bptmux.CodexProcessInfo(0).Home, dir, ""); ok && path != previousRollout {
 			opts.ResumeID = bpcache.CodexID(path)
@@ -1419,6 +1433,20 @@ func (a *app) open(args []string) error {
 	}
 	fmt.Fprintf(a.out, "%s opened%s\n", name, rc)
 	return nil
+}
+
+// applyOpenBar gives a session bp open touched the same bar bp run sets up.
+// A fresh managed launch configures it already, but a reopen of a running
+// agent, a respawned pane and a helper reusing an orphaned session never pass
+// through that launcher (#13). It is session display only, so reapplying is
+// harmless; a failure is reported and does not fail the open.
+func (a *app) applyOpenBar(name string) {
+	if a.config.Legacy {
+		return
+	}
+	if err := a.configureLocalBar(name); err != nil {
+		fmt.Fprintf(a.err, "WARNING: %v\n", err)
+	}
 }
 
 func (a *app) worktree(args []string) error {

@@ -47,8 +47,13 @@ var codexWorking = regexp.MustCompile(`^[•·◦]\s+Working\b`)
 // which is what keeps a Codex pane recognisable while a human's half-typed line
 // sits in the box (without it such a pane reads "dead" in bp status).
 //
-// The model slug and absolute cwd distinguish it from ordinary prose.
-var codexFooter = regexp.MustCompile(`^(?:gpt-|o[1-9])\S*(?:\s+[^·]+)?\s+·\s+/\S`)
+// The model slug and absolute cwd distinguish it from ordinary prose. The slug
+// is matched case-insensitively: GPT-6 builds print a display name
+// ("GPT-6-Luna max · /srv/…") where GPT-5.6 printed "gpt-5.6-sol". The
+// lowercase-only pattern made every GPT-6 pane with text in its composer read
+// as a non-Codex pane, so bp could neither see its own paste nor submit it
+// (issue #16, reproduced live 2026-09-24 on 1.8.7).
+var codexFooter = regexp.MustCompile(`^(?i:gpt-|o[1-9])\S*(?:\s+[^·]+)?\s+·\s+/\S`)
 
 // IsCodexCommand reports whether cmd COULD be a Codex pane. Like
 // IsHermesCommand it is not a whitelist: "node" is shared with half the

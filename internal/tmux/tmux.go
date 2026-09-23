@@ -1975,8 +1975,13 @@ type OpenOptions struct {
 	Remote    string `json:"remote,omitempty"`
 	Hermes    bool   `json:"hermes,omitempty"`
 	NoSandbox bool   `json:"noSandbox,omitempty"`
-	NoPrompt  bool   `json:"-"`
-	Legacy    bool   `json:"-"`
+	// Args are the native CLI flags the agent was launched with (model,
+	// reasoning effort, --search, --yolo, …). They are recorded so a revive or
+	// resume comes back in the same mode rather than the harness default
+	// (#25), and are passed verbatim after the harness binary.
+	Args     []string `json:"args,omitempty"`
+	NoPrompt bool     `json:"-"`
+	Legacy   bool     `json:"-"`
 	// Launcher is an internal, shell-quoted wrapper for local managed sessions.
 	// It receives the complete native command as one argument.
 	Launcher string `json:"-"`
@@ -2160,6 +2165,24 @@ func ResumeSessionID(projectsRoot, dir, agent string) (string, bool) {
 func UniqueSessionPath(projectsRoot, dir, agent, id string) (string, bool) {
 	path, err := ResolveSessionPath(projectsRoot, dir, agent, id)
 	return path, err == nil
+}
+
+// launchArgs shell-quotes recorded native flags, leaving out the ones the base
+// command already carries: a flag passed twice is at best redundant and at worst
+// rejected (Codex refuses a repeated --yolo) or ambiguous (#10).
+func launchArgs(command string, args []string) string {
+	bypass := map[string]bool{"--yolo": true, "--dangerously-bypass-approvals-and-sandbox": true}
+	var out []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && strings.Contains(" "+command+" ", " "+arg+" ") {
+			continue
+		}
+		if bypass[arg] && strings.Contains(command, "--dangerously-bypass-approvals-and-sandbox") {
+			continue
+		}
+		out = append(out, shellQuote(arg))
+	}
+	return strings.Join(out, " ")
 }
 
 // paneDead reports whether the session's target pane has exited but is kept
@@ -2365,6 +2388,24 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	if opts.Hermes {
 		command = hermesBin
+	}
+	if extra := launchArgs(command, opts.Args); extra != "" {
+		// Right after the binary: Codex takes its global flags before the
+		// `resume` subcommand, Claude accepts them anywhere.
+		bin := "claude"
+		switch {
+		case opts.Hermes:
+			bin = hermesBin
+		case opts.Codex:
+			bin = "codex"
+		}
+		// The binary as a whole word: a session name may itself contain
+		// "claude" in the RC prefix assignment before it.
+		padded := " " + command + " "
+		if at := strings.Index(padded, " "+bin+" "); at >= 0 {
+			end := at + len(bin) // index in command of the byte after the binary
+			command = command[:end] + " " + extra + command[end:]
+		}
 	}
 	// A brand-new Codex may not persist a rollout until its first user turn.
 	// Supply that first prompt through the native CLI, before a user can type

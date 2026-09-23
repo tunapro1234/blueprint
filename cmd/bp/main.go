@@ -52,7 +52,7 @@ bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] <codex|claude|opencode|hermes> [arguments...]
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -1131,7 +1131,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--no-sandbox] [--no-prompt] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1179,7 +1179,7 @@ func (a *app) open(args []string) error {
 					opts.ResumeID = ""
 				}
 				opts.Resume = resumeRequested
-				opts.Remote, opts.NoSandbox = "", false
+				opts.Remote, opts.NoSandbox, opts.Args = "", false, nil
 			}
 			opts.Codex, opts.Hermes = arg == "--codex", arg == "--hermes"
 			if !opts.Codex {
@@ -1227,6 +1227,11 @@ func (a *app) open(args []string) error {
 			}
 			reg.Role = args[index+1]
 			index++
+		case "--":
+			// Native flags for the harness (model, effort, --search, …). They
+			// replace the recorded ones and are reused on every later revive (#25).
+			opts.Args = append([]string(nil), args[index+1:]...)
+			index = len(args)
 		default:
 			return fmt.Errorf("unknown open option: %s", arg)
 		}

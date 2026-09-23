@@ -360,6 +360,14 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 	reg := book.Registration{Role: "local CLI", Parent: fleet.Root, Local: local, ClearLocal: local == nil}
 	if managed {
 		reg.Role, reg.Parent = "", ""
+	} else if launch := nativeLaunch(args[1], args[4:]); launch != nil {
+		// bp open records its own launch; a bp run launch recorded nothing, so
+		// the next bp open --resume dropped model, effort and permission mode
+		// (#25). A fresh conversation keeps the id already on record.
+		if stored := fleet.Agents[name].Launch; launch.ResumeID == "" && stored != nil && stored.Codex == launch.Codex && !stored.Hermes {
+			launch.ResumeID, launch.Resume = stored.ResumeID, stored.Resume
+		}
+		reg.Launch = launch
 	}
 	if err := book.SetStatus(a.config.Agentbooks, name, "open", cwd, reg); err != nil {
 		return err

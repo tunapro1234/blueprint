@@ -81,6 +81,32 @@ for the next launch. Reopening through the native `claude --resume` or
 mapping. `localObservation: false` disables observation for future launches.
 This mapping grants neither sender authority nor hierarchy authority.
 
+## Ephemeral agent lifetime
+
+`bp run` registrations are ephemeral by default. Named `bp open` registrations
+remain persistent unless `--ephemeral` is passed. Existing agentbook records with
+no `lifetime` field are treated as persistent. `bp run --persistent` opts out of
+the run default; `bp keep <name>` and `bp release <name>` change an active
+registration explicitly.
+
+The defaults can be changed independently:
+
+```yaml
+lifecycle:
+  ephemeralDefault: true
+  archiveOnClose: true
+```
+
+Set `ephemeralDefault: false` to make new `bp run` registrations persistent, or
+`archiveOnClose: false` to leave closed ephemeral registrations available for
+manual archival. When enabled, bp uses the normal archive mutation and preserves
+the record and native transcript. Parents with children remain registered until
+their children are archived or reparented.
+
+`bp status` and `bp tree` hide closed ephemeral records by default; `--all`
+includes them. `bp archive --stale --dry-run` previews closed registrations with
+a missing bound transcript unless they are explicitly persistent.
+
 ## Other available settings
 
 | Key | Purpose |

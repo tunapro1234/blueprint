@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/cache"
 	"blueprint/internal/identity"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
@@ -73,11 +74,17 @@ func (a *app) rename(args []string) error {
 		return fmt.Errorf("usage: bp rename <old-name> <new-name> [--dry-run] [--no-retitle] [--archived]")
 	}
 	old, name := positional[0], positional[1]
-	if old == name {
-		return fmt.Errorf("%s is already the name", name)
-	}
 	if !validAgentName(name) {
 		return fmt.Errorf("invalid agent name: %s (allowed: letters, digits, . _ -)", name)
+	}
+	if old == name {
+		if archivedOnly {
+			return fmt.Errorf("same-name native title repair is only available for active registrations")
+		}
+		if noRetitle {
+			return fmt.Errorf("--no-retitle cannot be used for native title repair")
+		}
+		return a.repairNativeTitle(name, dry)
 	}
 	if archivedOnly {
 		if dry {
@@ -374,6 +381,81 @@ func (a *app) rename(args []string) error {
 	return nil
 }
 
+func (a *app) repairNativeTitle(name string, dry bool) error {
+	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	if err != nil {
+		return err
+	}
+	agent, ok := fleet.Agents[name]
+	if !ok {
+		return fmt.Errorf("no active agent named %s", name)
+	}
+	live := a.tmux.HasSession(a.ctx, name)
+	var state *cache.State
+	if live {
+		value, recognized := book.RuntimeState(a.ctx, a.tmux, agent)
+		if recognized {
+			state = &value
+		}
+	}
+	current, harness, readErr := observedNativeTitle(agent, state)
+	if readErr == nil && current.Text == name {
+		if !dry {
+			if err := book.SetNativeTitle(a.config.Agentbooks, name, current); err != nil {
+				return err
+			}
+			if err := book.SetLifetime(a.config.Agentbooks, name, book.LifetimePersistent); err != nil {
+				return err
+			}
+		}
+		fmt.Fprintf(a.out, "native title for %s already matches; no repair needed\n", name)
+		return nil
+	}
+	if harness == "" {
+		return fmt.Errorf("cannot repair native title for %s: %v", name, readErr)
+	}
+	if dry {
+		fmt.Fprintf(a.out, "would reapply %s native title %s\n", harness, name)
+		fmt.Fprintln(a.out, "dry run: nothing was changed")
+		return nil
+	}
+	switch harness {
+	case "claude":
+		if !live {
+			return fmt.Errorf("cannot reapply Claude native title for %s without a live pane", name)
+		}
+		if current.Path == "" {
+			return fmt.Errorf("cannot verify Claude native title repair for %s: transcript path is unavailable", name)
+		}
+		if err := a.renamePaneWithTranscript(fleet, name, name, current.Path); err != nil {
+			a.reportRenameRefused(name, name, err)
+			return errReported
+		}
+		if value, _, err := observedNativeTitle(agent, state); err == nil {
+			current = value
+		}
+	case "codex":
+		if current.Path == "" || current.ThreadID == "" {
+			return fmt.Errorf("cannot repair Codex native title for %s: %v", name, readErr)
+		}
+		current, err = book.AppendCodexNativeTitle(current.Path, current.ThreadID, name)
+		if err != nil {
+			a.reportCodexRenameRefused(name, name, err)
+			return errReported
+		}
+	default:
+		return fmt.Errorf("cannot repair native title for %s: unsupported harness", name)
+	}
+	if err := book.SetNativeTitle(a.config.Agentbooks, name, current); err != nil {
+		return err
+	}
+	if err := book.SetLifetime(a.config.Agentbooks, name, book.LifetimePersistent); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "reapplied %s native title for %s\n", harness, name)
+	return nil
+}
+
 const (
 	// renamePollInterval and renamePollAttempts bound the wait for the agent to
 	// record its new title (~10s in total). The agent writes the custom-title
@@ -399,19 +481,48 @@ const (
 // is exactly what every other bp command resolves an agent by, so a title bp can
 // read is the only outcome that counts as a successful rename.
 func (a *app) renamePane(fleet book.Fleet, old, name string) error {
+	return a.renamePaneWithTranscript(fleet, old, name, "")
+}
+
+func (a *app) renamePaneWithTranscript(fleet book.Fleet, session, name, transcriptPath string) error {
+	if err := a.sendRename(session, name); err != nil {
+		return err
+	}
+	if transcriptPath != "" {
+		if !a.awaitTranscriptPath(transcriptPath, name) {
+			return fmt.Errorf("the agent did not retitle its transcript to %q within %s", name, renamePollInterval*renamePollAttempts)
+		}
+		return nil
+	}
+	folders := a.agentFolders(fleet, session)
+	if len(folders) == 0 {
+		// Nothing to read the title out of. Rare (a live session that is in no
+		// agentbook and whose pane directory tmux would not report), and refusing
+		// here would make such an agent unrenameable, so this continues — loudly.
+		fmt.Fprintf(a.err, "warning: no folder known for %s, so its transcript title could not be verified\n", session)
+		fmt.Fprintf(a.err, "         check it with: bp status\n")
+		return nil
+	}
+	if !a.awaitTranscriptTitle(folders, session, name) {
+		return fmt.Errorf("the agent did not retitle its transcript to %q within %s", name, renamePollInterval*renamePollAttempts)
+	}
+	return nil
+}
+
+func (a *app) sendRename(session, name string) error {
 	// Clear and send are one operation on one composer, so one pane lock covers
 	// both: another bp pasting in between would be typing into a composer this
 	// command has just emptied for its own slash command. The lock is given back
 	// before the transcript poll below, which reads a file and touches no pane —
 	// holding it there would only make the fleet's queues wait on a rename.
-	release, err := a.lockPane(old)
+	release, err := a.lockPane(session)
 	if err != nil {
 		return err
 	}
-	clearErr := a.tmux.ClearComposer(a.ctx, old)
+	clearErr := a.tmux.ClearComposer(a.ctx, session)
 	var sendErr error
 	if clearErr == nil {
-		sendErr = a.tmux.Send(a.ctx, old, "/rename "+name)
+		sendErr = a.tmux.Send(a.ctx, session, "/rename "+name)
 	}
 	release()
 	if clearErr != nil {
@@ -424,19 +535,19 @@ func (a *app) renamePane(fleet book.Fleet, old, name string) error {
 	if sendErr != nil && !errors.Is(sendErr, bptmux.ErrUnverified) {
 		return sendErr
 	}
-	folders := a.agentFolders(fleet, old)
-	if len(folders) == 0 {
-		// Nothing to read the title out of. Rare (a live session that is in no
-		// agentbook and whose pane directory tmux would not report), and refusing
-		// here would make such an agent unrenameable, so this continues — loudly.
-		fmt.Fprintf(a.err, "warning: no folder known for %s, so its transcript title could not be verified\n", old)
-		fmt.Fprintf(a.err, "         check it with: bp status\n")
-		return nil
-	}
-	if !a.awaitTranscriptTitle(folders, old, name) {
-		return fmt.Errorf("the agent did not retitle its transcript to %q within %s", name, renamePollInterval*renamePollAttempts)
-	}
 	return nil
+}
+
+func (a *app) awaitTranscriptPath(path, name string) bool {
+	for attempt := 0; ; attempt++ {
+		if title, ok := bptmux.ReadCustomTitle(path); ok && title == name {
+			return true
+		}
+		if attempt >= renamePollAttempts {
+			return false
+		}
+		a.sleep(renamePollInterval)
+	}
 }
 
 // awaitTranscriptTitle polls the agent's own session file until it reports the

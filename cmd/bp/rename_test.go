@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"blueprint/internal/book"
 	bpconfig "blueprint/internal/config"
 	bptmux "blueprint/internal/tmux"
 )
@@ -23,6 +25,55 @@ func mungeProject(dir string) string {
 		}
 		return '-'
 	}, dir)
+}
+
+func TestRenameSameNameRepairsClaudeUsingStoredTranscriptPath(t *testing.T) {
+	t.Setenv("AGENTBOOK", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	folder := t.TempDir()
+	transcriptDir := filepath.Join(home, ".claude", "projects", mungeProject(folder))
+	if err := os.MkdirAll(transcriptDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(transcriptDir, "sess-1.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"custom-title","customTitle":"stale-title","sessionId":"sess-1"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bookPath := filepath.Join(t.TempDir(), "agentbook.json")
+	entry := book.Agent{
+		Name: "canonical-name", Folder: folder, Status: "open", Lifetime: book.LifetimeEphemeral,
+		NativeTitle: &book.NativeTitle{ThreadID: "sess-1", Path: transcript, Text: "stale-title"},
+	}
+	contents, err := json.Marshal(book.File{Agents: []book.Agent{entry}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bookPath, append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tmux, _ := renameTmux(t, "canonical-name", transcript, folder, renameOptions{
+		live: true, pane: `printf '❯ \n──────────\n'`, retitle: "canonical-name",
+	})
+	stateDir := t.TempDir()
+	a := &app{
+		ctx:    context.Background(),
+		config: bpconfig.Config{Agentbooks: []string{bookPath}, UsageHistory: filepath.Join(stateDir, "history.json")},
+		tmux:   tmux, out: testOutput(t), err: testOutput(t),
+	}
+	if err := a.rename([]string{"canonical-name", "canonical-name"}); err != nil {
+		t.Fatal(err)
+	}
+	if title, ok := bptmux.ReadCustomTitle(transcript); !ok || title != "canonical-name" {
+		t.Fatalf("Claude title=%q found=%t, want canonical-name", title, ok)
+	}
+	file, err := book.Load(bookPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Agents[0].Lifetime != book.LifetimePersistent {
+		t.Fatalf("same-name title repair did not promote lifetime: %+v", file.Agents[0])
+	}
 }
 
 type renameFixture struct {

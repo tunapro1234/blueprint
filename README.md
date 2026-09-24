@@ -94,6 +94,32 @@ Remote Codex threads must also be confirmed unloaded. Restore an archived parent
 before its children. `bp open` and named local launches require an explicit
 restore instead of silently reusing an archived name.
 
+## Agent lifetime
+
+`bp run` marks new shell-integration sessions ephemeral by default. Use
+`bp run --persistent` to keep one, or `bp run --ephemeral` to make the choice
+explicit. Named `bp open` registrations are persistent by default;
+`bp open <name> <directory> --ephemeral` opts into automatic archival. Existing
+agentbook rows without a `lifetime` field remain persistent.
+
+`bp keep <name>` makes an active registration persistent and `bp release <name>`
+marks it ephemeral. A successful `bp rename` or a native Claude/Codex retitle
+observed by bp promotes an ephemeral record to persistent. Closing an ephemeral
+agent archives its registration when `lifecycle.archiveOnClose` is enabled.
+Archives retain registration metadata and do not touch native transcripts.
+Parents with children stay active and report the archive refusal.
+
+Closed ephemeral rows are hidden from `bp status` and `bp tree` by default;
+`--all` includes archived and closed rows. `bp archive --stale --dry-run` previews
+closed registrations whose bound transcript is missing and which are not marked
+persistent; `bp archive --stale` applies that migration without guessing from an
+agent name.
+
+When a native transcript title drifts from the canonical name,
+`bp rename <name> <name>` reapplies it. If it already matches, bp reports that
+no repair is needed. `bp doctor` warns about mismatches and prints this repair
+command.
+
 ## Configure
 
 Settings live in `~/.blueprint/config.yaml`, or under `BP_HOME`. Shell integration

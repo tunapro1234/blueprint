@@ -1687,12 +1687,14 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 //   - the box cannot be read (no status footer, a collapsed empty composer, a
 //     Codex pane, a paste chip standing in for the text): unchanged behavior —
 //     submit decides on the single rendered row, as it always has.
+//   - the box is tall enough to scroll (composerBoxScrollRows) or starts at the
+//     top of the capture: the render is a window, not the content. Treated as
+//     unreadable rather than damaged: a scrolled box read as damaged every time
+//     would clear, re-paste and queue the same message forever.
 //   - the box is a PREFIX of our message: keep waiting, then refuse if it never
-//     fills; Enter would deliver only the fragment;
-//   - the box is tall enough to scroll (composerBoxScrollRows), or Codex fills a
-//     short pane from a blank top: treat it as unreadable rather than damaged.
-//     A scrolled box read as damaged every time would clear, re-paste and queue
-//     the same message forever — the failure mode this change prevents.
+//     fills; Enter would deliver only the fragment.
+//   - Codex fills a short pane from a blank top and shows a later part of the
+//     message: unreadable, for the same reason. Checked after the prefix rule.
 //   - the box is related to our message but shorter/altered: our paste arrived
 //     broken. Clear it and paste it ONCE more. If the second attempt still does
 //     not match, ok=false and the caller returns ErrNotReady so the message is
@@ -1805,11 +1807,14 @@ func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
 		// Empty right after the paste: it may have auto-submitted, or the pane may
 		// have swallowed it. submit() already reports that honestly as unverified.
 		return pasteUnreadable
+	case composerBoxRows(box) >= composerBoxScrollRows || top <= 1:
+		// A window onto a taller composer, not proof of anything about content.
+		return pasteUnreadable
 	case strings.HasPrefix(want, got):
 		// A visible prefix of our message: the paste is still arriving, or part
-		// of it was lost on the way in. This check deliberately precedes the
-		// scrolled-view test, so a prefix remains non-submittable even when the
-		// pane is short. Pressing Enter here is exactly how the fleet lost message
+		// of it was lost on the way in. This check precedes the short Codex
+		// viewport test, so a prefix remains non-submittable even when the pane
+		// is short. Pressing Enter here is exactly how the fleet lost message
 		// bodies. Measured on the receiving side: q952220088
 		// arrived at probot-outreach as 81 characters of 716, and the 31 Aug cron
 		// trigger arrived at probot-main as 135 of 701, both cut mid-word, both
@@ -1822,8 +1827,9 @@ func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
 		// so bytes are genuinely lost rather than merely late. bp cannot stop it;
 		// it can refuse to turn it into a delivery.
 		return pasteIncomplete
-	case composerBoxScrolled(pane, box, top):
-		// A window onto a taller composer, not proof of anything about content.
+	case codexComposerViewportFillsPane(pane, top):
+		// A short Codex pane showing a later part of the composer. Checked only
+		// after the prefix rule, so a paste still arriving is never submitted.
 		return pasteUnreadable
 	case relatedPaste(got, want):
 		return pasteMangled

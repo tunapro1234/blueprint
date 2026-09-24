@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -405,6 +406,16 @@ func TestRemoteHistoryUsesSSHWithRegistryTransportSettings(t *testing.T) {
 		if _, err := resolveHistoryRemote(invalid, nil); err == nil {
 			t.Errorf("invalid remote accepted: %q", invalid)
 		}
+	}
+	endpoint, err = resolveHistoryRemote("local", map[string]bpconfig.RemoteConfig{
+		"local": {Host: "[2001:db8::1]", Transport: "ssh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err = remoteHistoryCommand(endpoint, "worker", fixedLookup)
+	if err != nil || !reflect.DeepEqual(command.Args, []string{"ssh", "[2001:db8::1]", "bp", "history", "export", "--stdout", "--agent", "worker"}) {
+		t.Fatalf("configured IPv6 history command = %#v, %v", command, err)
 	}
 }
 

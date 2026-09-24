@@ -17,10 +17,21 @@ type pathLookup func(string) (string, error)
 func execLookPath(name string) (string, error) { return exec.LookPath(name) }
 
 func remoteDestination(remote bpconfig.RemoteConfig) string {
+	host := remoteHostTarget(remote.Host)
 	if remote.User != "" {
-		return remote.User + "@" + remote.Host
+		return remote.User + "@" + host
 	}
-	return remote.Host
+	return host
+}
+
+func remoteHostTarget(host string) string {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return host
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 func remoteBPCommand(remote bpconfig.RemoteConfig, bpArgs []string, lookup pathLookup) (commandSpec, error) {

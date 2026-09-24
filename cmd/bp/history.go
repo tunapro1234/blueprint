@@ -732,6 +732,9 @@ func resolveHistoryRemote(value string, remotes map[string]bpconfig.RemoteConfig
 }
 
 func validSSHHistoryHost(host string) bool {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
 	if net.ParseIP(host) != nil {
 		return true
 	}
@@ -777,10 +780,7 @@ func remoteHistoryCommand(endpoint historyEndpoint, agent string, lookup pathLoo
 		}
 		args = append(args, "-i", endpoint.Identity)
 	}
-	targetHost := endpoint.Host
-	if strings.Contains(endpoint.Host, ":") {
-		targetHost = "[" + endpoint.Host + "]"
-	}
+	targetHost := remoteHostTarget(endpoint.Host)
 	target := targetHost
 	if endpoint.User != "" {
 		target = endpoint.User + "@" + targetHost

@@ -33,10 +33,22 @@ func TestRemoteCommandConstruction(t *testing.T) {
 			want:   commandSpec{Path: "/usr/bin/ssh", Args: []string{"ssh", "-t", "host.example", "sudo", "-i", "bp", "attach", "worker", "--no-revive"}},
 		},
 		{
+			name:   "ssh IPv6",
+			remote: bpconfig.RemoteConfig{Host: "2001:db8::1", User: "tuna", Transport: "ssh"},
+			args:   []string{"attach", "worker"},
+			want:   commandSpec{Path: "/usr/bin/ssh", Args: []string{"ssh", "-t", "tuna@[2001:db8::1]", "bp", "attach", "worker"}},
+		},
+		{
 			name:   "mosh",
 			remote: bpconfig.RemoteConfig{Host: "host.example", Port: 2222, User: "tuna", Identity: "/keys/id file", Transport: "mosh", MoshPorts: "60000:61000", Elevate: "sudo -i"},
 			args:   []string{"attach", "worker"},
 			want:   commandSpec{Path: "/usr/bin/mosh", Args: []string{"mosh", "--ssh=ssh -p 2222 -i '/keys/id file'", "--port=60000:61000", "tuna@host.example", "sudo", "-i", "bp", "attach", "worker"}},
+		},
+		{
+			name:   "mosh IPv6",
+			remote: bpconfig.RemoteConfig{Host: "2001:db8::1", User: "tuna", Transport: "mosh"},
+			args:   []string{"attach", "worker"},
+			want:   commandSpec{Path: "/usr/bin/mosh", Args: []string{"mosh", "tuna@[2001:db8::1]", "bp", "attach", "worker"}},
 		},
 	}
 	for _, test := range tests {

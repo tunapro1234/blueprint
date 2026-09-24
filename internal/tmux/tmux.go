@@ -2275,6 +2275,47 @@ func launchArgs(command string, args []string) string {
 	return strings.Join(out, " ")
 }
 
+// codexRemoteResumeArgs drops recorded options whose permissions are owned by
+// the remote app-server while retaining model and other launch settings.
+func codexRemoteResumeArgs(args []string) []string {
+	filtered := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, value, inline := strings.Cut(arg, "=")
+		switch name {
+		case "--yolo", "--dangerously-bypass-approvals-and-sandbox", "--full-auto":
+			continue
+		case "-s", "--sandbox", "-a", "--ask-for-approval", "--add-dir":
+			if !inline && i+1 < len(args) {
+				i++
+			}
+			continue
+		case "-c", "--config":
+			if !inline && i+1 < len(args) {
+				if codexRemoteResumePermissionConfig(args[i+1]) {
+					i++
+					continue
+				}
+			} else if inline && codexRemoteResumePermissionConfig(value) {
+				continue
+			}
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
+}
+
+func codexRemoteResumePermissionConfig(value string) bool {
+	key, _, ok := strings.Cut(value, "=")
+	if !ok {
+		return false
+	}
+	key = strings.TrimSpace(key)
+	return key == "sandbox_mode" || key == "approval_policy" ||
+		strings.HasPrefix(key, "sandbox_workspace_write.") ||
+		strings.HasPrefix(key, "permissions/permission_profile")
+}
+
 // launchBinary names the harness executable in an Open command. Keep this in
 // sync with the command selection below: launchArgs and the shell-escape step
 // use it to locate the executable after any environment assignments.
@@ -2511,7 +2552,10 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if opts.Codex {
 		command = "codex"
 		if opts.NoSandbox {
-			command = "CODEX_BWRAPPED=1 codex --dangerously-bypass-approvals-and-sandbox"
+			command = "CODEX_BWRAPPED=1 codex"
+			if opts.Remote == "" || !opts.Resume {
+				command += " --dangerously-bypass-approvals-and-sandbox"
+			}
 		}
 	}
 	if opts.Codex {
@@ -2532,7 +2576,11 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		command = "opencode"
 	}
 	bin := launchBinary(opts)
-	if extra := launchArgs(command, opts.Args); extra != "" {
+	recordedArgs := opts.Args
+	if opts.Codex && opts.Remote != "" && opts.Resume {
+		recordedArgs = codexRemoteResumeArgs(recordedArgs)
+	}
+	if extra := launchArgs(command, recordedArgs); extra != "" {
 		// Right after the binary: Codex takes its global flags before the
 		// `resume` subcommand, Claude accepts them anywhere.
 		// The binary as a whole word: a session name may itself contain

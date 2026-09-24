@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -27,9 +26,9 @@ func TestLegacyAnonymousSpoolCannotFlushAndIsPreserved(t *testing.T) {
 		if err := os.WriteFile(file, data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		entries, _, err := Load(dir, "target")
-		if err == nil || !strings.Contains(err.Error(), "anonymous delivery blocked") || len(entries) != 0 {
-			t.Fatal(entries, err)
+		snapshot, err := Load(dir, "target")
+		if err != nil || len(snapshot.Entries) != 0 || len(snapshot.Held) != 1 || snapshot.Held[0].Reason != ReasonAnonymousSender {
+			t.Fatal(snapshot, err)
 		}
 		after, err := os.ReadFile(file)
 		if err != nil || string(after) != string(data) {

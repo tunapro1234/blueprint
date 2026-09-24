@@ -24,10 +24,11 @@ func TestSpoolRecordSurvivesEmbeddedNewlines(t *testing.T) {
 	if err := Append(dir, "alp", entry); err != nil {
 		t.Fatal(err)
 	}
-	entries, dropped, err := Load(dir, "alp")
+	snapshot, err := Load(dir, "alp")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries, dropped := snapshot.Entries, snapshot.Dropped
 	if len(entries) != 1 || dropped != 0 {
 		t.Fatalf("len=%d dropped=%d, want 1/0 — the newlines split the record", len(entries), dropped)
 	}
@@ -49,10 +50,11 @@ func TestLoadReadsRecordLargerThanDefaultScannerBuffer(t *testing.T) {
 	if err := Append(dir, "alp", Entry{TS: now.Unix(), From: "ada", Kind: "msg", Text: "after"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, dropped, err := Load(dir, "alp")
+	snapshot, err := Load(dir, "alp")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	entries, dropped := snapshot.Entries, snapshot.Dropped
 	if len(entries) != 2 || dropped != 0 {
 		t.Fatalf("len=%d dropped=%d, want 2/0", len(entries), dropped)
 	}
@@ -69,18 +71,17 @@ func TestAppendRefusesRecordOverStoreLimit(t *testing.T) {
 	if err := Append(dir, "alp", entry); err == nil {
 		t.Fatal("append accepted a record the reader cannot read back")
 	}
-	entries, _, err := Load(dir, "alp")
+	snapshot, err := Load(dir, "alp")
 	if err != nil {
 		t.Fatalf("load after refused append: %v", err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("len=%d, want 0 — nothing should have been written", len(entries))
+	if len(snapshot.Entries) != 0 {
+		t.Fatalf("len=%d, want 0 — nothing should have been written", len(snapshot.Entries))
 	}
 }
 
-// Peek is the read-only twin of Load. A read that prunes is how spooled
-// messages disappeared with nobody told: bp q counted every agent's queue with
-// Load and threw the drop count away.
+// Peek is the non-mutating twin of Load. Queue counts must never acknowledge
+// records because they have nowhere to report dropped entries.
 func TestPeekLeavesSpoolUntouchedAndAgreesWithLoad(t *testing.T) {
 	dir := t.TempDir()
 	crowdedSpool(t, dir, "alp")
@@ -95,19 +96,19 @@ func TestPeekLeavesSpoolUntouchedAndAgreesWithLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	peeked, over, err := Peek(dir, "alp")
+	peeked, err := Peek(dir, "alp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(peeked) != 26 || over != 0 {
-		t.Fatalf("peek len=%d over=%d, want %d/6", len(peeked), over, 26)
+	if len(peeked.Entries) != 26 || peeked.Dropped != 0 {
+		t.Fatalf("peek len=%d over=%d, want %d/0", len(peeked.Entries), peeked.Dropped, 26)
 	}
-	items, alsoOver, err := Stat(dir, "alp")
+	status, err := Stat(dir, "alp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if items != len(peeked) || alsoOver != over {
-		t.Fatalf("stat=%d/%d, want %d/%d", items, alsoOver, len(peeked), over)
+	if status.Items != len(peeked.Entries) || status.Dropped != peeked.Dropped {
+		t.Fatalf("stat=%d/%d, want %d/%d", status.Items, status.Dropped, len(peeked.Entries), peeked.Dropped)
 	}
 
 	after, err := os.Stat(file)
@@ -127,16 +128,16 @@ func TestPeekLeavesSpoolUntouchedAndAgreesWithLoad(t *testing.T) {
 	}
 
 	// Same input, same view: whatever Peek reported is what a delivery hands over.
-	loaded, dropped, err := Load(dir, "alp")
+	loaded, err := Load(dir, "alp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != len(peeked) || dropped != over {
-		t.Fatalf("load=%d/%d, peek=%d/%d — the two views disagree", len(loaded), dropped, len(peeked), over)
+	if len(loaded.Entries) != len(peeked.Entries) || loaded.Dropped != peeked.Dropped {
+		t.Fatalf("load=%d/%d, peek=%d/%d — the two views disagree", len(loaded.Entries), loaded.Dropped, len(peeked.Entries), peeked.Dropped)
 	}
-	for i := range loaded {
-		if loaded[i] != peeked[i] {
-			t.Fatalf("entry %d differs: %+v vs %+v", i, loaded[i], peeked[i])
+	for i := range loaded.Entries {
+		if loaded.Entries[i] != peeked.Entries[i] {
+			t.Fatalf("entry %d differs: %+v vs %+v", i, loaded.Entries[i], peeked.Entries[i])
 		}
 	}
 }
@@ -153,12 +154,12 @@ func TestCountsDoesNotPruneSpools(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	agents, items, err := Counts(dir)
+	summary, err := Counts(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if agents != 1 || items != 25 {
-		t.Fatalf("counts=%d agents/%d items, want 1/%d", agents, items, 25)
+	if summary.Agents != 1 || summary.Items != 25 {
+		t.Fatalf("counts=%d agents/%d items, want 1/%d", summary.Agents, summary.Items, 25)
 	}
 	records, err := os.ReadFile(path(dir, "alp"))
 	if err != nil {
@@ -199,10 +200,11 @@ func TestLoadPreservesOldAndCrowdedSpools(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, dropped, err := Load(dir, "alp")
+	snapshot, err := Load(dir, "alp")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries, dropped := snapshot.Entries, snapshot.Dropped
 	if len(entries) != 23 {
 		t.Fatalf("len=%d, want 20", len(entries))
 	}
@@ -212,21 +214,20 @@ func TestLoadPreservesOldAndCrowdedSpools(t *testing.T) {
 	if entries[0].Text != "old" || entries[22].Text != "21" {
 		t.Fatalf("kept range=%q..%q, want 2..21", entries[0].Text, entries[19].Text)
 	}
-	entries, dropped, err = Load(dir, "alp")
+	snapshot, err = Load(dir, "alp")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries, dropped = snapshot.Entries, snapshot.Dropped
 	if len(entries) != 23 || dropped != 0 {
 		t.Fatalf("second load len=%d dropped=%d, want 20/0", len(entries), dropped)
 	}
 }
 
 // A sandboxed agent (Codex under bubblewrap, measured 2026-08-25) has the state
-// tree mounted READ-ONLY. Load opens the spool O_RDWR because it prunes, so
-// every bp msg from that agent failed at the spool rather than at the delivery
-// — and the failure looked like "bp cannot send" rather than "bp cannot write
-// here". The error must name that difference, because the caller's correct
-// response differs: skip the digest, do not fail the message.
+// tree mounted READ-ONLY. Load requests write access because the delivery path
+// must be able to acknowledge a digest afterward. The error must name that
+// difference so the caller can skip the digest without failing the message.
 func TestLoadReportsAReadOnlySpoolDistinctly(t *testing.T) {
 	dir := t.TempDir()
 	if err := Append(dir, "kavram-main", Entry{TS: time.Now().Unix(), From: "bp", Kind: "msg", Text: "pending message"}); err != nil {
@@ -247,13 +248,13 @@ func TestLoadReportsAReadOnlySpoolDistinctly(t *testing.T) {
 		t.Fatal("an ordinary failure was classified as read-only")
 	}
 	if os.Geteuid() != 0 {
-		if _, _, err := Load(dir, "kavram-main"); !errors.Is(err, ErrReadOnly) {
+		if _, err := Load(dir, "kavram-main"); !errors.Is(err, ErrReadOnly) {
 			t.Fatalf("Load err=%v, want ErrReadOnly", err)
 		}
 	}
 	// Reading still works, so a sandboxed client can still SEE what is waiting.
-	if entries, _, err := Peek(dir, "kavram-main"); err != nil || len(entries) != 1 {
-		t.Fatalf("Peek entries=%v err=%v — a read-only spool must still be readable", entries, err)
+	if snapshot, err := Peek(dir, "kavram-main"); err != nil || len(snapshot.Entries) != 1 {
+		t.Fatalf("Peek entries=%v err=%v — a read-only spool must still be readable", snapshot.Entries, err)
 	}
 }
 
@@ -264,18 +265,18 @@ func TestAcknowledgePreservesConcurrentAppendAndArchivesDelivery(t *testing.T) {
 	if err := Append(dir, "agent", first); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _, err := Load(dir, "agent")
+	snapshot, err := Load(dir, "agent")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := Append(dir, "agent", second); err != nil {
 		t.Fatal(err)
 	}
-	if err := Acknowledge(dir, "agent", snapshot); err != nil {
+	if err := Acknowledge(dir, "agent", snapshot.Entries); err != nil {
 		t.Fatal(err)
 	}
-	remaining, _, err := Peek(dir, "agent")
-	if err != nil || len(remaining) != 1 || remaining[0] != second {
+	remaining, err := Peek(dir, "agent")
+	if err != nil || len(remaining.Entries) != 1 || remaining.Entries[0] != second {
 		t.Fatalf("lost concurrent append: %+v %v", remaining, err)
 	}
 	archive, err := os.ReadFile(filepath.Join(dir, "pending-history", "agent.jsonl"))
@@ -297,12 +298,115 @@ func TestUnsafeSpoolIngressAndLegacyRecord(t *testing.T) {
 		if err := os.WriteFile(path(dir, "target"), data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := Load(dir, "target"); !errors.Is(err, messagetext.ErrUnsafe) {
-			t.Fatal(err)
+		snapshot, err := Load(dir, "target")
+		if err != nil || len(snapshot.Held) != 1 || snapshot.Held[0].Reason != ReasonUnsafeText {
+			t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 		}
 		after, err := os.ReadFile(path(dir, "target"))
 		if err != nil || !bytes.Equal(after, data) {
 			t.Fatal("legacy evidence changed")
 		}
+	}
+}
+
+func TestAcknowledgeValidEntriesKeepsAnonymousRecordByteForByte(t *testing.T) {
+	dir := t.TempDir()
+	anonymous := []byte(`{"ts":1,"from":"bilinmiyor","kind":"msg","text":"unknown sender"}` + "\r\n")
+	first := Entry{TS: 2, From: "sender-a", Kind: "msg", Text: "first valid"}
+	second := Entry{TS: 3, From: "sender-b", Kind: "msg", Text: "second valid"}
+	validFirst, _ := json.Marshal(first)
+	validSecond, _ := json.Marshal(second)
+	data := bytes.Join([][]byte{anonymous, append(validFirst, '\n'), append(validSecond, '\n')}, nil)
+	if err := os.MkdirAll(filepath.Dir(path(dir, "mixed")), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(dir, "mixed"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := Load(dir, "mixed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 2 || snapshot.Entries[0] != first || snapshot.Entries[1] != second {
+		t.Fatalf("deliverable entries=%+v", snapshot.Entries)
+	}
+	if len(snapshot.Held) != 1 || snapshot.Held[0].Line != 1 || snapshot.Held[0].Reason != ReasonAnonymousSender {
+		t.Fatalf("held records=%+v", snapshot.Held)
+	}
+	if err := Acknowledge(dir, "mixed", snapshot.Entries); err != nil {
+		t.Fatal(err)
+	}
+	spool, err := os.ReadFile(path(dir, "mixed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(spool, anonymous) {
+		t.Fatalf("held raw bytes changed: got %q, want %q", spool, anonymous)
+	}
+	history, err := os.ReadFile(filepath.Join(dir, "pending-history", "mixed.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archived []Entry
+	for _, line := range bytes.Split(bytes.TrimSpace(history), []byte{'\n'}) {
+		var entry Entry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatal(err)
+		}
+		archived = append(archived, entry)
+	}
+	if len(archived) != 2 || archived[0] != first || archived[1] != second {
+		t.Fatalf("history=%+v, want only acknowledged valid entries", archived)
+	}
+}
+
+func TestPeekReportsUnparseableAndDoesNotMutate(t *testing.T) {
+	dir := t.TempDir()
+	bad := []byte("{not-json}\n")
+	valid := Entry{TS: 2, From: "sender", Kind: "msg", Text: "after bad line"}
+	encoded, _ := json.Marshal(valid)
+	data := append(append([]byte(nil), bad...), append(encoded, '\n')...)
+	if err := os.MkdirAll(filepath.Dir(path(dir, "broken")), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(dir, "broken"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	beforeInfo, err := os.Stat(path(dir, "broken"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path(dir, "broken"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Peek(dir, "broken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0] != valid || len(snapshot.Held) != 1 || snapshot.Held[0].Reason != ReasonUnparseable {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+	afterInfo, err := os.Stat(path(dir, "broken"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path(dir, "broken"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || beforeInfo.Size() != afterInfo.Size() || !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+		t.Fatal("Peek changed the spool")
+	}
+	if err := Acknowledge(dir, "broken", snapshot.Entries); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := os.ReadFile(path(dir, "broken"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(remaining, bad) {
+		t.Fatalf("held malformed bytes changed: got %q, want %q", remaining, bad)
 	}
 }

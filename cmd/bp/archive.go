@@ -119,12 +119,12 @@ func (a *app) archiveGuard(agent book.Agent, verb string, archive bool) error {
 		}
 	}
 	if archive && a.config.StateDir != "" {
-		count, over, err := pending.Stat(a.config.StateDir, name)
+		status, err := pending.Stat(a.config.StateDir, name)
 		if err != nil {
 			return err
 		}
-		if count+over > 0 {
-			return fmt.Errorf("%s has pending announcements; preserve and resolve them before %s", name, verb)
+		if status.Items+status.Dropped > 0 || len(status.Held) > 0 {
+			return fmt.Errorf("%s has pending announcements (%d deliverable, %d held); preserve and resolve them before %s", name, status.Items, len(status.Held), verb)
 		}
 	}
 	return nil

@@ -302,7 +302,7 @@ func TestIssue24_OpenRefusesToRebindAnExistingAgentFolder(t *testing.T) {
 	issueWriteBook(t, path, []map[string]any{{"name": "ghost", "folder": oldDir, "status": "closed"}})
 	tmux, log, marker := issueTmux(t, "› Ask Codex to do anything\n", false)
 	a := issueApp(t, path, filepath.Join(t.TempDir(), "state"), tmux)
-	err := a.open([]string{"ghost", newDir, "--codex", "--no-prompt"})
+	err := a.open([]string{"ghost", newDir, "--codex"})
 	if err == nil || !strings.Contains(err.Error(), "bound") {
 		t.Fatalf("open should refuse a folder rebind with a conflict explanation, got %v", err)
 	}
@@ -323,7 +323,7 @@ func TestIssue25_OpenPreservesNativeLaunchModeFields(t *testing.T) {
 	})
 	tmux, log, _ := issueTmux(t, "› Ask Codex to do anything\n", false)
 	a := issueApp(t, path, filepath.Join(dir, "state"), tmux)
-	if err := a.open([]string{"ghost", dir, "--no-prompt"}); err != nil {
+	if err := a.open([]string{"ghost", dir}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)

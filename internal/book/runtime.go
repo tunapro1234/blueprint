@@ -133,6 +133,7 @@ func readCodexRuntime(ctx context.Context, info bptmux.CodexProcess, agent Agent
 	}
 	if !threadUUID.MatchString(id) {
 		a.Reason = "no valid explicit thread binding"
+		a.RecoveryHint = codexBindingRecoveryHint(agent)
 		return state
 	}
 	a.ThreadID, a.Binding = id, binding
@@ -319,19 +320,43 @@ func RuntimeBlockProbe(paths []string) func(string, bool) string {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		state := RuntimeFor(ctx, bptmux.New(), fleet, name)
-		a := state.Activity
-		if a == nil {
-			return "runtime unknown: no observation"
-		}
-		if a.Reason == "" && a.ThreadID != "" && (a.State == "idle" || (force && a.State == "working" && state.Runtime != "hermes")) {
-			return ""
-		}
-		reason := "runtime " + a.State + ": " + a.Reason
-		if a.ThreadID == "" && len(fleet.Sources[name]) > 0 {
-			reason += "; agentbooks: " + strings.Join(fleet.Sources[name], ", ") + "; inspect bp status --json (force cannot repair binding)"
-		}
-		return reason
+		return runtimeBlockReason(name, fleet, state, force)
 	}
+}
+
+func runtimeBlockReason(name string, fleet Fleet, state cache.State, force bool) string {
+	a := state.Activity
+	if a == nil {
+		return "runtime unknown: no observation"
+	}
+	if a.Reason == "" && a.ThreadID != "" && (a.State == "idle" || (force && a.State == "working" && state.Runtime != "hermes")) {
+		return ""
+	}
+	reason := "runtime " + a.State + ": " + a.Reason
+	if a.RecoveryHint != "" {
+		reason += "; " + a.RecoveryHint
+	}
+	if a.ThreadID == "" && len(fleet.Sources[name]) > 0 {
+		reason += "; agentbooks: " + strings.Join(fleet.Sources[name], ", ") + "; inspect bp status --json (force cannot repair binding)"
+	}
+	return reason
+}
+
+func codexBindingRecoveryHint(agent Agent) string {
+	name := agent.Name
+	if name == "" {
+		name = "AGENT_NAME"
+	}
+	directory := FirstPath(agent.Folder)
+	if directory == "" {
+		directory = "DIRECTORY"
+	}
+	name, directory = shellQuoteRecoveryArg(name), shellQuoteRecoveryArg(directory)
+	return fmt.Sprintf("no thread binding yet; close it first with bp close %s, then either reopen with bp open %s %s --codex (omit --no-prompt) or bind a known thread with bp open %s %s --codex --thread THREAD_ID --rebind", name, name, directory, name, directory)
+}
+
+func shellQuoteRecoveryArg(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func claudeRuntime(agent Agent, a *cache.Activity) cache.State {

@@ -10,6 +10,7 @@ type Activity struct {
 	State              string     `json:"state"`
 	Source             string     `json:"source"`
 	Reason             string     `json:"reason,omitempty"`
+	RecoveryHint       string     `json:"recovery_hint,omitempty"`
 	ObservedAt         time.Time  `json:"observed_at"`
 	LastEventAt        *time.Time `json:"last_event_at,omitempty"`
 	ThreadID           string     `json:"thread_id,omitempty"`

@@ -833,6 +833,9 @@ func (a *app) status(args []string) error {
 			label += " (" + name + ")"
 		}
 		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", label, tmuxState, cacheText, talkText, bookState, mark)
+		if state.Runtime != nil && state.Runtime.Activity != nil && state.Runtime.Activity.RecoveryHint != "" {
+			fmt.Fprintf(a.out, "  recovery: %s\n", state.Runtime.Activity.RecoveryHint)
+		}
 	}
 	a.renderCodexStatus(a.codexThreads())
 	return nil
@@ -1405,6 +1408,9 @@ func (a *app) open(args []string) error {
 	}
 	if freshRequested && (resumeRequested || threadExplicit) {
 		return fmt.Errorf("--fresh cannot be combined with --resume or --thread")
+	}
+	if opts.Codex && !opts.Resume && opts.NoPrompt {
+		return fmt.Errorf("--no-prompt cannot be used for a new Codex agent: Codex creates its thread only on the first prompt, so bp could not bind it and delivery would stay blocked; omit --no-prompt (bp sends the onboarding prompt; --role adds context)")
 	}
 	if storedAgent, ok := stored.Agents[name]; ok {
 		if err := applyStoredFleetUpdate(storedAgent, &opts); err != nil {

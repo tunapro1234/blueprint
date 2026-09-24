@@ -11,7 +11,7 @@ import (
 
 // Issue #23: there was no way to fix the parent of an existing agent short of
 // editing agentbook.json by hand under the lock.
-func TestIssue23ReparentMovesExistingAgent(t *testing.T) {
+func TestIssue23_ReparentMovesExistingAgent(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("AGENTBOOK", "")
 	bookPath := filepath.Join(dir, "agentbook.json")
@@ -42,7 +42,7 @@ func TestIssue23ReparentMovesExistingAgent(t *testing.T) {
 }
 
 // Issue #23: bp run had no --parent and reset every relaunch to the root.
-func TestIssue23RunPlacementKeepsRecordAndHonoursParent(t *testing.T) {
+func TestIssue23_RunPlacementKeepsRecordAndHonoursParent(t *testing.T) {
 	fleet := book.Fleet{Root: "main", Agents: map[string]book.Agent{
 		"main":   {Name: "main"},
 		"lead":   {Name: "lead", Parent: "main"},

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestIssue11RenameRefusesAnArchivedDestination(t *testing.T) {
+func TestIssue11_RenameRefusesAnArchivedDestination(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agentbook.json")
 	writeBookFile(t, path, map[string]any{"agents": []any{
 		map[string]any{"name": "worker", "status": "open"},

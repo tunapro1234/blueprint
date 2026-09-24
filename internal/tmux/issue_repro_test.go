@@ -12,7 +12,7 @@ import (
 // created instead of leaving an orphan holding the prompt (and the resume handle).
 // Auto-accepting the exact-directory "❯ 1. Yes" modal bp itself opened is an
 // existing, separate behaviour and is not what this reproduces.
-func TestIssue06OpenDoesNotAcceptAClaudeTrustPromptForTheUser(t *testing.T) {
+func TestIssue06_OpenDoesNotAcceptAClaudeTrustPromptForTheUser(t *testing.T) {
 	dir := "/tmp/issue-06-project"
 	prompt := "Accessing workspace:\n" + dir + "\n" +
 		"Quick safety check: Is this a project you created or one you trust?\n" +

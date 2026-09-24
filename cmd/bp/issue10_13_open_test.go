@@ -41,7 +41,7 @@ func launchLogTmux(t *testing.T, exists bool, pane string) (*bptmux.Client, func
 // Issue #10: bp open typed a bare `claude --dangerously-skip-permissions` into
 // the user's interactive shell — alias flags doubled up and no run settings or
 // _local-worker observed the pane, so the record stayed "opening".
-func TestIssue10ClaudeOpenUsesManagedLauncher(t *testing.T) {
+func TestIssue10_ClaudeOpenUsesManagedLauncher(t *testing.T) {
 	dir := t.TempDir()
 	bookPath := openTestBook(t, dir, "closed")
 	client, calls := launchLogTmux(t, false, "bypass permissions")
@@ -63,7 +63,7 @@ func TestIssue10ClaudeOpenUsesManagedLauncher(t *testing.T) {
 // Issue #13: bp open left the tmux global default bar; the bp bar (bp name /
 // bp bar) was applied only by bp run. Reusing an existing agent session must
 // apply it too.
-func TestIssue13OpenAppliesBarToExistingSession(t *testing.T) {
+func TestIssue13_OpenAppliesBarToExistingSession(t *testing.T) {
 	dir := t.TempDir()
 	bookPath := openTestBook(t, dir, "closed")
 	client, calls := launchLogTmux(t, true, "bypass permissions")

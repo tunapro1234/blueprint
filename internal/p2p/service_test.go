@@ -23,7 +23,7 @@ func waitFor(t *testing.T, f func() bool) {
 	}
 }
 
-func TestIssue19InboundDispatchTargetsAndBoundedRecovery(t *testing.T) {
+func TestIssue19_InboundDispatchTargetsAndBoundedRecovery(t *testing.T) {
 	// Short root avoids platform sockaddr_un path-length limits.
 	root := t.TempDir()
 	n, e := New(context.Background(), root, Config{Listen: []string{"/ip4/127.0.0.1/tcp/0"}}, msgq.New(filepath.Join(root, "q")))

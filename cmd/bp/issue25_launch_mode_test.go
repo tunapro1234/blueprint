@@ -10,7 +10,7 @@ import (
 
 // Issue #25: a revive/resume must come back in the recorded launch mode
 // (model, effort, native flags), not the harness default.
-func TestIssue25ReopenReplaysRecordedNativeFlags(t *testing.T) {
+func TestIssue25_ReopenReplaysRecordedNativeFlags(t *testing.T) {
 	dir := t.TempDir()
 	config := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", config)

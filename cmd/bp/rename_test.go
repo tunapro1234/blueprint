@@ -326,21 +326,21 @@ func TestRenameWithoutALiveSessionSkipsThePaneStep(t *testing.T) {
 	}
 }
 
-// /rename is a Claude command. At a codex pane it would be typed as text, so the
-// pane step is skipped entirely and the rest of the rename still runs.
-func TestRenameSkipsThePaneStepForANonClaudeAgent(t *testing.T) {
-	fix := newRenameFixture(t, renameOptions{live: true, command: "codex", pane: `printf '› \n'`})
+// A shell pane has no native title to change; it must never receive Claude's
+// /rename command.
+func TestRenameSkipsThePaneStepForANonAgentPane(t *testing.T) {
+	fix := newRenameFixture(t, renameOptions{live: true, command: "zsh", pane: `printf '❯ \n'`})
 	if err := fix.app.rename([]string{"worktrack-main", "worktrack"}); err != nil {
 		t.Fatal(err)
 	}
 	calls := fix.calls()
 	if strings.Contains(calls, "paste-buffer") || strings.Contains(calls, "send-keys") {
-		t.Fatalf("a codex pane was typed into:\n%s", calls)
+		t.Fatalf("a shell pane was typed into:\n%s", calls)
 	}
 	if !strings.Contains(calls, "rename-session") {
 		t.Fatalf("the tmux session was not renamed:\n%s", calls)
 	}
-	if got := readTestOutput(t, fix.app.out); !strings.Contains(got, "the worktrack-main pane is not a Claude agent") {
+	if got := readTestOutput(t, fix.app.out); !strings.Contains(got, "the worktrack-main pane is not a Claude or Codex agent") {
 		t.Fatalf("output=%q", got)
 	}
 	if book := readFixtureFile(t, fix.book); !strings.Contains(book, `"worktrack"`) {

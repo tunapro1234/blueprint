@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"blueprint/internal/ntfy"
@@ -22,28 +23,42 @@ const LegacyHome = "/srv/blueprint"
 
 // Config contains all paths and feature switches that vary by machine.
 type Config struct {
-	UpdateCheck      bool         `json:"updateCheck" yaml:"updateCheck"`
-	LocalMouse       bool         `json:"localMouse" yaml:"localMouse"`
-	LocalObservation bool         `json:"localObservation" yaml:"localObservation"`
-	Path             string       `json:"-" yaml:"-"`
-	Home             string       `json:"-" yaml:"-"`
-	Legacy           bool         `json:"-" yaml:"-"`
-	MsgqRoot         string       `json:"msgqRoot" yaml:"msgqRoot"`
-	Agentbooks       []string     `json:"agentbooks" yaml:"agentbooks"`
-	TokenAgentbooks  []string     `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
-	StateDir         string       `json:"stateDir" yaml:"stateDir"`
-	WAOutbox         string       `json:"waOutbox" yaml:"waOutbox"`
-	WAStore          string       `json:"waStore" yaml:"waStore"`
-	UsageBin         string       `json:"usageBin" yaml:"usageBin"`
-	UsageHistory     string       `json:"usageHistory" yaml:"usageHistory"`
-	ClipboardDir     string       `json:"clipboardDir" yaml:"clipboardDir"`
-	WABridge         bool         `json:"waBridge" yaml:"waBridge"`
-	Ntfy             *ntfy.Config `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
-	Fed              *FedConfig   `json:"fed,omitempty" yaml:"fed,omitempty"`
-	P2P              *p2p.Config  `json:"p2p,omitempty" yaml:"p2p,omitempty"`
-	Codex            *CodexConfig `json:"codex,omitempty" yaml:"codex,omitempty"`
-	Bar              BarConfig    `json:"bar" yaml:"bar"`
-	InvalidConfig    string       `json:"-" yaml:"-"`
+	UpdateCheck      bool                    `json:"updateCheck" yaml:"updateCheck"`
+	LocalMouse       bool                    `json:"localMouse" yaml:"localMouse"`
+	LocalObservation bool                    `json:"localObservation" yaml:"localObservation"`
+	Path             string                  `json:"-" yaml:"-"`
+	Home             string                  `json:"-" yaml:"-"`
+	Legacy           bool                    `json:"-" yaml:"-"`
+	MsgqRoot         string                  `json:"msgqRoot" yaml:"msgqRoot"`
+	Agentbooks       []string                `json:"agentbooks" yaml:"agentbooks"`
+	TokenAgentbooks  []string                `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
+	StateDir         string                  `json:"stateDir" yaml:"stateDir"`
+	WAOutbox         string                  `json:"waOutbox" yaml:"waOutbox"`
+	WAStore          string                  `json:"waStore" yaml:"waStore"`
+	UsageBin         string                  `json:"usageBin" yaml:"usageBin"`
+	UsageHistory     string                  `json:"usageHistory" yaml:"usageHistory"`
+	ClipboardDir     string                  `json:"clipboardDir" yaml:"clipboardDir"`
+	WABridge         bool                    `json:"waBridge" yaml:"waBridge"`
+	Ntfy             *ntfy.Config            `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
+	Fed              *FedConfig              `json:"fed,omitempty" yaml:"fed,omitempty"`
+	P2P              *p2p.Config             `json:"p2p,omitempty" yaml:"p2p,omitempty"`
+	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
+	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
+	Bar              BarConfig               `json:"bar" yaml:"bar"`
+	InvalidConfig    string                  `json:"-" yaml:"-"`
+}
+
+// RemoteConfig describes an interactive bp host. It deliberately contains no
+// password, token or private-key material: Identity is only a path to an SSH
+// identity file already managed by the user.
+type RemoteConfig struct {
+	Host      string `json:"host" yaml:"host"`
+	Port      int    `json:"port,omitempty" yaml:"port,omitempty"`
+	User      string `json:"user,omitempty" yaml:"user,omitempty"`
+	Identity  string `json:"identity,omitempty" yaml:"identity,omitempty"`
+	Transport string `json:"transport,omitempty" yaml:"transport,omitempty"`
+	MoshPorts string `json:"moshPorts,omitempty" yaml:"moshPorts,omitempty"`
+	Elevate   string `json:"elevate,omitempty" yaml:"elevate,omitempty"`
 }
 
 // BarConfig controls which metrics appear in the tmux status bar and their order.
@@ -74,24 +89,25 @@ type FedConfig struct {
 }
 
 type overrides struct {
-	UpdateCheck      *bool         `json:"updateCheck" yaml:"updateCheck"`
-	LocalMouse       *bool         `json:"localMouse" yaml:"localMouse"`
-	LocalObservation *bool         `json:"localObservation" yaml:"localObservation"`
-	MsgqRoot         *string       `json:"msgqRoot" yaml:"msgqRoot"`
-	Agentbooks       *[]string     `json:"agentbooks" yaml:"agentbooks"`
-	TokenAgentbooks  *[]string     `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
-	StateDir         *string       `json:"stateDir" yaml:"stateDir"`
-	WAOutbox         *string       `json:"waOutbox" yaml:"waOutbox"`
-	WAStore          *string       `json:"waStore" yaml:"waStore"`
-	UsageBin         *string       `json:"usageBin" yaml:"usageBin"`
-	UsageHistory     *string       `json:"usageHistory" yaml:"usageHistory"`
-	ClipboardDir     *string       `json:"clipboardDir" yaml:"clipboardDir"`
-	WABridge         *bool         `json:"waBridge" yaml:"waBridge"`
-	Ntfy             *ntfy.Config  `json:"ntfy" yaml:"ntfy"`
-	Fed              *FedConfig    `json:"fed" yaml:"fed"`
-	P2P              *p2p.Config   `json:"p2p" yaml:"p2p"`
-	Codex            *CodexConfig  `json:"codex" yaml:"codex"`
-	Bar              *barOverrides `json:"bar" yaml:"bar"`
+	UpdateCheck      *bool                    `json:"updateCheck" yaml:"updateCheck"`
+	LocalMouse       *bool                    `json:"localMouse" yaml:"localMouse"`
+	LocalObservation *bool                    `json:"localObservation" yaml:"localObservation"`
+	MsgqRoot         *string                  `json:"msgqRoot" yaml:"msgqRoot"`
+	Agentbooks       *[]string                `json:"agentbooks" yaml:"agentbooks"`
+	TokenAgentbooks  *[]string                `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
+	StateDir         *string                  `json:"stateDir" yaml:"stateDir"`
+	WAOutbox         *string                  `json:"waOutbox" yaml:"waOutbox"`
+	WAStore          *string                  `json:"waStore" yaml:"waStore"`
+	UsageBin         *string                  `json:"usageBin" yaml:"usageBin"`
+	UsageHistory     *string                  `json:"usageHistory" yaml:"usageHistory"`
+	ClipboardDir     *string                  `json:"clipboardDir" yaml:"clipboardDir"`
+	WABridge         *bool                    `json:"waBridge" yaml:"waBridge"`
+	Ntfy             *ntfy.Config             `json:"ntfy" yaml:"ntfy"`
+	Fed              *FedConfig               `json:"fed" yaml:"fed"`
+	P2P              *p2p.Config              `json:"p2p" yaml:"p2p"`
+	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
+	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
+	Bar              *barOverrides            `json:"bar" yaml:"bar"`
 }
 
 type barOverrides struct {
@@ -205,6 +221,9 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 			return Config{}, fmt.Errorf("parse %s: p2p: %w", path, err)
 		}
 	}
+	if err := validateRemotes(result.Remotes); err != nil {
+		return Config{}, fmt.Errorf("parse %s: remotes: %w", path, err)
+	}
 	return result, nil
 }
 
@@ -235,6 +254,10 @@ func resolvePaths(c *Config, user string) {
 		for i, p := range c.Codex.Sockets {
 			c.Codex.Sockets[i] = resolve(p)
 		}
+	}
+	for name, remote := range c.Remotes {
+		remote.Identity = resolve(remote.Identity)
+		c.Remotes[name] = remote
 	}
 }
 
@@ -338,6 +361,15 @@ func apply(result *Config, values overrides) {
 		value.Sockets = append([]string(nil), value.Sockets...)
 		result.Codex = &value
 	}
+	if values.Remotes != nil {
+		result.Remotes = make(map[string]RemoteConfig, len(*values.Remotes))
+		for name, remote := range *values.Remotes {
+			if remote.Transport == "" {
+				remote.Transport = "ssh"
+			}
+			result.Remotes[name] = remote
+		}
+	}
 	if values.Bar != nil && values.Bar.Context != nil {
 		result.Bar.Context = *values.Bar.Context
 	}
@@ -409,6 +441,76 @@ func validFederationName(value string) bool {
 			(char >= 'A' && char <= 'Z') ||
 			(char >= '0' && char <= '9') ||
 			char == '.' || char == '_' || char == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRemotes(remotes map[string]RemoteConfig) error {
+	for name, remote := range remotes {
+		if !validFederationName(name) {
+			return fmt.Errorf("invalid server name %q", name)
+		}
+		if remote.Host == "" || strings.HasPrefix(remote.Host, "-") || strings.ContainsAny(remote.Host, " \t\r\n\x00") {
+			return fmt.Errorf("%s.host must be one host name or address", name)
+		}
+		if remote.Port < 0 || remote.Port > 65535 {
+			return fmt.Errorf("%s.port must be between 1 and 65535", name)
+		}
+		if remote.User != "" && !validFederationName(remote.User) {
+			return fmt.Errorf("%s.user contains invalid characters", name)
+		}
+		if strings.ContainsAny(remote.Identity, "\r\n\x00") {
+			return fmt.Errorf("%s.identity contains invalid characters", name)
+		}
+		transport := remote.Transport
+		if transport == "" {
+			transport = "ssh"
+		}
+		if transport != "ssh" && transport != "mosh" {
+			return fmt.Errorf("%s.transport must be mosh or ssh", name)
+		}
+		if remote.MoshPorts != "" && !validPortRange(remote.MoshPorts) {
+			return fmt.Errorf("%s.moshPorts must be a port or MIN:MAX range", name)
+		}
+		if strings.ContainsAny(remote.Elevate, "\r\n\x00") {
+			return fmt.Errorf("%s.elevate must be one command line", name)
+		}
+		for _, field := range strings.Fields(remote.Elevate) {
+			if !validCommandWord(field) {
+				return fmt.Errorf("%s.elevate contains unsupported shell characters", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validPortRange(value string) bool {
+	parts := strings.Split(value, ":")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		port, err := strconv.Atoi(part)
+		if err != nil || port < 1 || port > 65535 {
+			return false
+		}
+	}
+	if len(parts) == 2 {
+		first, _ := strconv.Atoi(parts[0])
+		last, _ := strconv.Atoi(parts[1])
+		return first <= last
+	}
+	return true
+}
+
+func validCommandWord(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || strings.ContainsRune("._/+:-=@", char)) {
 			return false
 		}
 	}

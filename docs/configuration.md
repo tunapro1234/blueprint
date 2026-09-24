@@ -101,6 +101,33 @@ connection. `~/` expands to the home directory. There is no `$VAR` expansion,
 command execution, or secret configuration merge. Federation's loopback, TLS,
 and token checks also apply to YAML.
 
+## Interactive remote servers
+
+The `remotes` mapping configures terminal transports, independently of P2P
+messaging peers. Use `bp remote add`, `bp remote list [--json]`, and
+`bp remote rm` so updates are locked and written atomically. Each entry accepts
+`host`, `port`, `user`, `identity`, `transport` (`mosh` or `ssh`), `moshPorts`,
+and optional `elevate` (for example `sudo -i`). No password, token, or private
+key content is stored; `identity` is only a file path.
+
+`bp attach agent@server` runs `bp attach agent` on that server. `bp shell server`
+opens an interactive shell, and `bp shell server agent` delegates to the same
+remote attach command, so a typo cannot create an empty tmux session. The words
+`list`, `add`, and `rm` are reserved after `bp remote`; every other argument
+keeps the existing Claude `/remote-control` behavior.
+
+```yaml
+remotes:
+  server:
+    host: server.example
+    port: 22
+    user: tuna
+    identity: ~/.ssh/server
+    transport: mosh
+    moshPorts: 60000:61000
+    elevate: sudo -i
+```
+
 ## Compatibility and applying changes
 
 `config.yaml`, `config.yml`, and legacy `config.json` are supported. bp reports

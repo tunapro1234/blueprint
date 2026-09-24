@@ -47,3 +47,14 @@ updateCheck: true
 #     laptop:
 #       id: LAPTOP_PEER_ID
 #       expose: [main] # only these LOCAL agents may receive from laptop
+
+# Interactive remote terminals are separate from P2P message peers.
+# remotes:
+#   server:
+#     host: server.example
+#     port: 22
+#     user: tuna
+#     identity: ~/.ssh/server
+#     transport: mosh # mosh or ssh
+#     moshPorts: 60000:61000
+#     elevate: sudo -i

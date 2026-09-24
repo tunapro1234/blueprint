@@ -36,6 +36,17 @@ _bp_install_function hermes
 unset -f _bp_install_function
 `
 
+const compatibilityWrappers = `# Optional compatibility names. Existing aliases and functions always win.
+_bp_install_compat() {
+  typeset -f "$1" >/dev/null 2>&1 && return 0
+  alias "$1" >/dev/null 2>&1 && return 0
+  eval 'function '"$1"' { command bp '"$2"' "$@"; }'
+}
+_bp_install_compat lush attach
+_bp_install_compat rush shell
+unset -f _bp_install_compat
+`
+
 func (a *app) localSetup(args []string) error {
 	if len(args) == 1 && args[0] == "--check" {
 		return a.setupCheck()
@@ -48,10 +59,20 @@ func (a *app) localSetup(args []string) error {
 		return fmt.Errorf("fix the existing config before setup: %s", a.config.InvalidConfig)
 	}
 	shell := filepath.Base(os.Getenv("SHELL"))
-	if len(args) == 2 && args[0] == "--shell" {
-		shell = args[1]
-	} else if len(args) != 0 {
-		return fmt.Errorf("usage: bp setup [--shell bash|zsh]")
+	wrappers := false
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--shell":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--shell requires bash or zsh")
+			}
+			index++
+			shell = args[index]
+		case "--wrappers":
+			wrappers = true
+		default:
+			return fmt.Errorf("unknown setup option: %s", args[index])
+		}
 	}
 	if shell != "bash" && shell != "zsh" {
 		return fmt.Errorf("shell %q is not supported; use bp setup --shell bash or --shell zsh", shell)
@@ -71,7 +92,11 @@ func (a *app) localSetup(args []string) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "shell.sh"), []byte(localShell), 0600); err != nil {
+	shellIntegration := localShell
+	if wrappers {
+		shellIntegration += compatibilityWrappers
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shell.sh"), []byte(shellIntegration), 0600); err != nil {
 		return err
 	}
 	files := []string{filepath.Join(home, ".zshrc")}
@@ -142,6 +167,9 @@ func (a *app) localSetup(args []string) error {
 	}
 	fmt.Fprintln(a.out, "bp local setup ready. Open a new terminal, or run: . \"$HOME/.config/bp/shell.sh\"")
 	fmt.Fprintln(a.out, "bp wrappers ready; existing aliases and functions are preserved; 'command codex' bypasses the wrapper.")
+	if wrappers {
+		fmt.Fprintln(a.out, "Optional lush (bp attach) and rush (bp shell) wrappers installed; existing aliases and functions were preserved.")
+	}
 	fmt.Fprintf(a.out, "Settings: %s (check with: bp config check)\n", configPath)
 	return nil
 }

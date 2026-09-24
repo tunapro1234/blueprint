@@ -1637,7 +1637,7 @@ func TestRemoteAttachCommandUsesMoshByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"mosh", "ops@example.com", "--", "tmux", "attach", "-t", "server-main"}
+	want := []string{"mosh", "ops@example.com", "--", "tmux", "attach", "-t", "=server-main"}
 	if !reflect.DeepEqual(got.Args, want) {
 		t.Fatalf("args=%v, want %v", got.Args, want)
 	}
@@ -1652,7 +1652,7 @@ func TestRemoteAttachCommandFallsBackToSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"ssh", "-t", "ops@example.com", "tmux", "attach", "-t", "server-main"}
+	want := []string{"ssh", "-t", "ops@example.com", "tmux", "attach", "-t", "=server-main"}
 	if !reflect.DeepEqual(got.Args, want) {
 		t.Fatalf("args=%v, want %v", got.Args, want)
 	}

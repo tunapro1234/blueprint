@@ -11,7 +11,7 @@ import (
 // the reader has to survive.
 func openCodePane(composer []string, busy bool) string {
 	lines := []string{
-		"  ┃  onceki mesajim, transcript'te ayni rail ile ciziliyor",
+		"  ┃  my previous message is drawn with the same rail in the transcript",
 		"",
 		"     ▣  Build · Ox Alpha (stealth)",
 		"",
@@ -76,14 +76,14 @@ func TestOpenCodeComposerReader(t *testing.T) {
 		t.Fatalf("idle composer box=%q, want empty", box)
 	}
 
-	message := "[server-main] bu mesaj composer'da duruyor ve satirlara sariliyor, tam olarak boyle gorunuyor."
+	message := "[server-main] this message remains in the composer and wraps across lines; it looks exactly like this."
 	rows := []string{message[:56], message[56:]}
 	held := openCodePane(rows, false)
 	text, ours := StuckPaste(held, []string{message})
 	if !ours || text != message {
 		t.Fatalf("StuckPaste ours=%v text=%q, want our own message back", ours, text)
 	}
-	if _, ours := StuckPaste(held, []string{"bambaska bir mesaj, yeterince uzun olsun diye uzatiyorum"}); ours {
+	if _, ours := StuckPaste(held, []string{"a completely different message, extended to make it long enough"}); ours {
 		t.Fatal("a stranger's text was claimed as ours")
 	}
 }
@@ -96,7 +96,7 @@ func TestOpenCodeChipIsUnreadable(t *testing.T) {
 	if !openCodePasteChip(pane) || !pasteChip(pane) {
 		t.Fatal("opencode's paste chip was not recognised")
 	}
-	if _, ours := StuckPaste(pane, []string{"satir bir\nsatir iki\nsatir uc"}); ours {
+	if _, ours := StuckPaste(pane, []string{"line one\nline two\nline three"}); ours {
 		t.Fatal("an unreadable chip was claimed as our text at the gate")
 	}
 	if got := ComposerContentBlockReason(pane, nil); got != BlockedByPasteChip {

@@ -57,7 +57,7 @@ func (a *app) rename(args []string) error {
 			// The Claude transcript keeps its OLD custom title until the agent
 			// types /rename itself. Until then bp cannot read its context or last
 			// turn (blank CACHE column), `bp compact` reports "transcript
-			// okunamadi", and `bp open --resume` cannot find its conversation.
+			// unreadable", and `bp open --resume` cannot find its conversation.
 			// So it is allowed, and it says so loudly.
 			noRetitle = true
 		case "--archived":
@@ -206,7 +206,7 @@ func (a *app) rename(args []string) error {
 	codexAgent := bookCodex || paneCodex
 	switch {
 	case paneClaude && noRetitle:
-		fmt.Fprintf(a.out, "--no-retitle: %s pane'ine /rename YAZILMADI; transcript basligi %q olarak kaliyor\n", old, old)
+		fmt.Fprintf(a.out, "--no-retitle: /rename WAS NOT WRITTEN to pane %s; the transcript title remains %q\n", old, old)
 		claudeRetitleSkipped = true
 	case codexAgent && noRetitle:
 		if !liveOld && bookCodex {
@@ -348,14 +348,14 @@ func (a *app) rename(args []string) error {
 	if claudeRetitleSkipped && !dry {
 		// Said at the END, where it is read: the rename LOOKS complete and the one
 		// piece that is missing is invisible until something goes quiet.
-		fmt.Fprintf(a.err, "\nEKSIK KALAN TEK ADIM — %s kendi pane'inde SU KOMUTU YAZMALI:\n  /rename %s\n", name, name)
-		fmt.Fprintf(a.err, "o yazilana kadar transcript basligi %q kalir: bp bu agent'in baglamini/son turunu OKUYAMAZ (bp status'ta CACHE bos), bp compact 'transcript okunamadi' der ve bp open --resume onceki konusmayi bulamaz.\n", old)
+		fmt.Fprintf(a.err, "\nONE STEP REMAINS — %s MUST TYPE THIS COMMAND IN ITS OWN PANE:\n  /rename %s\n", name, name)
+		fmt.Fprintf(a.err, "until then the transcript title remains %q: bp CANNOT READ this agent's context/latest turn (CACHE is empty in bp status), bp compact reports 'transcript unreadable', and bp open --resume cannot find the previous conversation.\n", old)
 	}
 	if codexRetitleSkipped && !dry {
-		fmt.Fprintf(a.err, "\nUYARI — CODEX BAŞLIĞI ESKİ KALDI: %s için native title %q olarak kaldı; --no-retitle nedeniyle değiştirilmedi.\n", name, old)
+		fmt.Fprintf(a.err, "\nWARNING — CODEX TITLE REMAINS STALE: the native title for %s remains %q; it was not changed because of --no-retitle.\n", name, old)
 	}
 	if codexTitleUnavailable && !dry {
-		fmt.Fprintf(a.err, "\nUYARI — CODEX BAŞLIĞI ESKİ KALDI: %s için agentbook'ta nativeTitle.threadId ve session_index.jsonl yolu bulunamadı; Codex native title değiştirilmedi.\n", name)
+		fmt.Fprintf(a.err, "\nWARNING — CODEX TITLE REMAINS STALE: nativeTitle.threadId and the session_index.jsonl path were not found in the agentbook for %s; the Codex native title was not changed.\n", name)
 	}
 	return nil
 }

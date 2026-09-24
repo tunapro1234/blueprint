@@ -9,7 +9,8 @@ import (
 )
 
 func TestLegacyAnonymousSpoolCannotFlushAndIsPreserved(t *testing.T) {
-	for _, sender := range []string{"", "bilinmiyor"} {
+	// "bilinmiyor" is the legacy unknown label written by older bp versions.
+	for _, sender := range []string{"", "unknown", "bilinmiyor"} {
 		dir := t.TempDir()
 		entry := Entry{TS: 1788885626, From: sender, Kind: "msg", Text: "legacy anonymous message"}
 		if err := Append(dir, "target", entry); err == nil {

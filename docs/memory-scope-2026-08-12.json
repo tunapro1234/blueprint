@@ -5,7 +5,7 @@
    "file": "bitti-olculebilir-kanit.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tamamlanma kaniti",
+   "topic": "completion evidence",
    "confidence": "high"
   },
   {
@@ -13,7 +13,7 @@
    "file": "browser-server.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "paylasimli browser sunucusu",
+   "topic": "shared browser server",
    "confidence": "high"
   },
   {
@@ -21,7 +21,7 @@
    "file": "codex-arkaplan-guvenlik.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -29,7 +29,7 @@
    "file": "giden-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -37,7 +37,7 @@
    "file": "model-pinleme.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model pinleme politikasi",
+   "topic": "model pinning policy",
    "confidence": "high"
   },
   {
@@ -45,7 +45,7 @@
    "file": "ilter-hoca-usb-flaky.md",
    "scope": "local",
    "subtree": null,
-   "topic": "usb ariza teshisi",
+   "topic": "USB fault diagnosis",
    "confidence": "high"
   },
   {
@@ -53,7 +53,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -61,7 +61,7 @@
    "file": "project_agentic_economy.md",
    "scope": "local",
    "subtree": null,
-   "topic": "agentic economy projesi",
+   "topic": "agentic economy project",
    "confidence": "high"
   },
   {
@@ -69,7 +69,7 @@
    "file": "user_profile.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna kullanici profili",
+   "topic": "Tuna user profile",
    "confidence": "high"
   },
   {
@@ -77,7 +77,7 @@
    "file": "feedback_big5.md",
    "scope": "local",
    "subtree": null,
-   "topic": "big5 prompt tasarimi",
+   "topic": "Big Five prompt design",
    "confidence": "high"
   },
   {
@@ -85,7 +85,7 @@
    "file": "feedback_claude_attribution.md",
    "scope": "local",
    "subtree": null,
-   "topic": "claude atif formati",
+   "topic": "Claude citation format",
    "confidence": "low"
   },
   {
@@ -93,7 +93,7 @@
    "file": "feedback_model_choice.md",
    "scope": "local",
    "subtree": null,
-   "topic": "deney modeli degistirme",
+   "topic": "changing the experiment model",
    "confidence": "high"
   },
   {
@@ -101,7 +101,7 @@
    "file": "feedback_overclaiming.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "bulgu titizligi",
+   "topic": "finding rigor",
    "confidence": "low"
   },
   {
@@ -109,7 +109,7 @@
    "file": "feedback_preflight.md",
    "scope": "local",
    "subtree": null,
-   "topic": "api preflight testi",
+   "topic": "API preflight test",
    "confidence": "low"
   },
   {
@@ -117,7 +117,7 @@
    "file": "feedback_run_procedure.md",
    "scope": "local",
    "subtree": null,
-   "topic": "deney kosu proseduru",
+   "topic": "experiment run procedure",
    "confidence": "high"
   },
   {
@@ -125,7 +125,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -133,7 +133,7 @@
    "file": "project_multiturn_next.md",
    "scope": "local",
    "subtree": null,
-   "topic": "multiturn deney onceligi",
+   "topic": "multi-turn experiment priority",
    "confidence": "high"
   },
   {
@@ -141,7 +141,7 @@
    "file": "user_language.md",
    "scope": "local",
    "subtree": null,
-   "topic": "ingilizce iletisim tercihi",
+   "topic": "English communication preference",
    "confidence": "low"
   },
   {
@@ -149,7 +149,7 @@
    "file": "user_role.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna kullanici profili",
+   "topic": "Tuna user profile",
    "confidence": "high"
   },
   {
@@ -157,7 +157,7 @@
    "file": "announce-cost-policy.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "duyuru maliyeti ve compact",
+   "topic": "announcement cost and compact",
    "confidence": "high"
   },
   {
@@ -165,7 +165,7 @@
    "file": "codex-bypass-touches-system.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex sandbox bypass riski",
+   "topic": "Codex sandbox bypass risk",
    "confidence": "high"
   },
   {
@@ -173,7 +173,7 @@
    "file": "deploy-coordination.md",
    "scope": "local",
    "subtree": null,
-   "topic": "bp deploy tehlikesi",
+   "topic": "bp deployment risk",
    "confidence": "high"
   },
   {
@@ -181,7 +181,7 @@
    "file": "domain-tunapro-xyz.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "domain duzeni",
+   "topic": "domain layout",
    "confidence": "high"
   },
   {
@@ -189,7 +189,7 @@
    "file": "fed-tunnel.md",
    "scope": "local",
    "subtree": null,
-   "topic": "bp federation tuneli",
+   "topic": "bp federation tunnel",
    "confidence": "high"
   },
   {
@@ -197,7 +197,7 @@
    "file": "gpt-subagents-preferred.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/subagent politikasi",
+   "topic": "model/subagent policy",
    "confidence": "low"
   },
   {
@@ -205,7 +205,7 @@
    "file": "gpt-worktree-commit-limit.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex worktree commit kisiti",
+   "topic": "Codex worktree commit restriction",
    "confidence": "high"
   },
   {
@@ -213,7 +213,7 @@
    "file": "memory-katmanlari.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "memory vs kural katmani",
+   "topic": "memory versus rule layer",
    "confidence": "high"
   },
   {
@@ -221,7 +221,7 @@
    "file": "outbound-mail-coordination.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -229,7 +229,7 @@
    "file": "radar-aa-scores.md",
    "scope": "local",
    "subtree": null,
-   "topic": "model radar AA skoru",
+   "topic": "model radar AA score",
    "confidence": "high"
   },
   {
@@ -237,7 +237,7 @@
    "file": "resume-by-customtitle.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "bp open resume cozumu",
+   "topic": "bp open resume solution",
    "confidence": "low"
   },
   {
@@ -245,7 +245,7 @@
    "file": "tmux-stuck-composer-recovery.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tmux composer kurtarma",
+   "topic": "tmux composer recovery",
    "confidence": "high"
   },
   {
@@ -253,7 +253,7 @@
    "file": "usage-endpoints-quirks.md",
    "scope": "local",
    "subtree": null,
-   "topic": "usage endpoint tuhafliklari",
+   "topic": "usage endpoint quirks",
    "confidence": "high"
   },
   {
@@ -261,7 +261,7 @@
    "file": "yigit-side-channels.md",
    "scope": "subtree",
    "subtree": "kavram",
-   "topic": "yigit yan kanallari",
+   "topic": "Yigit side channels",
    "confidence": "high"
   },
   {
@@ -269,7 +269,7 @@
    "file": "codex-delege-kurallari.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -277,7 +277,7 @@
    "file": "compec-rol.md",
    "scope": "local",
    "subtree": null,
-   "topic": "tuna compec rolu",
+   "topic": "Tuna's Compec role",
    "confidence": "low"
   },
   {
@@ -285,7 +285,7 @@
    "file": "compec-sunucu-durumu.md",
    "scope": "local",
    "subtree": null,
-   "topic": "compec sunucu durumu",
+   "topic": "Compec server status",
    "confidence": "high"
   },
   {
@@ -293,7 +293,7 @@
    "file": "icebreaker-uygulamasi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "icebreaker uygulamasi",
+   "topic": "icebreaker application",
    "confidence": "high"
   },
   {
@@ -301,7 +301,7 @@
    "file": "chem105-final-prep.md",
    "scope": "local",
    "subtree": null,
-   "topic": "chem105 final hazirligi",
+   "topic": "CHEM105 final preparation",
    "confidence": "high"
   },
   {
@@ -309,7 +309,7 @@
    "file": "chem105-midterm1-prep.md",
    "scope": "local",
    "subtree": null,
-   "topic": "chem105 midterm hazirligi",
+   "topic": "CHEM105 midterm preparation",
    "confidence": "high"
   },
   {
@@ -317,7 +317,7 @@
    "file": "chem105-midterm2-prep.md",
    "scope": "local",
    "subtree": null,
-   "topic": "chem105 midterm hazirligi",
+   "topic": "CHEM105 midterm preparation",
    "confidence": "high"
   },
   {
@@ -333,7 +333,7 @@
    "file": "impact-site.md",
    "scope": "local",
    "subtree": null,
-   "topic": "impact sitesi",
+   "topic": "impact site",
    "confidence": "high"
   },
   {
@@ -341,7 +341,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -349,7 +349,7 @@
    "file": "server.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "sunucu altyapi genel",
+   "topic": "general server infrastructure",
    "confidence": "high"
   },
   {
@@ -357,7 +357,7 @@
    "file": "user.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna kullanici profili",
+   "topic": "Tuna user profile",
    "confidence": "high"
   },
   {
@@ -365,7 +365,7 @@
    "file": "design-taste.md",
    "scope": "local",
    "subtree": null,
-   "topic": "kavram tasarim zevki",
+   "topic": "Kavram design taste",
    "confidence": "high"
   },
   {
@@ -373,7 +373,7 @@
    "file": "gonderim-zamani.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "outreach gonderim zamani",
+   "topic": "outreach send time",
    "confidence": "low"
   },
   {
@@ -381,7 +381,7 @@
    "file": "gpu-inference-pivot.md",
    "scope": "local",
    "subtree": null,
-   "topic": "kavram gpu pivotu",
+   "topic": "Kavram GPU pivot",
    "confidence": "high"
   },
   {
@@ -389,7 +389,7 @@
    "file": "kanit-image-inference.md",
    "scope": "local",
    "subtree": null,
-   "topic": "kavram hedef citasi",
+   "topic": "Kavram target bar",
    "confidence": "high"
   },
   {
@@ -397,7 +397,7 @@
    "file": "kontrol-veri-katmaninda.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kontrol veri katmaninda",
+   "topic": "control in the data layer",
    "confidence": "high"
   },
   {
@@ -405,7 +405,7 @@
    "file": "outreach-interview-phase.md",
    "scope": "local",
    "subtree": null,
-   "topic": "kavram outreach fazi",
+   "topic": "Kavram outreach phase",
    "confidence": "high"
   },
   {
@@ -413,7 +413,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -421,7 +421,7 @@
    "file": "yigit-codex-bridge.md",
    "scope": "subtree",
    "subtree": "kavram",
-   "topic": "yigit yan kanallari",
+   "topic": "Yigit side channels",
    "confidence": "high"
   },
   {
@@ -429,7 +429,7 @@
    "file": "giden-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -437,7 +437,7 @@
    "file": "kitap-agent-fleet.md",
    "scope": "local",
    "subtree": null,
-   "topic": "kitap agent hiyerarsisi",
+   "topic": "book agent hierarchy",
    "confidence": "high"
   },
   {
@@ -445,7 +445,7 @@
    "file": "pipeline2-v2.md",
    "scope": "local",
    "subtree": null,
-   "topic": "ceviri pipeline v2",
+   "topic": "translation pipeline v2",
    "confidence": "high"
   },
   {
@@ -453,7 +453,7 @@
    "file": "transformers5-mt5-bozuk.md",
    "scope": "local",
    "subtree": null,
-   "topic": "transformers mt5 regresyonu",
+   "topic": "Transformers mT5 regression",
    "confidence": "high"
   },
   {
@@ -461,7 +461,7 @@
    "file": "background-process-safety.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -469,7 +469,7 @@
    "file": "brevo-per-domain-relay.md",
    "scope": "local",
    "subtree": null,
-   "topic": "brevo domain bazli relay",
+   "topic": "Brevo domain-based relay",
    "confidence": "high"
   },
   {
@@ -477,7 +477,7 @@
    "file": "check-target-busy-before-messaging.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -485,7 +485,7 @@
    "file": "docker-port-bind-explicit.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "docker port bind tuzagi",
+   "topic": "Docker port-bind trap",
    "confidence": "low"
   },
   {
@@ -493,7 +493,7 @@
    "file": "dont-recascade-announcements.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "duyuru cascade etmeme",
+   "topic": "do not cascade announcements",
    "confidence": "high"
   },
   {
@@ -501,7 +501,7 @@
    "file": "fleet-model-policy.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -509,7 +509,7 @@
    "file": "forwarding-external-blocked-by-brevo.md",
    "scope": "local",
    "subtree": null,
-   "topic": "dis yonlendirme engeli",
+   "topic": "external redirection block",
    "confidence": "high"
   },
   {
@@ -517,7 +517,7 @@
    "file": "mail-tls-cert-manual-sync.md",
    "scope": "local",
    "subtree": null,
-   "topic": "mail TLS sertifika sync",
+   "topic": "mail TLS certificate synchronization",
    "confidence": "high"
   },
   {
@@ -525,7 +525,7 @@
    "file": "medlul-mail-setup.md",
    "scope": "local",
    "subtree": null,
-   "topic": "medlul mail kurulumu",
+   "topic": "Medlul mail setup",
    "confidence": "high"
   },
   {
@@ -533,7 +533,7 @@
    "file": "opendkim-etc-not-synced-on-restart.md",
    "scope": "local",
    "subtree": null,
-   "topic": "opendkim sync tuzagi",
+   "topic": "OpenDKIM synchronization trap",
    "confidence": "high"
   },
   {
@@ -541,7 +541,7 @@
    "file": "outbound-block-park-domains.md",
    "scope": "local",
    "subtree": null,
-   "topic": "park domain gonderim blogu",
+   "topic": "Park Domain sending blog",
    "confidence": "high"
   },
   {
@@ -549,7 +549,7 @@
    "file": "outbound-mail-coordination.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -557,7 +557,7 @@
    "file": "probotstudio-mailbox-inventory.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probotstudio mail envanteri",
+   "topic": "Probot Studio mail inventory",
    "confidence": "high"
   },
   {
@@ -565,7 +565,7 @@
    "file": "probotstudio-mail-identities.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probotstudio mail kimlikleri",
+   "topic": "Probot Studio mail identities",
    "confidence": "high"
   },
   {
@@ -573,7 +573,7 @@
    "file": "probotstudio-support-remailer.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probotstudio destek remailer",
+   "topic": "Probot Studio support remailer",
    "confidence": "high"
   },
   {
@@ -581,7 +581,7 @@
    "file": "verify-completion-by-evidence.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tamamlanma kaniti",
+   "topic": "completion evidence",
    "confidence": "high"
   },
   {
@@ -597,7 +597,7 @@
    "file": "webmail-storage-failed-docker-dns.md",
    "scope": "local",
    "subtree": null,
-   "topic": "docker dns kaybi",
+   "topic": "Docker DNS loss",
    "confidence": "high"
   },
   {
@@ -605,7 +605,7 @@
    "file": "agent-folder-per-agent.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent basina klasor",
+   "topic": "directory per agent",
    "confidence": "high"
   },
   {
@@ -613,7 +613,7 @@
    "file": "agent-naming-discipline.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent adlandirma disiplini",
+   "topic": "agent naming discipline",
    "confidence": "high"
   },
   {
@@ -621,7 +621,7 @@
    "file": "agent-nicknames.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent takma adlari",
+   "topic": "agent aliases",
    "confidence": "high"
   },
   {
@@ -629,7 +629,7 @@
    "file": "agent-tree-view.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent listesini agac goster",
+   "topic": "show agent list as a tree",
    "confidence": "high"
   },
   {
@@ -645,7 +645,7 @@
    "file": "bp-msg-protectsystem-strict-tuzagi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "systemd ProtectSystem bp kuyrugu",
+   "topic": "systemd ProtectSystem bp queue",
    "confidence": "high"
   },
   {
@@ -653,7 +653,7 @@
    "file": "bp-open-resume-shared-folder-bug.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "bp open resume hatasi",
+   "topic": "bp open resume error",
    "confidence": "high"
   },
   {
@@ -661,7 +661,7 @@
    "file": "bp-tool-ownership.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "bp tool sahipligi",
+   "topic": "bp tool ownership",
    "confidence": "high"
   },
   {
@@ -669,7 +669,7 @@
    "file": "claudex-gpt-in-claude-code.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "claude code icinde gpt",
+   "topic": "GPT inside Claude Code",
    "confidence": "high"
   },
   {
@@ -677,7 +677,7 @@
    "file": "cloudflare-dns-access.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "cloudflare dns erisimi",
+   "topic": "Cloudflare DNS access",
    "confidence": "high"
   },
   {
@@ -685,7 +685,7 @@
    "file": "codex-sandbox-bwrap-wrapper.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex sandbox bypass riski",
+   "topic": "Codex sandbox bypass risk",
    "confidence": "high"
   },
   {
@@ -701,7 +701,7 @@
    "file": "domain-scheme.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "domain duzeni",
+   "topic": "domain layout",
    "confidence": "high"
   },
   {
@@ -709,7 +709,7 @@
    "file": "durdurulmus-sistem-ariza-maskeler.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "susturma arizayi maskeler",
+   "topic": "silencing masks failures",
    "confidence": "high"
   },
   {
@@ -717,7 +717,7 @@
    "file": "gece-penceresi-agir-isler.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "gece penceresi agir isler",
+   "topic": "heavy work during the night window",
    "confidence": "high"
   },
   {
@@ -725,7 +725,7 @@
    "file": "guvenlik-sertlestirme-2026-08.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "sunucu guvenlik sertlestirme",
+   "topic": "server security hardening",
    "confidence": "low"
   },
   {
@@ -733,7 +733,7 @@
    "file": "koruma-kapsami-zaman-boslugu.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "koruma kapsami zaman boslugu",
+   "topic": "protection-scope timing gap",
    "confidence": "high"
   },
   {
@@ -741,7 +741,7 @@
    "file": "mail-cikisi-server-mail-koordinasyonu.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -749,7 +749,7 @@
    "file": "model-policy-uc-model.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -757,7 +757,7 @@
    "file": "no-compact-without-asking.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "duyuru maliyeti ve compact",
+   "topic": "announcement cost and compact",
    "confidence": "high"
   },
   {
@@ -765,7 +765,7 @@
    "file": "no-model-effort-changes-without-asking.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -773,7 +773,7 @@
    "file": "probot-outreach-livesync.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "outreach vault livesync",
+   "topic": "outreach vault live synchronization",
    "confidence": "high"
   },
   {
@@ -781,7 +781,7 @@
    "file": "server-hardware-legion.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "sunucu donanimi",
+   "topic": "server hardware",
    "confidence": "high"
   },
   {
@@ -789,7 +789,7 @@
    "file": "server-orchestration.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent orkestrasyonu",
+   "topic": "agent orchestration",
    "confidence": "high"
   },
   {
@@ -797,7 +797,7 @@
    "file": "shared-browser-server.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "paylasimli browser sunucusu",
+   "topic": "shared browser server",
    "confidence": "high"
   },
   {
@@ -805,7 +805,7 @@
    "file": "tmux-clipboard-smart-cc.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tmux pano kurulumu",
+   "topic": "tmux clipboard setup",
    "confidence": "high"
   },
   {
@@ -813,7 +813,7 @@
    "file": "tone-with-user.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kullaniciyla ton",
+   "topic": "tone with the user",
    "confidence": "high"
   },
   {
@@ -821,7 +821,7 @@
    "file": "yedek-sistemi-depo3-borg.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "borg yedek sistemi",
+   "topic": "Borg backup system",
    "confidence": "high"
   },
   {
@@ -829,7 +829,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -837,7 +837,7 @@
    "file": "project_probot.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probot sirket ozeti",
+   "topic": "Probot company summary",
    "confidence": "high"
   },
   {
@@ -845,7 +845,7 @@
    "file": "reference_notion.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probot notion workspace",
+   "topic": "Probot Notion workspace",
    "confidence": "high"
   },
   {
@@ -853,7 +853,7 @@
    "file": "user_tuna.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna kullanici profili",
+   "topic": "Tuna user profile",
    "confidence": "high"
   },
   {
@@ -861,7 +861,7 @@
    "file": "background-codex-safety.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -869,7 +869,7 @@
    "file": "outgoing-mail-coordination.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -877,7 +877,7 @@
    "file": "verify-completion-not-claims.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tamamlanma kaniti",
+   "topic": "completion evidence",
    "confidence": "high"
   },
   {
@@ -885,7 +885,7 @@
    "file": "duyuru-cascade.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "duyuru cascade etmeme",
+   "topic": "do not cascade announcements",
    "confidence": "high"
   },
   {
@@ -893,7 +893,7 @@
    "file": "kendi-gecmisimiz-agda-yok.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "gecmis temaslar kayitsiz",
+   "topic": "past contacts unrecorded",
    "confidence": "high"
   },
   {
@@ -901,7 +901,7 @@
    "file": "kontrol-veri-katmaninda.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kontrol veri katmaninda",
+   "topic": "control in the data layer",
    "confidence": "high"
   },
   {
@@ -909,7 +909,7 @@
    "file": "mail-dogrulama.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "mail varlik dogrulama",
+   "topic": "mail asset verification",
    "confidence": "high"
   },
   {
@@ -917,7 +917,7 @@
    "file": "model-maliyet-olcumu.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex model maliyeti",
+   "topic": "Codex model cost",
    "confidence": "high"
   },
   {
@@ -925,7 +925,7 @@
    "file": "outpost-control.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "outpost kontrol kanali",
+   "topic": "Outpost control channel",
    "confidence": "low"
   },
   {
@@ -933,7 +933,7 @@
    "file": "outpost-infra.md",
    "scope": "local",
    "subtree": null,
-   "topic": "outpost altyapisi",
+   "topic": "Outpost infrastructure",
    "confidence": "high"
   },
   {
@@ -941,7 +941,7 @@
    "file": "outpost-kurallar.md",
    "scope": "local",
    "subtree": null,
-   "topic": "outpost kurallari",
+   "topic": "Outpost rules",
    "confidence": "high"
   },
   {
@@ -949,7 +949,7 @@
    "file": "outpost-mvp-yon.md",
    "scope": "local",
    "subtree": null,
-   "topic": "outpost urun yonu",
+   "topic": "Outpost product direction",
    "confidence": "high"
   },
   {
@@ -957,7 +957,7 @@
    "file": "outpost-progress.md",
    "scope": "local",
    "subtree": null,
-   "topic": "outpost insa durumu",
+   "topic": "Outpost build status",
    "confidence": "high"
   },
   {
@@ -965,7 +965,7 @@
    "file": "outpost-workspace-mimari.md",
    "scope": "local",
    "subtree": null,
-   "topic": "outpost workspace mimarisi",
+   "topic": "Outpost workspace architecture",
    "confidence": "high"
   },
   {
@@ -973,7 +973,7 @@
    "file": "outreach-bilgi-havuzu.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "outreach bilgi havuzu",
+   "topic": "outreach knowledge base",
    "confidence": "high"
   },
   {
@@ -981,7 +981,7 @@
    "file": "surec-guvenligi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -989,7 +989,7 @@
    "file": "tek-kurum-db.md",
    "scope": "local",
    "subtree": null,
-   "topic": "tek kurum DB karari",
+   "topic": "single-institution database decision",
    "confidence": "high"
   },
   {
@@ -997,7 +997,7 @@
    "file": "tuna-calisma-tarzi.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "tuna outreach ritmi",
+   "topic": "Tuna's outreach cadence",
    "confidence": "high"
   },
   {
@@ -1005,7 +1005,7 @@
    "file": "wa-kimlik-kaynagi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa kimlik/grup tespiti",
+   "topic": "WhatsApp identity/group detection",
    "confidence": "high"
   },
   {
@@ -1013,7 +1013,7 @@
    "file": "home-printers.md",
    "scope": "subtree",
    "subtree": "3d-baski",
-   "topic": "ev yazicilari",
+   "topic": "home printers",
    "confidence": "high"
   },
   {
@@ -1021,7 +1021,7 @@
    "file": "hasan-hoca-kimlik.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "hasan hoca kimligi",
+   "topic": "Hasan Hoca identity",
    "confidence": "high"
   },
   {
@@ -1029,7 +1029,7 @@
    "file": "mail-server-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -1037,7 +1037,7 @@
    "file": "agent-mesaj-mesgul-kontrolu.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -1045,7 +1045,7 @@
    "file": "anket-onay-kurali.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "anket onay kurali",
+   "topic": "survey approval rule",
    "confidence": "high"
   },
   {
@@ -1053,7 +1053,7 @@
    "file": "bogazici-avantaji-ibb-hatti.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "bogazici avantaji",
+   "topic": "Bogazici advantage",
    "confidence": "high"
   },
   {
@@ -1061,7 +1061,7 @@
    "file": "bp-msg-kullan.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -1069,7 +1069,7 @@
    "file": "codex-atif-log.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex atif logu",
+   "topic": "Codex citation log",
    "confidence": "high"
   },
   {
@@ -1077,7 +1077,7 @@
    "file": "codex-kota-tabani.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex kota/maliyet disiplini",
+   "topic": "Codex quota/cost discipline",
    "confidence": "high"
   },
   {
@@ -1085,7 +1085,7 @@
    "file": "ftc-pivot.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "ftc pivotu",
+   "topic": "FTC pivot",
    "confidence": "high"
   },
   {
@@ -1093,7 +1093,7 @@
    "file": "insaat-degil-konusma-onceligi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "musteri konusma onceligi",
+   "topic": "customer-conversation priority",
    "confidence": "high"
   },
   {
@@ -1101,7 +1101,7 @@
    "file": "kurum-listesi-temas-derinligi.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "kurum listesi citasi",
+   "topic": "institution-list bar",
    "confidence": "high"
   },
   {
@@ -1109,7 +1109,7 @@
    "file": "mail-gonderim-kurali.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "mail onay kurali",
+   "topic": "mail approval rule",
    "confidence": "low"
   },
   {
@@ -1117,7 +1117,7 @@
    "file": "mail-server-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -1125,7 +1125,7 @@
    "file": "mufredat-meb-sinir.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "mufredat rol siniri",
+   "topic": "curriculum role boundary",
    "confidence": "high"
   },
   {
@@ -1133,7 +1133,7 @@
    "file": "nf-products-gecmisi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "nf products gecmisi",
+   "topic": "NF Products history",
    "confidence": "high"
   },
   {
@@ -1141,7 +1141,7 @@
    "file": "probot-business-working-files.md",
    "scope": "local",
    "subtree": null,
-   "topic": "business is dosyalari",
+   "topic": "business work files",
    "confidence": "high"
   },
   {
@@ -1149,7 +1149,7 @@
    "file": "rakip-sikayet-kullanimi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "rakip sikayet kullanimi",
+   "topic": "use of competitor complaints",
    "confidence": "high"
   },
   {
@@ -1157,7 +1157,7 @@
    "file": "sirket-yapisi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "tuzel yapi",
+   "topic": "legal entity structure",
    "confidence": "high"
   },
   {
@@ -1165,7 +1165,7 @@
    "file": "stratejik-rol-ayrimi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "business/outreach rol ayrimi",
+   "topic": "business/outreach role separation",
    "confidence": "high"
   },
   {
@@ -1173,7 +1173,7 @@
    "file": "subagent-effort-secimi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex kota/maliyet disiplini",
+   "topic": "Codex quota/cost discipline",
    "confidence": "high"
   },
   {
@@ -1181,7 +1181,7 @@
    "file": "tuna-profile.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna kullanici profili",
+   "topic": "Tuna user profile",
    "confidence": "low"
   },
   {
@@ -1189,7 +1189,7 @@
    "file": "value-first-open-dev.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "open-dev iptali",
+   "topic": "open-dev cancellation",
    "confidence": "high"
   },
   {
@@ -1197,7 +1197,7 @@
    "file": "yigit-dm-yasak.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "yigit DM yasagi",
+   "topic": "Yigit direct-message prohibition",
    "confidence": "high"
   },
   {
@@ -1205,7 +1205,7 @@
    "file": "fleet-model-pinning.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -1213,7 +1213,7 @@
    "file": "probot-core-role.md",
    "scope": "local",
    "subtree": null,
-   "topic": "probot-core rolu",
+   "topic": "probot-core role",
    "confidence": "high"
   },
   {
@@ -1221,7 +1221,7 @@
    "file": "shared-browser-server.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "paylasimli browser sunucusu",
+   "topic": "shared browser server",
    "confidence": "high"
   },
   {
@@ -1229,7 +1229,7 @@
    "file": "tuna-feedback-minimal.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kullaniciyla ton",
+   "topic": "tone with the user",
    "confidence": "high"
   },
   {
@@ -1237,7 +1237,7 @@
    "file": "agent-kapatma-hijyeni.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent kapatma hijyeni",
+   "topic": "agent shutdown hygiene",
    "confidence": "high"
   },
   {
@@ -1245,7 +1245,7 @@
    "file": "agent-mesajlasma-guvenlik.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -1253,7 +1253,7 @@
    "file": "arka-plan-surec-guvenlik.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -1261,7 +1261,7 @@
    "file": "ftc-opmode-gecis.md",
    "scope": "local",
    "subtree": null,
-   "topic": "core opmode gecisi",
+   "topic": "core operating-mode transition",
    "confidence": "high"
   },
   {
@@ -1269,7 +1269,7 @@
    "file": "mail-gonderim-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -1277,7 +1277,7 @@
    "file": "model-pinleme-kurali.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -1285,7 +1285,7 @@
    "file": "probot-docs-project.md",
    "scope": "local",
    "subtree": null,
-   "topic": "docs proje mimarisi",
+   "topic": "documentation project architecture",
    "confidence": "high"
   },
   {
@@ -1293,7 +1293,7 @@
    "file": "probot-kit-canon.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kit canon zorunlu",
+   "topic": "kit canon mandatory",
    "confidence": "high"
   },
   {
@@ -1301,7 +1301,7 @@
    "file": "snap-chromium-screenshot.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "ui screenshot dogrulama",
+   "topic": "UI screenshot verification",
    "confidence": "high"
   },
   {
@@ -1309,7 +1309,7 @@
    "file": "tamamlanma-olculebilir-kanit.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tamamlanma kaniti",
+   "topic": "completion evidence",
    "confidence": "high"
   },
   {
@@ -1317,7 +1317,7 @@
    "file": "agent-mesajlasma-guvenlik.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -1325,7 +1325,7 @@
    "file": "codex-arka-plan-guvenligi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -1333,7 +1333,7 @@
    "file": "dev-site-basic-auth.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "dev domain basic auth",
+   "topic": "development domain basic auth",
    "confidence": "high"
   },
   {
@@ -1341,7 +1341,7 @@
    "file": "egitim-git-gitea.md",
    "scope": "local",
    "subtree": null,
-   "topic": "egitim repo duzeni",
+   "topic": "education repository layout",
    "confidence": "high"
   },
   {
@@ -1349,7 +1349,7 @@
    "file": "egitim-icerik-pedagoji-kurallari.md",
    "scope": "subtree",
    "subtree": "probot-egitim",
-   "topic": "icerik pedagoji kurallari",
+   "topic": "content pedagogy rules",
    "confidence": "high"
   },
   {
@@ -1357,7 +1357,7 @@
    "file": "egitim-site-yapisi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "egitim site yapisi",
+   "topic": "education site structure",
    "confidence": "high"
   },
   {
@@ -1365,7 +1365,7 @@
    "file": "giden-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -1373,7 +1373,7 @@
    "file": "icerik-dil-kurallari.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "site metin dil yasaklari",
+   "topic": "site copy language prohibitions",
    "confidence": "high"
   },
   {
@@ -1381,7 +1381,7 @@
    "file": "kit-robot-isim-canon.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kit canon zorunlu",
+   "topic": "kit canon mandatory",
    "confidence": "high"
   },
   {
@@ -1389,7 +1389,7 @@
    "file": "market-arastirma-durumu.md",
    "scope": "local",
    "subtree": null,
-   "topic": "market arastirma durumu",
+   "topic": "market research status",
    "confidence": "high"
   },
   {
@@ -1397,7 +1397,7 @@
    "file": "model-politikasi-guncel.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -1405,7 +1405,7 @@
    "file": "open-dev-satissiz-site-plani.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "open-dev iptali",
+   "topic": "open-dev cancellation",
    "confidence": "high"
   },
   {
@@ -1413,7 +1413,7 @@
    "file": "agent-kapatma-hijyeni.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent kapatma hijyeni",
+   "topic": "agent shutdown hygiene",
    "confidence": "high"
   },
   {
@@ -1421,7 +1421,7 @@
    "file": "arastirma-subagent-modeli.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex kota/maliyet disiplini",
+   "topic": "Codex quota/cost discipline",
    "confidence": "high"
   },
   {
@@ -1429,7 +1429,7 @@
    "file": "blocks-cross-subtree-koordinasyon.md",
    "scope": "local",
    "subtree": null,
-   "topic": "mufredat-blocks koordinasyonu",
+   "topic": "curriculum-blocks coordination",
    "confidence": "high"
   },
   {
@@ -1437,7 +1437,7 @@
    "file": "gitea-paylasimli-repo.md",
    "scope": "local",
    "subtree": null,
-   "topic": "mufredat paylasimli repo",
+   "topic": "shared curriculum repository",
    "confidence": "high"
   },
   {
@@ -1445,7 +1445,7 @@
    "file": "limit-donemi-effort-medium.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -1453,7 +1453,7 @@
    "file": "meb-giris-arastirma-sonuc.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "meb arastirma sonucu",
+   "topic": "MEB research result",
    "confidence": "high"
   },
   {
@@ -1461,7 +1461,7 @@
    "file": "beyan-gun-teyidi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "beyan gun teyidi",
+   "topic": "declaration-day confirmation",
    "confidence": "high"
   },
   {
@@ -1469,7 +1469,7 @@
    "file": "grup-mesaj-disiplini.md",
    "scope": "local",
    "subtree": null,
-   "topic": "wa grup mesaj disiplini",
+   "topic": "WhatsApp group-message discipline",
    "confidence": "high"
   },
   {
@@ -1477,7 +1477,7 @@
    "file": "acil-bildirim-whatsapp.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "acil bildirim whatsapp",
+   "topic": "urgent WhatsApp notification",
    "confidence": "high"
   },
   {
@@ -1485,7 +1485,7 @@
    "file": "basvuru-metni-uslubu.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "uzun tire yasagi",
+   "topic": "em-dash prohibition",
    "confidence": "high"
   },
   {
@@ -1493,7 +1493,7 @@
    "file": "bulgu-hipotez-ayrimi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "bulgu titizligi",
+   "topic": "finding rigor",
    "confidence": "high"
   },
   {
@@ -1501,7 +1501,7 @@
    "file": "codex-disiplin.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "codex kota/maliyet disiplini",
+   "topic": "Codex quota/cost discipline",
    "confidence": "high"
   },
   {
@@ -1509,7 +1509,7 @@
    "file": "hukmu-denetle-kaydi-degil.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "hukmu kaynaktan denetle",
+   "topic": "verify conclusions against the source",
    "confidence": "high"
   },
   {
@@ -1517,7 +1517,7 @@
    "file": "ic-veri-disa-cikmaz.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "ic veri disa cikmaz",
+   "topic": "internal data does not leave",
    "confidence": "high"
   },
   {
@@ -1525,7 +1525,7 @@
    "file": "kisitlamayi-amacindan-uygula.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kisitlamayi amacindan uygula",
+   "topic": "apply restrictions according to their purpose",
    "confidence": "high"
   },
   {
@@ -1533,7 +1533,7 @@
    "file": "mufredat-acik-degil.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "mufredat acik degil",
+   "topic": "curriculum not open",
    "confidence": "high"
   },
   {
@@ -1541,7 +1541,7 @@
    "file": "nf-products-sorusu-kapali.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "nf products gecmisi",
+   "topic": "NF Products history",
    "confidence": "high"
   },
   {
@@ -1549,7 +1549,7 @@
    "file": "no-artifacts-use-admin-probot.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "artifact yerine admin sayfasi",
+   "topic": "admin page instead of artifact",
    "confidence": "high"
   },
   {
@@ -1557,7 +1557,7 @@
    "file": "sunum-malzemesi-once-kontrol.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "sunum oncesi kontrol",
+   "topic": "pre-presentation check",
    "confidence": "low"
   },
   {
@@ -1565,7 +1565,7 @@
    "file": "urun-odagi-yon-karari.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "ftc pivotu",
+   "topic": "FTC pivot",
    "confidence": "high"
   },
   {
@@ -1573,7 +1573,7 @@
    "file": "wa-mesajlari-kisa.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa grup mesaj disiplini",
+   "topic": "WhatsApp group-message discipline",
    "confidence": "high"
   },
   {
@@ -1581,7 +1581,7 @@
    "file": "3d-print-routing-server-3dprinter.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "baski sahipligi/routing",
+   "topic": "print ownership/routing",
    "confidence": "high"
   },
   {
@@ -1589,7 +1589,7 @@
    "file": "admin-shelf-preview-pattern.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "admin.probotstudio yayin",
+   "topic": "admin.probotstudio deployment",
    "confidence": "high"
   },
   {
@@ -1597,7 +1597,7 @@
    "file": "agent-closure-hygiene.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent kapatma hijyeni",
+   "topic": "agent shutdown hygiene",
    "confidence": "high"
   },
   {
@@ -1605,7 +1605,7 @@
    "file": "agent-own-folder-rule.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent basina klasor",
+   "topic": "directory per agent",
    "confidence": "high"
   },
   {
@@ -1613,7 +1613,7 @@
    "file": "alias-alp-wa-discipline.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "wa persona disiplini",
+   "topic": "WhatsApp persona discipline",
    "confidence": "high"
   },
   {
@@ -1621,7 +1621,7 @@
    "file": "busy-check-two-checks-before-send.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -1629,7 +1629,7 @@
    "file": "codex-background-hygiene.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -1637,7 +1637,7 @@
    "file": "dont-recascade-server-main-announcements.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "duyuru cascade etmeme",
+   "topic": "do not cascade announcements",
    "confidence": "high"
   },
   {
@@ -1645,7 +1645,7 @@
    "file": "drive-mekanik-cad-kutuphanesi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "cad kutuphanesi",
+   "topic": "CAD library",
    "confidence": "high"
   },
   {
@@ -1653,7 +1653,7 @@
    "file": "fleet-token-economy.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "duyuru maliyeti ve compact",
+   "topic": "announcement cost and compact",
    "confidence": "high"
   },
   {
@@ -1661,7 +1661,7 @@
    "file": "incidents-log-read-discipline.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "incident log okuma",
+   "topic": "reading incident logs",
    "confidence": "high"
   },
   {
@@ -1669,7 +1669,7 @@
    "file": "meb-research-outcome-2026-07.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "meb arastirma sonucu",
+   "topic": "MEB research result",
    "confidence": "high"
   },
   {
@@ -1677,7 +1677,7 @@
    "file": "mecanum-3dbaski-canon-live-conflict.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "open-dev iptali",
+   "topic": "open-dev cancellation",
    "confidence": "low"
   },
   {
@@ -1685,7 +1685,7 @@
    "file": "nfr-never-mention-huseyin-wa-only.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "nfr marka yasagi",
+   "topic": "NFR brand prohibition",
    "confidence": "high"
   },
   {
@@ -1693,7 +1693,7 @@
    "file": "no-memory-answers-delegate-live.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "canli veriyi hafizadan cevaplama",
+   "topic": "answering live-data questions from memory",
    "confidence": "high"
   },
   {
@@ -1701,7 +1701,7 @@
    "file": "outbound-mail-coordinate-server-mail.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -1709,7 +1709,7 @@
    "file": "outpost-ui-research-status.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "outpost kontrol kanali",
+   "topic": "Outpost control channel",
    "confidence": "low"
   },
   {
@@ -1717,7 +1717,7 @@
    "file": "priority-customers-first-rest-is-polish.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "musteri konusma onceligi",
+   "topic": "customer-conversation priority",
    "confidence": "high"
   },
   {
@@ -1725,7 +1725,7 @@
    "file": "probot-gitea-repo-layout.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "gitea repo duzeni",
+   "topic": "Gitea repository layout",
    "confidence": "high"
   },
   {
@@ -1733,7 +1733,7 @@
    "file": "probot-logo-assets.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "logo varliklari",
+   "topic": "logo assets",
    "confidence": "high"
   },
   {
@@ -1741,7 +1741,7 @@
    "file": "studio-4-agents-keep-on-opus.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -1749,7 +1749,7 @@
    "file": "systemd-bpqueue-silent-drop.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "systemd ProtectSystem bp kuyrugu",
+   "topic": "systemd ProtectSystem bp queue",
    "confidence": "high"
   },
   {
@@ -1757,7 +1757,7 @@
    "file": "verify-completion-measurable-evidence.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tamamlanma kaniti",
+   "topic": "completion evidence",
    "confidence": "high"
   },
   {
@@ -1765,7 +1765,7 @@
    "file": "wa-bridge-file-send.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa dosya gonderimi",
+   "topic": "WhatsApp file sending",
    "confidence": "high"
   },
   {
@@ -1773,7 +1773,7 @@
    "file": "wa-group-two-personas-no-double-answer.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "wa persona disiplini",
+   "topic": "WhatsApp persona discipline",
    "confidence": "high"
   },
   {
@@ -1781,7 +1781,7 @@
    "file": "bakilamadi-bulunamadi-farki.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "bulgu titizligi",
+   "topic": "finding rigor",
    "confidence": "high"
   },
   {
@@ -1789,7 +1789,7 @@
    "file": "ham-cikti-damga-kurali.md",
    "scope": "local",
    "subtree": null,
-   "topic": "ham cikti damgasi",
+   "topic": "raw-output label",
    "confidence": "high"
   },
   {
@@ -1797,7 +1797,7 @@
    "file": "iletisim-ertelenenler-listesi.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "temas yasak listesi",
+   "topic": "do-not-contact list",
    "confidence": "high"
   },
   {
@@ -1805,7 +1805,7 @@
    "file": "kit-hazir-degil.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kit hazir degil",
+   "topic": "kit not ready",
    "confidence": "high"
   },
   {
@@ -1813,7 +1813,7 @@
    "file": "kontrol-kurarken-uc-soru.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kontrol kurma uc soru",
+   "topic": "three questions for establishing control",
    "confidence": "high"
   },
   {
@@ -1821,7 +1821,7 @@
    "file": "mail-arastirma-sizdirma-yasagi.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "arastirma sizdirma yasagi",
+   "topic": "research leak prohibition",
    "confidence": "high"
   },
   {
@@ -1829,7 +1829,7 @@
    "file": "nfr-probot-ayni-kisi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "nfr veri kullanimi",
+   "topic": "NFR data use",
    "confidence": "high"
   },
   {
@@ -1837,7 +1837,7 @@
    "file": "nfr-siparisi-sicak-lead-degil.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "nfr siparisi lead degil",
+   "topic": "NFR order is not a lead",
    "confidence": "high"
   },
   {
@@ -1845,7 +1845,7 @@
    "file": "outreach-fazi-user-interview.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "outreach fazi interview",
+   "topic": "outreach interview phase",
    "confidence": "high"
   },
   {
@@ -1853,7 +1853,7 @@
    "file": "probot-adi-ortak-zemin-sarti.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "marka adi ortak zemin",
+   "topic": "shared ground for the brand name",
    "confidence": "high"
   },
   {
@@ -1861,7 +1861,7 @@
    "file": "susturma-arizayi-maskeler.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "susturma arizayi maskeler",
+   "topic": "silencing masks failures",
    "confidence": "high"
   },
   {
@@ -1869,7 +1869,7 @@
    "file": "tek-arastirma-tek-workflow.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tek arastirma tek workflow",
+   "topic": "one research task, one workflow",
    "confidence": "low"
   },
   {
@@ -1877,7 +1877,7 @@
    "file": "tuna-konum.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna konumu",
+   "topic": "Tuna's location",
    "confidence": "high"
   },
   {
@@ -1885,7 +1885,7 @@
    "file": "vault-cift-dosya-birlestirme.md",
    "scope": "local",
    "subtree": null,
-   "topic": "vault dosya birlestirme",
+   "topic": "vault file merge",
    "confidence": "high"
   },
   {
@@ -1893,7 +1893,7 @@
    "file": "wa-grup-uye-listesi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa kimlik/grup tespiti",
+   "topic": "WhatsApp identity/group detection",
    "confidence": "high"
   },
   {
@@ -1901,7 +1901,7 @@
    "file": "yazim-uslubu-insan-gibi.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "uzun tire yasagi",
+   "topic": "em-dash prohibition",
    "confidence": "high"
   },
   {
@@ -1909,7 +1909,7 @@
    "file": "admin-panel-hesaplari.md",
    "scope": "local",
    "subtree": null,
-   "topic": "medusa admin hesaplari",
+   "topic": "Medusa admin accounts",
    "confidence": "high"
   },
   {
@@ -1917,7 +1917,7 @@
    "file": "admin-subdomain.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "admin.probotstudio yayin",
+   "topic": "admin.probotstudio deployment",
    "confidence": "high"
   },
   {
@@ -1925,7 +1925,7 @@
    "file": "birakilan-sistem-durumu.md",
    "scope": "local",
    "subtree": null,
-   "topic": "birakilan sistem envanteri",
+   "topic": "abandoned-system inventory",
    "confidence": "high"
   },
   {
@@ -1933,7 +1933,7 @@
    "file": "blocks-dev-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "blocks dev servisi",
+   "topic": "blocks development service",
    "confidence": "high"
   },
   {
@@ -1941,7 +1941,7 @@
    "file": "blog-is-akisi-kurallari.md",
    "scope": "local",
    "subtree": null,
-   "topic": "blog is akisi",
+   "topic": "blog workflow",
    "confidence": "high"
   },
   {
@@ -1949,7 +1949,7 @@
    "file": "blog-yorum-bulten-servisi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "blog yorum servisi",
+   "topic": "blog comment service",
    "confidence": "high"
   },
   {
@@ -1957,7 +1957,7 @@
    "file": "builder-dev-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "builder dev servisi",
+   "topic": "builder development service",
    "confidence": "high"
   },
   {
@@ -1965,7 +1965,7 @@
    "file": "content-package.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "urun medya kaynagi",
+   "topic": "product media source",
    "confidence": "high"
   },
   {
@@ -1981,7 +1981,7 @@
    "file": "design-test-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "design-test servisi",
+   "topic": "design-test service",
    "confidence": "high"
   },
   {
@@ -1989,7 +1989,7 @@
    "file": "dev-domain-basic-auth.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "dev domain basic auth",
+   "topic": "development domain basic auth",
    "confidence": "high"
   },
   {
@@ -1997,7 +1997,7 @@
    "file": "dev-domain-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "dev domain servisi",
+   "topic": "development domain service",
    "confidence": "high"
   },
   {
@@ -2005,7 +2005,7 @@
    "file": "dev-prod-ayni-dosyalar.md",
    "scope": "local",
    "subtree": null,
-   "topic": "dev-prod ayni dosyalar",
+   "topic": "same files in development and production",
    "confidence": "high"
   },
   {
@@ -2013,7 +2013,7 @@
    "file": "gitea-folder-remote-setup.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "gitea repo duzeni",
+   "topic": "Gitea repository layout",
    "confidence": "high"
   },
   {
@@ -2021,7 +2021,7 @@
    "file": "global-header-standard.md",
    "scope": "local",
    "subtree": null,
-   "topic": "global header standardi",
+   "topic": "global header standard",
    "confidence": "high"
   },
   {
@@ -2029,7 +2029,7 @@
    "file": "gsc-seo-api.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "gsc seo api",
+   "topic": "GSC SEO API",
    "confidence": "high"
   },
   {
@@ -2037,7 +2037,7 @@
    "file": "hiyerarsi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "studio hiyerarsisi",
+   "topic": "studio hierarchy",
    "confidence": "high"
   },
   {
@@ -2045,7 +2045,7 @@
    "file": "hub-dev-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "hub dev servisi",
+   "topic": "hub development service",
    "confidence": "high"
   },
   {
@@ -2053,7 +2053,7 @@
    "file": "kartvizit-sistemi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "kartvizit sistemi",
+   "topic": "business-card system",
    "confidence": "high"
   },
   {
@@ -2061,7 +2061,7 @@
    "file": "kartvizit-tasarim-feedback.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tasarimciya art-direction dikte etme",
+   "topic": "do not dictate art direction to the designer",
    "confidence": "low"
   },
   {
@@ -2069,7 +2069,7 @@
    "file": "kit-canon-zorunlu.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kit canon zorunlu",
+   "topic": "kit canon mandatory",
    "confidence": "high"
   },
   {
@@ -2077,7 +2077,7 @@
    "file": "landing-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "landing servisi",
+   "topic": "landing service",
    "confidence": "high"
   },
   {
@@ -2085,7 +2085,7 @@
    "file": "mail-server-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -2093,7 +2093,7 @@
    "file": "mimari-degerlendirme.md",
    "scope": "local",
    "subtree": null,
-   "topic": "studio mimari degerlendirmesi",
+   "topic": "studio architecture assessment",
    "confidence": "high"
   },
   {
@@ -2101,7 +2101,7 @@
    "file": "model-pinleme-kurali.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -2109,7 +2109,7 @@
    "file": "nginx-reverse-proxy.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "sunucu altyapi genel",
+   "topic": "general server infrastructure",
    "confidence": "high"
   },
   {
@@ -2117,7 +2117,7 @@
    "file": "no-fabricated-specs.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "spec uydurma yasagi",
+   "topic": "prohibition on inventing specifications",
    "confidence": "high"
   },
   {
@@ -2125,7 +2125,7 @@
    "file": "no-nfr-branding.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "nfr marka yasagi",
+   "topic": "NFR brand prohibition",
    "confidence": "high"
   },
   {
@@ -2133,7 +2133,7 @@
    "file": "paylasimli-browser.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "paylasimli browser sunucusu",
+   "topic": "shared browser server",
    "confidence": "high"
   },
   {
@@ -2141,7 +2141,7 @@
    "file": "pil-sarj-sku-hold.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "pil/sarj sku hold",
+   "topic": "battery/charger SKU hold",
    "confidence": "high"
   },
   {
@@ -2149,7 +2149,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -2157,7 +2157,7 @@
    "file": "probot-blocks-role.md",
    "scope": "local",
    "subtree": null,
-   "topic": "blocks agent rolu",
+   "topic": "blocks agent role",
    "confidence": "high"
   },
   {
@@ -2165,7 +2165,7 @@
    "file": "probot-core-referans.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probot-core api referansi",
+   "topic": "probot-core API reference",
    "confidence": "high"
   },
   {
@@ -2173,7 +2173,7 @@
    "file": "probot-shop-role.md",
    "scope": "local",
    "subtree": null,
-   "topic": "shop agent rolu",
+   "topic": "shop agent role",
    "confidence": "high"
   },
   {
@@ -2181,7 +2181,7 @@
    "file": "prod-serving.md",
    "scope": "local",
    "subtree": null,
-   "topic": "prod servisi",
+   "topic": "production service",
    "confidence": "high"
   },
   {
@@ -2189,7 +2189,7 @@
    "file": "shop-auth-modeli.md",
    "scope": "local",
    "subtree": null,
-   "topic": "shop auth modeli",
+   "topic": "shop authentication model",
    "confidence": "high"
   },
   {
@@ -2197,7 +2197,7 @@
    "file": "shop-dev-fiyat-gizli.md",
    "scope": "local",
    "subtree": null,
-   "topic": "shop dev fiyat gizli",
+   "topic": "shop development prices private",
    "confidence": "high"
   },
   {
@@ -2205,7 +2205,7 @@
    "file": "shop-katalog-bom-sync.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "shop katalog bom sync",
+   "topic": "shop catalog/BOM synchronization",
    "confidence": "high"
   },
   {
@@ -2213,7 +2213,7 @@
    "file": "shop-platform-karari.md",
    "scope": "local",
    "subtree": null,
-   "topic": "shop platform karari",
+   "topic": "shop platform decision",
    "confidence": "high"
   },
   {
@@ -2221,7 +2221,7 @@
    "file": "shop-uretim-modu.md",
    "scope": "local",
    "subtree": null,
-   "topic": "shop uretim modu",
+   "topic": "shop production mode",
    "confidence": "high"
   },
   {
@@ -2229,7 +2229,7 @@
    "file": "site-metin-kurallari.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "site metin dil yasaklari",
+   "topic": "site copy language prohibitions",
    "confidence": "high"
   },
   {
@@ -2237,7 +2237,7 @@
    "file": "site-nav-standard.md",
    "scope": "local",
    "subtree": null,
-   "topic": "site nav standardi",
+   "topic": "site navigation standard",
    "confidence": "high"
   },
   {
@@ -2245,7 +2245,7 @@
    "file": "staged-rollout-approval.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kademeli rollout onayi",
+   "topic": "staged rollout approval",
    "confidence": "high"
   },
   {
@@ -2253,7 +2253,7 @@
    "file": "studio-repo-duzeni.md",
    "scope": "local",
    "subtree": null,
-   "topic": "studio repo duzeni",
+   "topic": "studio repository layout",
    "confidence": "high"
   },
   {
@@ -2261,7 +2261,7 @@
    "file": "subagent-ve-codex-kurallari.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -2269,7 +2269,7 @@
    "file": "tasarlagelistir-durum.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "tasarlagelistir domaini",
+   "topic": "tasarlagelistir domain",
    "confidence": "high"
   },
   {
@@ -2277,7 +2277,7 @@
    "file": "tmux-etiket-ve-delegasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "low"
   },
   {
@@ -2285,7 +2285,7 @@
    "file": "tool-ui-density.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "arac ui yogunlugu",
+   "topic": "vehicle UI density",
    "confidence": "high"
   },
   {
@@ -2293,7 +2293,7 @@
    "file": "ui-visual-verification.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "ui screenshot dogrulama",
+   "topic": "UI screenshot verification",
    "confidence": "high"
   },
   {
@@ -2301,7 +2301,7 @@
    "file": "value-first-pivot.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "open-dev iptali",
+   "topic": "open-dev cancellation",
    "confidence": "high"
   },
   {
@@ -2309,7 +2309,7 @@
    "file": "agent-kapatma-hijyeni.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "agent kapatma hijyeni",
+   "topic": "agent shutdown hygiene",
    "confidence": "high"
   },
   {
@@ -2317,7 +2317,7 @@
    "file": "agent-messaging-safety.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -2325,7 +2325,7 @@
    "file": "baski-bom-sistemi.md",
    "scope": "local",
    "subtree": null,
-   "topic": "plastik bom sistemi",
+   "topic": "plastic BOM system",
    "confidence": "high"
   },
   {
@@ -2333,7 +2333,7 @@
    "file": "baski-models-git-lfs.md",
    "scope": "local",
    "subtree": null,
-   "topic": "3d model git lfs",
+   "topic": "3D model Git LFS",
    "confidence": "high"
   },
   {
@@ -2341,7 +2341,7 @@
    "file": "codex-arka-surec-hijyeni.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -2349,7 +2349,7 @@
    "file": "git-workflow-fetch-before-push.md",
    "scope": "local",
    "subtree": null,
-   "topic": "git fetch-before-push",
+   "topic": "Git fetch before push",
    "confidence": "high"
   },
   {
@@ -2357,7 +2357,7 @@
    "file": "kit-bom-yapisi.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kit bom yapisi",
+   "topic": "kit BOM structure",
    "confidence": "high"
   },
   {
@@ -2365,7 +2365,7 @@
    "file": "kit-canon-mandatory-read.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "kit canon zorunlu",
+   "topic": "kit canon mandatory",
    "confidence": "high"
   },
   {
@@ -2373,7 +2373,7 @@
    "file": "mail-server-mail-koordinasyon.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -2381,7 +2381,7 @@
    "file": "model-politika-2026-07-25.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -2389,7 +2389,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -2397,7 +2397,7 @@
    "file": "scope-printing-responsibility.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "baski sahipligi/routing",
+   "topic": "print ownership/routing",
    "confidence": "high"
   },
   {
@@ -2405,7 +2405,7 @@
    "file": "tamamlanma-olculebilir-kanit.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tamamlanma kaniti",
+   "topic": "completion evidence",
    "confidence": "high"
   },
   {
@@ -2413,7 +2413,7 @@
    "file": "whatsapp-probot-main.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "probot-main wa kanali",
+   "topic": "probot-main WhatsApp channel",
    "confidence": "low"
   },
   {
@@ -2421,7 +2421,7 @@
    "file": "canli-serp-dogrulama-engeli.md",
    "scope": "local",
    "subtree": null,
-   "topic": "serp dogrulama engeli",
+   "topic": "SERP verification block",
    "confidence": "high"
   },
   {
@@ -2429,7 +2429,7 @@
    "file": "codex-background-safety.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -2437,7 +2437,7 @@
    "file": "dis-lead-s24fe.md",
    "scope": "subtree",
    "subtree": "probot-outreach",
-   "topic": "ilk dis lead",
+   "topic": "first external lead",
    "confidence": "high"
   },
   {
@@ -2445,7 +2445,7 @@
    "file": "outbound-mail-coordination.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -2453,7 +2453,7 @@
    "file": "role-tracking-agent.md",
    "scope": "local",
    "subtree": null,
-   "topic": "tracking agent rolu",
+   "topic": "tracking agent role",
    "confidence": "high"
   },
   {
@@ -2461,7 +2461,7 @@
    "file": "seo-gercek-indeks-olcumu.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "gerçek indeks olcumu",
+   "topic": "real index measurement",
    "confidence": "high"
   },
   {
@@ -2469,7 +2469,7 @@
    "file": "shared-browser-server.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "paylasimli browser sunucusu",
+   "topic": "shared browser server",
    "confidence": "high"
   },
   {
@@ -2477,7 +2477,7 @@
    "file": "tasarlagelistir-gsc-pending.md",
    "scope": "subtree",
    "subtree": "probot",
-   "topic": "tasarlagelistir domaini",
+   "topic": "tasarlagelistir domain",
    "confidence": "high"
   },
   {
@@ -2493,7 +2493,7 @@
    "file": "video-sunucusu-kimlik-arsivi.md",
    "scope": "subtree",
    "subtree": "video",
-   "topic": "video sunucusu kimlik arsivi",
+   "topic": "video server identity archive",
    "confidence": "high"
   },
   {
@@ -2501,7 +2501,7 @@
    "file": "vitrin-rol-ve-baski.md",
    "scope": "local",
    "subtree": null,
-   "topic": "vitrin rolu",
+   "topic": "showcase role",
    "confidence": "high"
   },
   {
@@ -2509,7 +2509,7 @@
    "file": "a1-print-cost-script.md",
    "scope": "subtree",
    "subtree": "3d-baski",
-   "topic": "a1 baski maliyet araci",
+   "topic": "A1 print cost tool",
    "confidence": "high"
   },
   {
@@ -2517,7 +2517,7 @@
    "file": "bambu-a1-setup.md",
    "scope": "subtree",
    "subtree": "3d-baski",
-   "topic": "ev yazicilari",
+   "topic": "home printers",
    "confidence": "high"
   },
   {
@@ -2525,7 +2525,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -2533,7 +2533,7 @@
    "file": "identity-server-monitor-dash.md",
    "scope": "local",
    "subtree": null,
-   "topic": "monitor dash kimligi",
+   "topic": "monitor dashboard identity",
    "confidence": "high"
   },
   {
@@ -2541,7 +2541,7 @@
    "file": "mesajlasma-disiplini.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "mesaj oncesi mesgul kontrolu",
+   "topic": "busy check before messaging",
    "confidence": "high"
   },
   {
@@ -2549,7 +2549,7 @@
    "file": "model-radar.md",
    "scope": "local",
    "subtree": null,
-   "topic": "model radar sistemi",
+   "topic": "model radar system",
    "confidence": "high"
   },
   {
@@ -2557,7 +2557,7 @@
    "file": "tuna-dashboard-tercihleri.md",
    "scope": "local",
    "subtree": null,
-   "topic": "dashboard ui tercihleri",
+   "topic": "dashboard UI preferences",
    "confidence": "high"
   },
   {
@@ -2573,7 +2573,7 @@
    "file": "feedback_style.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "kullaniciyla ton",
+   "topic": "tone with the user",
    "confidence": "high"
   },
   {
@@ -2581,7 +2581,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -2589,7 +2589,7 @@
    "file": "project_tuna_cookie.md",
    "scope": "local",
    "subtree": null,
-   "topic": "video cookie erisimi",
+   "topic": "video cookie access",
    "confidence": "high"
   },
   {
@@ -2597,7 +2597,7 @@
    "file": "project_video_system.md",
    "scope": "local",
    "subtree": null,
-   "topic": "video kayit sistemi",
+   "topic": "video recording system",
    "confidence": "high"
   },
   {
@@ -2605,7 +2605,7 @@
    "file": "project_youtube_quota.md",
    "scope": "local",
    "subtree": null,
-   "topic": "youtube upload kotasi",
+   "topic": "YouTube upload quota",
    "confidence": "high"
   },
   {
@@ -2613,7 +2613,7 @@
    "file": "reference_server.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "sunucu altyapi genel",
+   "topic": "general server infrastructure",
    "confidence": "high"
   },
   {
@@ -2621,7 +2621,7 @@
    "file": "user_profile.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "tuna kullanici profili",
+   "topic": "Tuna user profile",
    "confidence": "high"
   },
   {
@@ -2629,7 +2629,7 @@
    "file": "port-standard.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "port standardi",
+   "topic": "port standard",
    "confidence": "high"
   },
   {
@@ -2637,7 +2637,7 @@
    "file": "user_identity.md",
    "scope": "local",
    "subtree": null,
-   "topic": "sunucu/ip kimligi",
+   "topic": "server/IP identity",
    "confidence": "low"
   },
   {
@@ -2645,7 +2645,7 @@
    "file": "visitor_ndng_tuna.md",
    "scope": "subtree",
    "subtree": "video",
-   "topic": "video sunucusu kimlik arsivi",
+   "topic": "video server identity archive",
    "confidence": "high"
   },
   {
@@ -2653,7 +2653,7 @@
    "file": "identity-and-relay.md",
    "scope": "local",
    "subtree": null,
-   "topic": "wa kopru kimligi",
+   "topic": "WhatsApp bridge identity",
    "confidence": "high"
   },
   {
@@ -2661,7 +2661,7 @@
    "file": "keep-quiet-in-groups.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa grup mesaj disiplini",
+   "topic": "WhatsApp group-message discipline",
    "confidence": "high"
   },
   {
@@ -2669,7 +2669,7 @@
    "file": "mail-coordination-rule.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "giden mail koordinasyonu",
+   "topic": "outbound mail coordination",
    "confidence": "high"
   },
   {
@@ -2677,7 +2677,7 @@
    "file": "model-policy-opus5.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "model/effort politikasi",
+   "topic": "model/effort policy",
    "confidence": "high"
   },
   {
@@ -2685,7 +2685,7 @@
    "file": "notification-target-scope.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa bildirim etiketi",
+   "topic": "WhatsApp notification label",
    "confidence": "high"
   },
   {
@@ -2693,7 +2693,7 @@
    "file": "process-kill-discipline.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "arka plan surec guvenligi",
+   "topic": "background process safety",
    "confidence": "high"
   },
   {
@@ -2701,13 +2701,13 @@
    "file": "wa-send-no-probe.md",
    "scope": "fleet",
    "subtree": null,
-   "topic": "wa send probe etme",
+   "topic": "do not probe WhatsApp sending",
    "confidence": "high"
   }
  ],
  "clusters": [
   {
-   "topic": "giden mail server-mail koordinasyonu",
+   "topic": "outbound mail server-mail coordination",
    "scope": "fleet",
    "members": [
     "-srv-3dprinter/giden-mail-koordinasyon.md",
@@ -2730,7 +2730,7 @@
    "contradictions": []
   },
   {
-   "topic": "model/effort politikasi + model pinleme",
+   "topic": "model/effort policy + model pinning",
    "scope": "fleet",
    "members": [
     "-srv-3dprinter/model-pinleme.md",
@@ -2750,13 +2750,13 @@
    ],
    "distinct_variants": 4,
    "contradictions": [
-    "-srv/model-policy-uc-model.md kendi icinde celisiyor: bas kisim 'effort MEDIUM, xhigh YASAK' (2026-07-26) derken 'How to apply' satiri hala 'pin dosyasini opus[1m]+high yaz' diyor.",
-    "-srv-blueprint/gpt-subagents-preferred.md (2026-08-01) 'Fable orchestrator olacak, kodu Opus 5 subagent yazacak' derken -srv-probot-tedarik/model-politika-2026-07-25.md, -srv-probot/studio-4-agents-keep-on-opus.md ve -srv-probot-egitim/model-politikasi-guncel.md 'Fable-orchestrator kurali GECERSIZ, Fable varsayilan degil' diyor; 08-01 notu tek agent icin mi filo geneli mi belirsiz.",
-    "Bes dosyanin FRONTMATTER description'i hala 'Opus 5 + high' diyor (probot-core/fleet-model-pinning, probot-tedarik/model-politika-2026-07-25, probot/studio-4-agents-keep-on-opus, whatsapp/model-policy-opus5); GOVDELERI 07-26 medium+xhigh-yasak ile guncel — sadece ozetler bayat, index/description okuyan bir agent yanlis kurali alir."
+    "-srv/model-policy-uc-model.md contradicts itself: the opening says 'effort MEDIUM, xhigh PROHIBITED' (2026-07-26), while the 'How to apply' line still says 'write opus[1m]+high to the pin file'.",
+    "-srv-blueprint/gpt-subagents-preferred.md (2026-08-01) says 'Fable will orchestrate and an Opus 5 subagent will write the code', while -srv-probot-tedarik/model-politika-2026-07-25.md, -srv-probot/studio-4-agents-keep-on-opus.md, and -srv-probot-egitim/model-politikasi-guncel.md say 'the Fable-orchestrator rule is INVALID; Fable is not the default'. It is unclear whether the 08-01 note applies to one agent or the whole fleet.",
+    "The FRONTMATTER descriptions of five files still say 'Opus 5 + high' (probot-core/fleet-model-pinning, probot-tedarik/model-politika-2026-07-25, probot/studio-4-agents-keep-on-opus, whatsapp/model-policy-opus5); their BODIES are current with the 07-26 medium + xhigh-prohibited rule. Only the summaries are stale, so an agent reading the index/description receives the wrong rule."
    ]
   },
   {
-   "topic": "arka plan/codex surec guvenligi (pgrep, self-update, stdin)",
+   "topic": "background/Codex process safety (pgrep, self-update, stdin)",
    "scope": "fleet",
    "members": [
     "-srv-3dprinter/codex-arkaplan-guvenlik.md",
@@ -2775,7 +2775,7 @@
    "contradictions": []
   },
   {
-   "topic": "tamamlanmayi olculebilir kanitla dogrula",
+   "topic": "verify completion with measurable evidence",
    "scope": "fleet",
    "members": [
     "-srv-3dprinter/bitti-olculebilir-kanit.md",
@@ -2789,7 +2789,7 @@
    "contradictions": []
   },
   {
-   "topic": "mesaj oncesi mesgul kontrolu / bp msg kullan",
+   "topic": "busy check before messaging / use bp msg",
    "scope": "fleet",
    "members": [
     "-srv-mailserver/check-target-busy-before-messaging.md",
@@ -2806,7 +2806,7 @@
    "contradictions": []
   },
   {
-   "topic": "port standardi /srv/docs/ports.md",
+   "topic": "port standard /srv/docs/ports.md",
    "scope": "fleet",
    "members": [
     "-srv-behave-discover/port-standard.md",
@@ -2824,7 +2824,7 @@
    "contradictions": []
   },
   {
-   "topic": "paylasimli Playwright/Chromium browser sunucusu",
+   "topic": "shared Playwright/Chromium browser server",
    "scope": "fleet",
    "members": [
     "-srv-3dprinter/browser-server.md",
@@ -2837,7 +2837,7 @@
    "contradictions": []
   },
   {
-   "topic": "[ANNOUNCE server-main] cascade etmeme",
+   "topic": "do not cascade [ANNOUNCE server-main]",
    "scope": "fleet",
    "members": [
     "-srv-mailserver/dont-recascade-announcements.md",
@@ -2848,7 +2848,7 @@
    "contradictions": []
   },
   {
-   "topic": "agent kapatma hijyeni (4 adim)",
+   "topic": "agent shutdown hygiene (4 steps)",
    "scope": "fleet",
    "members": [
     "-srv-probot-docs/agent-kapatma-hijyeni.md",
@@ -2860,7 +2860,7 @@
    "contradictions": []
   },
   {
-   "topic": "codex kota/maliyet disiplini (luna-oncelik, kuyruk tahmini)",
+   "topic": "Codex quota/cost discipline (Luna priority, queue estimate)",
    "scope": "fleet",
    "members": [
     "-srv-probot-business/codex-kota-tabani.md",
@@ -2871,11 +2871,11 @@
    ],
    "distinct_variants": 4,
    "contradictions": [
-    "Filo model listesi kurali (-srv-probot/studio-4-agents-keep-on-opus.md, 2026-07-26 + global CLAUDE.md) 'terra/luna ACMA' diyor; buna karsi -srv-probot-egitim-mufredat/arastirma-subagent-modeli.md (2026-07-26, Tuna) arastirma kollarini terra ile acmayi, -srv-probot-business/codex-kota-tabani.md (2026-08-10), -srv-probot-fon/codex-disiplin.md (2026-08-10) ve -srv-outpost/model-maliyet-olcumu.md (2026-08-03) mekanik isi ZORUNLU luna ile kosmayi emrediyor. Tarihce gore yeni kural (luna/terra serbest) gecerli, 'ACMA' satiri bayat."
+    "The fleet model-list rule (-srv-probot/studio-4-agents-keep-on-opus.md, 2026-07-26 + global CLAUDE.md) says 'DO NOT OPEN terra/luna'. In contrast, -srv-probot-egitim-mufredat/arastirma-subagent-modeli.md (2026-07-26, Tuna) requires research branches to use Terra, while -srv-probot-business/codex-kota-tabani.md (2026-08-10), -srv-probot-fon/codex-disiplin.md (2026-08-10), and -srv-outpost/model-maliyet-olcumu.md (2026-08-03) require mechanical work to use Luna. By chronology, the newer rule (Luna/Terra allowed) is valid and the 'DO NOT OPEN' line is stale."
    ]
   },
   {
-   "topic": "duyuru maliyeti + compact izni + filo token ekonomisi",
+   "topic": "announcement cost + compact permission + fleet token economy",
    "scope": "fleet",
    "members": [
     "-srv-blueprint/announce-cost-policy.md",
@@ -2886,7 +2886,7 @@
    "contradictions": []
   },
   {
-   "topic": "agent basina ayri klasor (paylasimli cwd yasak)",
+   "topic": "separate directory per agent (shared cwd prohibited)",
    "scope": "fleet",
    "members": [
     "-srv/agent-folder-per-agent.md",
@@ -2896,7 +2896,7 @@
    "contradictions": []
   },
   {
-   "topic": "kontrol veri katmaninda durur",
+   "topic": "control remains in the data layer",
    "scope": "fleet",
    "members": [
     "-srv-kavram/kontrol-veri-katmaninda.md",
@@ -2906,7 +2906,7 @@
    "contradictions": []
   },
   {
-   "topic": "susturulmus sistem arizayi maskeler",
+   "topic": "a silenced system masks failures",
    "scope": "fleet",
    "members": [
     "-srv/durdurulmus-sistem-ariza-maskeler.md",
@@ -2916,7 +2916,7 @@
    "contradictions": []
   },
   {
-   "topic": "uzun tire yasagi / insan gibi Turkce",
+   "topic": "em-dash prohibition / natural Turkish",
    "scope": "fleet",
    "members": [
     "-srv-probot-fon/basvuru-metni-uslubu.md",
@@ -2926,7 +2926,7 @@
    "contradictions": []
   },
   {
-   "topic": "tuna kullanici profili/kimligi",
+   "topic": "Tuna user profile/identity",
    "scope": "fleet",
    "members": [
     "-srv-behave-discover/user_profile.md",
@@ -2940,7 +2940,7 @@
    "contradictions": []
   },
   {
-   "topic": "kullaniciyla ton: sade, dogrudan, minimal",
+   "topic": "tone with the user: plain, direct, minimal",
    "scope": "fleet",
    "members": [
     "-srv/tone-with-user.md",
@@ -2951,7 +2951,7 @@
    "contradictions": []
   },
   {
-   "topic": "fail2ban kendini/konteyneri banlar",
+   "topic": "fail2ban bans itself/the container",
    "scope": "fleet",
    "members": [
     "-srv-impact/fail2ban.md",
@@ -2962,7 +2962,7 @@
    "contradictions": []
   },
   {
-   "topic": "domain duzeni tunapro.xyz",
+   "topic": "tunapro.xyz domain layout",
    "scope": "fleet",
    "members": [
     "-srv/domain-scheme.md",
@@ -2972,7 +2972,7 @@
    "contradictions": []
   },
   {
-   "topic": "systemd ProtectSystem=strict bp kuyrugunu sessizce dusuruyor",
+   "topic": "systemd ProtectSystem=strict silently drops the bp queue",
    "scope": "fleet",
    "members": [
     "-srv/bp-msg-protectsystem-strict-tuzagi.md",
@@ -2982,7 +2982,7 @@
    "contradictions": []
   },
   {
-   "topic": "bp open --resume paylasimli klasor sorunu",
+   "topic": "bp open --resume shared-directory problem",
    "scope": "fleet",
    "members": [
     "-srv/bp-open-resume-shared-folder-bug.md",
@@ -2990,11 +2990,11 @@
    ],
    "distinct_variants": 2,
    "contradictions": [
-    "-srv/bp-open-resume-shared-folder-bug.md (2026-07-20) hatayi ACIK gosteriyor ve 'kalici fix blueprint agent'inda bekliyor, elle claude --resume <uuid> gerekir' diyor; -srv-blueprint/resume-by-customtitle.md (2026-07-21, commit eb93a4b) fix'in customTitle taramasiyla DEPLOY EDILDIGINI belgeliyor. Ilki bayat kaldi, hala gecerli kuralmis gibi elle mudahale tarif ediyor."
+    "-srv/bp-open-resume-shared-folder-bug.md (2026-07-20) marks the bug OPEN and says 'the permanent fix is waiting in the blueprint agent; manual claude --resume <uuid> is required'. -srv-blueprint/resume-by-customtitle.md (2026-07-21, commit eb93a4b) documents that the fix WAS DEPLOYED using a customTitle scan. The former is stale and still prescribes manual intervention as if it were current."
    ]
   },
   {
-   "topic": "sunucu altyapi genel gorunumu (nginx + docker vhost)",
+   "topic": "general server infrastructure overview (nginx + Docker vhost)",
    "scope": "fleet",
    "members": [
     "-srv-impact/server.md",
@@ -3005,7 +3005,7 @@
    "contradictions": []
   },
   {
-   "topic": "bulgu/hipotez ayrimi, asiri iddia etmeme",
+   "topic": "finding/hypothesis distinction; avoid overclaiming",
    "scope": "fleet",
    "members": [
     "-srv-behave-who-to-punish/feedback_overclaiming.md",
@@ -3016,7 +3016,7 @@
    "contradictions": []
   },
   {
-   "topic": "codex sandbox root'ta etkisiz / bypass sistemi degistirir",
+   "topic": "Codex sandbox ineffective as root / bypass changes the system",
    "scope": "fleet",
    "members": [
     "-srv-blueprint/codex-bypass-touches-system.md",
@@ -3026,7 +3026,7 @@
    "contradictions": []
   },
   {
-   "topic": "big model smell / Tuna model zevki",
+   "topic": "big model smell / Tuna's model preference",
    "scope": "fleet",
    "members": [
     "-srv/big-model-smell.md",
@@ -3034,11 +3034,11 @@
    ],
    "distinct_variants": 2,
    "contradictions": [
-    "-srv/big-model-smell.md (modified 2026-07-25) 'varsayilan Opus 5 + HIGH oldu, Fable kullanilirsa effort tavani high' diyerek 07-25 kuralini GUNCEL gibi anlatiyor; filonun 2026-07-26 kurali effort MEDIUM + xhigh yasak."
+    "-srv/big-model-smell.md (modified 2026-07-25) presents the 07-25 rule as CURRENT by saying 'the default is now Opus 5 + HIGH; if Fable is used, the effort ceiling is high'. The fleet's 2026-07-26 rule is effort MEDIUM with xhigh prohibited."
    ]
   },
   {
-   "topic": "wa grup mesaj disiplini (kisa yaz, sessiz kal)",
+   "topic": "WhatsApp group-message discipline (write briefly; stay silent)",
    "scope": "fleet",
    "members": [
     "-srv-probot-fon/wa-mesajlari-kisa.md",
@@ -3049,7 +3049,7 @@
    "contradictions": []
   },
   {
-   "topic": "wa kimlik/grup uye tespiti",
+   "topic": "WhatsApp identity/group-member detection",
    "scope": "fleet",
    "members": [
     "-srv-outpost/wa-kimlik-kaynagi.md",
@@ -3059,7 +3059,7 @@
    "contradictions": []
   },
   {
-   "topic": "ui screenshot ile gorsel dogrulama",
+   "topic": "visual verification with UI screenshots",
    "scope": "fleet",
    "members": [
     "-srv-probot-docs/snap-chromium-screenshot.md",
@@ -3069,7 +3069,7 @@
    "contradictions": []
   },
   {
-   "topic": "outpost kontrol kanali / research_status",
+   "topic": "Outpost control channel / research_status",
    "scope": "fleet",
    "members": [
     "-srv-outpost/outpost-control.md",
@@ -3079,7 +3079,7 @@
    "contradictions": []
   },
   {
-   "topic": "KIT.md canon zorunlu okuma",
+   "topic": "mandatory KIT.md canon reading",
    "scope": "subtree",
    "members": [
     "-srv-probot-docs/probot-kit-canon.md",
@@ -3091,7 +3091,7 @@
    "contradictions": []
   },
   {
-   "topic": "open-dev branch iptali",
+   "topic": "open-dev branch cancellation",
    "scope": "subtree",
    "members": [
     "-srv-probot-business/value-first-open-dev.md",
@@ -3101,11 +3101,11 @@
    ],
    "distinct_variants": 3,
    "contradictions": [
-    "-srv-probot-business/value-first-open-dev.md ve -srv-probot-studio/value-first-pivot.md (ikisi de 2026-07-24) 'open-dev branch IPTAL/kapandi' diyor; -srv-probot-egitim/open-dev-satissiz-site-plani.md (modified 2026-07-25) hala 'egitim open-dev branch'inde BASTAN yazilacak, Tuna/alp sinyal verecek' diye bekleyen bir plan olarak anlatiyor ve -srv-probot/mecanum-3dbaski-canon-live-conflict.md (2026-07-25) mecanum temizligini 'Tuna'nin open-dev rewrite'ina PARK edildi' diye o iptal edilmis branch'e baglıyor."
+    "-srv-probot-business/value-first-open-dev.md and -srv-probot-studio/value-first-pivot.md (both 2026-07-24) say 'the open-dev branch is CANCELED/closed'. -srv-probot-egitim/open-dev-satissiz-site-plani.md (modified 2026-07-25) still describes a pending plan to 'rewrite the education open-dev branch FROM SCRATCH when Tuna/alp gives the signal', while -srv-probot/mecanum-3dbaski-canon-live-conflict.md (2026-07-25) ties mecanum cleanup to that canceled branch by saying it was 'PARKED for Tuna's open-dev rewrite'."
    ]
   },
   {
-   "topic": "NF Products gecmisi kapali soru",
+   "topic": "NF Products history question closed",
    "scope": "subtree",
    "members": [
     "-srv-probot-business/nf-products-gecmisi.md",
@@ -3115,7 +3115,7 @@
    "contradictions": []
   },
   {
-   "topic": "NFR marka adi hicbir yerde gecmez",
+   "topic": "NFR brand name never appears anywhere",
    "scope": "subtree",
    "members": [
     "-srv-probot/nfr-never-mention-huseyin-wa-only.md",
@@ -3125,7 +3125,7 @@
    "contradictions": []
   },
   {
-   "topic": "MEB giris arastirmasi sonucu",
+   "topic": "MEB entry research result",
    "scope": "subtree",
    "members": [
     "-srv-probot/meb-research-outcome-2026-07.md",
@@ -3135,7 +3135,7 @@
    "contradictions": []
   },
   {
-   "topic": "FTC pivotu (awards/girisim kapali)",
+   "topic": "FTC pivot (awards/venture closed)",
    "scope": "subtree",
    "members": [
     "-srv-probot-business/ftc-pivot.md",
@@ -3145,7 +3145,7 @@
    "contradictions": []
   },
   {
-   "topic": "musteri konusmasi her seyin onunde",
+   "topic": "customer conversations come before everything",
    "scope": "subtree",
    "members": [
     "-srv-probot-business/insaat-degil-konusma-onceligi.md",
@@ -3155,7 +3155,7 @@
    "contradictions": []
   },
   {
-   "topic": "gitea repo/folder-remote duzeni",
+   "topic": "Gitea repository/directory-remote layout",
    "scope": "subtree",
    "members": [
     "-srv-probot/probot-gitea-repo-layout.md",
@@ -3175,7 +3175,7 @@
    "contradictions": []
   },
   {
-   "topic": "site/icerik metin dil yasaklari",
+   "topic": "site/content copy language prohibitions",
    "scope": "subtree",
    "members": [
     "-srv-probot-egitim/icerik-dil-kurallari.md",
@@ -3185,7 +3185,7 @@
    "contradictions": []
   },
   {
-   "topic": "admin.probotstudio.com ozel yayin alani",
+   "topic": "private admin.probotstudio.com deployment area",
    "scope": "subtree",
    "members": [
     "-srv-probot/admin-shelf-preview-pattern.md",
@@ -3195,7 +3195,7 @@
    "contradictions": []
   },
   {
-   "topic": "baski sahipligi/routing (ev yazicilarina dokunma)",
+   "topic": "print ownership/routing (do not touch home printers)",
    "scope": "subtree",
    "members": [
     "-srv-probot/3d-print-routing-server-3dprinter.md",
@@ -3205,7 +3205,7 @@
    "contradictions": []
   },
   {
-   "topic": "ev 3D yazicilari (A1 / K1 Max)",
+   "topic": "home 3D printers (A1 / K1 Max)",
    "scope": "subtree",
    "members": [
     "-srv-printer/home-printers.md",
@@ -3215,7 +3215,7 @@
    "contradictions": []
   },
   {
-   "topic": "wa probot-main persona disiplini (alp/tarik)",
+   "topic": "WhatsApp probot-main persona discipline (alp/tarik)",
    "scope": "subtree",
    "members": [
     "-srv-probot/alias-alp-wa-discipline.md",
@@ -3225,7 +3225,7 @@
    "contradictions": []
   },
   {
-   "topic": "yigit yan kanallari / kavram-main-server koprusu",
+   "topic": "Yigit side channels / kavram-main-server bridge",
    "scope": "subtree",
    "members": [
     "-srv-blueprint/yigit-side-channels.md",
@@ -3235,7 +3235,7 @@
    "contradictions": []
   },
   {
-   "topic": "video sunucusu ziyaretci kimlik arsivi",
+   "topic": "video server visitor identity archive",
    "scope": "subtree",
    "members": [
     "-srv-probot-tracking/video-sunucusu-kimlik-arsivi.md",
@@ -3245,7 +3245,7 @@
    "contradictions": []
   },
   {
-   "topic": "tasarlagelistir.com domaini",
+   "topic": "tasarlagelistir.com domain",
    "scope": "subtree",
    "members": [
     "-srv-probot-studio/tasarlagelistir-durum.md",

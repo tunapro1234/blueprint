@@ -352,7 +352,7 @@ func classifyPaste(pane string, texts []string) (pasteVerdict, string) {
 		// A near-match on a message carrying WIDE characters is not a damaged
 		// paste — it is a lossy RENDER. Measured 2026-08-23: a message with
 		// "✍️ / ✅" in it came back from the screen with a letter missing
-		// ("gorunmez" -> "grunmez"), because a double-width glyph shifts the
+		// ("invisible" -> "invisble"), because a double-width glyph shifts the
 		// TUI's column accounting and a character is overwritten. The bytes in
 		// the composer's own buffer are fine — the agents that received these
 		// messages quoted them back correctly — so clearing and re-pasting
@@ -436,13 +436,13 @@ const (
 	// holds a paste rendered as a chip ("[Pasted text #1 +12 lines]"), whose
 	// content cannot be read, so it can be neither recognised as ours nor safely
 	// submitted. Only a human can tell what it is.
-	BlockedByPasteChip = "composer'da okunamayan bir paste var (chip); bp elle dokunmaz"
+	BlockedByPasteChip = "composer contains an unreadable paste (chip); bp will not alter it"
 	// BlockedByForeignText covers someone's half-written line and any remnant too
 	// short to identify as ours (under 32 characters) — both are left untouched on
 	// purpose, because erasing a human's input is the worse outcome.
-	BlockedByForeignText = "composer'da yabanci metin var"
+	BlockedByForeignText = "composer contains foreign text"
 	// BlockedByBusyPane is the ordinary, transient case: the agent is mid-turn.
-	BlockedByBusyPane = "pane calisiyor (esc to interrupt)"
+	BlockedByBusyPane = "pane is working (esc to interrupt)"
 	// BlockedByDialog is the pane waiting on a decision only a human may make —
 	// today a Hermes permission prompt ("1. Allow once / 4. Deny"). It reads as
 	// idle by every other measure (empty composer, no spinner), which is what
@@ -450,7 +450,7 @@ const (
 	// answers the prompt. Unlike BlockedByBusyPane this one does not clear
 	// itself — it waits for a person, so `bp q` says so instead of implying
 	// patience will fix it.
-	BlockedByDialog = "onay/secim ekrani acik — yalnizca insan yanitlar"
+	BlockedByDialog = "confirmation/selection screen is open — only a human may answer"
 )
 
 // ComposerBlockReason names why a pane cannot take a message, or "" when nothing
@@ -472,7 +472,7 @@ func ComposerBlockReason(pane string, texts []string) string {
 //
 // It exists for forced delivery (see Client.SendForce), which overrides "the
 // agent is working" and nothing else. The split is the whole point: reading a
-// busy pane through ComposerBlockReason answers "pane calisiyor" and never gets
+// busy pane through ComposerBlockReason answers "pane is working" and never gets
 // as far as the box, so a forced message would either wait on the one state it
 // is meant to override, or — if the caller ignored the verdict wholesale — paste
 // over somebody's half-written line. Callers that force ask this one instead and

@@ -165,7 +165,7 @@ func TestEnqueueListAndStatus(t *testing.T) {
 	// A record bp has not touched must NOT claim anything about the pane: the
 	// old wording ("is still busy") asserted a state nobody had measured, and on
 	// 2026-08-24 it described eight idle agents as busy for seven minutes.
-	if !strings.Contains(status, "henuz bir sey yapmadi") || !strings.Contains(status, "12 saniye") {
+	if !strings.Contains(status, "has not acted on this record yet") || !strings.Contains(status, "12 seconds") {
 		t.Fatalf("status=%q", status)
 	}
 	if strings.Contains(status, "busy") {
@@ -344,7 +344,7 @@ func composerPane(text string) string {
 		row = "❯ " + text
 	}
 	return strings.Join([]string{
-		"  agent: onceki turdan kalan cikti",
+		"  agent: output left from the previous turn",
 		top,
 		row,
 		border,
@@ -353,7 +353,7 @@ func composerPane(text string) string {
 	}, "\n")
 }
 
-const stuckText = "[server-main] roadmap incelemesi: hedef sistemi bolumunu bugun bitirelim"
+const stuckText = "[server-main] roadmap review: finish the goal-system section today"
 
 func TestDispatchSendsThroughItsOwnHangingPaste(t *testing.T) {
 	// The deadlock: the composer holds the very message this record is waiting to
@@ -385,7 +385,7 @@ func TestDispatchStillWaitsForSomeoneElsesText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := &fakeTarget{alive: true, pane: composerPane("kendi yarim kalan sorum burada duruyor")}
+	target := &fakeTarget{alive: true, pane: composerPane("my unfinished question is still here")}
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +498,7 @@ func TestWitnessLeavesAComposerItCannotProveAlone(t *testing.T) {
 	if _, err := q.Enqueue("target", "sender", stuckText); err != nil {
 		t.Fatal(err)
 	}
-	foreign := composerPane("kendi yarim kalan sorum burada duruyor")
+	foreign := composerPane("my unfinished question is still here")
 	target := &fakeTarget{alive: true, pane: foreign}
 	if err := q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
@@ -518,7 +518,7 @@ func TestDispatchRecordsWhyAMessageIsWaiting(t *testing.T) {
 		reason string
 	}{
 		{"unreadable paste chip", composerPane("[Pasted text #1 +12 lines]"), bptmux.BlockedByPasteChip},
-		{"someone else's text", composerPane("kendi yarim kalan sorum burada duruyor"), bptmux.BlockedByForeignText},
+		{"someone else's text", composerPane("my unfinished question is still here"), bptmux.BlockedByForeignText},
 		{"short unidentifiable fragment", composerPane("/rename wor"), bptmux.BlockedByForeignText},
 		{"working pane", "✻ Working… (23s · Esc to interrupt)\n" + composerPane(""), bptmux.BlockedByBusyPane},
 	}
@@ -562,7 +562,7 @@ func TestDispatchDropsAStaleReasonWhenThePaneFreesUp(t *testing.T) {
 	if _, err := q.Enqueue("target", "sender", stuckText); err != nil {
 		t.Fatal(err)
 	}
-	target := &fakeTarget{alive: true, pane: composerPane("kendi yarim kalan sorum")}
+	target := &fakeTarget{alive: true, pane: composerPane("my unfinished question")}
 	if err := q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -613,7 +613,7 @@ func TestPendingForAndCloseDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Millisecond)
-	if _, err := q.Enqueue("other", "sender", "baska hedefin mesaji"); err != nil {
+	if _, err := q.Enqueue("other", "sender", "another target's message"); err != nil {
 		t.Fatal(err)
 	}
 	texts := q.PendingFor("target")
@@ -690,7 +690,7 @@ func TestDispatchKeepsProvenFailurePendingAndClosesUnverified(t *testing.T) {
 // witnessable is a message long enough for the transcript witness to identify,
 // which is the condition for holding an unconfirmed delivery open instead of
 // closing it blind.
-const witnessable = "[ders-main] tek mesaj uc kere teslim edildi; bu kaydin kapanmasi transcript tanigina bagli"
+const witnessable = "[ders-main] one message was delivered three times; closing this record depends on the transcript witness"
 
 // The bridge signs its messages "whatsapp" but lives in the session
 // "server-whatsapp": a notice queued to the LABEL targets a session that does
@@ -739,7 +739,7 @@ func TestUndeliverableNoticeIsLoudInsteadOfQueued(t *testing.T) {
 	if messages, err := q.List(); err != nil || len(messages) != 0 {
 		t.Fatalf("a doomed notice was queued anyway: %v (err=%v)", messages, err)
 	}
-	if joined := strings.Join(reports, "\n"); !strings.Contains(joined, "TESLIM EDILEMIYOR") {
+	if joined := strings.Join(reports, "\n"); !strings.Contains(joined, "CANNOT BE DELIVERED") {
 		t.Fatalf("no loud line about the undeliverable notice:\n%s", joined)
 	}
 }
@@ -782,7 +782,7 @@ func TestDispatchHoldsAnUnverifiedDeliveryForTheWitness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(status, "yeniden paste edilmeyecek") || !strings.Contains(status, "transcript tanigi") {
+	if !strings.Contains(status, "will not be pasted again") || !strings.Contains(status, "transcript witness") {
 		t.Fatalf("status=%q", status)
 	}
 	if !strings.Contains(strings.Join(reports, "\n"), "UNVERIFIED") {
@@ -826,7 +826,7 @@ func TestUnsettledRecordClosesAndTellsTheSender(t *testing.T) {
 		wantSend int
 	}{
 		{"unverified injection", bptmux.ErrUnverified, "DELIVERED (UNVERIFIED)", witnessWindow + time.Minute, 1},
-		{"three unverifiable attempts", fmt.Errorf("%w: %s", bptmux.ErrNotReady, "composer'da baska metin var"), "NOT DELIVERED (VERIFICATION FAILED)", witnessWindow + time.Minute, 3},
+		{"three unverifiable attempts", fmt.Errorf("%w: %s", bptmux.ErrNotReady, "the composer contains other text"), "NOT DELIVERED (VERIFICATION FAILED)", witnessWindow + time.Minute, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
@@ -873,12 +873,12 @@ func TestUnsettledRecordClosesAndTellsTheSender(t *testing.T) {
 			if notice.To != "sender" || notice.From != "bp" {
 				t.Fatalf("notice=%+v", notice)
 			}
-			for _, want := range []string{id, "target hedefine", "bp peek target", witnessable[:60]} {
+			for _, want := range []string{id, "to target", "bp peek target", witnessable[:60]} {
 				if !strings.Contains(notice.Msg, want) {
 					t.Fatalf("notice %q does not mention %q", notice.Msg, want)
 				}
 			}
-			if !strings.Contains(strings.Join(reports, "\n"), "haberdar edildi") {
+			if !strings.Contains(strings.Join(reports, "\n"), "was notified") {
 				t.Fatalf("reports=%v", reports)
 			}
 			// Once only: the notice record itself must not spawn another one, and a
@@ -938,7 +938,7 @@ func TestProvenFailureBacksOffAndStopsAtThreeAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: fmt.Errorf("%w: %s", bptmux.ErrNotReady, "composer'da baska metin var: paste hic girmemis")}
+	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: fmt.Errorf("%w: %s", bptmux.ErrNotReady, "the composer contains other text: paste never entered")}
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -946,14 +946,14 @@ func TestProvenFailureBacksOffAndStopsAtThreeAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.Attempts != 1 || record.NextTry == 0 || record.Reason != "composer'da baska metin var: paste hic girmemis" {
+	if record.Attempts != 1 || record.NextTry == 0 || record.Reason != "the composer contains other text: paste never entered" {
 		t.Fatalf("record=%+v", record)
 	}
 	status, err := q.Status(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(status, "sonraki deneme ~") {
+	if !strings.Contains(status, "next attempt in ~") {
 		t.Fatalf("status=%q", status)
 	}
 	// Inside the backoff window nothing is pasted again.
@@ -992,7 +992,7 @@ func TestReadKeepsWorkingForRecordsWithoutTheNewFields(t *testing.T) {
 	if err := os.MkdirAll(q.pending(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	legacy := `{"id":"q1","to":"target","from":"sender","msg":"eski kayit, yeni alanlari yok","ts":1755255600.0}` + "\n"
+	legacy := `{"id":"q1","to":"target","from":"sender","msg":"legacy record without the new fields","ts":1755255600.0}` + "\n"
 	if err := os.WriteFile(filepath.Join(q.pending(), "q1.json"), []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1050,7 +1050,7 @@ func TestDispatchWaitsForAnOpenTurnTheScreenCannotSee(t *testing.T) {
 		asked = append(asked, to)
 		return turnOpen
 	}
-	id, err := q.Enqueue("target", "sender", "streaming sirasinda gelen mesaj")
+	id, err := q.Enqueue("target", "sender", "message received during streaming")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1102,15 +1102,15 @@ func TestDispatchDeliversInSendOrderNotInIDOrder(t *testing.T) {
 	// WITHIN the second, so a message sent at 10:43 can be called "q950734611" while
 	// one sent at 12:55 is "q436531039". Sorted by file name — which is what
 	// Dispatch used to do — the 12:55 message went first, and probot-outreach
-	// received a "DUR/IPTAL" correction AFTER the instruction it cancelled.
+	// received a "STOP/CANCEL" correction AFTER the instruction it cancelled.
 	clock := time.Date(2026, 8, 17, 10, 43, 30, 950734611, time.Local)
 	q := fifoQueue(t, &clock)
-	first, err := q.Enqueue("target", "sender", "[probot-business] birinci talimat: kosuyu baslat")
+	first, err := q.Enqueue("target", "sender", "[probot-business] first instruction: start the run")
 	if err != nil {
 		t.Fatal(err)
 	}
 	clock = time.Date(2026, 8, 17, 12, 55, 13, 436531039, time.Local)
-	second, err := q.Enqueue("target", "sender", "[probot-business] DUR, onceki talimati IPTAL ET")
+	second, err := q.Enqueue("target", "sender", "[probot-business] STOP, CANCEL the previous instruction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1128,7 +1128,7 @@ func TestDispatchDeliversInSendOrderNotInIDOrder(t *testing.T) {
 	if len(target.sent) != 2 {
 		t.Fatalf("sent=%v", target.sent)
 	}
-	if !strings.Contains(target.sent[0], "birinci talimat") || !strings.Contains(target.sent[1], "IPTAL") {
+	if !strings.Contains(target.sent[0], "first instruction") || !strings.Contains(target.sent[1], "CANCEL") {
 		t.Fatalf("delivered out of send order: %v", target.sent)
 	}
 }
@@ -1141,19 +1141,19 @@ func TestDispatchDeliversOneMessagePerTargetPerPass(t *testing.T) {
 	// target and the rest of the line waits, with a reason that says so.
 	clock := time.Date(2026, 8, 17, 13, 3, 37, 0, time.Local)
 	q := fifoQueue(t, &clock)
-	first, err := q.Enqueue("target", "sender", "[server-main] birinci mesaj")
+	first, err := q.Enqueue("target", "sender", "[server-main] first message")
 	if err != nil {
 		t.Fatal(err)
 	}
 	clock = clock.Add(time.Second)
-	second, err := q.Enqueue("target", "sender", "[server-main] ikinci mesaj")
+	second, err := q.Enqueue("target", "sender", "[server-main] second message")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A third message for a DIFFERENT target proves the rule is per target, not a
 	// global one-message-per-pass throttle.
 	clock = clock.Add(time.Second)
-	if _, err = q.Enqueue("other", "sender", "[server-main] baska hedefe"); err != nil {
+	if _, err = q.Enqueue("other", "sender", "[server-main] to another target"); err != nil {
 		t.Fatal(err)
 	}
 	target := &fakeTarget{alive: true, pane: composerPane("")}
@@ -1178,7 +1178,7 @@ func TestDispatchDeliversOneMessagePerTargetPerPass(t *testing.T) {
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(target.sent) != 3 || !strings.Contains(target.sent[2], "ikinci mesaj") {
+	if len(target.sent) != 3 || !strings.Contains(target.sent[2], "second message") {
 		t.Fatalf("the next pass did not deliver the second message: %v", target.sent)
 	}
 }
@@ -1190,12 +1190,12 @@ func TestDispatchKeepsAYoungMessageBehindABlockedHead(t *testing.T) {
 	// arriving late.
 	clock := time.Date(2026, 8, 17, 10, 43, 0, 0, time.Local)
 	q := fifoQueue(t, &clock)
-	head, err := q.Enqueue("target", "sender", "[probot-business] birinci talimat: kosuyu baslat")
+	head, err := q.Enqueue("target", "sender", "[probot-business] first instruction: start the run")
 	if err != nil {
 		t.Fatal(err)
 	}
 	clock = clock.Add(12 * time.Second)
-	young, err := q.Enqueue("target", "sender", "[probot-business] DUR, onceki talimati IPTAL ET")
+	young, err := q.Enqueue("target", "sender", "[probot-business] STOP, CANCEL the previous instruction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1225,7 +1225,7 @@ func TestDispatchKeepsAYoungMessageBehindABlockedHead(t *testing.T) {
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(target.sent) != 2 || !strings.Contains(target.sent[0], "birinci talimat") || !strings.Contains(target.sent[1], "IPTAL") {
+	if len(target.sent) != 2 || !strings.Contains(target.sent[0], "first instruction") || !strings.Contains(target.sent[1], "CANCEL") {
 		t.Fatalf("sent=%v", target.sent)
 	}
 }
@@ -1237,7 +1237,7 @@ func TestWitnessClosesAYoungRecordWhileTheHeadWaits(t *testing.T) {
 	// agent demonstrably has.
 	clock := time.Date(2026, 8, 17, 10, 43, 0, 0, time.Local)
 	q := fifoQueue(t, &clock)
-	head, err := q.Enqueue("target", "sender", "[server-main] beklemede kalacak olan mesaj")
+	head, err := q.Enqueue("target", "sender", "[server-main] message that will remain pending")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1338,7 +1338,7 @@ func TestRecentIdenticalOnlyMatchesTheSameTextInsideTheWindow(t *testing.T) {
 	// enough: those three together mean "already on the way".
 	clock := time.Date(2026, 8, 17, 13, 3, 37, 0, time.Local)
 	q := fifoQueue(t, &clock)
-	text := "[probot-business] BUSINESS → OP-MAIN — ayni metin ucuncu kez gonderiliyor"
+	text := "[probot-business] BUSINESS → OP-MAIN — the same text is being sent for the third time"
 	id, err := q.Enqueue("op-main", "probot-business", text)
 	if err != nil {
 		t.Fatal(err)
@@ -1347,10 +1347,10 @@ func TestRecentIdenticalOnlyMatchesTheSameTextInsideTheWindow(t *testing.T) {
 	if found, ok := q.RecentIdentical("op-main", text, 10*time.Minute); !ok || found.ID != id {
 		t.Fatalf("found=%+v ok=%v", found, ok)
 	}
-	if _, ok := q.RecentIdentical("op-main", text+" (farkli)", 10*time.Minute); ok {
+	if _, ok := q.RecentIdentical("op-main", text+" (different)", 10*time.Minute); ok {
 		t.Fatal("a different text was reported as already in flight")
 	}
-	if _, ok := q.RecentIdentical("baska-hedef", text, 10*time.Minute); ok {
+	if _, ok := q.RecentIdentical("other-target", text, 10*time.Minute); ok {
 		t.Fatal("another target's queue was consulted")
 	}
 	clock = clock.Add(11 * time.Minute)
@@ -1368,7 +1368,7 @@ func TestDispatchWaitsWhenAnotherBpHoldsThePane(t *testing.T) {
 	bptmux.PaneLockWait = 200 * time.Millisecond
 	q := newBoundTestQueue(t.TempDir())
 	q.Now = time.Now
-	id, err := q.Enqueue("target", "sender", "[server-main] kilit tutulurken gelen mesaj")
+	id, err := q.Enqueue("target", "sender", "[server-main] message received while the lock is held")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1405,7 +1405,7 @@ func TestDispatchWaitsWhenAnotherBpHoldsThePane(t *testing.T) {
 // forcedFollowUp is the SECOND forced message in a conversation: long enough for
 // the witness to identify, and sharing nothing with the first one, so a composer
 // holding one of them can never be mistaken for holding the other.
-const forcedFollowUp = "[wa] Tuna: ikinci mesaj — birincisini gorunce haber ver, bekliyorum burada"
+const forcedFollowUp = "[wa] Tuna: second message — tell me when you see the first; I am waiting here"
 
 // busyForceQueue is the state a forced message exists for: a target whose turn is
 // open in its own transcript while the screen shows an idle, empty composer. That
@@ -1424,12 +1424,12 @@ func TestForcedRecordIsDeliveredWhileTheTargetIsBusy(t *testing.T) {
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
 	busy := true
 	q := busyForceQueue(t, &now, &busy)
-	normal, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler")
+	normal, err := q.Enqueue("target", "ada", "[ada] ordinary message; waits its turn")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Second)
-	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: acil, hemen bakar misin")
+	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: urgent, can you look now")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1437,7 +1437,7 @@ func TestForcedRecordIsDeliveredWhileTheTargetIsBusy(t *testing.T) {
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "acil") {
+	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "urgent") {
 		t.Fatalf("sent=%v, want only the forced message", target.sent)
 	}
 	if _, err = os.Stat(filepath.Join(q.done(), forced+".json")); err != nil {
@@ -1459,15 +1459,15 @@ func TestForcedRecordsKeepSendOrderAheadOfNormalTraffic(t *testing.T) {
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
 	busy := true
 	q := busyForceQueue(t, &now, &busy)
-	if _, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler"); err != nil {
+	if _, err := q.Enqueue("target", "ada", "[ada] ordinary message; waits its turn"); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Second)
-	if _, err := q.EnqueueForce("target", "wa", "[wa] Tuna: birinci forced mesaj"); err != nil {
+	if _, err := q.EnqueueForce("target", "wa", "[wa] Tuna: first forced message"); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Second)
-	if _, err := q.EnqueueForce("target", "wa", "[wa] Tuna: ikinci forced mesaj"); err != nil {
+	if _, err := q.EnqueueForce("target", "wa", "[wa] Tuna: second forced message"); err != nil {
 		t.Fatal(err)
 	}
 	target := &fakeTarget{alive: true, pane: composerPane("")}
@@ -1492,7 +1492,7 @@ func TestForcedRecordsKeepSendOrderAheadOfNormalTraffic(t *testing.T) {
 	if len(target.sent) != 3 {
 		t.Fatalf("sent=%v", target.sent)
 	}
-	for index, want := range []string{"birinci forced", "ikinci forced", "siradan mesaj"} {
+	for index, want := range []string{"first forced", "second forced", "ordinary message"} {
 		if !strings.Contains(target.sent[index], want) {
 			t.Fatalf("delivery order=%v, want %q at %d", target.sent, want, index)
 		}
@@ -1510,11 +1510,11 @@ func TestForcedRecordStillWaitsForSomeoneElsesComposer(t *testing.T) {
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
 	busy := true
 	q := busyForceQueue(t, &now, &busy)
-	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: acil, hemen bakar misin")
+	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: urgent, can you look now")
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := &fakeTarget{alive: true, pane: composerPane("elle yazilmis yarim satir, bitmedi")}
+	target := &fakeTarget{alive: true, pane: composerPane("half-written manual line, not finished")}
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1592,7 +1592,7 @@ func TestFollowerForcedMessageWaitsForTheWitnessThenForTheCooldown(t *testing.T)
 	if err = q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "ikinci mesaj") {
+	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "second message") {
 		t.Fatalf("sent=%v, want the follower delivered after the cooldown", target.sent)
 	}
 	if _, err = os.Stat(filepath.Join(q.pending(), first+".json")); err != nil {
@@ -1624,7 +1624,7 @@ func TestFollowerForcedMessageGoesAsSoonAsTheWitnessSpeaks(t *testing.T) {
 	if err := q.Dispatch(context.Background(), target, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "ikinci mesaj") {
+	if len(target.sent) != 1 || !strings.Contains(target.sent[0], "second message") {
 		t.Fatalf("sent=%v, want the follower delivered as soon as the witness settled the head", target.sent)
 	}
 }
@@ -1682,7 +1682,7 @@ func TestOrdinaryRecordNeverOvertakesAForcedOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Second)
-	normal, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler")
+	normal, err := q.Enqueue("target", "ada", "[ada] ordinary message; waits its turn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1717,7 +1717,7 @@ func TestForceFieldsAreOptionalOnDiskAndSurviveARoundTrip(t *testing.T) {
 	if err := os.MkdirAll(q.pending(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	legacy := `{"id":"q1","to":"target","from":"sender","msg":"eski kayit, force alanlari yok","ts":1755255600.0}` + "\n"
+	legacy := `{"id":"q1","to":"target","from":"sender","msg":"legacy record without force fields","ts":1755255600.0}` + "\n"
 	if err := os.WriteFile(filepath.Join(q.pending(), "q1.json"), []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1728,7 +1728,7 @@ func TestForceFieldsAreOptionalOnDiskAndSurviveARoundTrip(t *testing.T) {
 	if old.ForceBusy || old.ForcedAt != 0 {
 		t.Fatalf("legacy record did not read as ordinary: %+v", old)
 	}
-	plain, err := q.Enqueue("target", "sender", "siradan mesaj")
+	plain, err := q.Enqueue("target", "sender", "ordinary message")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1739,7 +1739,7 @@ func TestForceFieldsAreOptionalOnDiskAndSurviveARoundTrip(t *testing.T) {
 	if strings.Contains(string(data), "forceBusy") || strings.Contains(string(data), "forcedAt") {
 		t.Fatalf("an ordinary record wrote the force keys: %s", data)
 	}
-	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: acil")
+	forced, err := q.EnqueueForce("target", "wa", "[wa] Tuna: urgent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1763,7 +1763,7 @@ func TestForceFieldsAreOptionalOnDiskAndSurviveARoundTrip(t *testing.T) {
 // the box: a pane whose SCREEN says the agent is working, which is where a busy
 // agent spends most of its time (tool calls and thinking, not streaming).
 func busyComposerPane(text string) string {
-	return strings.Replace(composerPane(text), "  agent: onceki turdan kalan cikti",
+	return strings.Replace(composerPane(text), "  agent: output left from the previous turn",
 		"✻ Working… (23s · esc to interrupt)", 1)
 }
 
@@ -1806,7 +1806,7 @@ func TestOrdinaryRecordStillWaitsForASpinner(t *testing.T) {
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.Local)
 	busy := false
 	q := busyForceQueue(t, &now, &busy)
-	id, err := q.Enqueue("target", "ada", "[ada] siradan mesaj, sirasini bekler")
+	id, err := q.Enqueue("target", "ada", "[ada] ordinary message; waits its turn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1875,11 +1875,11 @@ func TestFollowerForcedMessageRefusesAHeldComposerOnAWorkingPaneToo(t *testing.T
 func hermesBusyPane() string {
 	return strings.Join([]string{
 		"╭─ ⚕ Hermes ──────────────────────────────────────╮",
-		"onceki cevabin son satiri",
+		"last line of the previous answer",
 		"╰─────────────────────────────────────────────────╯",
 		"  (¬_¬) processing...",
 		"",
-		" ⚕ x-preview-f-free · 2% · 12m               ─ Say ve /srv dizin...",
+		" ⚕ x-preview-f-free · 2% · 12m               ─ Say and /srv directory...",
 		"────────────────────────────────────────────────────────────────────",
 		"⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel",
 		"────────────────────────────────────────────────────────────────────",
@@ -1927,13 +1927,13 @@ func TestForcedRecordStillWaitsForABusyHermes(t *testing.T) {
 func TestUnverifiedRecordFinishesItsOwnHangingPaste(t *testing.T) {
 	dir := t.TempDir()
 	queue := newBoundTestQueue(dir)
-	id, err := enqueueBoundUnverified(t, queue, "kavram-main", "blueprint", "asili kalan mesaj")
+	id, err := enqueueBoundUnverified(t, queue, "kavram-main", "blueprint", "hanging message")
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("asili kalan mesaj")}
+	target := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("hanging message")}
 	queue.Dispatch(context.Background(), target, nil)
-	if len(target.submitted) != 1 || target.submitted[0] != "asili kalan mesaj" {
+	if len(target.submitted) != 1 || target.submitted[0] != "hanging message" {
 		t.Fatalf("the hanging paste was not finished: %v", target.submitted)
 	}
 	rows, err := queue.List()
@@ -1946,10 +1946,10 @@ func TestUnverifiedRecordFinishesItsOwnHangingPaste(t *testing.T) {
 	// A composer holding SOMEBODY ELSE's text is never submitted: that would put
 	// a human's half-written line into their own agent.
 	queue2 := newBoundTestQueue(t.TempDir())
-	if _, err := enqueueBoundUnverified(t, queue2, "kavram-main", "blueprint", "bizim mesaj"); err != nil {
+	if _, err := enqueueBoundUnverified(t, queue2, "kavram-main", "blueprint", "our message"); err != nil {
 		t.Fatal(err)
 	}
-	foreign := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("insanin yazdigi bir sey")}
+	foreign := &fakeTarget{sessions: map[string]bool{"kavram-main": true}, pane: composerPane("something written by a person")}
 	queue2.Dispatch(context.Background(), foreign, nil)
 	if len(foreign.submitted) != 0 {
 		t.Fatalf("a foreign composer was submitted: %v", foreign.submitted)
@@ -1962,10 +1962,10 @@ func TestUnverifiedRecordFinishesItsOwnHangingPaste(t *testing.T) {
 // free, so it must neither advise an action nor block the messages behind it.
 func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T) {
 	queue := newBoundTestQueue(t.TempDir())
-	if _, err := enqueueBoundUnverified(t, queue, "kavram-main", "blueprint", "kaybolan mesaj"); err != nil {
+	if _, err := enqueueBoundUnverified(t, queue, "kavram-main", "blueprint", "lost message"); err != nil {
 		t.Fatal(err)
 	}
-	later, err := queue.Enqueue("kavram-main", "blueprint", "arkadaki mesaj")
+	later, err := queue.Enqueue("kavram-main", "blueprint", "message behind it")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1982,7 +1982,7 @@ func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T)
 		}
 	}
 	// The message behind it must have been delivered rather than held.
-	if len(target.sent) == 0 || !strings.Contains(target.sent[len(target.sent)-1], "arkadaki mesaj") {
+	if len(target.sent) == 0 || !strings.Contains(target.sent[len(target.sent)-1], "message behind it") {
 		t.Fatalf("the queue stayed blocked behind a dead record: sent=%v (later=%s)", target.sent, later)
 	}
 }
@@ -1991,17 +1991,17 @@ func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T)
 // notices in one evening described situations already fixed by hand, and the
 // noise hid the one real hanging paste (probot-outreach, 2026-08-23).
 func TestNoticeSaysWhetherThePasteIsStillHanging(t *testing.T) {
-	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "asili duran mesaj"}, true)
-	if !strings.Contains(hanging, "HALA ASILI") {
+	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, true)
+	if !strings.Contains(hanging, "STILL HANGING") {
 		t.Fatalf("a hanging paste was not announced as such: %q", hanging)
 	}
-	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "asili duran mesaj"}, false)
-	if !strings.Contains(gone, "SONRADAN COZULMUS OLABILIR") {
+	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, false)
+	if !strings.Contains(gone, "MAY HAVE RESOLVED LATER") {
 		t.Fatalf("a resolved case was not marked as such: %q", gone)
 	}
 	// Both keep the parts an operator navigates by.
 	for _, text := range []string{hanging, gone} {
-		if !strings.Contains(text, "kavram-main hedefine") || !strings.Contains(text, "bp peek kavram-main") {
+		if !strings.Contains(text, "to kavram-main") || !strings.Contains(text, "bp peek kavram-main") {
 			t.Fatalf("notice lost its target: %q", text)
 		}
 	}
@@ -2022,11 +2022,11 @@ func TestNoticeSaysWhetherThePasteIsStillHanging(t *testing.T) {
 // 2026-08-25: a box flush against the top edge may be a SCROLLED view of a
 // taller composer, and verdicts that erase a composer are refused there.
 func deepPane(text string) string {
-	return "  agent: eski cikti\n  agent: daha eski cikti\n  agent: en eski cikti\n" + composerPane(text)
+	return "  agent: old output\n  agent: older output\n  agent: oldest output\n" + composerPane(text)
 }
 
 func TestTornPasteIsClearedAndResent(t *testing.T) {
-	message := "[server-main] ERTELENEN HAFTALIK TARAMA, probot-rakip'i TAZE ac, task dosyasi aynen gecerli, bitince elle commit."
+	message := "[server-main] DEFERRED WEEKLY SCAN: open probot-rakip FRESH; the task file remains valid; commit manually when done."
 	queue := newBoundTestQueue(t.TempDir())
 	id, err := enqueueBoundUnverified(t, queue, "probot-main", "server-main", message)
 	if err != nil {
@@ -2064,7 +2064,7 @@ func TestTornPasteIsClearedAndResent(t *testing.T) {
 // clear-and-resend would feed the same pane forever. Once it is spent the
 // record must say plainly that Enter is the WRONG key here.
 func TestTornPasteStopsAtTheBound(t *testing.T) {
-	message := "[server-main] ayni mesaj, ayni pane, tekrar tekrar yirtiliyorsa durmak gerekir."
+	message := "[server-main] if the same message keeps tearing in the same pane, it must stop."
 	queue := newBoundTestQueue(t.TempDir())
 	id, err := enqueueBoundUnverified(t, queue, "probot-main", "server-main", message)
 	if err != nil {
@@ -2104,7 +2104,7 @@ func TestTornPasteStopsAtTheBound(t *testing.T) {
 // finished with Enter, never erased and re-pasted. Clearing that one would risk
 // the duplicate the whole no-repaste rule exists to prevent.
 func TestIntactHangingPasteIsStillSubmittedNotCleared(t *testing.T) {
-	message := "[server-main] bu mesaj composer'da eksiksiz duruyor, tek Enter yeter."
+	message := "[server-main] this complete message is in the composer; one Enter is enough."
 	queue := newBoundTestQueue(t.TempDir())
 	if _, err := enqueueBoundUnverified(t, queue, "probot-main", "server-main", message); err != nil {
 		t.Fatal(err)
@@ -2123,7 +2123,7 @@ func TestIntactHangingPasteIsStillSubmittedNotCleared(t *testing.T) {
 // in that composer and refused to submit it, so this is a known non-delivery,
 // and a record bp can never finish belongs in the sender's hands the same day.
 func TestSpentTornRecordClosesAsNotDelivered(t *testing.T) {
-	message := "[server-main] ERTELENEN HAFTALIK TARAMA, probot-rakip'i TAZE ac, task dosyasi aynen gecerli."
+	message := "[server-main] DEFERRED WEEKLY SCAN: open probot-rakip FRESH; the task file remains valid."
 	queue := newBoundTestQueue(t.TempDir())
 	// Aged past the witness window: the transcript has had its chance.
 	queue.Now = func() time.Time { return time.Now() }

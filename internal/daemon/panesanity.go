@@ -93,18 +93,18 @@ func paneSanityFindings(observations []paneObservation) map[string]string {
 			if o.Shell {
 				continue
 			}
-			running := "\"" + o.Command + "\" kosuyor"
+			running := "\"" + o.Command + "\" is running"
 			if o.Binary != "" {
-				running = o.Binary + " kosuyor (pane komutu: \"" + o.Command + "\")"
+				running = o.Binary + " is running (pane command: \"" + o.Command + "\")"
 			}
 			findings[o.Session] = fmt.Sprintf(
-				"bp: %s pane'ini AGENT SAYMIYOR ama icinde %s — inbound teslim bu agent'a kapali. bp'nin TUI imzasi kaymis ya da yeni bir TUI gelmis olabilir; internal/tmux IsAgentPane'e bak, bp peek %s ile ekrani gor.",
+				"bp: pane %s is NOT RECOGNIZED AS AN AGENT but contains %s — inbound delivery to this agent is disabled. bp's TUI signature may have drifted or a new TUI may have appeared; inspect internal/tmux IsAgentPane and view the screen with bp peek %s.",
 				o.Session, running, o.Session)
 			continue
 		}
 		if o.ClaudePane && !o.SessionFound {
 			findings[o.Session] = fmt.Sprintf(
-				"bp: %s canli bir Claude pane'i ama bp oturum dosyasini bulamiyor (folder=%q) — bu agent'in baglam/model/tur okumalari BOS gorunuyor, agent sessiz sanilabilir. agentbook folder alanini ve ~/.claude/projects karsiligini kontrol et.",
+				"bp: %s is a live Claude pane, but bp cannot find its session file (folder=%q) — this agent's context/model/turn readings appear EMPTY and it may look silent. Check the agentbook folder field and its ~/.claude/projects counterpart.",
 				o.Session, o.Folder)
 		}
 	}

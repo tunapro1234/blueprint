@@ -31,7 +31,7 @@ func TestPaneLockKeepsASecondWriterOutOfTheSameComposer(t *testing.T) {
 		t.Fatalf("ErrPaneLocked does not read as busy: %v", err)
 	}
 	// A different pane is a different lock: one busy composer must not stop the fleet.
-	other, err := acquirePaneLock(dir, "baska-hedef", 100*time.Millisecond)
+	other, err := acquirePaneLock(dir, "other-target", 100*time.Millisecond)
 	if err != nil {
 		t.Fatalf("an unrelated pane was blocked: %v", err)
 	}

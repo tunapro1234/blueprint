@@ -61,7 +61,7 @@ func composerContent(pane string) string {
 		// \x1b[0m"). A text allowlist therefore cannot work — the first
 		// version matched only the "Ask anything" sentence, and the first
 		// five real Hermes agents opened on this fleet all queued forever
-		// behind "composer'da yabanci metin var" over a suggestion nobody
+		// behind "composer contains foreign text" over a suggestion nobody
 		// typed. The ATTRIBUTE is the signature: italic is Hermes' "this is
 		// not input", exactly as dim is Claude's, so italic segments are
 		// removed the same way — but only on a pane the screen proves is
@@ -69,7 +69,7 @@ func composerContent(pane string) string {
 		// text.
 		composer = hermesGhostSeg.ReplaceAllString(composer, "")
 	}
-	composer = StripDim(composer) // dim placeholder/ghost metni gercek yazi DEGIL (2026-07-10)
+	composer = StripDim(composer) // dim placeholder/ghost text is NOT real input (2026-07-10)
 	after := promptLine.ReplaceAllString(composer, "")
 	if CodexPane(pane) && codexPlaceholderOnly(after) {
 		// Codex has a placeholder sentence of its own ("Ask Codex to do
@@ -249,7 +249,7 @@ func classifyComposer(pane, want string) composerVerdict {
 	}
 	// The SUBMIT-time twin of the wide-rune rule in classifyPaste, and the half
 	// that was missing until 2026-08-24. A message carrying emoji renders with a
-	// character missing once the composer WRAPS it ("gorunmez" -> "grunmez",
+	// character missing once the composer WRAPS it ("invisible" -> "invisble",
 	// measured on eight of probot-outreach's 68-column panes), so this exact
 	// comparison called our own paste FOREIGN, submit() never verified, and the
 	// record fell out through the one silent path in the delivery layer
@@ -712,9 +712,9 @@ var ErrUnverified = errors.New("delivery could not be verified")
 // Enter ever pressed. The second can also mean ownership became ambiguous
 // before the first key; it must not claim that Enter was sent.
 const (
-	UnverifiedClientActive      = "ekran okunamadi ya da pane'de klavye aktif — Enter BASILMADI, metin composer'da kalmis olabilir"
-	UnverifiedSubmitUnconfirmed = "composer'dan gonderim dogrulanamadi"
-	UnverifiedComposerOwnership = "composer metninin bu mesaja ait oldugu kanitlanamadi; ek Enter/Tab gonderilmedi"
+	UnverifiedClientActive      = "screen unreadable or keyboard active in pane — Enter WAS NOT PRESSED; text may remain in the composer"
+	UnverifiedSubmitUnconfirmed = "submission from composer was unverified"
+	UnverifiedComposerOwnership = "could not prove the composer text belongs to this message; no extra Enter/Tab was sent"
 )
 
 // authExpiredMarkers are the phrases a Claude Code session renders in its status
@@ -1243,9 +1243,9 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 var bufferSequence uint64
 
 const (
-	authExpiredReason    = "pane oturumu dusmus (Login expired / run /login)"
-	composerOtherReason  = "composer'da baska metin var: paste hic girmemis"
-	composerBrokenReason = "paste composer'a bozuk girdi (yeniden yazildi, hala eslesmiyor)"
+	authExpiredReason    = "pane session ended (Login expired / run /login)"
+	composerOtherReason  = "composer contains other text: paste never entered"
+	composerBrokenReason = "paste entered the composer incorrectly (rewritten, still does not match)"
 )
 
 // Send resolves anything of ours already hanging in the composer, then injects
@@ -1420,7 +1420,7 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 // The verdict itself was read off ONE capture. That is sound on a still pane and
 // worthless on a moving one: a pane redrawing mid-turn hands back torn frames,
 // and on q163159804 (2026-08-15) those frames produced alternating
-// "composer'da baska metin var" / "paste composer'a bozuk girdi" verdicts for a
+// "composer contains other text" / "paste entered the composer incorrectly" verdicts for a
 // message the agent had ALREADY queued internally. Each verdict said "provably
 // not delivered", the record stayed pending, and the daemon pasted the same
 // message again every 30 seconds.
@@ -2380,8 +2380,8 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		}
 		created = true
 	}
-	// RC oturum adi tmux adiyla eslessin diye prefix ver (claude.ai/code listesinde
-	// hostname yerine agent adi gorunur).
+	// Prefix the remote-control session name to match the tmux name, so the
+	// claude.ai/code list shows the agent name instead of the hostname.
 	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions"
 	if opts.Resume && !opts.Codex && !opts.Hermes {
 		// Resume THIS agent's own conversation by id, not `claude -c` (which
@@ -2544,7 +2544,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	// like success until the agent's first command died.
 	if opts.NoSandbox && warn != nil {
 		if process, err := c.PaneProcess(ctx, session); err == nil && process.Command == "bwrap" {
-			warn("WARNING: " + session + " --no-sandbox istendi ama pane komutu hala \"bwrap\": CODEX_BWRAPPED=1 komuta ulasmamis. Agent bu haliyle git olmayan bir dizinde komut calistiramaz; bp close " + session + " ile kapatip yeniden acmayi dene.")
+			warn("WARNING: " + session + " requested --no-sandbox but the pane command is still \"bwrap\": CODEX_BWRAPPED=1 did not reach the command. In this state the agent cannot run commands in a non-git directory; close it with bp close " + session + " and try reopening it.")
 		}
 	}
 	if !opts.NoPrompt && !nativeOnboarding {

@@ -11,7 +11,8 @@ import (
 )
 
 func TestAnonymousLegacyRecordNeverSubmitsButPastProofCanSettle(t *testing.T) {
-	for _, sender := range []string{"", "bilinmiyor"} {
+	// "bilinmiyor" is the legacy unknown label written by older bp versions.
+	for _, sender := range []string{"", "unknown", "bilinmiyor"} {
 		for _, recovery := range []bool{false, true} {
 			t.Run(sender+map[bool]string{false: "/new", true: "/recovery"}[recovery], func(t *testing.T) {
 				q := newBoundTestQueue(t.TempDir())
@@ -54,7 +55,7 @@ func TestAnonymousLegacyRecordNeverSubmitsButPastProofCanSettle(t *testing.T) {
 }
 
 func TestQueueRejectsAnonymousIngress(t *testing.T) {
-	for _, sender := range []string{"", "bilinmiyor", "  "} {
+	for _, sender := range []string{"", "unknown", "bilinmiyor", "  "} {
 		q := New(t.TempDir())
 		if _, err := q.Enqueue("target", sender, stuckText); err == nil {
 			t.Fatalf("accepted anonymous sender %q", sender)

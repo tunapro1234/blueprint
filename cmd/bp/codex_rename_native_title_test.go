@@ -278,7 +278,7 @@ func TestRenameCodexNoRetitleKeepsNativeTitleAndWarns(t *testing.T) {
 	if calls, err := os.ReadFile(fix.calls); err != nil || strings.Contains(string(calls), "paste-buffer") || strings.Contains(string(calls), "send-keys") {
 		t.Fatalf("--no-retitle typed into the Codex pane: %s err=%v", calls, err)
 	}
-	if warning := readTestOutput(t, fix.app.err); !strings.Contains(warning, "CODEX BAŞLIĞI ESKİ KALDI") {
+	if warning := readTestOutput(t, fix.app.err); !strings.Contains(warning, "CODEX TITLE REMAINS STALE") {
 		t.Fatalf("missing loud stale-title warning: %q", warning)
 	}
 	var updated book.File
@@ -327,7 +327,7 @@ func TestRenameClosedCodexWithoutStoredBindingWarnsAgentbookOnly(t *testing.T) {
 	if output := readTestOutput(t, fix.app.out); !strings.Contains(output, "agentbook only") {
 		t.Fatalf("closed Codex report omitted agentbook-only status: %q", output)
 	}
-	if warning := readTestOutput(t, fix.app.err); !strings.Contains(warning, "CODEX BAŞLIĞI ESKİ KALDI") {
+	if warning := readTestOutput(t, fix.app.err); !strings.Contains(warning, "CODEX TITLE REMAINS STALE") {
 		t.Fatalf("missing closed Codex stale-title warning: %q", warning)
 	}
 }

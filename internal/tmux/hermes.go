@@ -43,7 +43,7 @@ import (
 //     newlines as text; Hermes does not. A three-line message pasted that way
 //     into an IDLE Hermes submitted line one, then — because the first line had
 //     already started a turn — the pane printed "⚡ Sending after interrupt:
-//     'ikinci satir…'" and cancelled its own turn to take line two, leaving line
+//     'second line…'" and cancelled its own turn to take line two, leaving line
 //     three in the composer. One message became three, two of them interrupts.
 //     The same message pasted with `-p` (tmux emits the bracketed-paste
 //     markers, which Hermes honours) stayed in the composer as three rendered
@@ -97,9 +97,9 @@ var hermesIdleComposer = regexp.MustCompile(`^[❯›]\s+` + regexp.QuoteMeta(he
 // pasted. Measured 2026-08-22 in blueprint-hermes-test, all four states:
 //
 //	idle,  empty   ->  "❯ Ask anything, or type / for commands…"
-//	idle,  text    ->  "❯ ucuncu satir da var"
+//	idle,  text    ->  "❯ there is also a third line"
 //	busy,  empty   ->  "⚕ ❯ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel"
-//	busy,  text    ->  "⚕ ❯ ucuncu satir da var"
+//	busy,  text    ->  "⚕ ❯ there is also a third line"
 //
 // A first version of this matcher required the literal "msg=interrupt" and would
 // therefore have called the fourth state IDLE — a busy pane holding text, which
@@ -117,7 +117,7 @@ var hermesBusyComposer = regexp.MustCompile(`^` + hermesCaduceus + `\s*[❯›]`
 // hermesStatusRow matches the live status row Hermes draws just ABOVE its
 // composer (note: above, where Claude's footer is below):
 //
-//	⚕ x-preview-f-free · 2% · 2m                ─ Say ve /srv dizin...
+//	⚕ x-preview-f-free · 2% · 2m                ─ Say and /srv directory...
 //
 // Model name, context percentage and turn age. It is the third recognition
 // marker and the only one present in BOTH states, which is what lets a pane be
@@ -145,7 +145,7 @@ var hermesStatusRow = regexp.MustCompile(`^` + hermesCaduceus + `\s+\S.*·\s*(?:
 //	│   2. Allow for this session                                    │
 //	│   4. Deny                                                      │
 //	  ↑/↓ to select, Enter to confirm  (62s)
-//	 ⚕ x-preview-f-free · 40% · 1.2d          ─ kuanta.md görev d...
+//	 ⚕ x-preview-f-free · 40% · 1.2d          ─ kuanta.md task d...
 //	────────────────────────────────────────────────────────────────
 //	⚠ ❯
 //	────────────────────────────────────────────────────────────────
@@ -370,7 +370,7 @@ func IsAgentPane(cmd, pane string) bool {
 //
 // The live structure, measured 2026-08-22 in blueprint-hermes-test:
 //
-//	 ⚕ x-preview-f-free · 2% · 2m         ─ Say ve /srv dizin...   <- status, ABOVE
+//	 ⚕ x-preview-f-free · 2% · 2m         ─ Say and /srv directory...   <- status, ABOVE
 //	────────────────────────────────────────────────────────────   <- top rule
 //	❯ Ask anything, or type / for commands…                        <- composer
 //	────────────────────────────────────────────────────────────   <- bottom rule

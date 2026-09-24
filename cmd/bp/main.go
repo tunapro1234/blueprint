@@ -228,7 +228,7 @@ func main() {
 var errReported = errors.New("reported above")
 
 // deliveryReason unwraps a delivery sentinel so a user-visible line names the
-// cause ("pane oturumu dusmus …") instead of repeating the plumbing prefix.
+// cause ("pane session ended …") instead of repeating the plumbing prefix.
 func deliveryReason(err error, sentinel error) string {
 	return strings.TrimPrefix(err.Error(), sentinel.Error()+": ")
 }
@@ -677,9 +677,9 @@ func bookMismatch(bookState string, alive bool) string {
 func mismatchMark(mismatch string) string {
 	switch mismatch {
 	case mismatchTmuxOpenBookClosed:
-		return " !TMUX ACIK"
+		return " !TMUX OPEN"
 	case mismatchTmuxClosedBookOpen:
-		return " !TMUX YOK"
+		return " !TMUX MISSING"
 	}
 	return ""
 }
@@ -1145,14 +1145,14 @@ func codexContext(usage *codexrpc.ThreadTokenUsage) string {
 // plain description for an error that carries none.
 func unverifiedCause(err error) string {
 	if err == nil {
-		return "pane'de dogrulanamadi"
+		return "unverified in pane"
 	}
 	if text := err.Error(); strings.Contains(text, ": ") {
 		if _, cause, ok := strings.Cut(text, ": "); ok && cause != "" {
 			return cause
 		}
 	}
-	return "pane'de dogrulanamadi"
+	return "unverified in pane"
 }
 
 func (a *app) open(args []string) error {
@@ -1483,7 +1483,7 @@ func (a *app) open(args []string) error {
 	}
 	if err := a.flushPending(name); err != nil {
 		if errors.Is(err, bptmux.ErrUnverified) {
-			fmt.Fprintf(a.err, "WARNING: pending digest for %s was sent but DOGRULANAMADI; check with bp peek %s\n", name, name)
+			fmt.Fprintf(a.err, "WARNING: pending digest for %s was sent but UNVERIFIED; check with bp peek %s\n", name, name)
 		} else {
 			fmt.Fprintf(a.err, "WARNING: pending messages for %s were not delivered: %v\n", name, err)
 		}
@@ -1818,7 +1818,7 @@ func (a *app) flushPending(name string) error {
 		// send would stop the agent talking at all, which is what happened.
 		// So: the message goes through alone and the digest stays spooled for a
 		// client that can write.
-		fmt.Fprintf(a.err, "NOT: %s icin bekleyen duyurular EKLENMEDI — spool bu ortamdan salt-okunur (%v). Mesaj tek basina gonderiliyor; duyurular yazma izni olan bir istemcide teslim edilecek.\n", name, err)
+		fmt.Fprintf(a.err, "NOTE: pending announcements for %s were NOT ADDED — the spool is read-only in this environment (%v). The message is being sent alone; a client with write access will deliver the announcements.\n", name, err)
 		return nil
 	}
 	if err != nil || len(entries) == 0 {
@@ -1853,7 +1853,7 @@ func (a *app) flushPending(name string) error {
 		// about a digest that has no author to tell.
 		if a.queue != nil && book.CanWitness(digest) {
 			if _, enqueueErr := a.queue.EnqueueUnverified(name, "bp", digest); enqueueErr != nil {
-				fmt.Fprintf(a.err, "WARNING: %s icin dogrulanamayan digest kuyruga islenemedi: %v\n", name, enqueueErr)
+				fmt.Fprintf(a.err, "WARNING: unverified digest for %s could not be recorded in the queue: %v\n", name, enqueueErr)
 			}
 		}
 		return err
@@ -1863,31 +1863,31 @@ func (a *app) flushPending(name string) error {
 
 var istanbul = time.FixedZone("Europe/Istanbul", 3*60*60)
 
-var turkishMonths = [...]string{"", "Oca", "Sub", "Mar", "Nis", "May", "Haz", "Tem", "Agu", "Eyl", "Eki", "Kas", "Ara"}
+var monthAbbreviations = [...]string{"", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 
 func formatDigest(entries []pending.Entry, dropped int) string {
 	first := time.Unix(entries[0].TS, 0).In(istanbul)
 	last := time.Unix(entries[len(entries)-1].TS, 0).In(istanbul)
-	rangeText := fmt.Sprintf("%d %s", first.Day(), turkishMonths[first.Month()])
+	rangeText := fmt.Sprintf("%d %s", first.Day(), monthAbbreviations[first.Month()])
 	if first.YearDay() != last.YearDay() || first.Year() != last.Year() {
 		if first.Month() == last.Month() && first.Year() == last.Year() {
-			rangeText = fmt.Sprintf("%d-%d %s", first.Day(), last.Day(), turkishMonths[first.Month()])
+			rangeText = fmt.Sprintf("%d-%d %s", first.Day(), last.Day(), monthAbbreviations[first.Month()])
 		} else {
-			rangeText = fmt.Sprintf("%d %s-%d %s", first.Day(), turkishMonths[first.Month()], last.Day(), turkishMonths[last.Month()])
+			rangeText = fmt.Sprintf("%d %s-%d %s", first.Day(), monthAbbreviations[first.Month()], last.Day(), monthAbbreviations[last.Month()])
 		}
 	}
 	var digest strings.Builder
-	fmt.Fprintf(&digest, "[%d birikmis duyuru — %s]", len(entries), rangeText)
+	fmt.Fprintf(&digest, "[%d accumulated announcements — %s]", len(entries), rangeText)
 	for index, entry := range entries {
 		when := time.Unix(entry.TS, 0).In(istanbul)
-		fmt.Fprintf(&digest, "\n%d) (%d %s %s", index+1, when.Day(), turkishMonths[when.Month()], when.Format("15:04"))
+		fmt.Fprintf(&digest, "\n%d) (%d %s %s", index+1, when.Day(), monthAbbreviations[when.Month()], when.Format("15:04"))
 		if entry.Kind == "msg" {
 			fmt.Fprintf(&digest, ", %s", entry.From)
 		}
 		fmt.Fprintf(&digest, ") %s", entry.Text)
 	}
 	if dropped > 0 {
-		fmt.Fprintf(&digest, "\n(+%d eski duyuru dusuldu)", dropped)
+		fmt.Fprintf(&digest, "\n(+%d old announcements dropped)", dropped)
 	}
 	return digest.String()
 }
@@ -1927,7 +1927,7 @@ const forceBusyFlag = "--force-busy"
 //
 // The window closes after the target name: the first non-flag argument is the
 // name, the second is the first word of the message, and from there on nothing
-// is read as an option. So `bp msg ada su komutu dene: --force-busy` delivers
+// is read as an option. So `bp msg ada try this command: --force-busy` delivers
 // those words verbatim instead of quietly forcing itself.
 func cutForceBusy(args []string) ([]string, bool) {
 	rest, force := make([]string, 0, len(args)), false
@@ -1962,7 +1962,7 @@ func (a *app) message(args []string) error {
 			// A federated target is a pane on somebody else's machine: its busy
 			// state is not visible from here and its queue is not this queue, so
 			// there is nothing here that could jump it.
-			return fmt.Errorf("%s federe adreste calismaz: uzak pane'in mesguliyeti buradan gorulmuyor", forceBusyFlag)
+			return fmt.Errorf("%s is unavailable for a federated address: the remote pane's busy state is not visible here", forceBusyFlag)
 		}
 		target, peer, _, err := fed.ParseAddress(name)
 		if err != nil {
@@ -2026,7 +2026,7 @@ func (a *app) message(args []string) error {
 				// Honest refusal beats a silent drop: the target is closed, the
 				// only store for it is unwritable here, so the message CANNOT be
 				// kept and the sender has to know that now.
-				return fmt.Errorf("%s kapali ve mesaj saklanamiyor: spool bu ortamdan salt-okunur (%w). Mesaji yazma izni olan bir agent/istemci uzerinden gonder", name, err)
+				return fmt.Errorf("%s is closed and the message cannot be stored: the spool is read-only in this environment (%w). Send through an agent/client with write access", name, err)
 			}
 			return err
 		}
@@ -2052,7 +2052,7 @@ func (a *app) message(args []string) error {
 	}
 	// Nothing goes into the pane while an identical message is still in flight. This
 	// is the only guard that can stop the measured duplicate: an agent whose first
-	// send came back "TESLIMAT BELIRSIZ" re-sent the same text twice within 33
+	// send came back "DELIVERY UNCERTAIN" re-sent the same text twice within 33
 	// seconds, all three pastes went into a streaming pane, and the recipient read
 	// the same 441 characters three times. Neither the screen nor the transcript can
 	// see that while it happens — the copies sit in the CLI's own input queue — so
@@ -2088,7 +2088,7 @@ func (a *app) message(args []string) error {
 	switch {
 	case unverified:
 		if channelID != "" {
-			fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s; transcript tanigi bekleniyor; durum: bp qstat %s\n", name, channelID)
+			fmt.Fprintf(a.out, "DELIVERY UNCERTAIN: %s; waiting for the transcript witness; status: bp qstat %s\n", name, channelID)
 			a.resultLine("unverified", channelID)
 			return errReported
 		}
@@ -2115,16 +2115,16 @@ func (a *app) message(args []string) error {
 				// and "Enter went in but nothing confirmed it" need different
 				// things from a human, and until 2026-08-23 both printed the same
 				// sentence (six hanging pastes in one salvo, no way to tell which).
-				fmt.Fprintf(a.out, "TESLIMAT BELIRSIZ: %s — %s; tekrar gonderilmeyecek, VARSA transcript tanigi kontrol edecek (channel: %s). Durum: bp qstat %s\n", name, unverifiedCause(err), channelID, channelID)
+				fmt.Fprintf(a.out, "DELIVERY UNCERTAIN: %s — %s; it will not be sent again; the transcript witness will check it IF AVAILABLE (channel: %s). Status: bp qstat %s\n", name, unverifiedCause(err), channelID, channelID)
 				a.resultLine("unverified", channelID)
 				return errReported
 			}
 		}
-		fmt.Fprintf(a.out, "gonderildi ama DOGRULANAMADI: %s — pane'de mesaj gorulemedi, tekrar gondermeden once bp peek %s ile bak\n", name, name)
+		fmt.Fprintf(a.out, "sent but UNVERIFIED: %s — the message was not visible in the pane; inspect with bp peek %s before sending again\n", name, name)
 		a.resultLine("unverified", "")
 		return errReported
 	case notReady:
-		fmt.Fprintf(a.out, "GONDERILEMEDI: %s — %s; mesaj kuyruga alindi (channel: %s). Durum: bp qstat %s\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID, channelID)
+		fmt.Fprintf(a.out, "NOT DELIVERED: %s — %s; message queued (channel: %s). Status: bp qstat %s\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID, channelID)
 		a.resultLine("queued", channelID)
 		return nil
 	case !queued:
@@ -2135,7 +2135,7 @@ func (a *app) message(args []string) error {
 	fmt.Fprintf(a.out, "QUEUED (channel: %s). Check: bp qstat %s\n", channelID, channelID)
 	// A queued message is not evidence the agent is working; print the cause.
 	if why := a.queue.Reason(channelID); why != "" {
-		fmt.Fprintf(a.out, "BEKLEME SEBEBI: %s — bak: bp peek %s\n", why, name)
+		fmt.Fprintf(a.out, "WAITING REASON: %s — inspect with bp peek %s\n", why, name)
 	}
 	a.resultLine("queued", channelID)
 	return nil
@@ -2169,7 +2169,7 @@ func (a *app) allowForceBusy(who identity.Identity) error {
 			}
 		}
 	}
-	return fmt.Errorf("force-busy tesisata ayrilmis (root/bp/wa/whatsapp); gerekceni server-main'e yaz (kimlik: %s, kaynak: %s)",
+	return fmt.Errorf("force-busy is reserved for infrastructure (root/bp/wa/whatsapp); send the reason to server-main (identity: %s, source: %s)",
 		who.Label, who.Source)
 }
 
@@ -2204,9 +2204,9 @@ func (a *app) forceMessage(name, sender, message string, entries []pending.Entry
 		}
 	}
 	if waiting > 0 {
-		fmt.Fprintf(a.out, "uyari: hedefte %d bekleyen mesaj var; force sira disi teslim edilecek\n", waiting)
+		fmt.Fprintf(a.out, "warning: the target has %d waiting messages; the forced message will be delivered out of order\n", waiting)
 	}
-	fmt.Fprintf(a.out, "FORCE kuyrukta: %s (channel: %s). Durum: bp qstat %s\n", name, channelID, channelID)
+	fmt.Fprintf(a.out, "FORCE queued: %s (channel: %s). Status: bp qstat %s\n", name, channelID, channelID)
 	a.dispatchNow()
 	// The verdict is read back from the record itself, not from the pass's report
 	// lines: the pass may have been a no-op (daemon held the dispatch lock) and
@@ -2241,7 +2241,7 @@ func (a *app) dispatchNow() {
 		return
 	}
 	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
-		fmt.Fprintf(a.err, "WARNING: teslim pass'i calistirilamadi: %v\n", err)
+		fmt.Fprintf(a.err, "WARNING: delivery pass could not run: %v\n", err)
 	}
 }
 
@@ -2297,8 +2297,8 @@ func (a *app) reportInFlight(existing msgq.Message) {
 	if err != nil || status == "" {
 		status = existing.Reason
 	}
-	fmt.Fprintf(a.out, "AYNI METIN ZATEN YOLDA — kanal %s. Durum: %s\n", existing.ID, status)
-	fmt.Fprintf(a.out, "Bekle ya da israr icin: bp qcancel %s && bp msg ...\n", existing.ID)
+	fmt.Fprintf(a.out, "IDENTICAL TEXT ALREADY IN FLIGHT — channel %s. Status: %s\n", existing.ID, status)
+	fmt.Fprintf(a.out, "Wait, or override with: bp qcancel %s && bp msg ...\n", existing.ID)
 	a.resultLine("duplicate", existing.ID)
 }
 
@@ -2439,7 +2439,7 @@ func (t *deliveryTally) record(target string, queued bool, channelID string, err
 // existing summaries stay byte-identical whenever every delivery was clean.
 func (t *deliveryTally) report(out *os.File) {
 	if len(t.unverified) > 0 {
-		fmt.Fprintf(out, "dogrulanamadi: %d (%s) — bp peek ile bak\n", len(t.unverified), strings.Join(t.unverified, ", "))
+		fmt.Fprintf(out, "unverified: %d (%s) — inspect with bp peek\n", len(t.unverified), strings.Join(t.unverified, ", "))
 	}
 }
 
@@ -2723,20 +2723,19 @@ func selectCompactTargets(fleet book.Fleet, states map[string]book.State, sender
 	return plan
 }
 
-// Decision reasons, in the Turkish-without-diacritics style of the rest of the
-// compact/announce output.
+// Decision reasons used by compact/announce output.
 const (
-	compactPending  = "gonderilecek"
-	compactSent     = "gonderildi"
-	compactBusy     = "MESGUL, atlandi"
-	compactClosed   = "kapali"
-	compactSmallCtx = "context kucuk"
-	compactExcluded = "haric tutuldu"
-	compactNoCache  = "transcript okunamadi"
-	compactNotAgent = "agent CLI degil, atlandi"
+	compactPending  = "will send"
+	compactSent     = "sent"
+	compactBusy     = "BUSY, skipped"
+	compactClosed   = "closed"
+	compactSmallCtx = "context too small"
+	compactExcluded = "excluded"
+	compactNoCache  = "transcript unreadable"
+	compactNotAgent = "not an agent CLI, skipped"
 	// Enter was pressed but nothing confirmed the composer cleared. Never
-	// counted as "gonderildi": the operator has to look at the pane.
-	compactUnverified = "gonderildi ama DOGRULANAMADI (bp peek)"
+	// counted as "sent": the operator has to look at the pane.
+	compactUnverified = "sent but UNVERIFIED (bp peek)"
 )
 
 // compactDecision is one row of the decision table: what bp measured about an
@@ -2786,16 +2785,16 @@ func policyDecisions(fleet book.Fleet, states map[string]book.State, cacheStates
 			if command == "" {
 				command = "?"
 			}
-			row.Reason = fmt.Sprintf("claude degil (%s)", command)
+			row.Reason = fmt.Sprintf("not Claude (%s)", command)
 		case !state.Known:
 			row.Reason = compactNoCache
 		case state.LastHumanAge <= opts.idle:
-			row.Reason = fmt.Sprintf("taze konusma (<%dsa)", int(opts.idle.Hours()))
+			row.Reason = fmt.Sprintf("recent conversation (<%dh)", int(opts.idle.Hours()))
 		case state.CtxTokens <= opts.minCtx:
 			row.Reason = compactSmallCtx
 		default:
 			if last, ok := lastCompact[name]; ok && now.Sub(last) < opts.minAge {
-				row.Reason = fmt.Sprintf("yakinda compact edildi (%s once)", formatAge(now.Sub(last)))
+				row.Reason = fmt.Sprintf("recently compacted (%s ago)", formatAge(now.Sub(last)))
 				break
 			}
 			row.Send = true
@@ -2836,14 +2835,14 @@ func allDecisions(fleet book.Fleet, states map[string]book.State, cacheStates ma
 			row.Reason = compactExcluded
 		default:
 			if age, ok := recent[name]; ok {
-				row.Reason = fmt.Sprintf("yakinda compact edildi (%s once)", formatAge(age))
+				row.Reason = fmt.Sprintf("recently compacted (%s ago)", formatAge(age))
 				break
 			}
 			if !states[name].Alive {
 				row.Reason = compactClosed
 				break
 			}
-			row.Reason = "atlandi"
+			row.Reason = "skipped"
 		}
 		rows = append(rows, row)
 	}
@@ -2974,7 +2973,7 @@ func (a *app) paneCommands() (map[string]string, error) {
 }
 
 func (a *app) printCompactTable(rows []compactDecision) {
-	fmt.Fprintf(a.out, "%-24s %-10s %-10s %s\n", "AGENT", "KONUSMA", "CONTEXT", "KARAR")
+	fmt.Fprintf(a.out, "%-24s %-10s %-10s %s\n", "AGENT", "CONVERSATION", "CONTEXT", "DECISION")
 	for _, row := range rows {
 		age, tokens := "-", "-"
 		if row.Age >= 0 {
@@ -3029,7 +3028,7 @@ func (a *app) compact(args []string) error {
 		rows = policyDecisions(fleet, states, cacheStates, commands, lastCompact, opts, time.Now())
 		for index := range rows {
 			if sender != fleet.Root && !fleet.IsDescendant(rows[index].Name, sender) {
-				rows[index].Send, rows[index].Reason = false, "hiyerarsi disinda"
+				rows[index].Send, rows[index].Reason = false, "outside hierarchy"
 			}
 		}
 	}
@@ -3050,9 +3049,9 @@ func (a *app) compact(args []string) error {
 		}
 		a.printCompactTable(rows)
 		if len(unknownExcludes) > 0 {
-			fmt.Fprintf(a.out, "bilinmeyen exclude: %s\n", strings.Join(unknownExcludes, ", "))
+			fmt.Fprintf(a.out, "unknown exclusions: %s\n", strings.Join(unknownExcludes, ", "))
 		}
-		fmt.Fprintf(a.out, "gonderilecek: %d, atlanan: %d (gondermek icin: bp compact --apply)\n", pending, len(rows)-pending)
+		fmt.Fprintf(a.out, "will send: %d, skipped: %d (to send: bp compact --apply)\n", pending, len(rows)-pending)
 		return nil
 	}
 
@@ -3105,7 +3104,7 @@ func (a *app) compact(args []string) error {
 			case errors.Is(clearErr, bptmux.ErrNotAgent):
 				rows[index].Reason = compactNotAgent
 			default:
-				rows[index].Reason = fmt.Sprintf("gonderilemedi: %v", clearErr)
+				rows[index].Reason = fmt.Sprintf("not delivered: %v", clearErr)
 				tally.errs = append(tally.errs, fmt.Errorf("%s: %w", target, clearErr))
 			}
 			continue
@@ -3126,11 +3125,11 @@ func (a *app) compact(args []string) error {
 			updated = true
 			rows[index].Reason = compactSent
 			if queued {
-				rows[index].Reason = fmt.Sprintf("%s (kuyruk: %s)", compactSent, channelID)
+				rows[index].Reason = fmt.Sprintf("%s (queue: %s)", compactSent, channelID)
 			}
 			if errors.Is(deliveryErr, bptmux.ErrNotReady) {
 				// Queued because the pane provably could not take it.
-				rows[index].Reason = fmt.Sprintf("GONDERILEMEDI: %s, kuyrukta (%s)", deliveryReason(deliveryErr, bptmux.ErrNotReady), channelID)
+				rows[index].Reason = fmt.Sprintf("NOT DELIVERED: %s, queued (%s)", deliveryReason(deliveryErr, bptmux.ErrNotReady), channelID)
 			}
 			continue
 		}
@@ -3139,7 +3138,7 @@ func (a *app) compact(args []string) error {
 			rows[index].Reason = compactNotAgent
 			continue
 		}
-		rows[index].Reason = fmt.Sprintf("gonderilemedi: %v", deliveryErr)
+		rows[index].Reason = fmt.Sprintf("not delivered: %v", deliveryErr)
 	}
 	if updated {
 		if err := saveCompactState(compactStatePath, lastCompact); err != nil {
@@ -3150,9 +3149,9 @@ func (a *app) compact(args []string) error {
 	sent := tally.sent + len(tally.channels)
 	a.printCompactTable(rows)
 	if len(unknownExcludes) > 0 {
-		fmt.Fprintf(a.out, "bilinmeyen exclude: %s\n", strings.Join(unknownExcludes, ", "))
+		fmt.Fprintf(a.out, "unknown exclusions: %s\n", strings.Join(unknownExcludes, ", "))
 	}
-	fmt.Fprintf(a.out, "gonderildi: %d, atlanan: %d\n", sent, len(rows)-sent)
+	fmt.Fprintf(a.out, "sent: %d, skipped: %d\n", sent, len(rows)-sent)
 	tally.report(a.out)
 	return errors.Join(tally.errs...)
 }
@@ -3178,7 +3177,7 @@ func (a *app) queueList(args []string) error {
 			// blocked by an unreadable paste (or a fragment too short to identify)
 			// looks exactly like an agent that is merely working.
 			if row.Reason != "" {
-				fmt.Fprintf(a.out, "    ! %s — bak: bp peek %s\n", row.Reason, row.To)
+				fmt.Fprintf(a.out, "    ! %s — inspect: bp peek %s\n", row.Reason, row.To)
 			}
 		}
 	}
@@ -3491,6 +3490,8 @@ func (a *app) policy(args []string) error {
 var policyResetHours = regexp.MustCompile(`reset ([^,]+)s,`)
 
 func translatePolicyOutput(output string) string {
+	// Older usage-policy helpers may still emit Turkish usage lines; translate
+	// those exact legacy forms while current helpers already emit English.
 	output = strings.ReplaceAll(output, "kullanim: usage-policy override <saat>  (0 = kaldir)", "usage: bp policy override <hours> (0 = clear)")
 	output = strings.ReplaceAll(output, "kullanim: usage-policy [status | override <saat>]", "usage: bp policy status | override <hours>")
 	output = strings.ReplaceAll(output, "override kaldirildi", "override cleared")
@@ -3689,19 +3690,19 @@ func (a *app) remote(args []string) error {
 	queuedCount, skipped, unverified := 0, 0, 0
 	for _, name := range targets {
 		if !a.tmux.HasSession(a.ctx, name) {
-			fmt.Fprintf(a.out, "  skip   %-28s oturum yok\n", name)
+			fmt.Fprintf(a.out, "  skip   %-28s no session\n", name)
 			skipped++
 			continue
 		}
-		// Sadece claude panelerine gonder: codex bu komutu bilmez, shell'e (zsh/bash)
-		// yazmak root prompt'una metin dusurur.
+		// Send only to Claude panes: Codex does not know this command, and typing it
+		// into a shell (zsh/bash) would put text at a root prompt.
 		if cmd := commands[name]; cmd != "claude" {
-			fmt.Fprintf(a.out, "  skip   %-28s claude oturumu degil (%s)\n", name, cmd)
+			fmt.Fprintf(a.out, "  skip   %-28s not a Claude session (%s)\n", name, cmd)
 			skipped++
 			continue
 		}
-		// Onceki turdan asili kalmis RC menusu pane'i "mesgul" gosterir ve
-		// gonderimi kuyruga dusurur — once kapat.
+		// A remote-control menu left over from the previous turn makes the pane look
+		// busy and queues delivery, so close it first.
 		if pane, err := a.tmux.Capture(a.ctx, name); err == nil && bptmux.RemoteControlMenu(pane) {
 			_ = a.tmux.PressEnter(a.ctx, name)
 			time.Sleep(time.Second)
@@ -3709,23 +3710,23 @@ func (a *app) remote(args []string) error {
 		queued, channelID, err := a.deliver(name, sender, "/remote-control")
 		if errors.Is(err, bptmux.ErrUnverified) {
 			// Keystrokes went in, nothing confirmed them: not a send, not a
-			// failure. It is never counted as gonderildi.
-			fmt.Fprintf(a.out, "  ??     %-28s gonderildi ama DOGRULANAMADI (bp peek %s)\n", name, name)
+			// failure. It is never counted as sent.
+			fmt.Fprintf(a.out, "  ??     %-28s sent but UNVERIFIED (bp peek %s)\n", name, name)
 			unverified++
 			continue
 		}
 		if errors.Is(err, bptmux.ErrNotReady) && queued {
-			fmt.Fprintf(a.out, "  kuyruk %-28s GONDERILEMEDI: %s (%s)\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID)
+			fmt.Fprintf(a.out, "  queue  %-28s NOT DELIVERED: %s (%s)\n", name, deliveryReason(err, bptmux.ErrNotReady), channelID)
 			queuedCount++
 			continue
 		}
 		if err != nil {
-			fmt.Fprintf(a.out, "  hata   %-28s %v\n", name, err)
+			fmt.Fprintf(a.out, "  error  %-28s %v\n", name, err)
 			skipped++
 			continue
 		}
 		if queued {
-			fmt.Fprintf(a.out, "  kuyruk %-28s mesgul, bosalinca gider (%s)\n", name, channelID)
+			fmt.Fprintf(a.out, "  queue  %-28s busy; will send when available (%s)\n", name, channelID)
 			queuedCount++
 			continue
 		}
@@ -3733,7 +3734,7 @@ func (a *app) remote(args []string) error {
 	}
 	if len(sent) > 0 {
 		urls := map[string]string{}
-		deadline := time.Now().Add(25 * time.Second) // baglanti kurulumu yavas olabiliyor
+		deadline := time.Now().Add(25 * time.Second) // establishing the connection can be slow
 		for time.Now().Before(deadline) && len(urls) < len(sent) {
 			time.Sleep(4 * time.Second)
 			for _, p := range sent {
@@ -3749,11 +3750,12 @@ func (a *app) remote(args []string) error {
 				}
 			}
 		}
-		// RC zaten aktif olan oturumlarda komut bir menu acar (Disconnect/QR/Continue,
-		// imlec Continue'da) ve Enter bekler. Menu URL'den GEC render olabildigi icin
-		// kapatma ayri bir supurme: menu goren herkese Enter, kalan var mi diye tekrar.
-		// Ust uste ikinci bir submit gec de menu acabildigi icin: 2 ardisik temiz
-		// tur gorene kadar supur (en fazla ~24sn).
+		// In sessions where remote control is already active, the command opens a
+		// menu (Disconnect/QR/Continue, cursor on Continue) and waits for Enter.
+		// The menu can render later than the URL, so dismissal is a separate sweep:
+		// press Enter for every visible menu, then check again. A second consecutive
+		// submit can also open the menu late, so sweep until two clean passes (at
+		// most about 24 seconds).
 		clean := 0
 		for tries := 0; tries < 12 && clean < 2; tries++ {
 			dismissed := false
@@ -3776,15 +3778,15 @@ func (a *app) remote(args []string) error {
 		}
 		for _, p := range sent {
 			if url := urls[p.name]; url != "" {
-				fmt.Fprintf(a.out, "  aktif  %-28s %s\n", p.name, url)
+				fmt.Fprintf(a.out, "  active %-28s %s\n", p.name, url)
 			} else {
-				fmt.Fprintf(a.out, "  gonder %-28s URL gorunmedi (bp peek %s ile bak)\n", p.name, p.name)
+				fmt.Fprintf(a.out, "  send   %-28s URL not visible (inspect with bp peek %s)\n", p.name, p.name)
 			}
 		}
 	}
-	fmt.Fprintf(a.out, "remote: %d gonderildi, %d kuyrukta, %d atlandi\n", len(sent), queuedCount, skipped)
+	fmt.Fprintf(a.out, "remote: %d sent, %d queued, %d skipped\n", len(sent), queuedCount, skipped)
 	if unverified > 0 {
-		fmt.Fprintf(a.out, "        %d dogrulanamadi (bp peek ile bak)\n", unverified)
+		fmt.Fprintf(a.out, "        %d unverified (inspect with bp peek)\n", unverified)
 	}
 	return nil
 }

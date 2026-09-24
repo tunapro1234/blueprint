@@ -48,7 +48,8 @@ func Sender(label string) error {
 	if err := Label(label); err != nil {
 		return err
 	}
-	if value := strings.TrimSpace(label); value == "" || value == "bilinmiyor" {
+	// Persisted records and older peers may still use the Turkish unknown label.
+	if value := strings.TrimSpace(label); value == "" || value == "unknown" || value == "bilinmiyor" {
 		return errors.New("sender identity unavailable; anonymous delivery blocked")
 	}
 	return nil

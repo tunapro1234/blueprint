@@ -9,7 +9,7 @@
 // client happens to be attached — a spectator, not the sender. That is how four
 // cron-sent WhatsApp messages ended up signed by three uninvolved agents on
 // 2026-08-09/10. Everything below exists so that mistake has exactly one place
-// to live, and so an unattributable message says "bilinmiyor" instead of
+// to live, and so an unattributable message says "unknown" instead of
 // borrowing the orchestrator's name.
 package identity
 
@@ -33,7 +33,7 @@ type Sessioner interface {
 
 // Unknown is the label for a sender we cannot name. It is deliberately a word
 // no agent answers to: readers must see the gap rather than trust a guess.
-const Unknown = "bilinmiyor"
+const Unknown = "unknown"
 
 // InferMark separates a guessed label from a stated one. It cannot appear in a
 // valid agent name (see namePattern), so "cron?:inbox_watcher.py" is

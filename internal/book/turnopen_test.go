@@ -15,17 +15,17 @@ import (
 // stop_reason sits, that the interrupt record carries interruptedMessageId next
 // to a text block, that turn_duration is a system subtype — are unchanged.
 const (
-	recPrompt      = `{"type":"user","promptId":"p1","isSidechain":false,"message":{"role":"user","content":"Bana 500 satirlik uzun bir masal yaz. Hic arac kullanma."},"timestamp":"2026-08-15T17:19:58.854Z"}`
+	recPrompt      = `{"type":"user","promptId":"p1","isSidechain":false,"message":{"role":"user","content":"Write me a long 500-line story. Do not use any tools."},"timestamp":"2026-08-15T17:19:58.854Z"}`
 	recAttachment  = `{"type":"attachment","attachment":{"type":"queued_command"},"timestamp":"2026-08-15T17:19:58.853Z"}`
-	recAiTitle     = `{"type":"ai-title","aiTitle":"500 satirlik masal","sessionId":"sess-1"}`
-	recLastPrompt  = `{"type":"last-prompt","lastPrompt":"Bana 500 satirlik...","sessionId":"sess-1"}`
+	recAiTitle     = `{"type":"ai-title","aiTitle":"500-line story","sessionId":"sess-1"}`
+	recLastPrompt  = `{"type":"last-prompt","lastPrompt":"Write me a 500-line...","sessionId":"sess-1"}`
 	recMode        = `{"type":"mode","mode":"default","sessionId":"sess-1"}`
 	recPermMode    = `{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"sess-1"}`
 	recBridge      = `{"type":"bridge-session","sessionId":"sess-1","bridgeSessionId":"cse_01","lastSequenceNum":0}`
 	recQueueOp     = `{"type":"queue-operation","operation":"enqueue","sessionId":"sess-1","content":"<task-notification>"}`
 	recThinking    = `{"type":"assistant","isSidechain":false,"message":{"model":"claude-sonnet-5","id":"msg_01","role":"assistant","content":[{"type":"thinking","thinking":""}],"stop_reason":"tool_use"},"timestamp":"2026-08-15T17:24:21.147Z"}`
 	recToolUse     = `{"type":"assistant","isSidechain":false,"message":{"model":"claude-sonnet-5","id":"msg_01","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{}}],"stop_reason":"tool_use"},"timestamp":"2026-08-15T17:24:21.963Z"}`
-	recToolResult  = `{"type":"user","promptId":"p1","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"bitti"}]},"timestamp":"2026-08-15T17:24:21.972Z"}`
+	recToolResult  = `{"type":"user","promptId":"p1","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_01","type":"tool_result","content":"done"}]},"timestamp":"2026-08-15T17:24:21.972Z"}`
 	recAnswer      = `{"type":"assistant","isSidechain":false,"message":{"model":"claude-sonnet-5","id":"msg_02","role":"assistant","content":[{"type":"text","text":"# Bulutlarin Terzisi"}],"stop_reason":"end_turn"},"timestamp":"2026-08-15T17:22:26.181Z"}`
 	recTurnDone    = `{"type":"system","subtype":"turn_duration","durationMs":147324,"messageCount":7,"isMeta":false,"timestamp":"2026-08-15T17:22:26.224Z"}`
 	recInterrupted = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]},"interruptedMessageId":"msg_03","timestamp":"2026-08-15T15:00:16.776Z"}`
@@ -35,13 +35,13 @@ const (
 	// A Task subagent's own closing message. It lands in the SAME file as the main
 	// chain, after the tool_use that started it, and says nothing about the turn
 	// that is waiting for it.
-	recSidechainDone = `{"type":"assistant","isSidechain":true,"message":{"model":"claude-sonnet-5","id":"msg_04","role":"assistant","content":[{"type":"text","text":"alt gorev bitti"}],"stop_reason":"end_turn"},"timestamp":"2026-08-15T17:30:00.000Z"}`
+	recSidechainDone = `{"type":"assistant","isSidechain":true,"message":{"model":"claude-sonnet-5","id":"msg_04","role":"assistant","content":[{"type":"text","text":"subtask finished"}],"stop_reason":"end_turn"},"timestamp":"2026-08-15T17:30:00.000Z"}`
 	// The reminder Claude Code injects when a session is named: a user record that
 	// is not a prompt.
 	recMetaReminder = `{"type":"user","isMeta":true,"isSidechain":false,"message":{"role":"user","content":"<system-reminder>\nThe user named this session \"kavram-gate\".\n</system-reminder>"},"timestamp":"2026-08-01T05:03:28.842Z"}`
 	// A tool result quoting the interrupt marker — this very package was written
 	// in a session whose transcript contains that string. It must not close a turn.
-	recQuotesInterrupt = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_02","type":"tool_result","content":"grep sonucu: [Request interrupted by user]"}]},"timestamp":"2026-08-15T17:40:00.000Z"}`
+	recQuotesInterrupt = `{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":"toolu_02","type":"tool_result","content":"grep result: [Request interrupted by user]"}]},"timestamp":"2026-08-15T17:40:00.000Z"}`
 	// What /compact leaves behind, measured in bp's own control session on
 	// 2026-08-22: a boundary, a continuation summary flagged isCompactSummary,
 	// and the slash command's local echoes — user records nobody is answering.

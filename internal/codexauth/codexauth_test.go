@@ -252,7 +252,7 @@ func TestCheckAt(t *testing.T) {
 }
 
 // Broken must be true only for the one state that proves access is gone,
-// because it is what makes bp claim "ERISIM YOK" to a user.
+// because it is what makes bp claim "NO ACCESS" to a user.
 func TestBrokenOnlyForExpired(t *testing.T) {
 	for status, want := range map[Status]bool{Unknown: false, OK: false, Stale: false, Expired: true} {
 		if got := (State{Status: status}).Broken(); got != want {

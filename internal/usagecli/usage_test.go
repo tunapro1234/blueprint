@@ -185,43 +185,43 @@ func TestLinesCodexAbsence(t *testing.T) {
 				Status: codexauth.Expired,
 				Reason: "last_refresh 3d old (>1d), id_token expired 3d 4h ago",
 			}},
-			want: "Codex:  ERISIM YOK (codex auth: last_refresh 3d old (>1d), id_token expired 3d 4h ago)",
+			want: "Codex:  NO ACCESS (codex auth: last_refresh 3d old (>1d), id_token expired 3d 4h ago)",
 		},
 		{
 			name: "plausible access reports a data gap",
 			rows: history,
 			opts: Options{Now: now, Auth: codexauth.State{Status: codexauth.OK, Reason: "last_refresh 4m old, id_token valid for 56m"}},
-			want: "Codex:  veri yok (son deger 2d 1h once)",
+			want: "Codex:  no data (latest value 2d 1h ago)",
 		},
 		{
 			name: "unknown access reports a data gap",
 			rows: history,
 			opts: Options{Now: now},
-			want: "Codex:  veri yok (son deger 2d 1h once)",
+			want: "Codex:  no data (latest value 2d 1h ago)",
 		},
 		{
 			name: "stale but unexpired access reports a data gap",
 			rows: history,
 			opts: Options{Now: now, Auth: codexauth.State{Status: codexauth.Stale, Reason: "awaiting next refresh"}},
-			want: "Codex:  veri yok (son deger 2d 1h once)",
+			want: "Codex:  no data (latest value 2d 1h ago)",
 		},
 		{
 			name: "no clock falls back to the newest sample",
 			rows: history,
 			opts: Options{},
-			want: "Codex:  veri yok (son deger 2d 1h once)",
+			want: "Codex:  no data (latest value 2d 1h ago)",
 		},
 		{
 			name: "no reading ever recorded",
 			rows: noHistory,
 			opts: Options{Now: now},
-			want: "Codex:  veri yok (kayitli deger yok)",
+			want: "Codex:  no data (no stored value)",
 		},
 		{
 			name: "no reading ever recorded, access broken",
 			rows: noHistory,
 			opts: Options{Now: now, Auth: codexauth.State{Status: codexauth.Expired, Reason: "auth.json not found at /root/.codex/auth.json"}},
-			want: "Codex:  ERISIM YOK (codex auth: auth.json not found at /root/.codex/auth.json)",
+			want: "Codex:  NO ACCESS (codex auth: auth.json not found at /root/.codex/auth.json)",
 		},
 	}
 	for _, testCase := range cases {
@@ -247,7 +247,7 @@ func TestResolveRecordsLastCodexReadingOutsideWindow(t *testing.T) {
 	if r.CodexLastTS != "2026-07-01T00:00:00Z" {
 		t.Fatalf("CodexLastTS = %q, want the old reading's timestamp", r.CodexLastTS)
 	}
-	if line := Lines(r, Options{Now: time.Date(2026, 8, 10, 13, 26, 7, 0, time.UTC)})[2]; line != "Codex:  veri yok (son deger 40d 13h once)" {
+	if line := Lines(r, Options{Now: time.Date(2026, 8, 10, 13, 26, 7, 0, time.UTC)})[2]; line != "Codex:  no data (latest value 40d 13h ago)" {
 		t.Fatalf("codex line = %q", line)
 	}
 }
@@ -256,13 +256,13 @@ func TestResolveRecordsLastCodexReadingOutsideWindow(t *testing.T) {
 func TestLinesCodexAbsenceWithUnusableTimestamps(t *testing.T) {
 	r := resolve([]Sample{sample("not-a-time", 5.0, 9.0, nil, nil)})
 	r.CodexLastTS = "also-not-a-time"
-	if line := Lines(r, Options{})[2]; line != "Codex:  veri yok (kayitli deger yok)" {
+	if line := Lines(r, Options{})[2]; line != "Codex:  no data (no stored value)" {
 		t.Fatalf("codex line = %q", line)
 	}
 	// A reading stamped after the reference clock is not a negative age.
 	future := resolve([]Sample{sample("2026-08-10T13:00:00Z", 5.0, 9.0, nil, nil)})
 	future.CodexLastTS = "2026-08-11T13:00:00Z"
-	if line := Lines(future, Options{})[2]; line != "Codex:  veri yok (kayitli deger yok)" {
+	if line := Lines(future, Options{})[2]; line != "Codex:  no data (no stored value)" {
 		t.Fatalf("codex line = %q", line)
 	}
 }
@@ -279,12 +279,12 @@ func TestLinesClaudeFiguresStateAbsence(t *testing.T) {
 		Codex5:       52.0,
 		CodexResets:  Resets{Five: "x5"},
 	}})
-	want := "Claude: 5h %12 (reset c5), 7d %39 (reset c7), Fable 7d veri yok"
+	want := "Claude: 5h %12 (reset c5), 7d %39 (reset c7), Fable 7d no data"
 	if line := Lines(fableMissing, Options{})[1]; line != want {
 		t.Fatalf("claude line = %q, want %q", line, want)
 	}
 	blackout := resolve([]Sample{{TS: "2026-08-10T13:26:07Z"}})
-	want = "Claude: 5h veri yok, 7d veri yok, Fable 7d veri yok"
+	want = "Claude: 5h no data, 7d no data, Fable 7d no data"
 	if line := Lines(blackout, Options{})[1]; line != want {
 		t.Fatalf("claude line = %q, want %q", line, want)
 	}

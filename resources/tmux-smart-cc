@@ -1,6 +1,6 @@
 #!/bin/bash
-# Root C-c: taze+gorulmemis tmux buffer varsa (Claude Code secimi) panoya bas;
-# yoksa C-c'yi pane'e aynen ilet (interrupt/iptal normal calisir).
+# Root C-c: if there is a fresh, unseen tmux buffer (Claude Code selection), copy it;
+# otherwise pass C-c through to the pane unchanged (interrupt/cancel works normally).
 PANE="$1"
 STATE=/tmp/.tmux-cc-last-buffer
 read -r name created <<< "$(tmux list-buffers -F '#{buffer_name} #{buffer_created}' 2>/dev/null | sort -k2,2nr | head -1)"

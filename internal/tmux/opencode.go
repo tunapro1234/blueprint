@@ -26,7 +26,7 @@ import (
 // Three findings from that pane drive the code below, and each of them is a
 // class bp has already been hurt by once:
 //
-//  1. An UNBRACKETED multi-line paste SUBMITS. "satir bir\nsatir iki\nsatir uc"
+//  1. An UNBRACKETED multi-line paste SUBMITS. "line one\nline two\nline three"
 //     went out as one message with the newlines swallowed and the turn started
 //     immediately — the Hermes failure exactly (2026-08-22), where three lines
 //     became three messages and interrupted each other. opencode therefore

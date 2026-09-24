@@ -132,7 +132,7 @@ func (a *app) dispatchP2P(targets []string) {
 		return
 	}
 	if err := a.queue.DispatchTargets(a.ctx, a.tmux, targets, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
-		fmt.Fprintf(a.err, "WARNING: P2P teslim pass'i calistirilamadi: %v\n", err)
+		fmt.Fprintf(a.err, "WARNING: P2P delivery pass could not run: %v\n", err)
 	}
 }
 

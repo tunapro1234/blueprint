@@ -1222,7 +1222,7 @@ class LocalCLITest(unittest.TestCase):
                 if "30k" in bar or time.monotonic() >= deadline: break
                 time.sleep(0.2)
             self.assertIn("30k", bar)
-            self.assertNotIn("boş", bar)
+            self.assertNotIn("left", bar)
             self.assertIn("astra high" if cli == "codex" else "fable med", bar)
             # A sibling process must not impersonate the CLI's observation callback.
             book = json.loads((self.root / ".blueprint/agentbook.json").read_text())
@@ -1654,7 +1654,7 @@ class LocalCLITest(unittest.TestCase):
                             self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
                             self.assertIn("unsafe message text", rejected.stderr)
                         self.assertFalse(received.exists(), "injection submitted text")
-                        message = f"dd :q! Türkçe mesaj {cli} {mode}\nikinci satır\nüçüncü satır"
+                        message = f"dd :q! English message {cli} {mode}\nsecond line\nthird line"
                         result = subprocess.run([self.binary, "msg", cli + "-test", message],
                                                 env=self.env, capture_output=True, text=True, timeout=15)
                         deadline = time.monotonic() + 12

@@ -72,7 +72,7 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 			name:      "inside a pane the session signs the message",
 			env:       map[string]string{"TMUX": inTmux, "AGENT": "probot-fon", "SUDO_USER": "tunapro"},
 			from:      "cron:/srv/kavram/x.py",
-			wantText:  "[kavram-outreach] rapor hazir",
+			wantText:  "[kavram-outreach] report ready",
 			wantAsked: true,
 			wantSure:  true,
 		},
@@ -80,26 +80,26 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 			name:     "a cron script states its own origin",
 			env:      map[string]string{"TMUX": ""},
 			from:     "cron:/srv/kavram/outreach/workers/inbox_watcher.py",
-			wantText: "[cron:/srv/kavram/outreach/workers/inbox_watcher.py] 4 yeni cevap",
+			wantText: "[cron:/srv/kavram/outreach/workers/inbox_watcher.py] 4 new replies",
 			wantSure: true,
 		},
 		{
 			name:     "AGENT signs when there is no pane",
 			env:      map[string]string{"TMUX": "", "AGENT": "compec-mail", "SUDO_USER": "tunapro"},
-			wantText: "[agent?:compec-mail] gonderildi",
+			wantText: "[agent?:compec-mail] sent",
 			wantSure: false,
 		},
 		{
 			name:     "a human on the box signs with their own name",
 			env:      map[string]string{"TMUX": "", "SUDO_USER": "tunapro", "USER": "root"},
-			wantText: "[tunapro] elle gonderdim",
+			wantText: "[tunapro] sent manually",
 			wantSure: true,
 		},
 		{
 			name:     "a login name that is also an agent is marked as a guess",
 			env:      map[string]string{"TMUX": "", "SUDO_USER": "probot-fon"},
 			known:    func(name string) bool { return name == "probot-fon" },
-			wantText: "[user?:probot-fon] elle gonderdim",
+			wantText: "[user?:probot-fon] sent manually",
 		},
 		{
 			// The incident itself: a cron script that says nothing. It used to
@@ -107,7 +107,7 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 			name:      "a silent cron job confesses a guess",
 			env:       map[string]string{"TMUX": "", "USER": "root"},
 			ancestors: ancestors([]string{"/bin/sh", "-c", "/srv/kavram/outreach/workers/inbox_watcher.py"}, []string{"/usr/sbin/CRON", "-f"}),
-			wantText:  "[cron?:inbox_watcher.py] 4 yeni cevap",
+			wantText:  "[cron?:inbox_watcher.py] 4 new replies",
 		},
 		{
 			name:      "nothing to go on says so instead of borrowing server-main",

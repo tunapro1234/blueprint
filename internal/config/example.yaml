@@ -1,27 +1,27 @@
-# bp ayarları — değişiklikler sonraki bp komutunda okunur.
-# Dosya: ~/.blueprint/config.yaml (BP_HOME ayarlıysa o klasörde).
-# Göreli yollar bu dosyanın klasörüne göredir; ~/ ev klasörüdür.
-# config.json / config.yml ile birlikte kullanmayın; tek etkin dosya seçin.
+# bp settings — changes are read by the next bp command.
+# File: ~/.blueprint/config.yaml (or that directory when BP_HOME is set).
+# Relative paths are resolved from this file's directory; ~/ is the home directory.
+# Do not use this together with config.json or config.yml; select one active file.
 
 agentbooks: [agentbook.json]
 msgqRoot: msgq
 stateDir: state
 
-# Yerel CLI oturum/model/context gözlemi. Konuşmalar kendi CLI klasöründe kalır.
+# Local CLI session/model/context observation. Conversations stay in their native CLI directory.
 localObservation: true
 
-# bp yerel tmux oturumlarında fareyle kaydırma ve seçim.
+# Mouse scrolling and selection in local bp tmux sessions.
 localMouse: true
 
-# Alt çubuk: liste sırası ekran sırasıdır. [] bütün widget'ları gizler.
-# ctx: context, temp: cache tahmini/ölçüm yaşı, queue: bekleyen mesajlar,
-# model: model/effort, quota: kullanılan kota, talk: son mesaj yaşı, clock: saat.
+# Bottom bar: list order is display order. [] hides every widget.
+# ctx: context, temp: cache estimate/measurement age, queue: waiting messages,
+# model: model/effort, quota: quota used, talk: latest-message age, clock: time.
 bar:
-  # defaultColor: purple # bilgisayar varsayılanı; agenta özel bp color önceliklidir
-  context: used # kullanılan context; kalan miktar için remaining
+  # defaultColor: purple # computer default; per-agent bp color takes precedence
+  context: used # context used; select remaining for the amount left
   widgets: [ctx, temp, queue, model, quota]
 
-# İsteğe bağlı entegrasyonlar varsayılan olarak kapalıdır.
+# Optional integrations are disabled by default.
 waBridge: false
 # usageHistory: ~/usage/history.jsonl
 # codex:
@@ -31,8 +31,8 @@ waBridge: false
 #   topic: bp
 #   token: ""
 
-# Kontrol: bp config check
-# Etkin dosya: bp config path
+# Validate: bp config check
+# Active file: bp config path
 
 # Check signed releases in the background at most daily; never starts a model turn.
 updateCheck: true

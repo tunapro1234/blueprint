@@ -179,7 +179,7 @@ func figure(label string, value any, reset string) string {
 		label += " "
 	}
 	if value == nil {
-		return label + "veri yok"
+		return label + "no data"
 	}
 	text := fmt.Sprintf("%s%%%v", label, value)
 	if reset != "" {
@@ -192,19 +192,19 @@ func figure(label string, value any, reset string) string {
 // instead of formatting a nil into a value. Three forms, exactly:
 //
 //	%52 (reset 2026-08-10T13:15:18Z)      a real reading
-//	ERISIM YOK (codex auth: ...)          access is provably broken
-//	veri yok (son deger 2d 2h once)       nothing arrived, access looks plausible
+//	NO ACCESS (codex auth: ...)          access is provably broken
+//	no data (latest value 2d 2h ago)       nothing arrived, access looks plausible
 func codexText(r Resolved, opts Options) string {
 	if !hasCodex(r.Codex) {
 		// Broken access explains the silence, so it outranks the age of the
 		// last reading; anything less than proof stays a data-gap report.
 		if opts.Auth.Broken() {
-			return "ERISIM YOK (codex auth: " + opts.Auth.Reason + ")"
+			return "NO ACCESS (codex auth: " + opts.Auth.Reason + ")"
 		}
 		if age, ok := codexSilence(r, opts); ok {
-			return "veri yok (son deger " + age + " once)"
+			return "no data (latest value " + age + " ago)"
 		}
-		return "veri yok (kayitli deger yok)"
+		return "no data (no stored value)"
 	}
 	note := ""
 	if r.Codex.TS != r.TS {

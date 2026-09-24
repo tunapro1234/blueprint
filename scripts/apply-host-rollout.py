@@ -79,7 +79,7 @@ def main():
     targets = [(candidate, Path('/srv/blueprint/bp'), 0o755),
                (candidate, Path('/usr/local/bin/bp'), 0o755),
                (bundle / 'bp_runtime_usage.py', Path('/srv/server-main/bin/bp_runtime_usage.py'), 0o644),
-               (bundle / 'otonom-yakit-bekcisi.py', Path('/srv/server-main/bin/otonom-yakit-bekcisi.py'), 0o755)]
+               (bundle / 'autonomous-usage-watchdog.py', Path('/srv/server-main/bin/autonomous-usage-watchdog.py'), 0o755)]
     backup = bundle / ('host-backup-' + stamp)
     backup.mkdir(mode=0o700)
     for index, (_, target, _) in enumerate(targets):
@@ -112,7 +112,8 @@ def main():
             or installed.get('daemon_verification') != 'verified executable'
             or installed.get('daemon', {}).get('sha256') != digest):
         raise RuntimeError('installed CLI/daemon verification incomplete; inspect installed-status.json')
-    run(sys.executable, '/srv/server-main/bin/otonom-yakit-bekcisi.py', '--kuru')
+    # The renamed candidate accepts --dry-run and the legacy --kuru flag.
+    run(sys.executable, '/srv/server-main/bin/autonomous-usage-watchdog.py', '--dry-run')
     run('/usr/local/bin/bp', 'bar', 'probot-studio-astra')
     print('CLI and daemon verified:', digest, '\nEvidence:', review, flush=True)
 

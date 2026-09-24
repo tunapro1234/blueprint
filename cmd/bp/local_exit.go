@@ -18,12 +18,18 @@ import (
 )
 
 type localExitReport struct {
-	Harness  string `json:"harness"`
-	Status   string `json:"status"`
-	Signal   string `json:"signal,omitempty"`
-	Screen   string `json:"screen,omitempty"`
-	RoutedTo string `json:"routed_to,omitempty"`
-	Agent    string `json:"agent,omitempty"`
+	Harness  string     `json:"harness"`
+	Status   string     `json:"status"`
+	Signal   string     `json:"signal,omitempty"`
+	Screen   string     `json:"screen,omitempty"`
+	RoutedTo string     `json:"routed_to,omitempty"`
+	Agent    string     `json:"agent,omitempty"`
+	ExitedAt *time.Time `json:"exitedAt,omitempty"`
+}
+
+func localExitTime() *time.Time {
+	now := time.Now().UTC()
+	return &now
 }
 
 // retainSessionLaunchFailure records errors returned before _session replaces
@@ -41,7 +47,7 @@ func retainSessionLaunchFailure(args []string, err error) {
 	if len(args) > 2 && localHarness(args[2]) {
 		harness = args[2]
 	}
-	report := localExitReport{Agent: args[1], Harness: harness, Status: "1", Screen: err.Error()}
+	report := localExitReport{Agent: args[1], Harness: harness, Status: "1", Screen: err.Error(), ExitedAt: localExitTime()}
 	data, marshalErr := json.Marshal(report)
 	if marshalErr == nil {
 		_ = os.WriteFile(path, data, 0o600)
@@ -105,7 +111,7 @@ func (a *app) finishLocalExit(name string, parent int, harness, reportPath strin
 		break
 	}
 	pane := fields[0]
-	report := localExitReport{Agent: name, Harness: harness, Status: fields[3], Signal: fields[4]}
+	report := localExitReport{Agent: name, Harness: harness, Status: fields[3], Signal: fields[4], ExitedAt: localExitTime()}
 	failed := localExitFailed(report)
 	if failed {
 		screen, err := run("capture-pane", "-p", "-J", "-S", "-100", "-t", pane)

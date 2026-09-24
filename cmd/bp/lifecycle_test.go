@@ -443,8 +443,8 @@ func TestDoctorWarnsAboutNativeTitleMismatchAndSkipsEphemeralExitFailure(t *test
 	check, ok := doctorNativeTitleMismatch(book.Agent{
 		Name: "canonical-name", Lifetime: book.LifetimeEphemeral,
 		NativeTitle: &book.NativeTitle{ThreadID: "thread", Path: transcript},
-	}, nil)
-	if !ok || !check.Warning || !check.OK || check.Next != "bp rename canonical-name canonical-name" {
+	}, nil, nil)
+	if !ok || !check.Warning || !check.OK || check.Next != `bp rename canonical-name canonical-name (retitle the native session to "canonical-name")` {
 		t.Fatalf("native mismatch check=%+v, found=%t", check, ok)
 	}
 

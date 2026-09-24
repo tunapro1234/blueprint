@@ -193,12 +193,8 @@ func retainedLocalExitEvidence(cfg bpconfig.Config) map[string]map[string]localE
 	}
 	paths, _ := filepath.Glob(filepath.Join(cfg.StateDir, "local", "*", "exit.json"))
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var exit localExitReport
-		if json.Unmarshal(data, &exit) != nil || exit.Agent == "" || !localExitFailed(exit) {
+		exit, ok := readLocalExitReport(path)
+		if !ok || exit.Agent == "" || !localExitFailed(exit) {
 			continue
 		}
 		if evidence[exit.Agent] == nil {
@@ -209,12 +205,80 @@ func retainedLocalExitEvidence(cfg bpconfig.Config) map[string]map[string]localE
 	return evidence
 }
 
-func localExitDoctorChecks(name string, evidence map[string]localExitReport) []doctorCheck {
+func readLocalExitReport(path string) (localExitReport, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return localExitReport{}, false
+	}
+	var exit localExitReport
+	if json.Unmarshal(data, &exit) != nil {
+		return localExitReport{}, false
+	}
+	if exit.ExitedAt == nil || exit.ExitedAt.IsZero() {
+		if info, err := os.Stat(path); err == nil {
+			stamp := info.ModTime().UTC()
+			exit.ExitedAt = &stamp
+		}
+	}
+	return exit, true
+}
+
+const localExitHistoricalAge = 24 * time.Hour
+
+func localExitHistorical(exit localExitReport, registered, laterSuccess bool, now time.Time) bool {
+	if !registered || laterSuccess {
+		return true
+	}
+	return exit.ExitedAt != nil && !exit.ExitedAt.IsZero() && now.Sub(*exit.ExitedAt) > localExitHistoricalAge
+}
+
+func localExitDoctorCheck(name, path string, exit localExitReport, historical bool) doctorCheck {
+	detail := exit.Harness + " exited with status " + exit.Status
+	if exit.ExitedAt != nil && !exit.ExitedAt.IsZero() {
+		detail += " at " + exit.ExitedAt.UTC().Format(time.RFC3339)
+	}
+	next := "The exit.json file is kept as evidence at " + path + "; read it with: cat " + quoteShell(path) + ". Resolve the cause before retrying; do not remove writer locks."
+	check := doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: detail, Next: next}
+	if historical {
+		check.OK = true
+		check.Warning = true
+		check.Detail = "historical exit: " + detail
+		check.Next = "The exit.json file is kept as historical evidence at " + path + "; read it with: cat " + quoteShell(path) + "."
+	}
+	return check
+}
+
+func localExitDoctorChecks(name string, evidence map[string]localExitReport, historical bool) []doctorCheck {
 	var checks []doctorCheck
 	for path, exit := range evidence {
-		checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
+		checks = append(checks, localExitDoctorCheck(name, path, exit, historical))
 	}
 	return checks
+}
+
+func laterLaunchSucceeded(failurePath string, failure localExitReport, agent book.Agent, running bool) bool {
+	if failure.ExitedAt == nil || failure.ExitedAt.IsZero() || agent.StatusAt.IsZero() || !agent.StatusAt.After(*failure.ExitedAt) {
+		return false
+	}
+	if agent.Local != nil && agent.Local.Path != "" {
+		currentPath := filepath.Clean(filepath.Join(filepath.Dir(agent.Local.Path), "exit.json"))
+		if currentPath == filepath.Clean(failurePath) {
+			return false
+		}
+		if current, ok := readLocalExitReport(currentPath); ok {
+			return !localExitFailed(current) && current.ExitedAt != nil && current.ExitedAt.After(*failure.ExitedAt)
+		}
+	}
+	return agent.Status == "open" && running
+}
+
+func doctorAgentIsRunning(ctx context.Context, client *bptmux.Client, name string) bool {
+	process, err := client.PaneProcess(ctx, name)
+	if err != nil {
+		return false
+	}
+	pane, err := client.Capture(ctx, name)
+	return err == nil && bptmux.IsAgentPane(process.Command, pane)
 }
 
 // Read only: diagnose the target without repairing books, clearing input or
@@ -229,11 +293,12 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			if rows, err := book.Archives(cfg.Agentbooks); err == nil {
 				for _, row := range rows {
 					if row.Agent.Name == selected {
-						return []doctorCheck{{Name: "archive", Agent: selected, OK: true, Detail: "registration archived in " + row.Path + "; native history remains intact", Next: "bp restore " + selected}}
+						checks := []doctorCheck{{Name: "archive", Agent: selected, OK: true, Detail: "registration archived in " + row.Path + "; native history remains intact", Next: "bp restore " + selected}}
+						return append(checks, localExitDoctorChecks(selected, exitEvidence[selected], true)...)
 					}
 				}
 			}
-			if checks := localExitDoctorChecks(selected, exitEvidence[selected]); len(checks) > 0 {
+			if checks := localExitDoctorChecks(selected, exitEvidence[selected], true); len(checks) > 0 {
 				return checks
 			}
 			return []doctorCheck{{Name: "agent", Detail: "agent not registered: " + selected, Next: "bp book --json"}}
@@ -252,25 +317,30 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			continue
 		}
 		entry := fleet.Agents[name]
-		seenExit := map[string]bool{}
+		reports := make(map[string]localExitReport, len(exitEvidence[name])+1)
+		for path, exit := range exitEvidence[name] {
+			reports[path] = exit
+		}
 		if entry.Local != nil && !entry.IsEphemeral() {
 			path := filepath.Join(filepath.Dir(entry.Local.Path), "exit.json")
-			if data, err := os.ReadFile(path); err == nil {
-				var exit localExitReport
-				if json.Unmarshal(data, &exit) == nil && localExitFailed(exit) {
-					checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
-					seenExit[path] = true
+			if _, exists := reports[path]; !exists {
+				if exit, ok := readLocalExitReport(path); ok && localExitFailed(exit) {
+					reports[path] = exit
 				}
 			}
 		}
-		for path, exit := range exitEvidence[name] {
-			if seenExit[path] {
-				continue
-			}
-			checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
+		hasSession := client.HasSession(ctx, name)
+		running := false
+		if len(reports) > 0 && hasSession && entry.Status == "open" {
+			running = doctorAgentIsRunning(ctx, client, name)
 		}
-		if !client.HasSession(ctx, name) {
-			if mismatch, ok := doctorNativeTitleMismatch(entry, nil); ok {
+		for path, exit := range reports {
+			laterSuccess := laterLaunchSucceeded(path, exit, entry, running)
+			historical := localExitHistorical(exit, true, laterSuccess, time.Now())
+			checks = append(checks, localExitDoctorCheck(name, path, exit, historical))
+		}
+		if !hasSession {
+			if mismatch, ok := doctorNativeTitleMismatch(entry, nil, cfg.Agentbooks); ok {
 				checks = append(checks, mismatch)
 			}
 			if selected != "" {
@@ -305,7 +375,7 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			}
 		}
 		state := book.RuntimeFor(ctx, client, fleet, name)
-		if mismatch, ok := doctorNativeTitleMismatch(entry, &state); ok {
+		if mismatch, ok := doctorNativeTitleMismatch(entry, &state, cfg.Agentbooks); ok {
 			checks = append(checks, mismatch)
 		}
 		a := state.Activity
@@ -331,16 +401,20 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			if _, registered := fleet.Agents[name]; registered {
 				continue
 			}
-			checks = append(checks, localExitDoctorChecks(name, evidence)...)
+			checks = append(checks, localExitDoctorChecks(name, evidence, true)...)
 		}
 	}
 	return checks
 }
 
-func doctorNativeTitleMismatch(agent book.Agent, state *cache.State) (doctorCheck, bool) {
+func doctorNativeTitleMismatch(agent book.Agent, state *cache.State, agentbooks []string) (doctorCheck, bool) {
 	value, _, err := observedNativeTitle(agent, state)
 	if err != nil || value.Text == "" || value.Text == agent.Name {
 		return doctorCheck{}, false
+	}
+	next := fmt.Sprintf("bp rename %s %s (retitle the native session to %q)", agent.Name, agent.Name, agent.Name)
+	if validAgentName(value.Text) && len(agentbooks) > 0 && book.RenameConflict(agentbooks, agent.Name, value.Text) == nil {
+		next += fmt.Sprintf("; bp rename %s %s (adopt the native title as the bp name)", agent.Name, value.Text)
 	}
 	return doctorCheck{
 		Name:    "native_title/" + agent.Name,
@@ -348,6 +422,6 @@ func doctorNativeTitleMismatch(agent book.Agent, state *cache.State) (doctorChec
 		OK:      true,
 		Warning: true,
 		Detail:  fmt.Sprintf("bp name %q does not match native title %q", agent.Name, value.Text),
-		Next:    "bp rename " + agent.Name + " " + agent.Name,
+		Next:    next,
 	}, true
 }

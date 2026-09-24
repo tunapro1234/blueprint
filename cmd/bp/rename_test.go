@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	bptmux "blueprint/internal/tmux"
 )
@@ -29,6 +30,7 @@ func mungeProject(dir string) string {
 
 func TestRenameSameNameRepairsClaudeUsingStoredTranscriptPath(t *testing.T) {
 	t.Setenv("AGENTBOOK", "")
+	const threadID = "019a0d02-a847-76d1-ba01-8b67fbe755c1"
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	folder := t.TempDir()
@@ -36,14 +38,23 @@ func TestRenameSameNameRepairsClaudeUsingStoredTranscriptPath(t *testing.T) {
 	if err := os.MkdirAll(transcriptDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	transcript := filepath.Join(transcriptDir, "sess-1.jsonl")
-	if err := os.WriteFile(transcript, []byte(`{"type":"custom-title","customTitle":"stale-title","sessionId":"sess-1"}`+"\n"), 0o600); err != nil {
+	transcript := filepath.Join(transcriptDir, threadID+".jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"type":"custom-title","customTitle":"stale-title","sessionId":"`+threadID+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	observationPath := filepath.Join(t.TempDir(), "observation.json")
+	observation, err := json.Marshal(cache.LocalObservation{SessionID: threadID, TranscriptPath: transcript, CWD: folder, ObservedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(observationPath, observation, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	bookPath := filepath.Join(t.TempDir(), "agentbook.json")
 	entry := book.Agent{
 		Name: "canonical-name", Folder: folder, Status: "open", Lifetime: book.LifetimeEphemeral,
-		NativeTitle: &book.NativeTitle{ThreadID: "sess-1", Path: transcript, Text: "stale-title"},
+		Local:       &cache.LocalBinding{Path: observationPath, PID: 1, Harness: "claude", Home: home, CWD: folder},
+		NativeTitle: &book.NativeTitle{ThreadID: threadID, Path: transcript, Text: "stale-title"},
 	}
 	contents, err := json.Marshal(book.File{Agents: []book.Agent{entry}})
 	if err != nil {
@@ -53,7 +64,7 @@ func TestRenameSameNameRepairsClaudeUsingStoredTranscriptPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmux, _ := renameTmux(t, "canonical-name", transcript, folder, renameOptions{
-		live: true, pane: `printf '❯ \n──────────\n'`, retitle: "canonical-name",
+		live: true, pane: `printf '❯ \n──────────\n'`, retitle: "canonical-name", threadID: threadID,
 	})
 	stateDir := t.TempDir()
 	a := &app{
@@ -86,10 +97,11 @@ type renameFixture struct {
 }
 
 type renameOptions struct {
-	live    bool   // the session exists
-	command string // what the pane runs ("claude", "codex")
-	pane    string // shell snippet printing a capture
-	retitle string // title the agent records when something is pasted; "" = never
+	live     bool   // the session exists
+	command  string // what the pane runs ("claude", "codex")
+	pane     string // shell snippet printing a capture
+	retitle  string // title the agent records when something is pasted; "" = never
+	threadID string
 	// bookless leaves the agentbook entry without a folder, so the transcript can
 	// only be found through the directory tmux started the session in.
 	bookless bool
@@ -117,7 +129,11 @@ func renameTmux(t *testing.T, session, transcript, folder string, opts renameOpt
 	}
 	retitle := ":"
 	if opts.retitle != "" {
-		retitle = `printf '{"type":"custom-title","customTitle":"` + opts.retitle + `","sessionId":"sess-1"}\n' >> ` + transcript
+		threadID := opts.threadID
+		if threadID == "" {
+			threadID = "sess-1"
+		}
+		retitle = `printf '{"type":"custom-title","customTitle":"` + opts.retitle + `","sessionId":"` + threadID + `"}\n' >> ` + transcript
 	}
 	script := "#!/bin/sh\n" +
 		"echo \"$*\" >> " + log + "\n" +

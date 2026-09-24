@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,19 @@ import (
 type stubUpdateChecker struct {
 	manifest    release.Manifest
 	downloadErr error
+}
+
+func nextUpdateTestVersion(t *testing.T) string {
+	t.Helper()
+	parts := strings.Split(release.Version(), ".")
+	if len(parts) != 3 {
+		t.Fatalf("unexpected release version %q", release.Version())
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		t.Fatalf("unexpected release version %q: %v", release.Version(), err)
+	}
+	return fmt.Sprintf("%s.%s.%d", parts[0], parts[1], patch+1)
 }
 
 func (s stubUpdateChecker) Latest(context.Context) (release.Manifest, error) {
@@ -66,9 +80,10 @@ func TestNpmManagedPathRequiresPackageAndNativeLayout(t *testing.T) {
 }
 
 func TestUpdateKeepsSetupContextAliveAfterSlowDownload(t *testing.T) {
+	version := nextUpdateTestVersion(t)
 	payload := bytes.Repeat([]byte{0x5a}, 35_000_000)
 	manifest := release.Manifest{
-		Version: "1.9.1",
+		Version: version,
 		SHA256:  map[string]string{release.Platform(): fmt.Sprintf("%x", sha256.Sum256(payload))},
 	}
 	manifestData, err := json.Marshal(manifest)
@@ -84,11 +99,11 @@ func TestUpdateKeepsSetupContextAliveAfterSlowDownload(t *testing.T) {
 		switch r.URL.Path {
 		case "/latest.version":
 			_, _ = fmt.Fprintln(w, manifest.Version)
-		case "/releases/v1.9.1/manifest.json":
+		case "/releases/v" + version + "/manifest.json":
 			_, _ = w.Write(manifestData)
-		case "/releases/v1.9.1/manifest.sig":
+		case "/releases/v" + version + "/manifest.sig":
 			_, _ = w.Write(signature)
-		case "/releases/v1.9.1/" + release.Platform():
+		case "/releases/v" + version + "/" + release.Platform():
 			w.Header().Set("Content-Length", fmt.Sprint(len(payload)))
 			flusher := w.(http.Flusher)
 			const chunkSize = 250_000
@@ -149,7 +164,7 @@ func TestUpdateDownloadFailureNamesStepProgressAndInstallerFallback(t *testing.T
 		out: testOutput(t),
 		err: testOutput(t),
 		releaseChecker: stubUpdateChecker{
-			manifest:    release.Manifest{Version: "1.9.1"},
+			manifest:    release.Manifest{Version: nextUpdateTestVersion(t)},
 			downloadErr: fmt.Errorf("GET release after 22 MB of 35 MB: stalled after 20s"),
 		},
 	}

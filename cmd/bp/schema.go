@@ -364,7 +364,10 @@ func (a *app) continueProject(args []string) error {
 		openAgent = a.openForContinue
 	}
 	for _, plan := range plans {
-		args := []string{plan.Agent.Name, plan.Path, "--" + plan.Agent.Runtime, "--parent", plan.Agent.Parent, "--role", plan.Agent.Role, "--no-prompt"}
+		args := []string{plan.Agent.Name, plan.Path, "--" + plan.Agent.Runtime, "--parent", plan.Agent.Parent, "--role", plan.Agent.Role}
+		if plan.Agent.Runtime != "codex" {
+			args = append(args, "--no-prompt")
+		}
 		if loaded.History == "none" && plan.State != "leave live agent open" {
 			args = append(args, "--fresh")
 			// Replacing a closed registration's previous conversation is an
@@ -380,6 +383,9 @@ func (a *app) continueProject(args []string) error {
 		}
 		if id := resume[plan.Agent.Name]; id != "" {
 			args = append(args, "--thread", id, "--rebind")
+			if plan.Agent.Runtime == "codex" {
+				args = append(args, "--no-prompt")
+			}
 		}
 		native := schemaNativeArgs(plan.Agent)
 		if len(native) > 0 {

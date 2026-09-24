@@ -46,6 +46,7 @@ type Config struct {
 	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
 	Bar              BarConfig               `json:"bar" yaml:"bar"`
 	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
+	Windows          WindowsConfig           `json:"windows" yaml:"windows"`
 	InvalidConfig    string                  `json:"-" yaml:"-"`
 }
 
@@ -75,6 +76,11 @@ type BarConfig struct {
 	DefaultColor string   `json:"defaultColor" yaml:"defaultColor"`
 	Context      string   `json:"context" yaml:"context"`
 	Widgets      []string `json:"widgets" yaml:"widgets"`
+}
+
+// WindowsConfig controls compositor integration without enabling it.
+type WindowsConfig struct {
+	ResetColor string `json:"resetColor" yaml:"resetColor"`
 }
 
 // CodexConfig enables the read-only Codex app-server backend.
@@ -118,6 +124,7 @@ type overrides struct {
 	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
 	Bar              *barOverrides            `json:"bar" yaml:"bar"`
 	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
+	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
 }
 
 type lifecycleOverrides struct {
@@ -211,6 +218,9 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 			return Config{}, fmt.Errorf("bar.defaultColor: %w", err)
 		}
 	}
+	if _, err := ColorIndex(result.Windows.ResetColor); err != nil {
+		return Config{}, fmt.Errorf("windows.resetColor: %w", err)
+	}
 	if filepath.Ext(path) != ".json" {
 		user, err := userHome()
 		if err != nil {
@@ -279,6 +289,7 @@ func resolvePaths(c *Config, user string) {
 func defaults(home string, legacy bool) Config {
 	bar := BarConfig{Context: "used", Widgets: []string{"ctx", "temp", "queue", "model", "quota"}}
 	lifecycle := LifecycleConfig{EphemeralDefault: true, ArchiveOnClose: true}
+	windows := WindowsConfig{ResetColor: "white"}
 	if legacy {
 		return Config{
 			Home:     home,
@@ -297,6 +308,7 @@ func defaults(home string, legacy bool) Config {
 			WABridge:         true,
 			Bar:              bar,
 			Lifecycle:        lifecycle,
+			Windows:          windows,
 			LocalObservation: true,
 			LocalMouse:       true,
 			UpdateCheck:      true,
@@ -310,6 +322,7 @@ func defaults(home string, legacy bool) Config {
 		StateDir:         filepath.Join(home, "state"),
 		Bar:              bar,
 		Lifecycle:        lifecycle,
+		Windows:          windows,
 		LocalObservation: true,
 		LocalMouse:       true,
 		UpdateCheck:      true,
@@ -399,6 +412,12 @@ func apply(result *Config, values overrides) {
 	}
 	if values.Bar != nil && values.Bar.Widgets != nil {
 		result.Bar.Widgets = append([]string(nil), (*values.Bar.Widgets)...)
+	}
+	if values.Windows != nil {
+		result.Windows = *values.Windows
+		if result.Windows.ResetColor == "" {
+			result.Windows.ResetColor = "white"
+		}
 	}
 }
 

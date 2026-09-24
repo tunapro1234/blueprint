@@ -528,6 +528,12 @@ type PaneProcess struct {
 	PID     int
 }
 
+// AttachedClient identifies the OS process and session of one tmux client.
+type AttachedClient struct {
+	PID     int
+	Session string
+}
+
 func New() *Client {
 	return &Client{Bin: "tmux", Sleep: time.Sleep, Now: time.Now}
 }
@@ -653,6 +659,32 @@ func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 		}
 	}
 	return sessions, nil
+}
+
+// Clients returns attached client processes, which lets callers associate a
+// terminal window with the tmux session displayed inside it.
+func (c *Client) Clients(ctx context.Context) ([]AttachedClient, error) {
+	out, err := c.run(ctx, nil, "list-clients", "-F", "#{client_pid}\t#{session_name}")
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no current client") || strings.Contains(lower, "no clients") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var clients []AttachedClient
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+		session := strings.TrimSpace(fields[1])
+		if err == nil && pid > 0 && session != "" {
+			clients = append(clients, AttachedClient{PID: pid, Session: session})
+		}
+	}
+	return clients, nil
 }
 
 func (c *Client) Locations(ctx context.Context) ([]Location, error) {

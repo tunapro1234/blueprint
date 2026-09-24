@@ -244,7 +244,7 @@ func TestStatusUnknownKeepsGateClosedAndSnapshotConsistent(t *testing.T) {
 	if err := json.Unmarshal([]byte(readTestOutput(t, a.out)), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Schema != 2 || len(result.Agents) != 1 || result.Agents[0].Name != "target" || result.Agents[0].Activity.State != "unknown" || result.Agents[0].UsageAt.Equal(now) {
+	if result.Schema != 3 || len(result.Agents) != 1 || result.Agents[0].Name != "target" || result.Agents[0].Activity.State != "unknown" || result.Agents[0].UsageAt.Equal(now) {
 		t.Fatalf("misleading JSON: %+v", result)
 	}
 }

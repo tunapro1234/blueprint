@@ -49,6 +49,20 @@ func TestLifecycleYAMLDefaultsAndOptOut(t *testing.T) {
 	}
 }
 
+func TestWindowsResetColorDefaultsAndValidatesOverrides(t *testing.T) {
+	c, err := yamlConfig(t, "config.yaml", "{}")
+	if err != nil || c.Windows.ResetColor != "white" {
+		t.Fatalf("default reset color=%q err=%v", c.Windows.ResetColor, err)
+	}
+	c, err = yamlConfig(t, "config.yaml", "windows:\n  resetColor: 245\n")
+	if err != nil || c.Windows.ResetColor != "245" {
+		t.Fatalf("configured reset color=%q err=%v", c.Windows.ResetColor, err)
+	}
+	if _, err := yamlConfig(t, "config.yaml", "windows:\n  resetColor: not-a-color\n"); err == nil {
+		t.Fatal("invalid reset color was accepted")
+	}
+}
+
 func TestYAMLConfigPathsAndDisabledValues(t *testing.T) {
 	c, err := yamlConfig(t, "config.yaml", `# portable paths
 agentbooks: [agents/book.json]

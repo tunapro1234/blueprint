@@ -120,6 +120,19 @@ When a native transcript title drifts from the canonical name,
 no repair is needed. `bp doctor` warns about mismatches and prints this repair
 command.
 
+## Windows and attention
+
+`bp windows` maps local compositor windows to registered tmux agents; add
+`--json` for launcher integrations. `bp focus <agent>` focuses a mapped window
+and records that you looked at the agent. `bp con <agent>` records the same
+when it attaches to a local session. `bp windows watch` paints active and dimmed
+inactive borders in each agent's bp accent and resets departed windows to the
+configured color.
+
+`bp status --json` includes `awaiting_user` and `unread`. Remote agents reached
+through mosh are outside the local window map. See [window integration](docs/windows.md)
+for compositor support and the JSON fields.
+
 ## Configure
 
 Settings live in `~/.blueprint/config.yaml`, or under `BP_HOME`. Shell integration

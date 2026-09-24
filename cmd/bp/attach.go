@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"blueprint/internal/book"
 	"blueprint/internal/identity"
@@ -169,7 +170,14 @@ func (a *app) attach(args []string) error {
 	}
 	a.applyAttachBar(name)
 	fmt.Fprintf(a.err, "bp attach %q: attaching to exact tmux session %s\n", args[0], name)
-	return replaceWith(attachCommand(a.tmux.Bin, name, os.Getenv("TMUX") != ""))
+	if err := a.markLooked(name, time.Now().UTC()); err != nil {
+		return fmt.Errorf("record last looked: %w", err)
+	}
+	spec := attachCommand(a.tmux.Bin, name, os.Getenv("TMUX") != "")
+	if a.replaceProcess != nil {
+		return a.replaceProcess(spec)
+	}
+	return replaceWith(spec)
 }
 
 func (a *app) applyAttachBar(name string) {

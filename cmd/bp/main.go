@@ -25,6 +25,7 @@ import (
 	bpcache "blueprint/internal/cache"
 	"blueprint/internal/codexauth"
 	"blueprint/internal/codexrpc"
+	"blueprint/internal/compositor"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
@@ -37,6 +38,7 @@ import (
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
 	"blueprint/internal/wa"
+	"blueprint/internal/windowmap"
 	"blueprint/internal/worktree"
 )
 
@@ -45,6 +47,8 @@ const usage = `blueprint (bp) — agent infrastructure CLI
 bp version [--json] | bp update [--check] [--json] | bp doctor [--agent <name>] [--json]
 bp archive <name> | bp archive --list [--json] | bp archive --stale [--dry-run] | bp restore <name>
 bp status [--json] [--all] | bp tree [--all]
+bp windows [--json] | bp windows watch
+bp focus <agent>              # focus the agent's compositor window
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
 bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
@@ -126,8 +130,14 @@ type app struct {
 	clearPane       func(string) error
 	turnOpenProbe   func(string) bool
 	execNative      func(string, []string, []string) error
+	replaceProcess  func(commandSpec) error
 	openForContinue func([]string) error
 	interactive     func() bool
+
+	detectCompositor func() (compositor.Adapter, error)
+	processLister    windowmap.ProcessLister
+	listTmuxClients  func(context.Context) ([]bptmux.AttachedClient, error)
+	windowPoll       time.Duration
 
 	// paneLocks counts the pane locks this process is holding, per session. It
 	// exists because the lock is an flock and flock is NOT reentrant even within one
@@ -336,6 +346,10 @@ func (a *app) run(args []string) error {
 		return a.localSetup(args[1:])
 	case "status":
 		return a.status(args[1:])
+	case "windows":
+		return a.windows(args[1:])
+	case "focus":
+		return a.focus(args[1:])
 	case "tree":
 		return a.tree(args[1:])
 	case "open":
@@ -616,6 +630,9 @@ func (a *app) connect(args []string) error {
 		if err != nil {
 			return err
 		}
+		if err := a.markLooked(name, time.Now().UTC()); err != nil {
+			return fmt.Errorf("record last looked: %w", err)
+		}
 		return replaceWith(spec)
 	}
 
@@ -840,12 +857,14 @@ type statusReport struct {
 }
 
 type statusAgent struct {
-	Activity    *bpcache.Activity `json:"activity,omitempty"`
-	UsageAt     *time.Time        `json:"usage_observed_at,omitempty"`
-	UsageScope  string            `json:"usage_scope,omitempty"`
-	Name        string            `json:"name"`
-	DisplayName string            `json:"display_name,omitempty"`
-	Tmux        string            `json:"tmux"`
+	Activity     *bpcache.Activity `json:"activity,omitempty"`
+	UsageAt      *time.Time        `json:"usage_observed_at,omitempty"`
+	UsageScope   string            `json:"usage_scope,omitempty"`
+	Name         string            `json:"name"`
+	DisplayName  string            `json:"display_name,omitempty"`
+	AwaitingUser bool              `json:"awaiting_user"`
+	Unread       bool              `json:"unread"`
+	Tmux         string            `json:"tmux"`
 	// Mismatch is written only when tmux and the book disagree, so a consumer can
 	// treat the field's presence as the alarm.
 	Mismatch string `json:"mismatch,omitempty"`
@@ -884,8 +903,9 @@ type statusThread struct {
 
 func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, showAll ...bool) error {
 	all := len(showAll) > 0 && showAll[0]
-	report := statusReport{SchemaVersion: 2, ObservedAt: time.Now().UTC(), Producer: currentProducer(), Agents: make([]statusAgent, 0, len(fleet.Agents))}
+	report := statusReport{SchemaVersion: 3, ObservedAt: time.Now().UTC(), Producer: currentProducer(), Agents: make([]statusAgent, 0, len(fleet.Agents))}
 	report.Daemon, report.DaemonVerification = buildinfo.Recorded(filepath.Join(a.config.StateDir, "daemon-runtime.json"))
+	attention := a.attention(states)
 	for _, name := range fleet.SortedNames() {
 		if !all && hiddenClosedEphemeral(fleet.Agents[name], states) {
 			continue
@@ -900,6 +920,8 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 			Folder:         agent.Folder,
 			Parent:         fleet.Parents[name],
 			AgentbookPaths: fleet.Sources[name],
+			AwaitingUser:   attention[name].AwaitingUser,
+			Unread:         attention[name].Unread,
 		}
 		if state.Runtime != nil {
 			row.DisplayName = a.nativeName(agent, state.Runtime)

@@ -410,3 +410,39 @@ func TestPeekReportsUnparseableAndDoesNotMutate(t *testing.T) {
 		t.Fatalf("held malformed bytes changed: got %q, want %q", remaining, bad)
 	}
 }
+
+// Blank lines are not records: they must not be reported as held, and line
+// numbers in held reports must still match the file.
+func TestBlankLinesAreSkippedNotHeld(t *testing.T) {
+	dir := t.TempDir()
+	anonymous := []byte(`{"ts":1,"from":"bilinmiyor","kind":"msg","text":"unknown sender"}` + "\n")
+	valid := Entry{TS: 2, From: "python3?:check_incoming.py", Kind: "msg", Text: "after blanks"}
+	encoded, _ := json.Marshal(valid)
+	data := bytes.Join([][]byte{[]byte("\n"), anonymous, []byte("   \n"), append(encoded, '\n')}, nil)
+	if err := os.MkdirAll(filepath.Dir(path(dir, "blank")), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path(dir, "blank"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Peek(dir, "blank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0] != valid {
+		t.Fatalf("entries=%+v", snapshot.Entries)
+	}
+	if len(snapshot.Held) != 1 || snapshot.Held[0].Line != 2 || snapshot.Held[0].Reason != ReasonAnonymousSender {
+		t.Fatalf("held=%+v", snapshot.Held)
+	}
+	if err := Acknowledge(dir, "blank", snapshot.Entries); err != nil {
+		t.Fatal(err)
+	}
+	spool, err := os.ReadFile(path(dir, "blank"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(spool, anonymous) {
+		t.Fatalf("spool after ack=%q, want only the held record", spool)
+	}
+}

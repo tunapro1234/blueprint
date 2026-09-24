@@ -55,7 +55,7 @@ var PaneLockWait = 10 * time.Second
 // holds this pane. It belongs next to the other BlockedBy… reasons: from the
 // operator's side it is one more kind of "not now", and it is the only one that
 // points at bp itself rather than at the agent or a human.
-const BlockedByPaneLock = "baska bir bp sureci bu pane'e yaziyor (pane kilidi)"
+const BlockedByPaneLock = "another bp process is writing to this pane (pane lock)"
 
 // ErrPaneLocked says another bp process is inside the critical section for this
 // pane. It WRAPS ErrBusy on purpose: every caller already knows how to treat a

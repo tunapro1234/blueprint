@@ -48,14 +48,14 @@ func spinnerPane(transcript ...string) string {
 func filler(n int) []string {
 	rows := make([]string, n)
 	for i := range rows {
-		rows[i] = "  agent: ara satir"
+		rows[i] = "  agent: intermediate line"
 	}
 	return rows
 }
 
 // The quotation that made this test necessary: an IDLE pane whose transcript is
 // discussing the busy signature itself. Every token of the live row is present.
-const quotedSpinner = "  imza ✻ Symbioting… (29s · ↓ 163 tokens). Yani kapi kapali degil."
+const quotedSpinner = "  signature ✻ Symbioting… (29s · ↓ 163 tokens). So the door is not closed."
 
 func TestBusyReadsTheLiveSpinner(t *testing.T) {
 	cases := []struct {
@@ -64,25 +64,25 @@ func TestBusyReadsTheLiveSpinner(t *testing.T) {
 		want bool
 	}{
 		// (a) the four live spinner frames, each in a real pane structure.
-		{"spinner with thinking segment", spinnerPane("  agent: cikti", "✻ Baking… (2m 32s · ↓ 6.1k tokens · thought for 6s)"), true},
-		{"spinner short timer", spinnerPane("  agent: cikti", "✽ Baking… (30s · ↓ 943 tokens)"), true},
-		{"spinner other verb", spinnerPane("  agent: cikti", "✻ Symbioting… (29s · ↓ 163 tokens)"), true},
-		{"spinner dim frame glyph", spinnerPane("  agent: cikti", "· Symbioting… (2m 13s · ↓ 422 tokens)"), true},
+		{"spinner with thinking segment", spinnerPane("  agent: output", "✻ Baking… (2m 32s · ↓ 6.1k tokens · thought for 6s)"), true},
+		{"spinner short timer", spinnerPane("  agent: output", "✽ Baking… (30s · ↓ 943 tokens)"), true},
+		{"spinner other verb", spinnerPane("  agent: output", "✻ Symbioting… (29s · ↓ 163 tokens)"), true},
+		{"spinner dim frame glyph", spinnerPane("  agent: output", "· Symbioting… (2m 13s · ↓ 422 tokens)"), true},
 		// Frames copied verbatim from a driven 2.1.233 session (2026-08-15), where
 		// Busy was polled twice a second across a whole turn. The counter is absent
 		// at the start, then arrives WITHOUT a token segment, then with one: a
 		// pattern that insisted on "… tokens" would have called a third of a live
 		// working turn idle.
-		{"spinner before the counter appears", spinnerPane("  agent: cikti", "✽ Unravelling…"), true},
-		{"spinner before the counter, dim frame", spinnerPane("  agent: cikti", "· Misting…"), true},
-		{"counter without a token segment", spinnerPane("  agent: cikti", "✻ Marinating… (1s · thinking with medium effort)"), true},
-		{"counter with tokens and thinking", spinnerPane("  agent: cikti", "· Marinating… (5s · ↓ 256 tokens · thought for 2s)"), true},
+		{"spinner before the counter appears", spinnerPane("  agent: output", "✽ Unravelling…"), true},
+		{"spinner before the counter, dim frame", spinnerPane("  agent: output", "· Misting…"), true},
+		{"counter without a token segment", spinnerPane("  agent: output", "✻ Marinating… (1s · thinking with medium effort)"), true},
+		{"counter with tokens and thinking", spinnerPane("  agent: output", "· Marinating… (5s · ↓ 256 tokens · thought for 2s)"), true},
 		// The rows a FINISHED (or merely waiting) pane draws in the same place, all
 		// three copied from live captures. One word and an ellipsis is what tells
 		// them apart from a running turn.
-		{"finished turn", spinnerPane("  agent: cikti", "✻ Baked for 3s"), false},
-		{"finished turn with a background shell", spinnerPane("  agent: cikti", "✻ Baked for 6m 19s · 1 shell still running"), false},
-		{"waiting for a background agent", spinnerPane("  agent: cikti", "✻ Waiting for 1 background agent to finish"), false},
+		{"finished turn", spinnerPane("  agent: output", "✻ Baked for 3s"), false},
+		{"finished turn with a background shell", spinnerPane("  agent: output", "✻ Baked for 6m 19s · 1 shell still running"), false},
+		{"waiting for a background agent", spinnerPane("  agent: output", "✻ Waiting for 1 background agent to finish"), false},
 		// (b) a tool is running: the box is drawn AND the spinner keeps turning.
 		{"tool box with spinner", spinnerPane(
 			"  ⎿  $ go test ./... (27s · 28 lines)",
@@ -97,13 +97,13 @@ func TestBusyReadsTheLiveSpinner(t *testing.T) {
 		{"spinner row far above the box", spinnerPane(append([]string{"✻ Baking… (30s · ↓ 943 tokens)"}, filler(9)...)...), false},
 		// (d) the same quotation dragged INTO the search window: only the line
 		// structure is left to refuse it, and it must.
-		{"quoted spinner above the box", spinnerPane("  agent: cikti", quotedSpinner), false},
+		{"quoted spinner above the box", spinnerPane("  agent: output", quotedSpinner), false},
 		// (e) the previous generation, still printed by Codex panes and older builds.
-		{"legacy esc-to-interrupt spinner", spinnerPane("  agent: cikti", "✻ Working… (23s · esc to interrupt)"), true},
+		{"legacy esc-to-interrupt spinner", spinnerPane("  agent: output", "✻ Working… (23s · esc to interrupt)"), true},
 		// (f) background shells are not a running turn.
-		{"background shell footer", spinnerPane("  agent: cikti", "⏵⏵ bypass permissions on · 2 shells · esc to interrupt"), false},
+		{"background shell footer", spinnerPane("  agent: output", "⏵⏵ bypass permissions on · 2 shells · esc to interrupt"), false},
 		// (g) nothing at all.
-		{"idle pane", spinnerPane("  agent: cikti", "  agent: bitti"), false},
+		{"idle pane", spinnerPane("  agent: output", "  agent: done"), false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -146,7 +146,7 @@ const (
 	// Real capture bytes (probot-builder-worker, Codex v0.144.x): the affordance
 	// is dim-styled (\x1b[2m…\x1b[0m), so StripDim removes it.
 	busyQueueChip = "\x1b[2mWorking (12s · esc to interrupt)\x1b[0m\n" +
-		"\x1b[0;1m›\x1b[0m \x1b[38;5;6m[Pasted Content 1021 chars]\x1b[39mopup'in yildizi siparis akisi.\n" +
+		"\x1b[0;1m›\x1b[0m \x1b[38;5;6m[Pasted Content 1021 chars]\x1b[39mthe popup star is the order flow.\n" +
 		"  \x1b[2mtab to queue message\x1b[0m                                      \x1b[2m30% context left\x1b[0m\n"
 )
 
@@ -324,7 +324,7 @@ func TestNodePaneNeedsCodexOnScreen(t *testing.T) {
 		}
 	}
 	// Prose that merely mentions Codex is not a Codex pane.
-	if CodexPane("kullanici dedi ki: Ask Codex to do anything, sonra bekle\n") {
+	if CodexPane("the user said: Ask Codex to do anything, then wait\n") {
 		t.Fatal("a transcript quoting the placeholder was read as a Codex pane")
 	}
 }
@@ -936,14 +936,14 @@ func TestSendDeliversToPaneQuotingTheBanner(t *testing.T) {
 	healthy := composerBorder + "  ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
 	h := &sendHarness{
 		captures: []string{
-			quoting + "❯  \n" + healthy,                          // readyToSend pass 1
-			quoting + "❯  \n" + healthy,                          // readyToSend pass 2
-			quoting + "❯ [ada] yanlis-pozitif testi\n" + healthy, // holds ours -> Enter
-			quoting + "❯  \n" + healthy,                          // cleared -> verified
+			quoting + "❯  \n" + healthy,                         // readyToSend pass 1
+			quoting + "❯  \n" + healthy,                         // readyToSend pass 2
+			quoting + "❯ [ada] false-positive test\n" + healthy, // holds ours -> Enter
+			quoting + "❯  \n" + healthy,                         // cleared -> verified
 		},
 		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
-	if err := testClient(h).Send(context.Background(), "target", "[ada] yanlis-pozitif testi"); err != nil {
+	if err := testClient(h).Send(context.Background(), "target", "[ada] false-positive test"); err != nil {
 		t.Fatalf("healthy pane quoting the banner was refused: %v", err)
 	}
 	if countInjections(h.mutations) != 1 || countEnter(h.mutations) != 1 {

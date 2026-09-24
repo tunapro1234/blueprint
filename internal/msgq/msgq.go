@@ -28,7 +28,7 @@ type Message struct {
 	Origin *Origin         `json:"origin,omitempty"`
 	Sender *SenderEvidence `json:"sender_evidence,omitempty"`
 	// Reason says WHY the message is still waiting, in words the operator can act
-	// on ("composer'da okunamayan bir paste var (chip)"). It is refreshed on every
+	// on ("composer contains an unreadable paste (chip)"). It is refreshed on every
 	// dispatch pass that has to skip the target, and cleared when the pane frees
 	// up. Empty means the plain, uninformative-but-honest "still busy": either the
 	// record predates this field, or nobody has looked at the pane yet. An empty
@@ -172,16 +172,16 @@ const (
 	// failure: the text may well be in the agent already, which is exactly why
 	// nothing pastes it again.
 	//
-	// It says PASTE YAPILDI first, because this sentence is now read by a sender
+	// It says PASTED first, because this sentence is now read by a sender
 	// that has just been refused a retry (bp msg's duplicate guard quotes the
-	// record's status). "teslimat belirsiz" alone left the honest question — did the
+	// record's status). "delivery uncertain" alone left the honest question — did the
 	// text reach the pane at all? — unanswered, and a sender who cannot answer it
 	// repeats itself somewhere bp cannot see.
-	unverifiedReason = "paste yapildi, ekran dogrulayamadi; tekrar paste edilmeyecek, transcript tanigi bekleniyor"
+	unverifiedReason = "pasted; the screen could not verify it; it will not be pasted again; waiting for the transcript witness"
 	// hangingPasteReason is the same record once the composer has been LOOKED at
 	// and still holds the text: the message never went in, and bp could not press
 	// Enter itself. This one names the action instead of the mechanism.
-	hangingPasteReason = "mesaj composer'da ASILI (gonderilmemis); bp bitiremedi — pane bosaldiginda tek Enter yeter"
+	hangingPasteReason = "message is HANGING in the composer (not sent); bp could not finish — one Enter is enough when the pane is idle"
 	// damagedPasteReason is the OTHER thing a held composer can mean, and it
 	// wants the opposite action. The text in the box is our message with
 	// characters missing, so an Enter delivers a mutilated instruction and
@@ -192,21 +192,21 @@ const (
 	// Enter is enough", an operator pressed it, and 81 characters of a
 	// 716-character instruction were delivered — cut mid-word, the remaining 635
 	// in no transcript anywhere.
-	damagedPasteReason = "composer'da bu mesajin KIRPIK bir kopyasi duruyor — ENTER BASMA (kirpik mesaj teslim edilir); bp temizleyip yeniden gonderecek"
+	damagedPasteReason = "a TORN copy of this message is in the composer — DO NOT PRESS ENTER (it would deliver the torn message); bp will clear and resend it"
 	// tornClearedReason marks the recovery itself, so a reader who sees the
 	// message pasted twice in one pane knows the first copy was torn and erased.
-	tornClearedReason = "kirpik paste temizlendi; mesaj bastan yeniden gonderilecek"
+	tornClearedReason = "torn paste cleared; the message will be resent from the beginning"
 	// unverifiedGoneReason is the same record after the text has LEFT the
 	// composer. It may have been submitted by a human, cleared, or dropped by the
 	// TUI; bp cannot tell which, and there is nothing left to press Enter on. The
 	// wording exists because the previous one kept advising an Enter that landed
 	// on an empty composer (probot-outreach, 2026-08-23).
-	unverifiedGoneReason = "teslim dogrulanamadi ve metin composer'da yok; bp bir sey yapamaz — ulasmadiysa yeniden gonderin"
+	unverifiedGoneReason = "delivery was unverified and the text is no longer in the composer; bp cannot act — resend it if it did not arrive"
 	// exhaustedReason is the other way into the same waiting state: the screen
 	// kept claiming a proven failure and three pastes could not be verified.
 	// Continuing would only produce more copies of a message that may already
 	// have arrived (measured: three copies of one message, q163159804).
-	exhaustedReason = "3 deneme dogrulanamadi; tekrar paste edilmeyecek; transcript tanigi bekleniyor"
+	exhaustedReason = "3 attempts were unverified; it will not be pasted again; waiting for the transcript witness"
 	// notReadyAttemptMax bounds the proven-failure retries. Three is enough for a
 	// transient cause (someone's line in the composer, a redraw) and few enough
 	// that a wrong verdict cannot flood a pane.
@@ -226,7 +226,7 @@ const (
 	// forceReason is what a --force-busy record says while it waits. It is written
 	// at enqueue time so a force record is never the uninformative "still busy":
 	// the whole point of the flag is that busy was expected.
-	forceReason = "force: mesgul pane'e oncelikli teslim bekliyor"
+	forceReason = "force: priority delivery to the busy pane is waiting"
 	// forceCooldown bounds how long a forced message waits for the forced message
 	// before it. Two WhatsApp messages pasted into one TUI window back to back is
 	// the 2026-08-17 merge condition itself, so the normal answer is "wait for the
@@ -243,7 +243,7 @@ const (
 // reason a young message does not overtake an old one any more, said in words the
 // operator can act on (`bp qcancel` the blocker, or clear its pane).
 func headOfLineReason(head string) string {
-	return fmt.Sprintf("sirada: onunde %s var", head)
+	return fmt.Sprintf("queued: %s is ahead", head)
 }
 
 // deliveredThisPassReason is the other half of the ordering rule: this target
@@ -252,7 +252,7 @@ func headOfLineReason(head string) string {
 // second (op-main, 2026-08-17 13:03:37) — the second paste goes in before anything
 // can witness the first one leaving the composer.
 func deliveredThisPassReason(id string) string {
-	return fmt.Sprintf("sirada: bu pass'te %s teslim edildi; sonraki pass bekleniyor", id)
+	return fmt.Sprintf("queued: %s was delivered in this pass; waiting for the next pass", id)
 }
 
 // Enqueue records a message with no reason attached (the caller does not know why
@@ -547,6 +547,7 @@ func (message *Message) clearDeliveredWait() {
 
 func englishStatus(status string) string {
 	switch status {
+	// Older peers and persisted queue records may still use these Turkish tokens.
 	case "iletildi":
 		return "delivered"
 	case "iptal (hedef kapali)":
@@ -579,7 +580,7 @@ type badRecord struct {
 // q<nanoseconds-WITHIN-the-second> (see enqueueLocked), so "q950734611" is a
 // fraction of a second, not a moment in time: sorted as strings, a message sent at
 // 12:55 came out of the queue BEFORE two sent at 10:43 (probot-outreach,
-// 2026-08-17), which delivered a "DUR/IPTAL" correction after the instruction it
+// 2026-08-17), which delivered a "STOP/CANCEL" correction after the instruction it
 // was cancelling. TS is the moment the message was queued and is what ordering
 // must follow; the id decides only ties — the same nanosecond, or a legacy record
 // with no usable TS, where the id at least keeps the order stable between passes.
@@ -640,14 +641,14 @@ func (q *Queue) Status(id string) (string, error) {
 		}
 		// Legacy cleanup or failed finalization: delivery itself is already proven.
 		if message.Cleanup {
-			return fmt.Sprintf("DELIVERED (transcript), kuyruk kaydi kapatilacak: %s (%d seconds queued)", message.To, seconds), nil
+			return fmt.Sprintf("DELIVERED (transcript), queue record will be closed: %s (%d seconds queued)", message.To, seconds), nil
 		}
 		// A record nobody will paste again must SAY so. Reporting it as an
 		// ordinary "PENDING" would suggest the queue is still trying, and the
 		// operator would keep waiting for a delivery that is now in the
 		// transcript's hands.
 		if message.NoRepaste {
-			return fmt.Sprintf("PENDING (yeniden paste edilmeyecek): %s — %s (%d seconds queued); bak: bp peek %s",
+			return fmt.Sprintf("PENDING (will not be pasted again): %s — %s (%d seconds queued); inspect: bp peek %s",
 				message.To, message.Reason, seconds, message.To), nil
 		}
 		// A forced record says that it is forced. Plain "PENDING" would read as an
@@ -658,18 +659,18 @@ func (q *Queue) Status(id string) (string, error) {
 			if why == "" {
 				why = forceReason
 			}
-			return fmt.Sprintf("PENDING (FORCE): %s — %s (%d seconds queued); bak: bp peek %s",
+			return fmt.Sprintf("PENDING (FORCE): %s — %s (%d seconds queued); inspect: bp peek %s",
 				message.To, why, seconds, message.To), nil
 		}
 		if wait := int(time.Unix(0, int64(message.NextTry*1e9)).Sub(q.Now()).Seconds()); message.NextTry > 0 && wait > 0 {
-			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued; %d. deneme, sonraki deneme ~%ds); bak: bp peek %s",
+			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued; attempt %d, next attempt in ~%ds); inspect: bp peek %s",
 				message.To, message.Reason, seconds, message.Attempts+1, wait, message.To), nil
 		}
 		// With a known reason, say it and say what to do about it. "is still busy"
 		// is kept ONLY for records nobody has a reason for, because that sentence
 		// is what made a four-day-old message look like an ordinary wait.
 		if message.Reason != "" {
-			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued); bak: bp peek %s",
+			return fmt.Sprintf("PENDING: %s — %s (%d seconds queued); inspect: bp peek %s",
 				message.To, message.Reason, seconds, message.To), nil
 		}
 		// No reason at all means bp has not TOUCHED this record yet — it was
@@ -679,7 +680,7 @@ func (q *Queue) Status(id string) (string, error) {
 		// reason for seven minutes while `bp qstat` told probot-outreach the
 		// agents were busy. They were idle; the delivery layer had fallen out
 		// through a silent path. An untouched record must say so.
-		return fmt.Sprintf("PENDING: %s — bp bu kayda henuz bir sey yapmadi (kuyrukta %d saniye); pane durumu HAKKINDA BILGI YOK, bak: bp peek %s",
+		return fmt.Sprintf("PENDING: %s — bp has not acted on this record yet (%d seconds queued); PANE STATE IS UNKNOWN; inspect: bp peek %s",
 			message.To, seconds, message.To), nil
 	}
 	if message, err := read(filepath.Join(q.done(), id+".json")); err == nil {
@@ -746,7 +747,7 @@ func (q *Queue) PendingFor(to string) []string {
 //
 // It is the sender-side duplicate guard, and it exists because the two other
 // guards cannot see the case that produced measured duplicates: an agent whose
-// first `bp msg` came back "TESLIMAT BELIRSIZ" simply sent the same text twice
+// first `bp msg` came back "DELIVERY UNCERTAIN" simply sent the same text twice
 // more within 33 seconds (probot-business -> op-main, 2026-08-17). All three
 // pastes went into a pane that was streaming, so the screen could not confirm
 // them and the transcript had not recorded them yet — every copy landed in Claude
@@ -887,7 +888,7 @@ func (q *Queue) retryLater(path string, message Message, cause error, report fun
 		message.NoRepaste, message.Reason, message.NextTry = true, exhaustedReason, 0
 		q.update(path, message, report)
 		if report != nil {
-			report(fmt.Sprintf("msgq: %s -> %s %d denemede dogrulanamadi (%s); tekrar paste edilmeyecek, transcript tanigi bekleniyor",
+			report(fmt.Sprintf("msgq: %s -> %s unverified after %d attempts (%s); it will not be pasted again; waiting for the transcript witness",
 				message.ID, message.To, message.Attempts, whyNotDelivered(cause)))
 		}
 		return
@@ -897,14 +898,14 @@ func (q *Queue) retryLater(path string, message Message, cause error, report fun
 	message.NextTry = float64(q.Now().Add(delay).UnixNano()) / 1e9
 	q.update(path, message, report)
 	if report != nil {
-		report(fmt.Sprintf("msgq: %s -> %s not delivered (%v); still queued, %d. deneme %s sonra",
+		report(fmt.Sprintf("msgq: %s -> %s not delivered (%v); still queued, attempt %d in %s",
 			message.ID, message.To, cause, message.Attempts+1, delay))
 	}
 }
 
 // whyNotDelivered strips the sentinel off a wrapped delivery error so the queue
-// record carries the CAUSE in the operator's own words ("composer'da baska metin
-// var...") rather than the English sentinel in front of it.
+// record carries the CAUSE in the operator's own words ("the composer contains
+// other text...") rather than the sentinel in front of it.
 func whyNotDelivered(err error) string {
 	reason := strings.TrimPrefix(err.Error(), bptmux.ErrNotReady.Error()+": ")
 	if reason == "" {
@@ -1039,7 +1040,7 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 		// calling it "delivered (unverified)" is how one of these was closed on
 		// 2026-08-31 after six days pending — server-main's weekly-scan
 		// instruction to probot-main, which never reached that agent at all.
-		status = "not delivered (kirpik paste, gonderilmedi)"
+		status = "not delivered (torn paste)"
 	}
 	// Ask the pane what is true NOW. A notice written from the failure's own
 	// memory describes a moment that has usually passed.
@@ -1065,16 +1066,16 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 			// queueing it into the void; the record's own closing line below still
 			// carries the failed delivery.
 			if report != nil {
-				report(fmt.Sprintf("msgq: %s icin gonderene haber TESLIM EDILEMIYOR — %q icin oturum yok (from=%q); teslimat sonucu yalnizca bu log'da",
+				report(fmt.Sprintf("msgq: SENDER NOTICE FOR %s CANNOT BE DELIVERED — %q has no session (from=%q); the delivery result appears only in this log",
 					message.ID, home, message.From))
 			}
 		default:
 			if _, err := q.enqueueLocked(home, "bp", noticeText(message, hanging), enqueueOptions{}); err != nil {
 				if report != nil {
-					report(fmt.Sprintf("msgq: %s icin gonderene haber verilemedi: %v", message.ID, err))
+					report(fmt.Sprintf("msgq: sender notice for %s could not be delivered: %v", message.ID, err))
 				}
 			} else if report != nil {
-				report(fmt.Sprintf("msgq: %s teslimati dogrulanamadi; gonderen %s haberdar edildi (%s)", message.ID, message.From, home))
+				report(fmt.Sprintf("msgq: delivery of %s was unverified; sender %s was notified (%s)", message.ID, message.From, home))
 			}
 		}
 	}
@@ -1085,7 +1086,7 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 		return false
 	}
 	if report != nil {
-		report(fmt.Sprintf("%s: %s -> %s (transcript tanigi %s icinde bulamadi); bak: bp peek %s",
+		report(fmt.Sprintf("%s: %s -> %s (transcript witness did not find it within %s); inspect: bp peek %s",
 			strings.ToUpper(status), message.ID, message.To, witnessWindow, message.To))
 	}
 	return true
@@ -1131,11 +1132,11 @@ func noticeText(message Message, stillHanging bool) string {
 	if len(head) > noticeHeadRunes {
 		head = head[:noticeHeadRunes]
 	}
-	state := "SONRADAN COZULMUS OLABILIR: metin artik composer'da yok — ulastiysa islem gerekmez, ulasmadiysa yeniden gonderin"
+	state := "MAY HAVE RESOLVED LATER: the text is no longer in the composer — no action is needed if it arrived; resend if it did not"
 	if stillHanging {
-		state = "HALA ASILI: mesaj SU AN composer'da duruyor, gonderilmemis — pane bosken tek Enter yeter"
+		state = "STILL HANGING: the message is in the composer RIGHT NOW and has not been sent — one Enter is enough when the pane is idle"
 	}
-	return fmt.Sprintf("bp: %s mesajinin (%s hedefine) teslimati dogrulanamadi. %s. bp peek %s ile bak. Bas: %s",
+	return fmt.Sprintf("bp: delivery of message %s to %s was unverified. %s. Inspect with bp peek %s. Start: %s",
 		message.ID, message.To, state, message.To, string(head))
 }
 
@@ -1414,7 +1415,7 @@ func lines(records []record) ([]string, map[string][]record) {
 // The cost is bounded and deliberate: a NoRepaste head can hold its line for up to
 // witnessWindow (15 minutes) while the transcript is given its chance. In
 // instruction traffic ORDER beats latency — the 2026-08-17 incident delivered a
-// "DUR/IPTAL" correction after the instruction it cancelled, and fifteen minutes of
+// "STOP/CANCEL" correction after the instruction it cancelled, and fifteen minutes of
 // silence would have been the cheaper failure by far.
 func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
 	// Legacy records must not authorize Enter, cleanup, or a fresh paste.
@@ -1474,7 +1475,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		// ordinary records — an interlock nobody has reported a problem with is
 		// not something to redesign as a side effect.
 		if submitted, err := q.finishHangingPaste(ctx, target, rec); err == nil && submitted {
-			if err := q.finish(rec.path, rec.Message, "delivered (asili paste tamamlandi)"); err != nil && report != nil {
+			if err := q.finish(rec.path, rec.Message, "delivered (hanging paste completed)"); err != nil && report != nil {
 				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
 			}
 			return
@@ -1498,7 +1499,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 					message.Reason = tornClearedReason
 					q.update(rec.path, message, report)
 					if report != nil {
-						report(fmt.Sprintf("msgq: %s composer'da kirpik duruyordu; temizlendi, yeniden gonderilecek (%d/%d)", rec.ID, message.TornClears, tornClearMax))
+						report(fmt.Sprintf("msgq: %s had a torn copy in the composer; cleared and will be resent (%d/%d)", rec.ID, message.TornClears, tornClearMax))
 					}
 					line.block(rec.ID)
 					return
@@ -1614,7 +1615,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// blueprint-hermes-test). A forced record would therefore not jump the queue,
 	// it would cancel the work the sender wanted to reach. Client.SendForce
 	// refuses this too and is the real guarantee; the check is repeated here so the
-	// record gets the honest "pane calisiyor" reason a human can read in `bp q`
+	// record gets the honest "pane is working" reason a human can read in `bp q`
 	// instead of a delivery error.
 	if q.RuntimeBlock != nil {
 		if reason := q.RuntimeBlock(rec.To, rec.ForceBusy); reason != "" {
@@ -1734,7 +1735,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// occurrence carries its own evidence.
 			if report != nil {
 				if pane, capErr := target.Capture(ctx, rec.To); capErr == nil {
-					report(fmt.Sprintf("msgq: %s -> %s DOGRULANAMADI (%v); ekranin son satirlari:\n%s",
+					report(fmt.Sprintf("msgq: %s -> %s UNVERIFIED (%v); final screen rows:\n%s",
 						message.ID, message.To, err, paneTail(pane, unverifiedSnapshotRows)))
 				}
 			}
@@ -1754,7 +1755,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
 				q.update(rec.path, message, report)
 				if report != nil {
-					report(fmt.Sprintf("delivery UNVERIFIED: %s -> %s; tekrar paste edilmeyecek, transcript tanigi bekleniyor", message.ID, message.To))
+					report(fmt.Sprintf("delivery UNVERIFIED: %s -> %s; it will not be pasted again; waiting for the transcript witness", message.ID, message.To))
 				}
 				return
 			}

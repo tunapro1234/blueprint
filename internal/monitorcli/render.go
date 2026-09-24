@@ -127,7 +127,7 @@ func renderOverview(out io.Writer, doc *Document, options RenderOptions) {
 	// Say why the codex row is missing when we can prove it, using the same
 	// wording as `bp usage` so the two commands cannot contradict each other.
 	if !doc.Usage.Current.Codex5H.Valid && options.CodexAuth.Broken() {
-		fmt.Fprintf(out, "Note: Codex ERISIM YOK (codex auth: %s); codex meters omitted.\n", oneLine(options.CodexAuth.Reason))
+		fmt.Fprintf(out, "Note: Codex NO ACCESS (codex auth: %s); codex meters omitted.\n", oneLine(options.CodexAuth.Reason))
 	}
 }
 

@@ -212,7 +212,7 @@ func (a *app) barLine(agent string) string {
 				if remaining < 0 {
 					remaining = 0
 				}
-				text = humanTokens(remaining) + " boş"
+				text = humanTokens(remaining) + " left"
 			}
 			colour := barQuiet
 			// Claude never reports its window, so those keep the absolute

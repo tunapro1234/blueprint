@@ -292,7 +292,7 @@ func TestClientPollDropsUnexposedTarget(t *testing.T) {
 	if _, err := hub.Outbox.Enqueue("yigit", "oz", "ada@tuna", "for oz"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := hub.Outbox.Enqueue("yigit", "gizli-agent", "ada@tuna", "sneak"); err != nil {
+	if _, err := hub.Outbox.Enqueue("yigit", "hidden-agent", "ada@tuna", "sneak"); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(hub.Handler())
@@ -325,8 +325,8 @@ func TestClientPollDropsUnexposedTarget(t *testing.T) {
 			dropped = &journal[index]
 		}
 	}
-	if dropped == nil || dropped.To != "gizli-agent" || dropped.Msg != "sneak" {
-		t.Fatalf("journal=%+v, want a drop entry for gizli-agent", journal)
+	if dropped == nil || dropped.To != "hidden-agent" || dropped.Msg != "sneak" {
+		t.Fatalf("journal=%+v, want a drop entry for hidden-agent", journal)
 	}
 	// The drop must still be acked: a second poll may not resurface it.
 	queue2 := msgq.New(filepath.Join(t.TempDir(), "msgq2"))

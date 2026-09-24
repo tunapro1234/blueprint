@@ -243,7 +243,7 @@ func TestRenderOverviewExplainsMissingCodexMeterWhenAuthIsBroken(t *testing.T) {
 	if err := Render(&output, doc, "overview", RenderOptions{Now: now, CodexAuth: broken}); err != nil {
 		t.Fatal(err)
 	}
-	want := "Note: Codex ERISIM YOK (codex auth: last_refresh 3d old (>1d), id_token expired 3d 4h ago); codex meters omitted."
+	want := "Note: Codex NO ACCESS (codex auth: last_refresh 3d old (>1d), id_token expired 3d 4h ago); codex meters omitted."
 	if !strings.Contains(output.String(), want) {
 		t.Fatalf("output missing %q:\n%s", want, output.String())
 	}
@@ -253,7 +253,7 @@ func TestRenderOverviewExplainsMissingCodexMeterWhenAuthIsBroken(t *testing.T) {
 	if err := Render(&quiet, doc, "overview", RenderOptions{Now: now, CodexAuth: codexauth.State{Status: codexauth.Stale, Reason: "awaiting next refresh"}}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(quiet.String(), "ERISIM YOK") {
+	if strings.Contains(quiet.String(), "NO ACCESS") {
 		t.Fatalf("unproven auth trouble must not be reported:\n%s", quiet.String())
 	}
 	healthyDoc, err := Decode([]byte(`{"usage":{"current":{"ts":"2026-08-10T13:26:07Z","codex_5h":52}}}`))
@@ -264,7 +264,7 @@ func TestRenderOverviewExplainsMissingCodexMeterWhenAuthIsBroken(t *testing.T) {
 	if err := Render(&healthy, healthyDoc, "overview", RenderOptions{Now: now, CodexAuth: broken}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(healthy.String(), "ERISIM YOK") {
+	if strings.Contains(healthy.String(), "NO ACCESS") {
 		t.Fatalf("a present codex meter must not be annotated:\n%s", healthy.String())
 	}
 }

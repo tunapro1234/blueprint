@@ -416,7 +416,7 @@ func FolderHint(name, folder, parent, parentFolder, root string) string {
 	if child == "." || above == "." || child == above || isWorktree(child) || under(child, above) {
 		return ""
 	}
-	return fmt.Sprintf("oneri: %s klasoru ebeveyni %s altinda degil (%s vs %s) — hiyerarsi klasor yapisinda da gorunsun",
+	return fmt.Sprintf("suggestion: folder %s is not under parent %s (%s vs %s) — reflect the hierarchy in the folder structure too",
 		name, parent, child, above)
 }
 

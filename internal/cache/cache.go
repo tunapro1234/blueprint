@@ -59,7 +59,9 @@ func readTail(file *os.File, size int64) ([]byte, bool) {
 	return nil, false
 }
 
-var digestPrefix = regexp.MustCompile(`^\[\d+ birikmis duyuru`)
+// Persisted transcripts from older bp versions use the Turkish digest prefix;
+// accept it alongside the current English form when classifying automatic input.
+var digestPrefix = regexp.MustCompile(`^\[\d+ (?:accumulated announcements|birikmis duyuru)`)
 
 type State struct {
 	Activity  *Activity
@@ -306,7 +308,9 @@ func automatic(text string) bool {
 	if newline := strings.IndexByte(first, '\n'); newline >= 0 {
 		first = first[:newline]
 	}
-	return strings.HasPrefix(text, "[ ") && strings.Contains(first, " DUYURU (")
+	// Older announcement producers used DUYURU; keep reading it alongside the English marker.
+	return strings.HasPrefix(text, "[ ") &&
+		(strings.Contains(first, " ANNOUNCEMENT (") || strings.Contains(first, " DUYURU ("))
 }
 
 func parseTime(value string) (time.Time, bool) {

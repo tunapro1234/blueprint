@@ -244,7 +244,7 @@ func TestSetStatusExistingAgentStaysInItsOwnBook(t *testing.T) {
 	folder := filepath.Join(root, "probot", "fon")
 	writeBookFile(t, mainPath, map[string]any{"agents": []any{
 		map[string]any{"name": "server-main", "folder": root, "class": "server"},
-		map[string]any{"name": "probot-fon", "folder": folder, "class": "probot", "parent": "probot-main", "role": "eski rol", "status": "closed"},
+		map[string]any{"name": "probot-fon", "folder": folder, "class": "probot", "parent": "probot-main", "role": "old role", "status": "closed"},
 	}})
 
 	if err := SetStatus([]string{mainPath, probotPath}, "probot-fon", "open", folder, Registration{Sender: "server-main"}); err != nil {
@@ -258,7 +258,7 @@ func TestSetStatusExistingAgentStaysInItsOwnBook(t *testing.T) {
 	}
 
 	// Pins correct that same entry in place rather than creating a second one.
-	reg := Registration{Sender: "server-main", Parent: "probot-business", Role: "yeni rol"}
+	reg := Registration{Sender: "server-main", Parent: "probot-business", Role: "new role"}
 	if err := SetStatus([]string{mainPath, probotPath}, "probot-fon", "open", folder, reg); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestSetStatusExistingAgentStaysInItsOwnBook(t *testing.T) {
 		t.Fatalf("project book agents=%v, want no duplicate entry", names)
 	}
 	got := findAgent(t, mainPath, "probot-fon")
-	if got.Parent != "probot-business" || got.Role != "yeni rol" {
+	if got.Parent != "probot-business" || got.Role != "new role" {
 		t.Fatalf("existing agent=%+v, want pinned parent/role applied in place", got)
 	}
 }
@@ -285,7 +285,7 @@ func TestFolderHint(t *testing.T) {
 			what: "folder outside the parent's tree",
 			name: "probot-fon", folder: "/srv/kitap/fon",
 			parent: "probot-main", parentFolder: "/srv/probot",
-			want: "oneri: probot-fon klasoru ebeveyni probot-main altinda degil (/srv/kitap/fon vs /srv/probot) — hiyerarsi klasor yapisinda da gorunsun",
+			want: "suggestion: folder probot-fon is not under parent probot-main (/srv/kitap/fon vs /srv/probot) — reflect the hierarchy in the folder structure too",
 		},
 		{
 			// A sibling name is not a path component: /srv/probot-old is not
@@ -293,13 +293,13 @@ func TestFolderHint(t *testing.T) {
 			what: "sibling directory sharing a name prefix",
 			name: "probot-fon", folder: "/srv/probot-old",
 			parent: "probot-main", parentFolder: "/srv/probot",
-			want: "oneri: probot-fon klasoru ebeveyni probot-main altinda degil (/srv/probot-old vs /srv/probot) — hiyerarsi klasor yapisinda da gorunsun",
+			want: "suggestion: folder probot-fon is not under parent probot-main (/srv/probot-old vs /srv/probot) — reflect the hierarchy in the folder structure too",
 		},
 		{
 			what: "annotated parent folder still resolves",
 			name: "probot-fon", folder: "/srv/kitap/fon",
 			parent: "probot-main", parentFolder: "/srv/probot (home: /srv/probot/main)",
-			want: "oneri: probot-fon klasoru ebeveyni probot-main altinda degil (/srv/kitap/fon vs /srv/probot) — hiyerarsi klasor yapisinda da gorunsun",
+			want: "suggestion: folder probot-fon is not under parent probot-main (/srv/kitap/fon vs /srv/probot) — reflect the hierarchy in the folder structure too",
 		},
 		{
 			what: "folder under the parent's",

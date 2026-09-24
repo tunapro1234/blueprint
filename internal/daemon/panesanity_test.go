@@ -35,13 +35,13 @@ func TestPaneSanityFindings(t *testing.T) {
 	if len(findings) != 3 {
 		t.Fatalf("findings=%v, want exactly the three contradictions", findings)
 	}
-	if got := findings["compec-mail-ox"]; !strings.Contains(got, "opencode") || !strings.Contains(got, "AGENT SAYMIYOR") {
+	if got := findings["compec-mail-ox"]; !strings.Contains(got, "opencode") || !strings.Contains(got, "NOT RECOGNIZED AS AN AGENT") {
 		t.Fatalf("unknown-TUI finding=%q", got)
 	}
-	if got := findings["probot-out-codex"]; !strings.Contains(got, "AGENT SAYMIYOR") || !strings.Contains(got, "codex") {
+	if got := findings["probot-out-codex"]; !strings.Contains(got, "NOT RECOGNIZED AS AN AGENT") || !strings.Contains(got, "codex") {
 		t.Fatalf("codex finding=%q", got)
 	}
-	if got := findings["server-main"]; !strings.Contains(got, "oturum dosyasini bulamiyor") || !strings.Contains(got, "/srv (home:") {
+	if got := findings["server-main"]; !strings.Contains(got, "cannot find its session file") || !strings.Contains(got, "/srv (home:") {
 		t.Fatalf("server-main finding=%q", got)
 	}
 }

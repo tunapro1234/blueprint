@@ -75,18 +75,22 @@ class RuntimeUsageTest(unittest.TestCase):
         import sys
         from unittest import mock
         from scripts import bp_runtime_usage
-        spec = importlib.util.spec_from_file_location('bp_watchdog_candidate', Path(__file__).with_name('otonom-yakit-bekcisi.py'))
+        spec = importlib.util.spec_from_file_location('bp_watchdog_candidate', Path(__file__).with_name('autonomous-usage-watchdog.py'))
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(sys.modules, {'bp_runtime_usage': bp_runtime_usage}):
             spec.loader.exec_module(module)
-        module.DURUM = str(Path(self.tmp.name) / 'missing-state.json')
+        module.STATE_FILE = str(Path(self.tmp.name) / 'missing-state.json')
         self.write([self.assistant(self.now-dt.timedelta(days=2), 25_000_000)])
         row = dict(name='op-main', folder='/srv/outpost', runtime='claude',
                    activity=dict(state='working', observed_at=self.now.isoformat(),
                                  transcript_path=str(self.path), thread_id='thread', binding='claude-session-name'))
         report = dict(schema_version=2, agents=[row])
-        out = io.StringIO()
-        with mock.patch.object(sys, 'argv', ['watchdog', '--kuru']), mock.patch.object(module.subprocess, 'check_output', return_value=json.dumps(report)), mock.patch.object(module.os, 'system', side_effect=AssertionError('external message')), contextlib.redirect_stdout(out):
-            self.assertIsNone(module.main())
-        self.assertIn('esik asilmadi', out.getvalue())
-        self.assertNotIn('OTONOM YANMA', out.getvalue())
+        for flag in ('--dry-run', '--kuru'):
+            out = io.StringIO()
+            with mock.patch.object(sys, 'argv', ['watchdog', flag]), \
+                    mock.patch.object(module.subprocess, 'check_output', return_value=json.dumps(report)), \
+                    mock.patch.object(module.os, 'system', side_effect=AssertionError('external message')), \
+                    contextlib.redirect_stdout(out):
+                self.assertIsNone(module.main())
+            self.assertIn('no threshold was exceeded', out.getvalue())
+            self.assertNotIn('AUTONOMOUS USAGE', out.getvalue())

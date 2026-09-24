@@ -57,7 +57,7 @@ const (
 //
 // The shape of the name is what keeps this from firing on prose. It must look like
 // an agent name — lower case, starting with a letter, at least three characters —
-// so a numbered line ("3] maddesini ekledim") is not mistaken for damage. The
+// so a numbered line ("I added item 3]") is not mistaken for damage. The
 // measured case, "t-business] BUSINESS → OUTREACH ...", is a business agent's name
 // with its first two characters eaten.
 var truncatedEnvelope = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,23}\] `)
@@ -99,10 +99,10 @@ func mergedShape(text string, known map[string]bool) string {
 		first = body[:index]
 	}
 	if truncatedEnvelope.MatchString(first) {
-		return "kirpik zarf (ilk satir '[' olmadan ']' ile aciliyor)"
+		return "torn envelope (first line opens with ']' but has no '[')"
 	}
 	// Envelopes BELOW a quotation marker do not count. Agents legitimately hand
-	// history over verbatim — "DEVIR: ... --- ORIJINAL METIN (17 Agu) ---
+	// history over verbatim — "HANDOVER: ... --- ORIGINAL TEXT (17 Aug) ---
 	// [probot-business] ..." — and the quoted original naturally begins with its
 	// own bp envelope. Nine such handovers fired this alarm in one day
 	// (2026-08-21, ada), and a detector that accumulates false positives teaches
@@ -119,14 +119,14 @@ func mergedShape(text string, known map[string]bool) string {
 		}
 	}
 	if count >= 2 {
-		return "tek kayitta iki [gonderen] zarfi"
+		return "two [sender] envelopes in one record"
 	}
 	return ""
 }
 
 // quoteSeparator marks the start of quoted material: a horizontal rule of three
 // or more dashes/equals at line start, a ">"-quoted line, or a titled rule
-// anywhere in the line ("... --- ORIJINAL METIN (17 Agu) --- ..." — the
+// anywhere in the line ("... --- ORIGINAL TEXT (17 Aug) --- ..." — the
 // measured handover shape flows it mid-line). Everything below the first such
 // line is somebody's history, not this delivery.
 var quoteSeparator = regexp.MustCompile(`^\s*(?:[-=]{3,}|>)|---.+---`)
@@ -212,6 +212,6 @@ func (s *Service) mergeScan(sessions []string, state *busySanityState, now time.
 // mergeMessage is written for a human: which agent, which record, what is wrong
 // with it, and what it means for the delivery channel as a whole.
 func mergeMessage(agent string, when time.Time, shape string) string {
-	return fmt.Sprintf("bp: %s transcript'inde birlesmis/kirpik teslimat kaydi (%s, %s); bp msg teslimat butunlugu bozulmus olabilir — bak: bp q, bp peek %s",
+	return fmt.Sprintf("bp: merged/torn delivery record in %s transcript (%s, %s); bp msg delivery integrity may be compromised — inspect: bp q, bp peek %s",
 		agent, when.In(time.Local).Format("2006-01-02 15:04"), shape, agent)
 }

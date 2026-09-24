@@ -19,7 +19,7 @@ import (
 const (
 	// hermesStatusLine sits ABOVE the composer (Claude's footer sits below), and
 	// carries model · context% · turn age.
-	hermesStatusLine = " ⚕ x-preview-f-free · 2% · 12m               ─ Say ve /srv dizin..."
+	hermesStatusLine = " ⚕ x-preview-f-free · 2% · 12m               ─ Say and /srv directory..."
 	// hermesRule is the composer's border: a PURE run of ─, no label inside.
 	hermesRule = "────────────────────────────────────────────────────────────────────"
 	// hermesIdleRow is the idle composer: prompt marker at column 0, placeholder
@@ -33,7 +33,7 @@ const (
 	// hermesGhostRowAnsi is the placeholder's OTHER face, measured on
 	// probot-outreach-ig-error (2026-08-22): a rotating suggestion in the same
 	// italic wrapper. The first five real Hermes agents on this fleet all
-	// queued forever behind "composer'da yabanci metin var" because the text
+	// queued forever behind "composer contains foreign text" because the text
 	// filter knew only the "Ask anything" sentence — the attribute, not the
 	// words, is the signature.
 	hermesGhostRowAnsi = "\x1b[38;5;230m❯ \x1b[3m\x1b[38;5;136mDraft a reply to the last email in my inbox\x1b[0m"
@@ -43,9 +43,9 @@ const (
 	// hermesBusyTypedRow is the state that corrected the first version of the busy
 	// matcher: a busy pane whose composer holds text. The placeholder is gone, the
 	// caduceus stays.
-	hermesBusyTypedRow = "⚕ ❯ ucuncu satir da var"
+	hermesBusyTypedRow = "⚕ ❯ there is also a third line"
 	// hermesIdleTypedRow is the same text on an IDLE pane — no caduceus.
-	hermesIdleTypedRow = "❯ ucuncu satir da var"
+	hermesIdleTypedRow = "❯ there is also a third line"
 	// hermesKaomoji is one frame of the spinner. Two-space indent, rotating
 	// emoticon and verb; deliberately not matched by anything.
 	hermesKaomoji = "  (¬_¬) processing..."
@@ -58,10 +58,10 @@ const (
 func hermesTranscript() []string {
 	return []string{
 		"╭─ ⚕ Hermes ───────────────────────────────────────────────────────╮",
-		"/srv dizini; blueprint, kavram, outpost gibi klasorler iceriyor.",
+		"the /srv directory contains folders such as blueprint, kavram, and outpost.",
 		"╰──────────────────────────────────────────────────────────────────╯",
 		"────────────────────────────────────────",
-		"● Lutfen terminal aracinla `sleep 45` calistir, sonra bitti de.",
+		"● Please run `sleep 45` with your terminal tool, then say it is done.",
 		"────────────────────────────────────────",
 		"",
 	}
@@ -102,10 +102,10 @@ func TestHermesPaneRecognisesTheMeasuredScreens(t *testing.T) {
 		{"empty capture", "", false},
 		// A pane merely QUOTING the placeholder is not Hermes: the prompt marker
 		// must start the row.
-		{"transcript quoting the placeholder", claudePane("❯ hermes'in composer'i '❯ Ask anything, or type / for commands' yaziyor"), false},
+		{"transcript quoting the placeholder", claudePane("❯ the Hermes composer says '❯ Ask anything, or type / for commands'"), false},
 		// Hermes' own answer-box header carries the caduceus, but not at the start
 		// of a row and never with "· N% ·" behind it.
-		{"answer box header only", strings.Join([]string{"╭─ ⚕ Hermes ──╮", "cevap", "╰──╯"}, "\n"), false},
+		{"answer box header only", strings.Join([]string{"╭─ ⚕ Hermes ──╮", "answer", "╰──╯"}, "\n"), false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -226,7 +226,7 @@ func TestHermesPermissionPromptIsNeverIdle(t *testing.T) {
 		"╰────────────────────────────────────────────────────────────────╯",
 		"  💻 sleep 30 + 27 commands  (04m22s · ↓ 960 tok)",
 		"  ↑/↓ to select, Enter to confirm  (62s)",
-		" ⚕ x-preview-f-free · 40% · 1.2d             ─ kuanta.md görev d...",
+		" ⚕ x-preview-f-free · 40% · 1.2d             ─ kuanta.md task d...",
 		hermesRule,
 		"⚠ ❯",
 		hermesRule,
@@ -305,9 +305,9 @@ func TestHermesComposerBoxReadsAMultiRowPaste(t *testing.T) {
 	// between the rules — there is no paste chip. The box is therefore the only
 	// view that can compare what landed against what we injected.
 	pane := hermesPane(
-		"❯ birinci satir bir mesajin ilk parcasi",
-		"ikinci satir devam ediyor burada",
-		"ucuncu satir da var",
+		"❯ the first line is the first part of a message",
+		"the second line continues here",
+		"there is also a third line",
 	)
 	box, ok := composerBox(pane)
 	if !ok {
@@ -337,9 +337,9 @@ func TestHermesClearBudgetGrowsWithTheRenderedRows(t *testing.T) {
 	// Measured on a 3-row paste: five C-u presses (content and newline die
 	// separately), so the budget must exceed 2N-1 and the fixed bound of 8 is not
 	// enough past four rows.
-	rows := []string{"❯ satir bir"}
+	rows := []string{"❯ line one"}
 	for i := 0; i < 9; i++ {
-		rows = append(rows, "devam satiri")
+		rows = append(rows, "continuation line")
 	}
 	got := hermesClearBudget(hermesPane(rows...))
 	if got < 2*len(rows)-1 {
@@ -437,12 +437,12 @@ func TestSendPastesBracketedIntoAHermesPane(t *testing.T) {
 	// Unbracketed, Hermes reads each newline as a submit: a three-line message
 	// went out as three, the last two INTERRUPTING the turn the first started.
 	// With -p it stays in the composer and leaves on one Enter.
-	message := "birinci satir bir mesajin ilk parcasi\nikinci satir devam ediyor burada\nucuncu satir da var"
+	message := "the first line is the first part of a message\nthe second line continues here\nthere is also a third line"
 	idle := hermesPane(hermesIdleRowAnsi)
 	pasted := hermesPane(
-		"❯ birinci satir bir mesajin ilk parcasi",
-		"ikinci satir devam ediyor burada",
-		"ucuncu satir da var",
+		"❯ the first line is the first part of a message",
+		"the second line continues here",
+		"there is also a third line",
 	)
 	h := hermesSendHarness(
 		[]string{idle, idle, idle, pasted, idle},
@@ -521,7 +521,7 @@ func TestClearComposerAcceptsAHermesPane(t *testing.T) {
 // prompt before Enter. Pressing Enter there answers the DIALOG — the highlighted
 // line is "Allow once" — instead of submitting the message.
 func TestSubmitRefusesEnterWhenADialogAppearedAfterThePaste(t *testing.T) {
-	message := "gorev dosyasi hazir, oku ve uygula"
+	message := "the task file is ready; read and apply it"
 	// Our text IS in the composer (the paste landed), and a prompt is now on
 	// screen. The composer content alone would say "press Enter again".
 	pane := strings.Join([]string{

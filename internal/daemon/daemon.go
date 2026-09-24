@@ -535,11 +535,11 @@ const (
 // suspect.
 func busySanityMessage(samples int) string {
 	// The wording names BOTH gates on purpose. The first version accused the
-	// screen ("imza kaymis olabilir") and server-main spent a measurement round
+	// screen ("the signature may have drifted") and server-main spent a measurement round
 	// proving it innocent on 2026-08-28 — the samples were phantoms from
 	// TurnOpen's freshness window, not screen misses. An alarm that names one
 	// suspect sends its reader there first.
-	return fmt.Sprintf("bp: ekran mesguliyet imzasi ile transcript gecidi %d ornektir ortusmuyor. IKI TARAF DA SUPHELI: (a) ekran imzasi kaymis olabilir — internal/tmux Busy(); (b) TurnOpen tur olmayan yazimlari tur sayiyor olabilir — internal/book/turnopen.go. Ayirmak icin: canli bir pane'de Busy() ile ekrani, ayni anda tailTurnPhase ile transcript'i karsilastir. bp status'un teslimat kapilari her iki halde de guvenli tarafta kaliyor (supheli = mesgul).", samples)
+	return fmt.Sprintf("bp: the screen busy signature and transcript gate have disagreed for %d samples. BOTH SIDES ARE SUSPECT: (a) the screen signature may have drifted — internal/tmux Busy(); (b) TurnOpen may count non-turn writes as turns — internal/book/turnopen.go. To distinguish them, compare the screen via Busy() with the transcript via tailTurnPhase at the same time in a live pane. bp status delivery gates remain conservative in both cases (uncertain = busy).", samples)
 }
 
 // busySanityState is the whole memory of the loop. Timestamps are RFC3339 so the

@@ -122,7 +122,7 @@ func TestMatchingRegistryDoesNotAuthenticateAnUnprovenCaller(t *testing.T) {
 func TestStudioApprovalIncidentCannotAcquireRecipientIdentity(t *testing.T) {
 	const studio = "01a0711e-1b8b-76a2-954a-76f9e1a44ceb"
 	const root = "01a0715e-a5c0-7171-adf3-c95343ce6d5b"
-	const body = "Tuna için SON TOPLU ONAY: /srv/probot/studio/astra/APPROVAL-2026-09-05.md somut paket hazır"
+	const body = "Tuna FINAL BATCH APPROVAL: concrete package ready at /srv/probot/studio/astra/APPROVAL-2026-09-05.md"
 	for _, verified := range []bool{true, false} {
 		t.Run(map[bool]string{true: "verified-main-thread", false: "unconfined-without-proof"}[verified], func(t *testing.T) {
 			a, _ := identityFixture(t) // same stale TMUX, TMUX_PANE and AGENT=root

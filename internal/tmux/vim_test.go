@@ -49,10 +49,10 @@ func TestVimMessageDelivery(t *testing.T) {
 				name, text   string
 				chip, expand bool
 			}{
-				{"single", "dd :q! i Türkçe mesaj", false, false},
-				{"multiline", "[bp] Türkçe mesaj\nikinci satır\n:q! dd", false, false},
-				{"chip", "[bp] " + strings.Repeat("uzun mesaj ", 250), true, false},
-				{"expand", "[bp] " + strings.Repeat("uzun mesaj ", 250), true, true},
+				{"single", "dd :q! i English message", false, false},
+				{"multiline", "[bp] English message\nsecond line\n:q! dd", false, false},
+				{"chip", "[bp] " + strings.Repeat("long message ", 250), true, false},
+				{"expand", "[bp] " + strings.Repeat("long message ", 250), true, true},
 			} {
 				t.Run(harness+"/"+mode+"/"+tc.name, func(t *testing.T) {
 					h := &codexTerminal{harness: harness, mode: mode, chip: tc.chip, expandFirst: tc.expand}
@@ -74,8 +74,8 @@ func TestVimMessageDelivery(t *testing.T) {
 				h    codexTerminal
 				want error
 			}{
-				{"draft", codexTerminal{draft: "kullanıcının taslağı"}, ErrTyping},
-				{"multiline draft", codexTerminal{draft: "\n  taslağın ikinci satırı"}, ErrTyping},
+				{"draft", codexTerminal{draft: "the user's draft"}, ErrTyping},
+				{"multiline draft", codexTerminal{draft: "\n  the draft's second line"}, ErrTyping},
 				{"busy", codexTerminal{working: true}, ErrBusy},
 				{"keyboard", codexTerminal{active: true}, ErrTyping},
 				{"dialog", codexTerminal{modal: true}, ErrDialog},
@@ -85,7 +85,7 @@ func TestVimMessageDelivery(t *testing.T) {
 					h := tc.h
 					h.harness, h.mode = harness, mode
 					before := h.draft
-					if err := h.client().Send(context.Background(), "agent", "[bp] mesaj"); !errors.Is(err, tc.want) {
+					if err := h.client().Send(context.Background(), "agent", "[bp] message"); !errors.Is(err, tc.want) {
 						t.Fatalf("%v, want %v", err, tc.want)
 					}
 					if len(h.keys) != 0 || len(h.submitted) != 0 {
@@ -101,9 +101,9 @@ func TestVimMessageDelivery(t *testing.T) {
 }
 
 func TestCodexVimSearchDoesNotReceiveMessages(t *testing.T) {
-	for _, query := range []string{"/", "?", "/taslak", "?önceki"} {
+	for _, query := range []string{"/", "?", "/draft", "?previous"} {
 		h := &codexTerminal{mode: "normal", search: query}
-		if err := h.client().Send(context.Background(), "agent", "[bp] mesaj"); !errors.Is(err, ErrDialog) {
+		if err := h.client().Send(context.Background(), "agent", "[bp] message"); !errors.Is(err, ErrDialog) {
 			t.Fatalf("search %q: %v", query, err)
 		}
 		if h.pasted != 0 || len(h.keys) != 0 {
@@ -111,7 +111,7 @@ func TestCodexVimSearchDoesNotReceiveMessages(t *testing.T) {
 		}
 	}
 	h := &codexTerminal{mode: "normal", searchAfterPaste: true}
-	if err := h.client().Send(context.Background(), "agent", "[bp] mesaj"); !errors.Is(err, ErrUnverified) {
+	if err := h.client().Send(context.Background(), "agent", "[bp] message"); !errors.Is(err, ErrUnverified) {
 		t.Fatal(err)
 	}
 	if len(h.keys) != 0 {

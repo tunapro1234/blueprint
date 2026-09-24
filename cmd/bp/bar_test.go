@@ -147,7 +147,7 @@ func TestBarRemainingContextDoesNotInventAWindow(t *testing.T) {
 		known  bool
 		want   string
 	}{
-		{200000, true, "170k boş"}, {0, true, "30k/?"}, {20000, true, "0 boş"}, {0, false, "ctx —"},
+		{200000, true, "170k left"}, {0, true, "30k/?"}, {20000, true, "0 left"}, {0, false, "ctx —"},
 	} {
 		a := &app{config: bpconfig.Config{Agentbooks: []string{bookPath}, Bar: bpconfig.BarConfig{Context: "remaining", Widgets: []string{"ctx"}}},
 			loadCache: func(map[string]string) map[string]cache.State {

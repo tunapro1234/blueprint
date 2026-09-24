@@ -40,7 +40,7 @@ def totals(group_by):
     against a bg-review record on 2026-08-22: 7746 + 47360 = 55106 prompt
     tokens)."""
     if not os.path.exists(STATE_DB):
-        return {"error": "state.db yok"}
+        return {"error": "state.db missing"}
     connection = sqlite3.connect(f"file:{STATE_DB}?mode=ro", uri=True)
     try:
         rows = connection.execute(
@@ -51,7 +51,7 @@ def totals(group_by):
     finally:
         connection.close()
     return {
-        key or "(bilinmiyor)": {
+        key or "(unknown)": {
             "calls": calls or 0,
             "fresh_in": fresh or 0,
             "cache_read": cached or 0,
@@ -72,9 +72,9 @@ def openrouter_usage():
                     key = line.split("=", 1)[1].strip()
                     break
     except OSError as error:
-        return {"error": f".env okunamadi: {error}"}
+        return {"error": f"could not read .env: {error}"}
     if not key:
-        return {"error": "anahtar yok"}
+        return {"error": "key missing"}
     request = urllib.request.Request(KEY_URL, headers={"Authorization": f"Bearer {key}"})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:

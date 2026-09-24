@@ -47,7 +47,7 @@ func wrapText(text string, width int) []string {
 // the composer as still holding its own text, and told the operator the message
 // was gone while it sat on screen.
 func TestCodexComposerReadsWrappedPaste(t *testing.T) {
-	message := "[probot-outreach] blueprint bp'deki gonderme arizani duzeltti (16ed445): sorun teslimat degil spool'du — bp duyuru eklemek icin spool'u yazma modunda aciyordu, senin sandbox'inda /srv/blueprint salt-okunur oldugu icin daha ilk adimda patliyordu. Artik spool salt-okunursa mesaj duyurusuz TEK BASINA gidiyor. DOGRULAMA RICASI: musait oldugunda bana kisa bir test mesaji at."
+	message := "[probot-outreach] blueprint fixed your bp sending failure (16ed445): delivery was not the problem; the spool was. bp opened the spool for writing to add announcements, and your sandbox mounted /srv/blueprint read-only, so it failed at the first step. Now, if the spool is read-only, the message is sent ALONE without announcements. VERIFICATION REQUEST: send me a short test message when convenient."
 	pane := codexPaneWith(wrapText(message, 68))
 
 	if _, ok := composerBoxText(pane); !ok {
@@ -78,8 +78,8 @@ func TestCodexIdleComposerReadsEmpty(t *testing.T) {
 // reader exists to let bp finish its OWN paste, never to press Enter on a
 // human's unfinished text.
 func TestCodexForeignComposerStaysForeign(t *testing.T) {
-	pane := codexPaneWith(wrapText("abi sunu bir kontrol eder misin, listedeki numaralarin nitelik alanini yeniden gozden gecirmemiz lazim", 68))
-	if _, ours := StuckPaste(pane, []string{"[bp] bambaska bir mesaj, yeterince uzun olsun diye uzatiyorum."}); ours {
+	pane := codexPaneWith(wrapText("could you check this; we need to review the attribute field for the numbers in the list", 68))
+	if _, ours := StuckPaste(pane, []string{"[bp] a completely different message, extended to make it long enough."}); ours {
 		t.Fatal("a stranger's text in a codex composer was claimed as ours")
 	}
 }
@@ -95,12 +95,12 @@ func TestCodexCurrentFooterAndLongRunningTurn(t *testing.T) {
 			t.Fatalf("incorrect current Codex state: %q", pane)
 		}
 	}
-	text := "[server-main] ilk satır\n  ikinci satır ve Türkçe içerik"
+	text := "[server-main] first line\n  second line with English content"
 	pane := modernCodexPane(text)
 	if _, ok := StuckPaste(pane, []string{text}); !ok {
 		t.Fatal("current wrapped composer not recognized")
 	}
-	if !Typing(modernCodexPane("kullanıcının yarım metni")) {
+	if !Typing(modernCodexPane("the user's unfinished text")) {
 		t.Fatal("user input ignored")
 	}
 }
@@ -218,7 +218,7 @@ func (h *codexTerminal) client() *Client {
 }
 
 func TestCodexDeliveryHarness(t *testing.T) {
-	for _, text := range []string{"[bp] kısa mesaj", "[bp] Türkçe satır\n  ikinci satır", "[bp] " + strings.Repeat("wrapped text ", 50)} {
+	for _, text := range []string{"[bp] short message", "[bp] English line\n  second line", "[bp] " + strings.Repeat("wrapped text ", 50)} {
 		h := &codexTerminal{}
 		if err := h.client().Send(context.Background(), "agent", text); err != nil {
 			t.Fatal(err)

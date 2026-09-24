@@ -253,13 +253,13 @@ func TestAnnouncementTargetsFollowHierarchy(t *testing.T) {
 
 func TestFormatDigest(t *testing.T) {
 	entries := []pending.Entry{
-		{TS: time.Date(2026, 7, 26, 11, 2, 0, 0, time.UTC).Unix(), From: "ada", Kind: "announce", Text: "ilk"},
-		{TS: time.Date(2026, 7, 27, 15, 40, 0, 0, time.UTC).Unix(), From: "alp", Kind: "msg", Text: "ikinci"},
+		{TS: time.Date(2026, 7, 26, 11, 2, 0, 0, time.UTC).Unix(), From: "ada", Kind: "announce", Text: "first"},
+		{TS: time.Date(2026, 7, 27, 15, 40, 0, 0, time.UTC).Unix(), From: "alp", Kind: "msg", Text: "second"},
 	}
-	want := "[2 birikmis duyuru — 26-27 Tem]\n" +
-		"1) (26 Tem 14:02) ilk\n" +
-		"2) (27 Tem 18:40, alp) ikinci\n" +
-		"(+1 eski duyuru dusuldu)"
+	want := "[2 accumulated announcements — 26-27 Jul]\n" +
+		"1) (26 Jul 14:02) first\n" +
+		"2) (27 Jul 18:40, alp) second\n" +
+		"(+1 old announcements dropped)"
 	if got := formatDigest(entries, 1); got != want {
 		t.Fatalf("digest:\n%q\nwant:\n%q", got, want)
 	}
@@ -369,7 +369,7 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		if err := a.message([]string{"alp", "direct"}); err != nil {
 			t.Fatal(err)
 		}
-		if calls != 1 || !strings.Contains(delivered, "birikmis duyuru") || !strings.HasSuffix(delivered, "\n\n[ada] direct") {
+		if calls != 1 || !strings.Contains(delivered, "accumulated announcements") || !strings.HasSuffix(delivered, "\n\n[ada] direct") {
 			t.Fatalf("calls=%d delivered=%q", calls, delivered)
 		}
 		entries, _, err := pending.Load(stateDir, "alp")
@@ -608,13 +608,13 @@ func TestPolicyDecisionsThresholds(t *testing.T) {
 		t.Fatalf("targets=%v, want %v", policyTargetNames(rows), want)
 	}
 	want := []compactDecision{
-		{Name: "alpha", Age: 24 * time.Hour, Tokens: 900_000, Reason: "taze konusma (<24sa)"},
-		{Name: "alpha-child", Age: 25 * time.Hour, Tokens: 200_001, Send: true, Reason: "gonderilecek"},
-		{Name: "alpha-grandchild", Age: 25 * time.Hour, Tokens: 200_001, Reason: "MESGUL, atlandi"},
-		{Name: "beta", Age: 48 * time.Hour, Tokens: 200_000, Reason: "context kucuk"},
-		{Name: "orphan", Age: 25 * time.Hour, Tokens: 200_001, Reason: "claude degil (codex)"},
-		{Name: "lab-scratch", Age: -1, Tokens: -1, Reason: "transcript okunamadi"},
-		{Name: "closed-agent", Age: 25 * time.Hour, Tokens: 200_001, Reason: "kapali"},
+		{Name: "alpha", Age: 24 * time.Hour, Tokens: 900_000, Reason: "recent conversation (<24h)"},
+		{Name: "alpha-child", Age: 25 * time.Hour, Tokens: 200_001, Send: true, Reason: "will send"},
+		{Name: "alpha-grandchild", Age: 25 * time.Hour, Tokens: 200_001, Reason: "BUSY, skipped"},
+		{Name: "beta", Age: 48 * time.Hour, Tokens: 200_000, Reason: "context too small"},
+		{Name: "orphan", Age: 25 * time.Hour, Tokens: 200_001, Reason: "not Claude (codex)"},
+		{Name: "lab-scratch", Age: -1, Tokens: -1, Reason: "transcript unreadable"},
+		{Name: "closed-agent", Age: 25 * time.Hour, Tokens: 200_001, Reason: "closed"},
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("rows=%+v\nwant=%+v", rows, want)
@@ -626,7 +626,7 @@ func TestPolicyDecisionsThresholds(t *testing.T) {
 	if names := policyTargetNames(rows); len(names) != 0 {
 		t.Fatalf("targets=%v, want none", names)
 	}
-	if got := rows[1].Reason; got != "yakinda compact edildi (5m once)" {
+	if got := rows[1].Reason; got != "recently compacted (5m ago)" {
 		t.Fatalf("alpha-child reason=%q", got)
 	}
 
@@ -639,7 +639,7 @@ func TestPolicyDecisionsThresholds(t *testing.T) {
 	}
 	opts.idle = 48 * time.Hour
 	rows = policyDecisions(fleet, states, cacheStates, commands, nil, opts, now)
-	if got := rows[0].Reason; got != "taze konusma (<48sa)" {
+	if got := rows[0].Reason; got != "recent conversation (<48h)" {
 		t.Fatalf("alpha reason=%q", got)
 	}
 }
@@ -916,15 +916,15 @@ func TestCompactListsWithoutSendingByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readTestOutput(t, a.out)
-	want := fmt.Sprintf("%-24s %-10s %-10s %s\n", "AGENT", "KONUSMA", "CONTEXT", "KARAR") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha", "24h", "900k", "taze konusma (<24sa)") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "gonderilecek") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-grandchild", "25h", "200k", "MESGUL, atlandi") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "beta", "2d", "200k", "context kucuk") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "orphan", "25h", "200k", "claude degil (codex)") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "lab-scratch", "-", "-", "transcript okunamadi") +
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "closed-agent", "25h", "200k", "kapali") +
-		"gonderilecek: 1, atlanan: 6 (gondermek icin: bp compact --apply)\n"
+	want := fmt.Sprintf("%-24s %-10s %-10s %s\n", "AGENT", "CONVERSATION", "CONTEXT", "DECISION") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha", "24h", "900k", "recent conversation (<24h)") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "will send") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-grandchild", "25h", "200k", "BUSY, skipped") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "beta", "2d", "200k", "context too small") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "orphan", "25h", "200k", "not Claude (codex)") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "lab-scratch", "-", "-", "transcript unreadable") +
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "closed-agent", "25h", "200k", "closed") +
+		"will send: 1, skipped: 6 (to send: bp compact --apply)\n"
 	if got != want {
 		t.Fatalf("output:\n%s\nwant:\n%s", got, want)
 	}
@@ -962,10 +962,10 @@ func TestCompactApplySendsAndRecordsState(t *testing.T) {
 		t.Fatalf("sent=%v, want %v", sent, want)
 	}
 	got := readTestOutput(t, a.out)
-	if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "gonderildi")) {
+	if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "sent")) {
 		t.Fatalf("table does not report the send:\n%s", got)
 	}
-	if !strings.HasSuffix(got, "gonderildi: 1, atlanan: 6\n") {
+	if !strings.HasSuffix(got, "sent: 1, skipped: 6\n") {
 		t.Fatalf("summary missing:\n%s", got)
 	}
 	state := loadCompactState(filepath.Join(a.config.StateDir, "compact.json"))
@@ -1061,10 +1061,10 @@ func TestCompactSkipsBusyAndTypedTargets(t *testing.T) {
 				t.Fatalf("sent=%v, want nothing", sent)
 			}
 			got := readTestOutput(t, a.out)
-			if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "MESGUL, atlandi")) {
+			if !strings.Contains(got, fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-child", "25h", "200k", "BUSY, skipped")) {
 				t.Fatalf("table does not report the skip:\n%s", got)
 			}
-			if !strings.HasSuffix(got, "gonderildi: 0, atlanan: 7\n") {
+			if !strings.HasSuffix(got, "sent: 0, skipped: 7\n") {
 				t.Fatalf("summary:\n%s", got)
 			}
 			if _, err := os.Stat(filepath.Join(a.config.StateDir, "compact.json")); !os.IsNotExist(err) {
@@ -1104,11 +1104,11 @@ func TestCompactAllKeepsTheDescendantSweep(t *testing.T) {
 	}
 	got := readTestOutput(t, a.out)
 	for _, line := range []string{
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-grandchild", "25h", "200k", "MESGUL, atlandi"),
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "beta", "2d", "200k", "haric tutuldu"),
-		fmt.Sprintf("%-24s %-10s %-10s %s\n", "closed-agent", "25h", "200k", "kapali"),
-		"bilinmeyen exclude: does-not-exist\n",
-		"gonderildi: 3, atlanan: 3\n",
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "alpha-grandchild", "25h", "200k", "BUSY, skipped"),
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "beta", "2d", "200k", "excluded"),
+		fmt.Sprintf("%-24s %-10s %-10s %s\n", "closed-agent", "25h", "200k", "closed"),
+		"unknown exclusions: does-not-exist\n",
+		"sent: 3, skipped: 3\n",
 	} {
 		if !strings.Contains(got, line) {
 			t.Fatalf("output missing %q:\n%s", line, got)
@@ -1558,11 +1558,11 @@ func TestWhatsAppSendFrom(t *testing.T) {
 		clearEnv(t)
 		outbox := t.TempDir()
 		a, errOutput := newApp(t, outbox)
-		if err := a.whatsapp([]string{"send", "--from", script, "4 yeni cevap"}); err != nil {
+		if err := a.whatsapp([]string{"send", "--from", script, "4 new replies"}); err != nil {
 			t.Fatal(err)
 		}
 		record := queued(t, outbox)
-		if record.Agent != script || record.Text != "["+script+"] 4 yeni cevap" {
+		if record.Agent != script || record.Text != "["+script+"] 4 new replies" {
 			t.Fatalf("record=%+v", record)
 		}
 		if warning := readTestOutput(t, errOutput); warning != "" {
@@ -1666,8 +1666,14 @@ func writeTestExecutable(t *testing.T, dir, name string) {
 }
 
 func TestTranslatePolicyOutput(t *testing.T) {
-	input := "usage: 7g %42, fable %10, 5s %8, reset 12.5s, E %25, fresh (1s)\noverride kaldirildi\n"
-	want := "usage: 7d %42, fable %10, 5h %8, reset 12.5h, E %25, fresh (1s)\noverride cleared\n"
+	input := "usage: 7g %42, fable %10, 5s %8, reset 12.5s, E %25, fresh (1s)\n" +
+		"override kaldirildi\n" +
+		"kullanim: usage-policy override <saat>  (0 = kaldir)\n" +
+		"kullanim: usage-policy [status | override <saat>]\n"
+	want := "usage: 7d %42, fable %10, 5h %8, reset 12.5h, E %25, fresh (1s)\n" +
+		"override cleared\n" +
+		"usage: bp policy override <hours> (0 = clear)\n" +
+		"usage: bp policy status | override <hours>\n"
 	if got := translatePolicyOutput(input); got != want {
 		t.Fatalf("translated output=%q, want %q", got, want)
 	}
@@ -1950,8 +1956,8 @@ func TestStatusMarksBothDirectionsOfMismatch(t *testing.T) {
 	}
 	got := readTestOutput(t, a.out)
 	for _, want := range []string{
-		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost-gone", "closed", "-", "-", "open", " !TMUX YOK"),
-		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost-running", "idle", "-", "-", "closed", " !TMUX ACIK"),
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost-gone", "closed", "-", "-", "open", " !TMUX MISSING"),
+		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "ghost-running", "idle", "-", "-", "closed", " !TMUX OPEN"),
 		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "half-open", "idle", "-", "-", "opening", ""),
 		fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s%s\n", "server-main", "idle", "-", "-", "open", ""),
 	} {
@@ -2082,8 +2088,8 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 			t.Fatalf("pasted into an expired-login pane:\n%s", calls())
 		}
 		got := readTestOutput(t, out)
-		if !strings.HasPrefix(got, "GONDERILEMEDI: alp — ") || !strings.Contains(got, "Login expired") ||
-			!strings.Contains(got, "kuyruga alindi (channel: q") {
+		if !strings.HasPrefix(got, "NOT DELIVERED: alp — ") || !strings.Contains(got, "Login expired") ||
+			!strings.Contains(got, "message queued (channel: q") {
 			t.Fatalf("output=%q", got)
 		}
 		records := queuedMessages(t, msgqRoot)
@@ -2147,13 +2153,13 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		}
 		tmuxClient, _ := fakeTmux(t, `printf '❯  \n──────────\n'`)
 		a.tmux = tmuxClient
-		brief := "roadmap incelemesi: hedef sistemi bolumunu bugun bitirelim"
+		brief := "roadmap review: finish the goal-system section today"
 		trustedSenderFixture(a)
 		if err := a.message([]string{"alp", brief}); !errors.Is(err, errReported) {
 			t.Fatalf("err=%v, want errReported", err)
 		}
 		got := readTestOutput(t, out)
-		if !strings.HasPrefix(got, "TESLIMAT BELIRSIZ: alp") || !strings.Contains(got, "transcript tanigi") {
+		if !strings.HasPrefix(got, "DELIVERY UNCERTAIN: alp") || !strings.Contains(got, "transcript witness") {
 			t.Fatalf("output=%q", got)
 		}
 		records := queuedMessages(t, msgqRoot)
@@ -2191,7 +2197,7 @@ func TestDeliveryTallyBucketsUnverified(t *testing.T) {
 	}
 	out := testOutput(t)
 	tally.report(out)
-	if got := readTestOutput(t, out); !strings.Contains(got, "dogrulanamadi: 1 (alpha)") {
+	if got := readTestOutput(t, out); !strings.Contains(got, "unverified: 1 (alpha)") {
 		t.Fatalf("summary=%q", got)
 	}
 	// A clean tally prints nothing, so existing summaries stay byte-identical.
@@ -2218,7 +2224,7 @@ func deliverPane(text string) string {
 		row = "❯ " + text
 	}
 	return strings.Join([]string{
-		"  agent: onceki turdan kalan cikti",
+		"  agent: output left from the previous turn",
 		top,
 		row,
 		border,
@@ -2281,8 +2287,8 @@ func deliverApp(t *testing.T, client *bptmux.Client) *app {
 // A queued head is delivered first. The fresh message must keep its own channel
 // and wait for another pass instead of sending two instructions in one call.
 func TestDeliverRespectsExistingQueueHead(t *testing.T) {
-	hanging := "[ada] onceki kuyruk mesaji: bar chip renklerini kontrol eder misin"
-	fresh := "[server-main] yeni mesaj: roadmap hedef sistemi bolumunu bugun bitirelim"
+	hanging := "[ada] previous queued message: could you check the bar chip colors"
+	fresh := "[server-main] new message: finish the roadmap goal-system section today"
 	client, calls := scriptedPanes(t, deliverPane(hanging), deliverPane(hanging), deliverPane(hanging), deliverPane(""))
 	a := deliverApp(t, client)
 	head, err := a.queue.Enqueue("worker", "ada", hanging)
@@ -2310,9 +2316,9 @@ func TestDeliverRespectsExistingQueueHead(t *testing.T) {
 // The other side of the same gate: text that is NOT ours is left completely
 // alone and the message is queued, exactly as before.
 func TestDeliverQueuesBehindSomeoneElsesTypingWithoutTouchingThePane(t *testing.T) {
-	client, calls := scriptedPanes(t, deliverPane("kendi yarim kalan sorum burada duruyor"))
+	client, calls := scriptedPanes(t, deliverPane("my unfinished question is still here"))
 	a := deliverApp(t, client)
-	queued, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap incelemesi bugun bitmeli")
+	queued, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap review must be finished today")
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -2332,7 +2338,7 @@ func TestDeliverQueuesBehindSomeoneElsesTypingWithoutTouchingThePane(t *testing.
 func TestQueueListAndStatusNameTheReasonAMessageWaits(t *testing.T) {
 	client, calls := scriptedPanes(t, deliverPane("[Pasted text #1 +12 lines]"))
 	a := deliverApp(t, client)
-	queued, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap incelemesi bugun bitmeli")
+	queued, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap review must be finished today")
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
@@ -2371,7 +2377,7 @@ func TestQueueReasonNamesAnExpiredLogin(t *testing.T) {
 		"  -- INSERT -- ⏵⏵ bypass permissions on   ● Login expired · Please run /login", 1)
 	client, _ := scriptedPanes(t, expired)
 	a := deliverApp(t, client)
-	_, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap incelemesi bugun bitmeli")
+	_, channel, err := a.deliver("worker", "server-main", "[server-main] roadmap review must be finished today")
 	if !errors.Is(err, bptmux.ErrNotReady) {
 		t.Fatalf("err=%v, want ErrNotReady", err)
 	}
@@ -2388,14 +2394,14 @@ func TestQueueReasonNamesAnExpiredLogin(t *testing.T) {
 func TestMessageRefusesADuplicateThatIsStillInFlight(t *testing.T) {
 	// The measured retry burst: probot-business sent the same 441 characters to
 	// op-main three times in 33 seconds, because the first attempt could only say
-	// "TESLIMAT BELIRSIZ". Every copy landed. The second send is refused here — and
+	// "DELIVERY UNCERTAIN". Every copy landed. The second send is refused here — and
 	// the refusal carries the record's live status, because a sender that cannot see
 	// what happened to its message is exactly the sender that repeats it somewhere
 	// bp cannot see at all.
 	t.Setenv("AGENT", "ada")
 	t.Setenv("TMUX", "")
 	queue := msgq.New(t.TempDir())
-	id, err := queue.EnqueueReason("alp", "ada", "[ada] ayni metin", bptmux.BlockedByBusyPane)
+	id, err := queue.EnqueueReason("alp", "ada", "[ada] identical text", bptmux.BlockedByBusyPane)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2413,14 +2419,14 @@ func TestMessageRefusesADuplicateThatIsStillInFlight(t *testing.T) {
 		},
 	}
 	trustedSenderFixture(a)
-	if err := a.message([]string{"alp", "ayni metin"}); err != nil {
+	if err := a.message([]string{"alp", "identical text"}); err != nil {
 		t.Fatal(err)
 	}
 	if delivered != 0 {
 		t.Fatal("an identical message already in flight was delivered a second time")
 	}
 	report := readTestOutput(t, out)
-	for _, want := range []string{"AYNI METIN ZATEN YOLDA", id, "Durum:", "bp qcancel " + id} {
+	for _, want := range []string{"IDENTICAL TEXT ALREADY IN FLIGHT", id, "Status:", "bp qcancel " + id} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("output=%q, want it to contain %q", report, want)
 		}
@@ -2428,7 +2434,7 @@ func TestMessageRefusesADuplicateThatIsStillInFlight(t *testing.T) {
 	// A different message is not touched by the guard.
 	a.out = testOutput(t)
 	trustedSenderFixture(a)
-	if err := a.message([]string{"alp", "bambaska bir mesaj"}); err != nil {
+	if err := a.message([]string{"alp", "a completely different message"}); err != nil {
 		t.Fatal(err)
 	}
 	if delivered != 1 {
@@ -2443,7 +2449,7 @@ func TestMessageResendsAfterTheDuplicateWindow(t *testing.T) {
 	t.Setenv("TMUX", "")
 	queue := msgq.New(t.TempDir())
 	queue.Now = func() time.Time { return time.Now().Add(-11 * time.Minute) }
-	if _, err := queue.EnqueueReason("alp", "ada", "[ada] ayni metin", bptmux.BlockedByBusyPane); err != nil {
+	if _, err := queue.EnqueueReason("alp", "ada", "[ada] identical text", bptmux.BlockedByBusyPane); err != nil {
 		t.Fatal(err)
 	}
 	queue.Now = time.Now
@@ -2460,7 +2466,7 @@ func TestMessageResendsAfterTheDuplicateWindow(t *testing.T) {
 		},
 	}
 	a.resolveSender = func() identity.Identity { return identity.Identity{Label: "ada", Source: "tmux", Certain: true} }
-	if err := a.message([]string{"alp", "ayni metin"}); err != nil {
+	if err := a.message([]string{"alp", "identical text"}); err != nil {
 		t.Fatal(err)
 	}
 	if delivered != 1 {
@@ -2482,7 +2488,7 @@ func TestDeliverQueuesWhileAnotherBpHoldsThePane(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	queued, channelID, err := a.deliver("worker", "server-main", "[server-main] kilit tutulurken gelen mesaj")
+	queued, channelID, err := a.deliver("worker", "server-main", "[server-main] message received while the lock is held")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2510,9 +2516,9 @@ func TestCutForceBusyOnlyReadsTheFlagBeforeTheMessage(t *testing.T) {
 	}{
 		{name: "leading", args: []string{"--force-busy", "ada", "selam"}, rest: []string{"ada", "selam"}, force: true},
 		{name: "short force", args: []string{"--force", "ada", "selam"}, rest: []string{"ada", "selam"}, force: true},
-		{name: "force in body", args: []string{"ada", "sunu dene:", "--force"}, rest: []string{"ada", "sunu dene:", "--force"}},
+		{name: "force in body", args: []string{"ada", "try this:", "--force"}, rest: []string{"ada", "try this:", "--force"}},
 		{name: "after the name", args: []string{"ada", "--force-busy", "selam"}, rest: []string{"ada", "selam"}, force: true},
-		{name: "inside the message", args: []string{"ada", "sunu dene:", "--force-busy"}, rest: []string{"ada", "sunu dene:", "--force-busy"}},
+		{name: "inside the message", args: []string{"ada", "try this:", "--force-busy"}, rest: []string{"ada", "try this:", "--force-busy"}},
 		{name: "absent", args: []string{"ada", "selam"}, rest: []string{"ada", "selam"}},
 	}
 	for _, test := range tests {
@@ -2553,8 +2559,8 @@ func TestForceBusyIsRefusedForAnOrdinaryAgent(t *testing.T) {
 		delivered++
 		return false, "", nil
 	}
-	err := a.message([]string{"--force-busy", "alp", "acil bir sey"})
-	if err == nil || !strings.Contains(err.Error(), "force-busy tesisata ayrilmis") {
+	err := a.message([]string{"--force-busy", "alp", "something urgent"})
+	if err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
 		t.Fatalf("err=%v, want the refusal", err)
 	}
 	if delivered != 0 {
@@ -2573,7 +2579,7 @@ func TestForceBusyIsRefusedForAnOrdinaryAgent(t *testing.T) {
 func TestForceBusyRejectsSelfDeclaredBridgeIdentity(t *testing.T) {
 	t.Setenv("AGENT", "whatsapp")
 	a := forceApp(t, testOutput(t))
-	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err == nil {
+	if err := a.message([]string{"--force-busy", "alp", "Tuna: urgent, look"}); err == nil {
 		t.Fatal("self-declared bridge received force authority")
 	}
 	rows, err := a.queue.List()
@@ -2595,7 +2601,7 @@ func TestForceBusyQueuesAForcedRecordForThePlumbing(t *testing.T) {
 		return false, "", nil
 	}
 	trustedSenderFixture(a)
-	if err := a.message([]string{"--force-busy", "alp", "Tuna:", "acil bak"}); err != nil {
+	if err := a.message([]string{"--force-busy", "alp", "Tuna:", "urgent, look"}); err != nil {
 		t.Fatal(err)
 	}
 	if delivered != 0 {
@@ -2605,11 +2611,11 @@ func TestForceBusyQueuesAForcedRecordForThePlumbing(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows=%v err=%v", rows, err)
 	}
-	if !rows[0].ForceBusy || rows[0].To != "alp" || rows[0].Msg != "[wa] Tuna: acil bak" {
+	if !rows[0].ForceBusy || rows[0].To != "alp" || rows[0].Msg != "[wa] Tuna: urgent, look" {
 		t.Fatalf("record=%+v", rows[0])
 	}
 	report := readTestOutput(t, out)
-	for _, want := range []string{"FORCE kuyrukta: alp", rows[0].ID, "bp qstat"} {
+	for _, want := range []string{"FORCE queued: alp", rows[0].ID, "bp qstat"} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("output=%q, want it to contain %q", report, want)
 		}
@@ -2622,16 +2628,16 @@ func TestForceBusySaysHowManyMessagesItIsJumping(t *testing.T) {
 	t.Setenv("AGENT", "wa")
 	out := testOutput(t)
 	a := forceApp(t, out)
-	for _, text := range []string{"[ada] birinci", "[ada] ikinci"} {
+	for _, text := range []string{"[ada] first", "[ada] second"} {
 		if _, err := a.queue.EnqueueReason("alp", "ada", text, bptmux.BlockedByBusyPane); err != nil {
 			t.Fatal(err)
 		}
 	}
 	trustedSenderFixture(a)
-	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err != nil {
+	if err := a.message([]string{"--force-busy", "alp", "Tuna: urgent, look"}); err != nil {
 		t.Fatal(err)
 	}
-	if report := readTestOutput(t, out); !strings.Contains(report, "uyari: hedefte 2 bekleyen mesaj var") {
+	if report := readTestOutput(t, out); !strings.Contains(report, "warning: the target has 2 waiting messages") {
 		t.Fatalf("output=%q, want the warning naming the messages being jumped", report)
 	}
 }
@@ -2642,19 +2648,19 @@ func TestForceBusyStillRefusesADuplicateInFlight(t *testing.T) {
 	t.Setenv("AGENT", "wa")
 	out := testOutput(t)
 	a := forceApp(t, out)
-	id, err := a.queue.EnqueueReason("alp", "wa", "[wa] Tuna: acil bak", bptmux.BlockedByBusyPane)
+	id, err := a.queue.EnqueueReason("alp", "wa", "[wa] Tuna: urgent, look", bptmux.BlockedByBusyPane)
 	if err != nil {
 		t.Fatal(err)
 	}
 	trustedSenderFixture(a)
-	if err := a.message([]string{"--force-busy", "alp", "Tuna: acil bak"}); err != nil {
+	if err := a.message([]string{"--force-busy", "alp", "Tuna: urgent, look"}); err != nil {
 		t.Fatal(err)
 	}
 	rows, listErr := a.queue.List()
 	if listErr != nil || len(rows) != 1 {
 		t.Fatalf("a duplicate was queued anyway: %v (%v)", rows, listErr)
 	}
-	if report := readTestOutput(t, out); !strings.Contains(report, "AYNI METIN ZATEN YOLDA") || !strings.Contains(report, id) {
+	if report := readTestOutput(t, out); !strings.Contains(report, "IDENTICAL TEXT ALREADY IN FLIGHT") || !strings.Contains(report, id) {
 		t.Fatalf("output=%q", report)
 	}
 }
@@ -2664,8 +2670,8 @@ func TestForceBusyIsRefusedForAFederatedAddress(t *testing.T) {
 	// does not own: there is nothing here to jump.
 	t.Setenv("AGENT", "wa")
 	a := forceApp(t, testOutput(t))
-	err := a.message([]string{"--force-busy", "ada@yigit", "acil"})
-	if err == nil || !strings.Contains(err.Error(), "federe adreste calismaz") {
+	err := a.message([]string{"--force-busy", "ada@yigit", "urgent"})
+	if err == nil || !strings.Contains(err.Error(), "unavailable for a federated address") {
 		t.Fatalf("err=%v, want the federated refusal", err)
 	}
 }
@@ -2682,8 +2688,8 @@ func TestForceBusyRefusesAnUnestablishedSender(t *testing.T) {
 	if got := a.sender(); got != identity.Unknown {
 		t.Fatalf("fixture is not the fallback case: sender()=%q", got)
 	}
-	err := a.message([]string{"--force-busy", "alp", "acil bir sey"})
-	if err == nil || !strings.Contains(err.Error(), "force-busy tesisata ayrilmis") {
+	err := a.message([]string{"--force-busy", "alp", "something urgent"})
+	if err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
 		t.Fatalf("err=%v, want the refusal", err)
 	}
 }

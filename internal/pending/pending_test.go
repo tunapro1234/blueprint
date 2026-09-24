@@ -229,7 +229,7 @@ func TestLoadPreservesOldAndCrowdedSpools(t *testing.T) {
 // response differs: skip the digest, do not fail the message.
 func TestLoadReportsAReadOnlySpoolDistinctly(t *testing.T) {
 	dir := t.TempDir()
-	if err := Append(dir, "kavram-main", Entry{TS: time.Now().Unix(), From: "bp", Kind: "msg", Text: "bekleyen mesaj"}); err != nil {
+	if err := Append(dir, "kavram-main", Entry{TS: time.Now().Unix(), From: "bp", Kind: "msg", Text: "pending message"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(dir, "pending", "kavram-main.jsonl"), 0o444); err != nil {
@@ -243,7 +243,7 @@ func TestLoadReportsAReadOnlySpoolDistinctly(t *testing.T) {
 			t.Fatalf("readOnly(%v) = false, want true", err)
 		}
 	}
-	if readOnly(os.ErrNotExist) || readOnly(errors.New("bozuk dosya")) {
+	if readOnly(os.ErrNotExist) || readOnly(errors.New("malformed file")) {
 		t.Fatal("an ordinary failure was classified as read-only")
 	}
 	if os.Geteuid() != 0 {

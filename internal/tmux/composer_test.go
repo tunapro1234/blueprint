@@ -33,7 +33,7 @@ const (
 // exercised against a pane that has border-looking lines in its scrollback — the
 // NEAREST border above the box must win).
 func claudePane(rows ...string) string {
-	lines := []string{"  agent: onceki turdan kalan cikti", "  \u2500\u2500\u2500\u2500\u2500\u2500\u2500 ozet \u2500\u2500\u2500\u2500\u2500\u2500\u2500"}
+	lines := []string{"  agent: output left from the previous turn", "  \u2500\u2500\u2500\u2500\u2500\u2500\u2500 summary \u2500\u2500\u2500\u2500\u2500\u2500\u2500"}
 	lines = append(lines, boxBorderTop)
 	lines = append(lines, rows...)
 	lines = append(lines, boxBorderBottom, boxStatus, boxChip, "")
@@ -53,7 +53,7 @@ func screenFillingPane(rows ...string) string {
 // collapsedPane is a composer with only ONE border above the status line.
 func collapsedPane() string {
 	return strings.Join([]string{
-		"  agent: onceki turdan kalan cikti",
+		"  agent: output left from the previous turn",
 		emptyRow,
 		boxBorderBottom,
 		boxStatus,
@@ -68,11 +68,11 @@ func collapsedPane() string {
 // read and nothing may be sent to that pane.
 func pickerPane() string {
 	return strings.Join([]string{
-		"  agent: onceki turdan kalan cikti",
+		"  agent: output left from the previous turn",
 		boxBorderBottom,
-		"  Hangi dosyayi acalim?",
-		"\u276f 1. birinci secenek",
-		"  2. ikinci secenek",
+		"  Which file should we open?",
+		"\u276f 1. first option",
+		"  2. second option",
 		boxBorderBottom,
 		"  Enter to select \u00b7 Tab/Arrow keys to navigate \u00b7 Esc to cancel",
 		"",
@@ -84,9 +84,9 @@ func pickerPane() string {
 // region must veto the box anyway.
 func pickerOverStatusPane() string {
 	return strings.Join([]string{
-		"  agent: onceki turdan kalan cikti",
+		"  agent: output left from the previous turn",
 		boxBorderTop,
-		"\u276f 1. birinci secenek",
+		"\u276f 1. first option",
 		boxBorderBottom,
 		boxStatus,
 		"  Enter to select \u00b7 Esc to cancel",
@@ -96,10 +96,10 @@ func pickerOverStatusPane() string {
 
 func TestComposerBoxReadsTheWholeBox(t *testing.T) {
 	pane := claudePane(
-		"❯ -konusma taslaginda altinci bolum atlanmis",
-		"  -takim tanitimi daha basa alinabilir",
+		"❯ -the sixth section is missing from the conversation draft",
+		"  -the team introduction could move earlier",
 		"",
-		"  - teknik soru yoktu",
+		"  - there was no technical question",
 	)
 	box, ok := composerBox(pane)
 	if !ok {
@@ -115,10 +115,10 @@ func TestComposerBoxReadsTheWholeBox(t *testing.T) {
 	if strings.Contains(box, "❯") {
 		t.Fatalf("prompt marker was not stripped: %q", box)
 	}
-	if strings.Contains(box, "ozet") || strings.Contains(box, "INSERT") {
+	if strings.Contains(box, "summary") || strings.Contains(box, "INSERT") {
 		t.Fatalf("box leaked rows from outside the borders: %q", box)
 	}
-	want := stripSpace("-konusma taslaginda altinci bolum atlanmis-takim tanitimi daha basa alinabilir- teknik soru yoktu")
+	want := stripSpace("-the sixth section is missing from the conversation draft-the team introduction could move earlier- there was no technical question")
 	if got := stripSpace(box); got != want {
 		t.Fatalf("box text=%q, want %q", got, want)
 	}
@@ -145,8 +145,8 @@ func TestComposerBoxRefusesUnfamiliarStructures(t *testing.T) {
 		{"only one border above the status line", collapsedPane()},
 		{"no status footer", "  transcript\n" + boxBorderTop + "\n\u276f yazi\n" + boxBorderBottom + "\n"},
 		{"no composer at all", "just some output\n"},
-		{"marker on a continuation row", "  x\n" + boxBorderTop + "\n\u276f birinci\n\u276f ikinci\n" + boxBorderBottom + "\n" + boxStatus + "\n"},
-		{"no marker on the first row", "  x\n" + boxBorderTop + "\n  birinci\n" + boxBorderBottom + "\n" + boxStatus + "\n"},
+		{"marker on a continuation row", "  x\n" + boxBorderTop + "\n\u276f first\n\u276f second\n" + boxBorderBottom + "\n" + boxStatus + "\n"},
+		{"no marker on the first row", "  x\n" + boxBorderTop + "\n  first\n" + boxBorderBottom + "\n" + boxStatus + "\n"},
 		// Measured live on compec-site: a modal picker is open. Reading a box there
 		// would treat menu rows as composer content, and typing into that pane sends
 		// keys into the menu.
@@ -164,7 +164,7 @@ func TestComposerBoxRefusesUnfamiliarStructures(t *testing.T) {
 		t.Fatal("collapsed empty composer reported as filled")
 	}
 	for _, pane := range []string{pickerPane(), pickerOverStatusPane()} {
-		if _, ours := StuckPaste(pane, []string{"1. birinci secenek", stuckMessage}); ours {
+		if _, ours := StuckPaste(pane, []string{"1. first option", stuckMessage}); ours {
 			t.Fatal("a picker row was claimed as our own paste")
 		}
 		if got := ComposerBlockReason(pane, []string{stuckMessage}); got != BlockedByForeignText {
@@ -182,7 +182,7 @@ func TestComposerBoxReadsTheLabelledTopBorder(t *testing.T) {
 		boxBorderTop,
 		boxBorderBottom,
 		"\u2500\u2500\u2500\u2500\u2500\u2500 kavram-outreach \u2500\u2500",
-		"\u2500\u2500\u2500\u2500\u2500\u2500\u2500 12 satir daha \u2500\u2500\u2500",
+		"\u2500\u2500\u2500\u2500\u2500\u2500\u2500 12 more lines \u2500\u2500\u2500",
 		"  \u2500\u2500\u2500\u2500\u2500\u2500 probot-main \u2500\u2500  ",                   // padded, as captured
 		"\u001b[38;5;244m\u2500\u2500\u2500\u2500\u2500\u2500 op-main \u2500\u2500\u001b[39m", // coloured, as captured
 	} {
@@ -192,10 +192,10 @@ func TestComposerBoxReadsTheLabelledTopBorder(t *testing.T) {
 	}
 	for _, line := range []string{
 		"",
-		"  duz metin",
-		"\u276f \u2500\u2500\u2500 kullanici kendi yazdi \u2500\u2500\u2500", // starts with the prompt marker
-		"bir \u2500 iki \u2500 uc",       // dashes inside prose
-		"\u2500\u2500 kisa \u2500\u2500", // only 4 border runes
+		"  plain text",
+		"\u276f \u2500\u2500\u2500 written by the user \u2500\u2500\u2500", // starts with the prompt marker
+		"bir \u2500 iki \u2500 uc",        // dashes inside prose
+		"\u2500\u2500 short \u2500\u2500", // only 4 border runes
 		"  -- INSERT -- \u23f5\u23f5 bypass permissions on",
 	} {
 		if isComposerBoxBorder(line) {
@@ -234,9 +234,9 @@ func TestComposerBoxOnAnEmptyLiveComposer(t *testing.T) {
 func TestComposerBoxPrefersTheNearestBorderAboveTheBox(t *testing.T) {
 	// The transcript can hold rule-shaped rows (this fixture has one). The upward
 	// search must stop at the box's own top border, not wander into the scrollback.
-	pane := claudePane("\u276f tek satir")
+	pane := claudePane("\u276f one line")
 	box, top, ok := composerBoxAt(pane)
-	if !ok || stripSpace(box) != "teksatir" {
+	if !ok || stripSpace(box) != "oneline" {
 		t.Fatalf("box=%q ok=%v", box, ok)
 	}
 	if top != 2 {
@@ -248,8 +248,8 @@ func TestComposerBoxPrefersTheNearestBorderAboveTheBox(t *testing.T) {
 }
 
 func TestClassifyPasteTellsOursFromForeign(t *testing.T) {
-	msg := "[server-main] roadmap incelemesi: hedef sistemi bolumunu bugun bitirmemiz gerekiyor, ozellikle hiyerarsik atama kismini"
-	other := "[ada] tamamen baska bir konu: dashboard renkleri"
+	msg := "[server-main] roadmap review: we need to finish the goal-system section today, especially hierarchical assignment"
+	other := "[ada] a completely different topic: dashboard colors"
 	cases := []struct {
 		name    string
 		pane    string
@@ -262,7 +262,7 @@ func TestClassifyPasteTellsOursFromForeign(t *testing.T) {
 		{"truncated from the front", claudePane("❯ " + msg[60:]), pasteDamaged, msg},
 		{"truncated at the end", claudePane("❯ " + msg[:70]), pasteDamaged, msg},
 		{"middle chunk missing", claudePane("❯ " + msg[:45] + msg[80:]), pasteDamaged, msg},
-		{"foreign line", claudePane("❯ kendi yarim kalan sorum burada duruyor"), pasteForeign, ""},
+		{"foreign line", claudePane("❯ my unfinished question is still here"), pasteForeign, ""},
 		{"short foreign line that our text contains", claudePane("❯ roadmap"), pasteForeign, ""},
 		{"claude paste chip is not readable", claudePane("❯ [Pasted text #1 +12 lines]"), pasteForeign, ""},
 		{"codex chip is not readable", claudePane("❯ [Pasted Content 1024 chars]"), pasteForeign, ""},
@@ -293,7 +293,7 @@ func TestRelatedPasteIgnoresShortOverlaps(t *testing.T) {
 
 // --- the deadlock ---------------------------------------------------------
 
-const stuckMessage = "[server-main] roadmap incelemesi: hedef sistemi bolumunu bugun bitirelim, hiyerarsik atama kismi eksik"
+const stuckMessage = "[server-main] roadmap review: finish the goal-system section today; hierarchical assignment is missing"
 
 func TestSendFinishesItsOwnHangingPaste(t *testing.T) {
 	// The incident: an earlier paste's Enter never registered and the message hung
@@ -329,7 +329,7 @@ func TestSendFinishesAQueuedMessageHangingInTheComposer(t *testing.T) {
 	// record is reported back so the caller can close it — the missing step that
 	// let a hand-delivered message be pasted twice — and our own message then goes
 	// in normally.
-	queued := "[ada] " + strings.Repeat("onceki kuyruk mesaji ", 6)
+	queued := "[ada] " + strings.Repeat("previous queued message ", 6)
 	h := &sendHarness{
 		captures: []string{
 			claudePane("❯ " + queued), // gate: a pending record, whole
@@ -404,7 +404,7 @@ func TestSendQueuesForeignComposerWithoutTouchingIt(t *testing.T) {
 	// Someone else's half-written line: not one key may be sent, and the caller
 	// must be told to queue exactly as before.
 	h := &sendHarness{
-		captures:   []string{claudePane("❯ kendi yarim kalan sorum burada duruyor")},
+		captures:   []string{claudePane("❯ my unfinished question is still here")},
 		activities: []string{"target\t900\n"},
 	}
 	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
@@ -441,7 +441,7 @@ func TestSendDoesNotTouchAHangingPasteOnABusyPane(t *testing.T) {
 	}
 	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
 	// ErrBusy, not ErrTyping (2026-08-15): a working pane is now refused by NAME
-	// before anything is pasted, so the caller can say "pane calisiyor" instead of
+	// before anything is pasted, so the caller can say "pane is working" instead of
 	// blaming a composer. Both are queueing outcomes, so nothing downstream
 	// changes; only the reason the operator is shown does.
 	if !errors.Is(err, ErrBusy) {
@@ -614,7 +614,7 @@ func TestSendTreatsAScreenFillingBoxAsUnreadableRatherThanDamaged(t *testing.T) 
 	// include a user's draft. Retain the paste without clearing or submitting it.
 	rows := []string{"❯ " + stuckMessage[:20]}
 	for i := 0; i < 6; i++ {
-		rows = append(rows, "  devam satiri "+strings.Repeat("x", 20))
+		rows = append(rows, "  continuation line "+strings.Repeat("x", 20))
 	}
 	h := &sendHarness{
 		captures: []string{
@@ -642,7 +642,7 @@ func TestSendVerifiesATallWrappedPasteMeasuredOnLivePanes(t *testing.T) {
 	// COMPLETE view, so a 14-row render of our own message must verify as intact —
 	// an earlier row-count guard threw the box away at 8 rows and disabled the
 	// integrity check on exactly these pastes.
-	long := strings.Repeat("bizim kendi mesajimizin bir satiri daha ", 14)
+	long := strings.Repeat("one more long line from our own message ", 14)
 	rows := []string{"❯ " + long[:40]}
 	for i := 40; i < len(long); i += 40 {
 		end := i + 40
@@ -705,7 +705,7 @@ func TestClearComposerPressesCtrlUAndNeverEscape(t *testing.T) {
 
 func TestClearComposerRefusesVisibleTextWithoutPressingAnything(t *testing.T) {
 	h := &sendHarness{
-		captures:   []string{claudePane("❯ yarim kalan bir soru")},
+		captures:   []string{claudePane("❯ an unfinished question")},
 		activities: []string{},
 	}
 	err := testClient(h).ClearComposer(context.Background(), "target")
@@ -734,7 +734,7 @@ func TestClearWithCtrlURepeatsUntilTheBoxIsEmpty(t *testing.T) {
 	// A single C-u clears one line; multi-line content needs it repeated (the
 	// operator measured 6-8). Each press is followed by a fresh capture, and the
 	// loop stops the moment the box reads empty.
-	long := strings.Repeat("bizim kendi mesajimizin satiri ", 6)
+	long := strings.Repeat("a line from our own message ", 6)
 	h := &sendHarness{
 		captures: []string{
 			claudePane("❯ "+long[:120], "  "+long[120:]),
@@ -754,11 +754,11 @@ func TestClearWithCtrlURepeatsUntilTheBoxIsEmpty(t *testing.T) {
 }
 
 func TestClearWithCtrlUStopsAtForeignText(t *testing.T) {
-	long := strings.Repeat("bizim kendi mesajimizin satiri ", 6)
+	long := strings.Repeat("a line from our own message ", 6)
 	h := &sendHarness{
 		captures: []string{
 			claudePane("❯ " + long[:100]),
-			claudePane("❯ birisi simdi yazmaya baslamis"), // not ours -> stop
+			claudePane("❯ someone has just started typing"), // not ours -> stop
 		},
 		activities: []string{},
 	}
@@ -773,7 +773,7 @@ func TestClearWithCtrlUStopsAtForeignText(t *testing.T) {
 }
 
 func TestClearWithCtrlUIsBounded(t *testing.T) {
-	long := strings.Repeat("bizim kendi mesajimizin satiri ", 6)
+	long := strings.Repeat("a line from our own message ", 6)
 	captures := make([]string, composerClearAttempts+2)
 	for i := range captures {
 		captures[i] = claudePane("❯ " + long)
@@ -797,7 +797,7 @@ func TestClearDeliveredNeedsProofBeforeErasingAnything(t *testing.T) {
 	}{
 		{"holds the delivered text", claudePane("❯ " + delivered), true, 1},
 		{"holds a damaged copy of it", claudePane("❯ " + delivered[55:]), true, 1},
-		{"holds someone else's text", claudePane("❯ bambaska bir soru yaziyorum"), false, 0},
+		{"holds someone else's text", claudePane("❯ I am writing a completely different question"), false, 0},
 		{"holds an unreadable chip", claudePane("❯ [Pasted text #1 +12 lines]"), false, 0},
 		{"already empty", claudePane(emptyRow), false, 0},
 	}
@@ -842,7 +842,7 @@ func TestComposerBlockReasonNamesWhatAHumanMustFix(t *testing.T) {
 		{"our damaged paste is not a block", claudePane("❯ " + stuckMessage[55:]), ""},
 		{"chip", claudePane("❯ [Pasted text #1 +12 lines]"), BlockedByPasteChip},
 		{"codex chip", claudePane("❯ [Pasted Content 1024 chars]"), BlockedByPasteChip},
-		{"foreign line", claudePane("❯ kendi yarim kalan sorum burada duruyor"), BlockedByForeignText},
+		{"foreign line", claudePane("❯ my unfinished question is still here"), BlockedByForeignText},
 		{"short fragment", claudePane("❯ /rename wor"), BlockedByForeignText},
 		{"busy", "✻ Working… (23s · Esc to interrupt)\n" + claudePane(emptyRow), BlockedByBusyPane},
 	}
@@ -1050,14 +1050,14 @@ func TestSendForceStillRefusesAnExpiredLogin(t *testing.T) {
 
 // The trigger three days of hanging pastes came down to (measured 2026-08-23 in
 // a lab pane, confirmed against probot-outreach's two failed batches): a message
-// carrying emoji renders WRONG. "gorunmez" came back from the screen as
-// "grunmez" — a double-width glyph shifts the TUI's column accounting and eats a
+// carrying emoji renders WRONG. "invisible" came back from the screen as
+// "invisble" — a double-width glyph shifts the TUI's column accounting and eats a
 // character. The composer's own buffer is intact; only the drawing is lossy, so
 // clearing and re-pasting produces the same loss again.
 func TestWideRuneMessageIsOursNotDamaged(t *testing.T) {
-	sent := "[bp] UYARI: komut satirina ✍️ / ✅ emojisi YAZMA — gorunmez Unicode tasiyor."
+	sent := "[bp] WARNING: on the command line ✍️ / ✅ DO NOT WRITE emoji — invisible carries Unicode."
 	// What the screen gave back: one letter short.
-	rendered := strings.Replace(sent, "gorunmez", "grunmez", 1)
+	rendered := strings.Replace(sent, "invisible", "invisble", 1)
 	pane := claudePane("❯ " + rendered)
 	verdict, text := classifyPaste(pane, []string{sent})
 	if verdict != pasteExact || text != sent {
@@ -1065,8 +1065,8 @@ func TestWideRuneMessageIsOursNotDamaged(t *testing.T) {
 	}
 	// A plain-ASCII message with the same kind of difference is still damaged:
 	// there, re-pasting genuinely repairs a torn paste.
-	plain := "[bp] UYARI: komut satirina emoji yazma, gorunmez Unicode tasiyor kardesim."
-	plainPane := claudePane("❯ " + strings.Replace(plain, "gorunmez", "grunmez", 1))
+	plain := "[bp] WARNING: on the command line do not write emoji, invisible carries Unicode friend."
+	plainPane := claudePane("❯ " + strings.Replace(plain, "invisible", "invisble", 1))
 	if verdict, _ := classifyPaste(plainPane, []string{plain}); verdict != pasteDamaged {
 		t.Fatalf("verdict=%v, want pasteDamaged for a plain-text mismatch", verdict)
 	}
@@ -1091,20 +1091,20 @@ func TestWideRuneMessageIsOursNotDamaged(t *testing.T) {
 // The lab missed it because a 200-column pane does not WRAP the message, and
 // without wrapping the emoji costs no character.
 func TestSubmitTimeComparisonToleratesWideRuneRender(t *testing.T) {
-	want := stripSpace("[bp] UYARI: komut satirina ✍️ / ✅ emojisi YAZMA — gorunmez Unicode tasiyor, guvenlik taramasi kilitliyor.")
+	want := stripSpace("[bp] WARNING: on the command line ✍️ / ✅ DO NOT WRITE emoji — invisible carries Unicode, the security scan blocks it.")
 	// The pane as it was measured live: one character short, wrapped.
-	rendered := strings.Replace("[bp] UYARI: komut satirina ✍️ / ✅ emojisi YAZMA — gorunmez Unicode tasiyor, guvenlik taramasi kilitliyor.", "gorunmez", "grunmez", 1)
+	rendered := strings.Replace("[bp] WARNING: on the command line ✍️ / ✅ DO NOT WRITE emoji — invisible carries Unicode, the security scan blocks it.", "invisible", "invisble", 1)
 	pane := claudePane("❯ " + rendered)
 	if got := classifyComposer(pane, want); got != composerMine {
 		t.Fatalf("classifyComposer = %v, want composerMine — a wrapped emoji render is still OUR text", got)
 	}
 	// Somebody else's text is still foreign, wide runes or not.
-	if got := classifyComposer(claudePane("❯ insanin kendi yazdigi bambaska bir cumle ✍️"), want); got != composerOther {
+	if got := classifyComposer(claudePane("❯ a completely different sentence written by a person ✍️"), want); got != composerOther {
 		t.Fatalf("classifyComposer = %v, want composerOther", got)
 	}
 	// And a plain-ASCII message keeps the strict comparison.
-	plain := stripSpace("[bp] duz metin mesaji, hicbir genis karakter yok, yeterince uzun.")
-	if got := classifyComposer(claudePane("❯ [bp] duz metin mesaji, hicbir genis karakter yk, yeterince uzun."), plain); got != composerOther {
+	plain := stripSpace("[bp] plain-text message with no wide characters and enough length.")
+	if got := classifyComposer(claudePane("❯ [bp] plain-text message with no wide charcters and enough length."), plain); got != composerOther {
 		t.Fatalf("classifyComposer = %v, want composerOther for a plain-text mismatch", got)
 	}
 }
@@ -1115,7 +1115,7 @@ func TestSubmitTimeComparisonToleratesWideRuneRender(t *testing.T) {
 // so on an incomplete view it must be refused: the cost of being wrong is a
 // whole message destroyed to "recover" a paste that was never torn.
 func TestDamagedPasteRefusesIncompleteView(t *testing.T) {
-	message := "[server-main] yeterince uzun bir mesaj, kirpik mi yoksa kaydirilmis mi oldugunu ayirt etmek gerekiyor, iste bu kadar."
+	message := "[server-main] a sufficiently long message; we need to distinguish whether it is torn or shifted; that is all."
 	torn := "\u276f " + message[40:]
 	if DamagedPaste(screenFillingPane(torn), []string{message}) {
 		t.Fatal("a scrolled composer was declared damaged; bp would erase a whole message")

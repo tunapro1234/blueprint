@@ -11,7 +11,7 @@ class HealthDeliveryTest(unittest.TestCase):
         for output, rc, expected in [
             ('RESULT=delivered CHANNEL=q1', 0, 0),
             ('RESULT=queued CHANNEL=q2', 0, 0),
-            ('TESLIMAT BELIRSIZ\nRESULT=unverified CHANNEL=q3', 1, 0),
+            ('DELIVERY UNCERTAIN\nRESULT=unverified CHANNEL=q3', 1, 0),
             ('ERROR: sender identity unavailable', 1, 1),
             ('ERROR: storage unavailable', 1, 1),
         ]:

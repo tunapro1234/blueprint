@@ -21,10 +21,14 @@ func TestCacheAgeAndLastHuman(t *testing.T) {
 		map[string]any{"type": "custom-title", "customTitle": agent},
 		user(now.Add(-30*time.Hour), "real old message"),
 		user(now.Add(-4*time.Hour), "[ANNOUNCE ada] automated"),
+		// Compatibility fixture for announcement text written by older bp versions.
 		user(now.Add(-3*time.Hour), "[ ada DUYURU (27 Tem)]\nautomated"),
 		user(now.Add(-2*time.Hour), "health-watch: automated"),
+		user(now.Add(-110*time.Minute), "[ ada ANNOUNCEMENT (27 Jul)]\nautomated"),
 		user(now.Add(-90*time.Minute), "[usage-policy] automated"),
-		user(now.Add(-80*time.Minute), "[3 birikmis duyuru — 26-27 Tem]\nautomated"),
+		user(now.Add(-80*time.Minute), "[3 accumulated announcements — 26-27 Jul]\nautomated"),
+		// Compatibility fixture for persisted digests written before the English-only pass.
+		user(now.Add(-70*time.Minute), "[3 birikmis duyuru — 26-27 Tem]\nautomated"),
 		usage(now.Add(-59*time.Minute), 150_000, 70_000),
 		synthetic(now.Add(-58 * time.Minute)),
 	}

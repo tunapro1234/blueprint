@@ -28,7 +28,7 @@ type Outgoing struct {
 //
 // Nothing here falls back to "server-main". A WhatsApp message reaches a phone
 // where the label is the only attribution there is, so an unattributable one
-// must say "bilinmiyor" (or confess a guess) rather than borrow the
+// must say "unknown" (or confess a guess) rather than borrow the
 // orchestrator's authority. Inference is allowed for the same reason: the label
 // admits it with a "?".
 func Agent(ctx context.Context, client identity.Sessioner, opts identity.Options) identity.Identity {

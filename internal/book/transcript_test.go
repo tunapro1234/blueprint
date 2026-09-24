@@ -43,9 +43,9 @@ func userRecord(when time.Time, text string) string {
 func TestTranscriptDeliveredFindsAnArrivedMessage(t *testing.T) {
 	folder := "/srv/kavram-main"
 	queued := time.Now().Add(-2 * time.Minute)
-	message := "[server-main] roadmap incelemesi: hedef sistemi bolumunu bugun bitirelim\nikinci satir da var"
+	message := "[server-main] roadmap review: finish the goal-system section today\nthere is a second line too"
 	root := writeTranscript(t, "kavram-main", folder,
-		userRecord(queued.Add(-time.Hour), "cok daha onceki baska bir mesaj tamamen alakasiz"),
+		userRecord(queued.Add(-time.Hour), "a much older unrelated message"),
 		userRecord(queued.Add(30*time.Second), message),
 	)
 	if !TranscriptDelivered(root, folder, "kavram-main", message, queued) {
@@ -53,7 +53,7 @@ func TestTranscriptDeliveredFindsAnArrivedMessage(t *testing.T) {
 	}
 	// A multi-line message is stored with escaped newlines: the probe must handle
 	// that, which the case above proves. Now the negative side.
-	if TranscriptDelivered(root, folder, "kavram-main", "[server-main] bu mesaj hic gonderilmedi ve transcriptte yok", queued) {
+	if TranscriptDelivered(root, folder, "kavram-main", "[server-main] this message was never sent and is absent from the transcript", queued) {
 		t.Fatal("a message that never arrived was reported as delivered")
 	}
 }
@@ -62,7 +62,7 @@ func TestTranscriptDeliveredIgnoresOlderCopies(t *testing.T) {
 	// The same message really was sent before. A repeat must NOT be closed by its
 	// own earlier copy, or the operator's second send is silently dropped.
 	folder := "/srv/kavram-main"
-	message := "[server-main] ayni mesaji bilerek tekrar gonderiyorum, ilki kayboldu"
+	message := "[server-main] I am deliberately sending the same message again; the first was lost"
 	queued := time.Now()
 	root := writeTranscript(t, "kavram-main", folder, userRecord(queued.Add(-2*time.Hour), message))
 	if TranscriptDelivered(root, folder, "kavram-main", message, queued) {
@@ -79,7 +79,7 @@ func TestTranscriptDeliveredMatchesPastedCarriageReturns(t *testing.T) {
 	// has LF.
 	folder := "/srv/server-main"
 	queued := time.Now().Add(-time.Minute)
-	message := "[ders-main] tek mesaj uc kere teslim edildi, bunu yazdim.\n\nBu kaydin transcriptteki hali \\r tasiyor."
+	message := "[lesson-main] one message was delivered three times; I wrote this.\n\nThis record contains \\r in the transcript."
 	stored := strings.ReplaceAll(message, "\n", "\r")
 	root := writeTranscript(t, "server-main", folder, userRecord(queued.Add(10*time.Second), stored))
 	if !TranscriptDelivered(root, folder, "server-main", message, queued) {
@@ -93,7 +93,7 @@ func TestTranscriptDeliveredMatchesPastedCarriageReturns(t *testing.T) {
 	}
 	// The variant must not make the witness careless: an unrelated message is
 	// still not found.
-	if TranscriptDelivered(root, folder, "server-main", "bambaska bir mesaj, hicbir yerde gecmiyor ve gecmemeli", queued) {
+	if TranscriptDelivered(root, folder, "server-main", "a completely different message that does not and should not appear anywhere", queued) {
 		t.Fatal("a message that never arrived was reported as delivered")
 	}
 }
@@ -104,22 +104,22 @@ func TestTranscriptDeliveredRefusesWhatItCannotProve(t *testing.T) {
 	short := "/compact"
 	root := writeTranscript(t, "kavram-main", folder,
 		userRecord(queued.Add(time.Second), short),
-		userRecord(queued.Add(time.Second), "zaman damgasiz kayitlar da olabilir"),
+		userRecord(queued.Add(time.Second), "records may also lack timestamps"),
 	)
 	if TranscriptDelivered(root, folder, "kavram-main", short, queued) {
 		t.Fatal("a message too short to identify was reported as delivered")
 	}
 	// No folder, unknown agent, and a record without a timestamp all read as "not
 	// found", which falls back to delivering rather than dropping.
-	if TranscriptDelivered(root, "", "kavram-main", "yeterince uzun bir mesaj metni burada", queued) {
+	if TranscriptDelivered(root, "", "kavram-main", "a sufficiently long message appears here", queued) {
 		t.Fatal("a missing folder was reported as delivered")
 	}
-	if TranscriptDelivered(root, folder, "baska-agent", "yeterince uzun bir mesaj metni burada", queued) {
+	if TranscriptDelivered(root, folder, "other-agent", "a sufficiently long message appears here", queued) {
 		t.Fatal("an unresolvable transcript was reported as delivered")
 	}
 	stampless := writeTranscript(t, "kavram-main", folder,
-		`{"type":"user","message":{"role":"user","content":"zaman damgasi olmayan yeterince uzun bir kayit"}}`)
-	if TranscriptDelivered(stampless, folder, "kavram-main", "zaman damgasi olmayan yeterince uzun bir kayit", queued) {
+		`{"type":"user","message":{"role":"user","content":"a sufficiently long record without a timestamp"}}`)
+	if TranscriptDelivered(stampless, folder, "kavram-main", "a sufficiently long record without a timestamp", queued) {
 		t.Fatal("a record without a timestamp was accepted as proof")
 	}
 }
@@ -132,20 +132,20 @@ func TestRecentUserTextsReadsWhatTheAgentWasHanded(t *testing.T) {
 	folder := "/srv/probot/outreach"
 	now := time.Now()
 	root := writeTranscript(t, "probot-outreach", folder,
-		userRecord(now.Add(-40*time.Hour), "[server-main] cok eski, penceresinin disinda"),
-		userRecord(now.Add(-2*time.Hour), "[probot-business] BUSINESS → OUTREACH — birinci talimat"),
+		userRecord(now.Add(-40*time.Hour), "[server-main] too old; outside the window"),
+		userRecord(now.Add(-2*time.Hour), "[probot-business] BUSINESS → OUTREACH — first instruction"),
 		`{"type":"user","isMeta":true,"timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"<system-reminder> The user named this session"}}`,
-		`{"type":"user","isSidechain":true,"timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"subagent kendi promptu"}}`,
+		`{"type":"user","isSidechain":true,"timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"subagent's own prompt"}}`,
 		`{"type":"user","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":"[Request interrupted by user]"}}`,
-		`{"type":"user","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":[{"type":"tool_result","content":"grep cikti"}]}}`,
-		`{"type":"assistant","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"assistant","stop_reason":"end_turn","content":"cevap"}}`,
-		userRecord(now.Add(-time.Minute), "[server-main] ikinci talimat"),
+		`{"type":"user","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"user","content":[{"type":"tool_result","content":"grep output"}]}}`,
+		`{"type":"assistant","timestamp":"`+now.UTC().Format(time.RFC3339)+`","message":{"role":"assistant","stop_reason":"end_turn","content":"answer"}}`,
+		userRecord(now.Add(-time.Minute), "[server-main] second instruction"),
 	)
 	records := RecentUserTexts(root, folder, "probot-outreach", now.Add(-24*time.Hour))
 	if len(records) != 2 {
 		t.Fatalf("read %d deliveries, want 2: %+v", len(records), records)
 	}
-	if records[0].Text != "[probot-business] BUSINESS → OUTREACH — birinci talimat" || records[1].Text != "[server-main] ikinci talimat" {
+	if records[0].Text != "[probot-business] BUSINESS → OUTREACH — first instruction" || records[1].Text != "[server-main] second instruction" {
 		t.Fatalf("records=%+v", records)
 	}
 	if !records[0].Timestamp.Before(records[1].Timestamp) {
@@ -169,7 +169,7 @@ func TestCodexDeliveredReadsRollout(t *testing.T) {
 	if err := os.MkdirAll(day, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	message := "[blueprint] bp: INCIDENT bp-msg-enter-2026-08-25 — once acil kisim, mesajini yeniden gonder."
+	message := "[blueprint] bp: INCIDENT bp-msg-enter-2026-08-25 — urgent first part; resend your message."
 	sent := time.Now().Add(-10 * time.Minute)
 	lines := []string{
 		`{"timestamp":"` + sent.Add(-time.Hour).UTC().Format(time.RFC3339Nano) + `","type":"session_meta","payload":{"cwd":"` + folder + `"}}`,
@@ -191,7 +191,7 @@ func TestCodexDeliveredReadsRollout(t *testing.T) {
 	if CodexDelivered(home, folder, message, sent.Add(5*time.Minute)) {
 		t.Fatal("an older rollout record settled a newer send")
 	}
-	if CodexDelivered(home, folder, "bambaska bir mesaj, yeterince uzun olsun diye", sent) {
+	if CodexDelivered(home, folder, "a completely different message, made long enough", sent) {
 		t.Fatal("a message that never arrived was witnessed")
 	}
 	// Another agent's folder must not borrow this rollout.

@@ -20,16 +20,16 @@ import (
 // probot-outreach (2026-08-17), carriage returns included: a bracketed paste's line
 // breaks are stored as \r, and a detector that does not fold them sees one long line.
 const (
-	// truncatedRecord is the 12:53:36 delivery: a "DUR/IPTAL" message whose envelope
+	// truncatedRecord is the 12:53:36 delivery: a "STOP/CANCEL" message whose envelope
 	// lost its opening bracket, with the tail of an earlier digest glued underneath.
-	truncatedRecord = "\nt-business] BUSINESS → OUTREACH — DUR, onceki mesajimi IPTAL ET: Tuna 'codex kullanma, bekle' dedi." +
-		"\no2 birikmis duyuru — 16-17 Agu]\r1) (16 Agu 16:41, server-main) yeni mail: logo boxes\r\r[probot-business] BUSINESS → OUTREACH — Tuna 'codex ok' dedi."
+	truncatedRecord = "\nt-business] BUSINESS → OUTREACH — STOP, CANCEL my previous message: Tuna said 'do not use Codex; wait'." +
+		"\no2 accumulated announcements — 16-17 Aug]\r1) (16 Aug 16:41, server-main) new mail: logo boxes\r\r[probot-business] BUSINESS → OUTREACH — Tuna said 'Codex is okay'."
 	// piggybackRecord is the 10:43:17 delivery, and it is NOT damaged: bp composes a
 	// pending-announcement digest and the message into one paste on purpose
 	// (formatDigest + "\n\n[" + sender + "] " + message), which is why the digest
 	// shape alone must never raise an alarm.
-	piggybackRecord = "[2 birikmis duyuru — 16-17 Agu]\r1) (16 Agu 16:41, server-main) yeni mail: logo boxes" +
-		"\r2) (17 Agu 09:17, server-main) re zamani: Teknokta Akademi\r\r[probot-business] BUSINESS → OUTREACH — Tuna 'codex ok' dedi, login geldi."
+	piggybackRecord = "[2 accumulated announcements — 16-17 Aug]\r1) (16 Aug 16:41, server-main) new mail: logo boxes" +
+		"\r2) (17 Aug 09:17, server-main) regarding: Teknokta Akademi\r\r[probot-business] BUSINESS → OUTREACH — Tuna said 'Codex is okay'; login arrived."
 )
 
 func TestMergedShapeCatchesOnlyMeasuredDamage(t *testing.T) {
@@ -41,28 +41,28 @@ func TestMergedShapeCatchesOnlyMeasuredDamage(t *testing.T) {
 	}{
 		{"truncated envelope", truncatedRecord, true},
 		{"digest piggybacked by design", piggybackRecord, false},
-		{"two envelopes in one record", "[probot-business] birinci mesaj\n\n[server-main] ikinci mesaj", true},
-		{"ordinary envelope", "[server-main] tek mesaj, tek gonderen\nikinci satiri da var", false},
+		{"two envelopes in one record", "[probot-business] first message\n\n[server-main] second message", true},
+		{"ordinary envelope", "[server-main] one message, one sender\nthere is a second line too", false},
 		{"bare slash command", "/compact", false},
-		{"prose with a bracket in it", "3] maddesini de ekledim, listeye bak", false},
-		{"quoted envelope inside a line", "sana gelen mesaj soyleydi: [ada] bunu yap", false},
+		{"prose with a bracket in it", "I added item 3] too; check the list", false},
+		{"quoted envelope inside a line", "the message you received was: [ada] do this", false},
 		// The detector's first real output was a false alarm on this shape
 		// (probot-studio, 2026-08-20): a sender writing a numbered list. "[1]"
 		// is not an agent, and itemized reports are everyday traffic.
-		{"numbered list is not a second envelope", "[probot-tracking] probot-studio: TUNA ONAYI GELDI - UYGULAMA PAKETI (4 parca). Oncelik sirasiyla:\n[1] WIREFRAME-ADA KAYIT akisi\n[2] olcum paneli\n[3] geri bildirim\n[4] yayina alma", false},
+		{"numbered list is not a second envelope", "[probot-tracking] probot-studio: TUNA APPROVED - IMPLEMENTATION PACKAGE (4 parts). In priority order:\n[1] WIREFRAME-ADA REGISTRATION flow\n[2] measurement panel\n[3] feedback\n[4] deployment", false},
 		// A shape-valid name nobody answers to is prose, not a delivery: only
 		// agentbook membership makes a candidate an envelope.
-		{"unknown name is not an envelope", "[server-main] mesaj govdesi\n[not] bu bir uyari etiketi\n[ornek] bu da prose", false},
+		{"unknown name is not an envelope", "[server-main] message body\n[not] this is a warning label\n[example] this is prose too", false},
 		// The measured handover shape (probot-business 15:15, 2026-08-21): an
 		// agent forwarding history verbatim, the quoted original starting with
 		// its own envelope. Nine of these fired the alarm in one day; envelopes
 		// below a quotation marker are somebody's history, not this delivery.
-		{"handover quoting an original message", "[server-whatsapp] DEVIR: kartvizit isi sana geciyor.\n--- ORIJINAL METIN (17 Agu) ---\n[probot-business] probot-main PLAN: kartvizitler cuma basilacak", false},
-		{"handover with the rule flowed mid-line", "[server-whatsapp] DEVIR ozeti --- ORIJINAL METIN (17 Agu) ---\n[probot-business] plan metni burada", false},
-		{"quoted lines are history too", "[server-main] su mesaji degerlendir:\n> [probot-business] eski talimat metni", false},
+		{"handover quoting an original message", "[server-whatsapp] HANDOVER: the business-card task is moving to you.\n--- ORIGINAL TEXT (17 Aug) ---\n[probot-business] probot-main PLAN: business cards will be printed Friday", false},
+		{"handover with the rule flowed mid-line", "[server-whatsapp] HANDOVER summary --- ORIGINAL TEXT (17 Aug) ---\n[probot-business] plan text here", false},
+		{"quoted lines are history too", "[server-main] evaluate this message:\n> [probot-business] old instruction text", false},
 		// A raw two-message merge carries no separator between the envelopes —
 		// the suppression must not blind the detector to it.
-		{"two envelopes with no separator still alarm", "[probot-business] birinci mesajin govdesi\n\n[server-main] ikincisi ustune yapismis", true},
+		{"two envelopes with no separator still alarm", "[probot-business] body of the first message\n\n[server-main] second message attached to it", true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -135,7 +135,7 @@ func TestMergeScanReportsADamagedDeliveryExactlyOnce(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("queued %d notices, want 1: %+v", len(rows), rows)
 	}
-	if rows[0].To != "server-main" || !strings.Contains(rows[0].Msg, "probot-outreach") || !strings.Contains(rows[0].Msg, "kirpik") {
+	if rows[0].To != "server-main" || !strings.Contains(rows[0].Msg, "probot-outreach") || !strings.Contains(rows[0].Msg, "torn") {
 		t.Fatalf("notice=%+v", rows[0])
 	}
 	if len(state.MergeSeen) != 1 {

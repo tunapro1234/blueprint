@@ -53,10 +53,13 @@ bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] [--parent <name>] [--role <text>] <codex|claude|opencode|hermes> [arguments...]
-                              # opencode is launch-only: bp open has no --opencode
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
+                              # bp open also accepts --opencode for managed sessions
+bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
 bp attach <agent>@<server>      # delegate the same command to a registered remote
+bp schema export [<project-dir>] [--lead <agent>]
+bp continue [<project-dir>] [--dry-run] [--yes]
+bp history export [<project-dir>] [--agent <name>] [--keep N] [--stdout]
 bp reparent <agent> <new-parent>
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
@@ -112,17 +115,18 @@ type app struct {
 	out         *os.File
 	err         *os.File
 
-	loadFleet      func() (book.Fleet, map[string]book.State, error)
-	loadCodex      func() []codexrpc.Thread
-	deliverMessage func(string, string, string) (bool, string, error)
-	sessionExists  func(string) bool
-	loadCache      func(map[string]string) map[string]bpcache.State
-	loadCommands   func() (map[string]string, error)
-	capturePane    func(string) (string, error)
-	clearPane      func(string) error
-	turnOpenProbe  func(string) bool
-	execNative     func(string, []string, []string) error
-	interactive    func() bool
+	loadFleet       func() (book.Fleet, map[string]book.State, error)
+	loadCodex       func() []codexrpc.Thread
+	deliverMessage  func(string, string, string) (bool, string, error)
+	sessionExists   func(string) bool
+	loadCache       func(map[string]string) map[string]bpcache.State
+	loadCommands    func() (map[string]string, error)
+	capturePane     func(string) (string, error)
+	clearPane       func(string) error
+	turnOpenProbe   func(string) bool
+	execNative      func(string, []string, []string) error
+	openForContinue func([]string) error
+	interactive     func() bool
 
 	// paneLocks counts the pane locks this process is holding, per session. It
 	// exists because the lock is an flock and flock is NOT reentrant even within one
@@ -337,6 +341,12 @@ func (a *app) run(args []string) error {
 		return a.open(args[1:])
 	case "attach":
 		return a.attach(args[1:])
+	case "schema":
+		return a.schemaCommand(args[1:])
+	case "continue":
+		return a.continueProject(args[1:])
+	case "history":
+		return a.historyCommand(args[1:])
 	case "worktree":
 		return a.worktree(args[1:])
 	case "close":
@@ -1168,7 +1178,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1196,7 +1206,7 @@ func (a *app) open(args []string) error {
 		opts.Resume = opts.ResumeID != ""
 	}
 	harness := ""
-	resumeRequested, threadExplicit := false, false
+	resumeRequested, threadExplicit, freshRequested := false, false, false
 	rebind := false
 	worktreeTopic := ""
 	reg := book.Registration{}
@@ -1206,12 +1216,16 @@ func (a *app) open(args []string) error {
 		case "--resume":
 			opts.Resume = true
 			resumeRequested = true
-		case "--codex", "--claude", "--hermes":
+		case "--fresh":
+			opts.ResumeID = ""
+			opts.Resume = false
+			freshRequested = true
+		case "--codex", "--claude", "--hermes", "--opencode":
 			if harness != "" && harness != arg {
 				return fmt.Errorf("choose one harness")
 			}
 			harness = arg
-			changed := opts.Codex != (arg == "--codex") || opts.Hermes != (arg == "--hermes")
+			changed := opts.Codex != (arg == "--codex") || opts.Hermes != (arg == "--hermes") || opts.OpenCode != (arg == "--opencode")
 			if changed {
 				if !threadExplicit {
 					opts.ResumeID = ""
@@ -1219,7 +1233,7 @@ func (a *app) open(args []string) error {
 				opts.Resume = resumeRequested
 				opts.Remote, opts.NoSandbox, opts.Args = "", false, nil
 			}
-			opts.Codex, opts.Hermes = arg == "--codex", arg == "--hermes"
+			opts.Codex, opts.Hermes, opts.OpenCode = arg == "--codex", arg == "--hermes", arg == "--opencode"
 			if !opts.Codex {
 				opts.Remote, opts.NoSandbox = "", false
 			}
@@ -1275,6 +1289,9 @@ func (a *app) open(args []string) error {
 		default:
 			return fmt.Errorf("unknown open option: %s", arg)
 		}
+	}
+	if freshRequested && (resumeRequested || threadExplicit) {
+		return fmt.Errorf("--fresh cannot be combined with --resume or --thread")
 	}
 	if err := opts.Validate(); err != nil {
 		return err
@@ -1371,7 +1388,7 @@ func (a *app) open(args []string) error {
 			fmt.Fprintln(a.out, hint)
 		}
 	}
-	if !opts.Codex && !opts.Hermes && opts.Resume {
+	if !opts.Codex && !opts.Hermes && !opts.OpenCode && opts.Resume {
 		path, err := bptmux.ResolveSessionPath(bptmux.ClaudeProjectsRoot(), dir, name, opts.ResumeID)
 		if err != nil {
 			return err
@@ -1430,6 +1447,8 @@ func (a *app) open(args []string) error {
 	managedHarness := "claude"
 	if opts.Codex {
 		managedHarness = "codex"
+	} else if opts.OpenCode {
+		managedHarness = "opencode"
 	}
 	if !a.config.Legacy && !opts.Hermes && opts.Remote == "" {
 		self, err := os.Executable()
@@ -1466,7 +1485,7 @@ func (a *app) open(args []string) error {
 			opts.ResumeID = bpcache.CodexID(path)
 		}
 	}
-	if !opts.Codex && !opts.Hermes && opts.ResumeID == "" {
+	if !opts.Codex && !opts.Hermes && !opts.OpenCode && opts.ResumeID == "" {
 		if process, err := a.tmux.PaneProcess(a.ctx, name); err == nil {
 			if id, err := bptmux.ClaudeProcessSession(process.PID, dir); err == nil && id != "" {
 				if _, err := bptmux.ResolveSessionPath(bptmux.ClaudeProjectsRoot(), dir, name, id); err == nil {
@@ -1510,6 +1529,8 @@ func launchHarnessName(opts bptmux.OpenOptions) string {
 		return "codex"
 	case opts.Hermes:
 		return "hermes"
+	case opts.OpenCode:
+		return "opencode"
 	}
 	return "claude"
 }

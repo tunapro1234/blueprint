@@ -128,6 +128,46 @@ remotes:
     elevate: sudo -i
 ```
 
+## Portable project schemas and history
+
+`bp schema export [<project-dir>] [--lead <agent>]` writes the version 1 agent
+tree to `<project>/.blueprint/schema.yaml`. It includes registered agents whose
+folders are inside the project and only preserves parent links to agents in
+that exported set. Paths are relative to the project root. The schema accepts
+`history: none|file|remote`; each agent records its name, folder, runtime, role
+and color, with optional model, effort and launch mode.
+
+`bp open ... --fresh` ignores a stored conversation binding and starts a new
+conversation. It cannot be combined with `--resume` or `--thread`. OpenCode
+agents can be launched in managed sessions with `bp open ... --opencode`.
+
+`bp continue [<project-dir>] [--dry-run] [--yes]` validates folders, checks for
+name collisions and prints the complete plan before opening agents parent
+first. Live agents remain open. Closed agents with `history: none` start fresh;
+file or remote history is imported before a closed agent resumes. A name already
+registered for a different folder is an error; there is no prefix override.
+The first run in each project folder and every change to the schema content
+requires confirmation. Non-interactive use must pass `--yes`; that approval is
+stored under the local bp state directory by project path and schema hash.
+
+`bp history export [<project-dir>] [--agent <name>] [--keep N]` copies Claude
+transcripts and Codex rollout files plus their session-index rows into
+`.blueprint/history`. It keeps one session per agent by default. Existing files
+with different contents are never overwritten. `bp history export --stdout
+--agent <name>` writes the same layout as a tar stream for remote transfer.
+Portable history currently supports Claude and Codex; use `history: none` for
+Hermes or OpenCode schemas.
+`history: remote` accepts `ssh://user@host[:port]` or a server name from the
+local `remotes:` block; it uses SSH and does not put credentials in the project
+schema.
+
+History is ignored by default because it can contain private conversation data.
+Schema export creates or updates `.blueprint/.gitignore` with `history/` while
+preserving existing rules. To commit conversations intentionally, add them
+explicitly with `git add -f .blueprint/history`. `history: none` does not move
+conversation files. `bp rename` prints a manual-update hint when a schema still
+declares the old agent name; it never edits the project schema.
+
 ## Compatibility and applying changes
 
 `config.yaml`, `config.yml`, and legacy `config.json` are supported. bp reports

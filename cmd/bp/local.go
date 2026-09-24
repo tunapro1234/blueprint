@@ -359,7 +359,7 @@ func (a *app) localSession(args []string) error {
 // managedSession uses the same lifetime, observations and bar as bp run,
 // preserving the hierarchy already registered by bp open.
 func (a *app) managedSession(args []string) error {
-	if len(args) != 3 || (args[1] != "codex" && args[1] != "claude") || !identity.ValidName(args[0]) {
+	if len(args) != 3 || (args[1] != "codex" && args[1] != "claude" && args[1] != "opencode") || !identity.ValidName(args[0]) {
 		return fmt.Errorf("invalid managed session")
 	}
 	extra, path, err := a.prepareLocalObservation(args[1], nil)
@@ -449,7 +449,7 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 		// bp open records its own launch; a bp run launch recorded nothing, so
 		// the next bp open --resume dropped model, effort and permission mode
 		// (#25). A fresh conversation keeps the id already on record.
-		if stored := fleet.Agents[name].Launch; launch.ResumeID == "" && stored != nil && stored.Codex == launch.Codex && !stored.Hermes {
+		if stored := fleet.Agents[name].Launch; launch.ResumeID == "" && stored != nil && stored.Codex == launch.Codex && !stored.Hermes && !stored.OpenCode {
 			launch.ResumeID, launch.Resume = stored.ResumeID, stored.Resume
 		}
 		reg.Launch = launch

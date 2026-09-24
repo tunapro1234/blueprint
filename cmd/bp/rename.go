@@ -99,8 +99,20 @@ func (a *app) rename(args []string) error {
 				return fmt.Errorf("expected one archived registration named %s, found %d", old, len(archived))
 			}
 			fmt.Fprintf(a.out, "would update %s: archived name %s -> %s\n", filepath.Base(archived[0].Path), old, name)
+			a.reportSchemaRenameHints(archived[0].Agent, old, name)
 			fmt.Fprintln(a.out, "dry run: nothing was changed")
 			return nil
+		}
+		records, err := book.Records(a.config.Agentbooks)
+		if err != nil {
+			return err
+		}
+		var archivedAgent book.Agent
+		for _, record := range records {
+			if record.Agent.Name == old && record.Agent.ArchivedAt != "" {
+				archivedAgent = record.Agent
+				break
+			}
 		}
 		changes, err := book.RenameArchived(a.config.Agentbooks, old, name)
 		if err != nil {
@@ -112,6 +124,7 @@ func (a *app) rename(args []string) error {
 		for _, change := range changes {
 			fmt.Fprintf(a.out, "update %s\n", change)
 		}
+		a.reportSchemaRenameHints(archivedAgent, old, name)
 		fmt.Fprintf(a.out, "renamed archived registration %s -> %s\n", old, name)
 		return nil
 	}
@@ -339,6 +352,7 @@ func (a *app) rename(args []string) error {
 	// later bp open/run waiting (#17).
 	releaseClaims()
 	a.reportCodeReferences(fleet, old, name)
+	a.reportSchemaRenameHints(fleet.Agents[old], old, name)
 
 	if dry {
 		fmt.Fprintln(a.out, "\ndry run: nothing was changed")
@@ -554,7 +568,7 @@ func agentbookRunsCodex(agent book.Agent) bool {
 	if agent.Local != nil && agent.Local.Harness == "codex" {
 		return true
 	}
-	if agent.Launch != nil && agent.Launch.Codex && !agent.Launch.Hermes {
+	if agent.Launch != nil && agent.Launch.Codex && !agent.Launch.Hermes && !agent.Launch.OpenCode {
 		return true
 	}
 	_, ok := closedCodexNativeTitle(agent)

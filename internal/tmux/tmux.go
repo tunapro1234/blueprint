@@ -1981,6 +1981,7 @@ type OpenOptions struct {
 	Codex     bool   `json:"codex,omitempty"`
 	Remote    string `json:"remote,omitempty"`
 	Hermes    bool   `json:"hermes,omitempty"`
+	OpenCode  bool   `json:"opencode,omitempty"`
 	NoSandbox bool   `json:"noSandbox,omitempty"`
 	// Args are the native CLI flags the agent was launched with (model,
 	// reasoning effort, --search, --yolo, …). They are recorded so a revive or
@@ -2000,7 +2001,7 @@ type OpenOptions struct {
 var codexThreadID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
 func (o OpenOptions) Validate() error {
-	if o.Codex && o.Hermes {
+	if boolCount(o.Codex, o.Hermes, o.OpenCode) > 1 {
 		return fmt.Errorf("choose one harness")
 	}
 	if o.NoSandbox && !o.Codex {
@@ -2018,6 +2019,16 @@ func (o OpenOptions) Validate() error {
 		return fmt.Errorf("invalid session/thread id")
 	}
 	return nil
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
 }
 
 const (
@@ -2051,6 +2062,11 @@ func ClaudeProjectsRoot() string {
 		home, _ = os.UserHomeDir()
 	}
 	return filepath.Join(home, ".claude", "projects")
+}
+
+// ClaudeProjectDir is the native transcript directory for one absolute cwd.
+func ClaudeProjectDir(dir string) string {
+	return filepath.Join(ClaudeProjectsRoot(), mungeProjectPath(dir))
 }
 
 // readCustomTitle returns the customTitle set for a Claude session file (via the
@@ -2322,7 +2338,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	if opts.Resume && !opts.Codex && !opts.Hermes {
+	if opts.Resume && !opts.Codex && !opts.Hermes && !opts.OpenCode {
 		path, err := ResolveSessionPath(ClaudeProjectsRoot(), dir, session, opts.ResumeID)
 		if err != nil {
 			return err
@@ -2390,7 +2406,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	// Prefix the remote-control session name to match the tmux name, so the
 	// claude.ai/code list shows the agent name instead of the hostname.
 	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions"
-	if opts.Resume && !opts.Codex && !opts.Hermes {
+	if opts.Resume && !opts.Codex && !opts.Hermes && !opts.OpenCode {
 		// Resume THIS agent's own conversation by id, not `claude -c` (which
 		// continues whichever conversation in the cwd is most recent and so
 		// grabs a co-located agent's session in a shared directory).
@@ -2416,11 +2432,16 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if opts.Hermes {
 		command = hermesBin
 	}
+	if opts.OpenCode {
+		command = "opencode"
+	}
 	if extra := launchArgs(command, opts.Args); extra != "" {
 		// Right after the binary: Codex takes its global flags before the
 		// `resume` subcommand, Claude accepts them anywhere.
 		bin := "claude"
 		switch {
+		case opts.OpenCode:
+			bin = "opencode"
 		case opts.Hermes:
 			bin = hermesBin
 		case opts.Codex:
@@ -2466,7 +2487,12 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 				progress("waiting: " + state + " (bp peek " + session + ")")
 			}
 			lower := strings.ToLower(pane)
-			if opts.Hermes {
+			if opts.OpenCode {
+				if OpenCodePane(pane) && !openCodeBusy(pane) {
+					ready = true
+					break
+				}
+			} else if opts.Hermes {
 				// Readiness for Hermes is the idle composer placeholder: the one
 				// screen that proves the TUI has finished booting AND is not
 				// mid-turn, so the onboarding paste below lands in a composer that
@@ -2524,7 +2550,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	progress("harness ready")
 	c.Sleep(time.Second)
-	if !opts.Codex && !opts.Hermes {
+	if !opts.Codex && !opts.Hermes && !opts.OpenCode {
 		_ = c.Send(ctx, session, "/rename "+session)
 		c.Sleep(time.Second)
 		_ = c.Send(ctx, session, "/remote-control")

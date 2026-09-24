@@ -200,6 +200,9 @@ func composerHoldsMessage(pane, want string) bool {
 	if box, ok := composerBoxText(pane); ok && box == want {
 		return true
 	}
+	if codexComposerTailMatches(pane, want) {
+		return true
+	}
 	return composerContent(pane) == want || pasteChip(pane)
 }
 
@@ -235,6 +238,9 @@ const (
 // as such even when its first row happens to start like ours.
 func classifyComposer(pane, want string) composerVerdict {
 	if pasteChip(pane) {
+		return composerMine
+	}
+	if codexComposerTailMatches(pane, want) {
 		return composerMine
 	}
 	got, boxed := composerJudgeText(pane)
@@ -1681,11 +1687,12 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 //   - the box cannot be read (no status footer, a collapsed empty composer, a
 //     Codex pane, a paste chip standing in for the text): unchanged behavior —
 //     submit decides on the single rendered row, as it always has.
-//   - the box is a PREFIX of our message, or the box is tall enough to be
-//     scrolled (composerBoxScrollRows): the render is a window, not the content.
-//     Treated as unreadable rather than damaged, deliberately: a scrolled box
-//     that read as "damaged" every time would clear, re-paste and queue the same
-//     message forever — the very failure mode this whole change is about.
+//   - the box is a PREFIX of our message: keep waiting, then refuse if it never
+//     fills; Enter would deliver only the fragment;
+//   - the box is tall enough to scroll (composerBoxScrollRows), or Codex fills a
+//     short pane from a blank top: treat it as unreadable rather than damaged.
+//     A scrolled box read as damaged every time would clear, re-paste and queue
+//     the same message forever — the failure mode this change prevents.
 //   - the box is related to our message but shorter/altered: our paste arrived
 //     broken. Clear it and paste it ONCE more. If the second attempt still does
 //     not match, ok=false and the caller returns ErrNotReady so the message is
@@ -1776,9 +1783,9 @@ const (
 	pasteMangled
 	// pasteBroken: unrelated content where our paste should be. Proof of failure.
 	pasteBroken
-	// pasteIncomplete: a complete view of the composer holding only the OPENING
-	// of our message. Never submittable: Enter would deliver the fragment and
-	// close the record as if the whole message had gone.
+	// pasteIncomplete: a view of the composer holding only the OPENING of our
+	// message. Never submittable: Enter would deliver the fragment and close the
+	// record as if the whole message had gone.
 	pasteIncomplete
 )
 
@@ -1798,14 +1805,12 @@ func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
 		// Empty right after the paste: it may have auto-submitted, or the pane may
 		// have swallowed it. submit() already reports that honestly as unverified.
 		return pasteUnreadable
-	case composerBoxScrolled(box, top):
-		// A window onto a taller composer, not proof of anything about content.
-		return pasteUnreadable
 	case strings.HasPrefix(want, got):
-		// A COMPLETE view holding the opening of our message: the paste is still
-		// arriving, or part of it was lost on the way in. Either way this is not
-		// the moment to press Enter — and pressing Enter here is exactly how the
-		// fleet lost message bodies. Measured on the receiving side: q952220088
+		// A visible prefix of our message: the paste is still arriving, or part
+		// of it was lost on the way in. This check deliberately precedes the
+		// scrolled-view test, so a prefix remains non-submittable even when the
+		// pane is short. Pressing Enter here is exactly how the fleet lost message
+		// bodies. Measured on the receiving side: q952220088
 		// arrived at probot-outreach as 81 characters of 716, and the 31 Aug cron
 		// trigger arrived at probot-main as 135 of 701, both cut mid-word, both
 		// closed as delivered. The other half of the same event is the composer
@@ -1817,6 +1822,9 @@ func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
 		// so bytes are genuinely lost rather than merely late. bp cannot stop it;
 		// it can refuse to turn it into a delivery.
 		return pasteIncomplete
+	case composerBoxScrolled(pane, box, top):
+		// A window onto a taller composer, not proof of anything about content.
+		return pasteUnreadable
 	case relatedPaste(got, want):
 		return pasteMangled
 	default:

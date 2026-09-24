@@ -44,7 +44,15 @@ bp msg work "Please review the change"
 bp qstat <channel-id>
 bp peek work
 bp color work purple
+bp attach work                    # attach if live, otherwise revive its recorded launch
 ```
+
+`bp attach` resolves an exact canonical name first, then an unambiguous native
+title. It never creates an unregistered or empty tmux session. A closed agent is
+resumed with its recorded folder, harness, conversation, permission mode, model,
+effort, search flags and parent; `--no-revive` limits the command to live sessions.
+Inside tmux it switches the current client, while an outer terminal attaches a
+new client without detaching any other client.
 
 Messages wait when the target is working, its state is uncertain, or the user is
 typing. A transport acknowledgement alone is not proof of agent delivery.
@@ -100,9 +108,29 @@ and leaves the native transcript title unchanged.
 
 ```sh
 bp setup                   # install/refresh shell integration
+bp setup --wrappers        # also install non-clobbering lush/rush compatibility functions
 bp config path
 bp config check
 ```
+
+Register interactive remote bp servers separately from P2P message peers:
+
+```sh
+bp remote add server --host server.example --user tuna --transport mosh \
+  --identity ~/.ssh/server --mosh-ports 60000:61000 --elevate "sudo -i"
+bp remote list
+bp attach worker@server           # delegates to `bp attach worker` on server
+bp shell server                   # interactive remote shell
+bp shell server worker            # delegates to remote attach; unknown names fail
+bp remote rm server
+```
+
+SSH uses a PTY; mosh can use a configured SSH port, identity path and UDP port
+range. Remote records contain no credential values beyond the identity-file path.
+The existing `bp remote [<agent>...]` Claude remote-control action remains
+available, except that `list`, `add`, and `rm` are reserved subcommand words.
+Optional `lush` and `rush` wrappers call `bp attach` and `bp shell`; setup does
+not replace an existing alias or function with either name.
 
 `bp onboard` prepares `$BP_HOME/main/ONBOARDING.md`. The coordinator creates tailored
 `MACHINE.md` guidance there. Existing files and real coordinators are preserved.

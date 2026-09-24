@@ -47,13 +47,16 @@ bp archive <name> | bp archive --list [--json] | bp restore <name>
 bp status [--json] | bp tree
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
-bp setup [--check|--disable]   # local shell integration (bash/zsh)
+bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
+                              # --wrappers adds non-clobbering lush/rush helpers
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] [--parent <name>] [--role <text>] <codex|claude|opencode|hermes> [arguments...]
                               # opencode is launch-only: bp open has no --opencode
 bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume] [--codex|--claude|--hermes] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
+bp attach <agent>@<server>      # delegate the same command to a registered remote
 bp reparent <agent> <new-parent>
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
@@ -73,7 +76,11 @@ bp announce <message...> [--dry-run]
 bp compact [--idle-hours N] [--min-ctx N] [--apply]   # policy: idle+full claude agents
 bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]
                              # lists by default; nothing is sent without --apply
-bp remote [<name>...]        # print or open /remote-control (default: every live claude agent)
+bp remote list [--json]
+bp remote add <name> --host <host> [--port N] [--user <user>] [--identity <path>] [--transport mosh|ssh] [--mosh-ports <range>] [--elevate <command>]
+bp remote rm <name>
+bp remote [<agent>...]       # existing /remote-control action; list/add/rm are reserved
+bp shell <server> [agent]    # interactive remote shell, or remote bp attach
 bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] [--from <label>] <message...>
@@ -328,6 +335,8 @@ func (a *app) run(args []string) error {
 		return a.tree(args[1:])
 	case "open":
 		return a.open(args[1:])
+	case "attach":
+		return a.attach(args[1:])
 	case "worktree":
 		return a.worktree(args[1:])
 	case "close":
@@ -348,6 +357,8 @@ func (a *app) run(args []string) error {
 		return a.compact(args[1:])
 	case "remote":
 		return a.remote(args[1:])
+	case "shell":
+		return a.shell(args[1:])
 	case "q":
 		if len(args) == 2 && args[1] == "--retry" {
 			a.dispatchNow() // Existing queue only; normal runtime/composer gates apply.
@@ -558,11 +569,11 @@ func findCommand(bin string, args ...string) (commandSpec, error) {
 
 func remoteAttachCommand(config connectConfig, name string) (commandSpec, error) {
 	if config.Method == "mosh" {
-		if spec, err := findCommand("mosh", config.Remote, "--", "tmux", "attach", "-t", name); err == nil {
+		if spec, err := findCommand("mosh", config.Remote, "--", "tmux", "attach", "-t", "="+name); err == nil {
 			return spec, nil
 		}
 	}
-	return findCommand("ssh", "-t", config.Remote, "tmux", "attach", "-t", name)
+	return findCommand("ssh", "-t", config.Remote, "tmux", "attach", "-t", "="+name)
 }
 
 func replaceWith(spec commandSpec) error {
@@ -586,7 +597,7 @@ func (a *app) connect(args []string) error {
 		if os.Getenv("TMUX") != "" {
 			operation = "switch-client"
 		}
-		spec, err := findCommand("tmux", operation, "-t", name)
+		spec, err := findCommand("tmux", operation, "-t", "="+name)
 		if err != nil {
 			return err
 		}
@@ -3665,6 +3676,9 @@ var remoteURLPattern = regexp.MustCompile(`https://claude\.ai/code/\S+`)
 // its claude.ai/code URL. Idempotent: an already-connected session just reports
 // "is active" with the same URL. Codex sessions are skipped (no such command).
 func (a *app) remote(args []string) error {
+	if handled, err := a.remoteRegistry(args); handled {
+		return err
+	}
 	sender := a.sender()
 	var targets []string
 	if len(args) > 0 {

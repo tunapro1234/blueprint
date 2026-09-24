@@ -83,6 +83,12 @@ CLI binary does not update an already-running daemon or local worker. Verify the
 actual executable identity separately. Shared Codex app-servers and agent processes
 have independent lifetimes and should not be restarted as part of routine bp updates.
 
+Interactive remote terminals use a separate `remotes` registry. Local bp only
+constructs the configured mosh or SSH transport; agent lookup and revival are
+delegated to `bp attach` on the destination, so remote agentbook state is never
+guessed locally. No password or transport credential is stored beyond an SSH
+identity-file path.
+
 ## Optional P2P transport
 
 A separate `bp p2p serve` worker owns the machine key, network host and outgoing

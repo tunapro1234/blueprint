@@ -289,7 +289,11 @@ func (a *app) recordClaudeResume(g *localResumeGuard) error {
 
 func (a *app) attachLocal(name string) error {
 	fmt.Fprintf(a.out, "bp: attached to %s; existing process, input and launch settings preserved\n", name)
-	cmd := exec.Command(a.tmux.Bin, "attach-session", "-t", "="+name)
+	operation := "attach-session"
+	if os.Getenv("TMUX") != "" {
+		operation = "switch-client"
+	}
+	cmd := exec.Command(a.tmux.Bin, operation, "-t", "="+name)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.err
 	return cmd.Run()
 }

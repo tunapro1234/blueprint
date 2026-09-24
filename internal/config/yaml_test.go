@@ -35,6 +35,20 @@ func TestLocalObservationYAMLDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestLifecycleYAMLDefaultsAndOptOut(t *testing.T) {
+	c, err := yamlConfig(t, "config.yaml", "{}")
+	if err != nil || !c.Lifecycle.EphemeralDefault || !c.Lifecycle.ArchiveOnClose {
+		t.Fatalf("defaults=%+v err=%v", c.Lifecycle, err)
+	}
+	c, err = yamlConfig(t, "config.yaml", "lifecycle:\n  ephemeralDefault: false\n  archiveOnClose: false\n")
+	if err != nil || c.Lifecycle.EphemeralDefault || c.Lifecycle.ArchiveOnClose {
+		t.Fatalf("opt-out=%+v err=%v", c.Lifecycle, err)
+	}
+	if _, err := yamlConfig(t, "config.yaml", "lifecycle:\n  ephemeralDefalt: false\n"); err == nil {
+		t.Fatal("unknown lifecycle key was accepted")
+	}
+}
+
 func TestYAMLConfigPathsAndDisabledValues(t *testing.T) {
 	c, err := yamlConfig(t, "config.yaml", `# portable paths
 agentbooks: [agents/book.json]

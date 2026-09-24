@@ -152,6 +152,7 @@ func SetArchived(paths []string, name string, archive bool, check func(Agent) er
 	}
 	if archive {
 		record["archivedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+		delete(record, "lifecycleNote")
 	} else {
 		delete(record, "archivedAt")
 	}

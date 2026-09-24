@@ -13,6 +13,12 @@ localObservation: true
 # Mouse scrolling and selection in local bp tmux sessions.
 localMouse: true
 
+# Throwaway agents launched through bp run are archived after they close.
+# bp open remains persistent unless --ephemeral is supplied.
+lifecycle:
+  ephemeralDefault: true
+  archiveOnClose: true
+
 # Bottom bar: list order is display order. [] hides every widget.
 # ctx: context, temp: cache estimate/measurement age, queue: waiting messages,
 # model: model/effort, quota: quota used, talk: latest-message age, clock: time.

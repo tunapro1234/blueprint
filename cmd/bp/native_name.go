@@ -16,32 +16,7 @@ func (a *app) nativeName(agent book.Agent, state *cache.State) string {
 	if state == nil || state.Activity == nil || state.Activity.ThreadID == "" || state.Activity.TranscriptPath == "" {
 		return agent.Name
 	}
-	var value book.NativeTitle
-	var err error
-	switch state.Runtime {
-	case "claude":
-		value, err = book.ReadNativeTitle(state.Activity.TranscriptPath, state.Activity.ThreadID, agent.NativeTitle)
-	case "codex", "codex-remote":
-		home := ""
-		if agent.Local != nil {
-			home = agent.Local.Home
-		}
-		if home == "" {
-			// Derive the native home only from the already bound rollout path.
-			for dir := filepath.Dir(state.Activity.TranscriptPath); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-				if filepath.Base(dir) == "sessions" {
-					home = filepath.Dir(dir)
-					break
-				}
-			}
-		}
-		if home == "" {
-			return agent.Name
-		}
-		value, err = book.ReadCodexNativeTitle(filepath.Join(home, "session_index.jsonl"), state.Activity.ThreadID, agent.NativeTitle)
-	default:
-		return agent.Name
-	}
+	value, _, err := observedNativeTitle(agent, state)
 	if err != nil {
 		return agent.Name
 	}
@@ -59,8 +34,40 @@ func (a *app) nativeName(agent book.Agent, state *cache.State) string {
 		if _, taken := fleet.Agents[value.Text]; taken || value.Text == fleet.Root || value.Text == "server-main" {
 			return agent.Name
 		}
+		if agent.IsEphemeral() {
+			_ = book.SetLifetime(a.config.Agentbooks, agent.Name, book.LifetimePersistent)
+		}
 	}
 	return value.Text
+}
+
+// observedNativeTitle reads the native source without changing the agentbook.
+// A live runtime binding is preferred; a stored binding keeps closed Codex
+// repair and doctor diagnostics available.
+func observedNativeTitle(agent book.Agent, state *cache.State) (book.NativeTitle, string, error) {
+	if state != nil && state.Activity != nil && state.Activity.ThreadID != "" && state.Activity.TranscriptPath != "" {
+		switch state.Runtime {
+		case "claude":
+			value, err := book.ReadNativeTitle(state.Activity.TranscriptPath, state.Activity.ThreadID, agent.NativeTitle)
+			return value, "claude", err
+		case "codex", "codex-remote":
+			path, err := codexSessionIndexPath(agent, state.Activity.ThreadID, state.Activity.TranscriptPath)
+			if err != nil {
+				return book.NativeTitle{}, "codex", err
+			}
+			value, err := book.ReadCodexNativeTitle(path, state.Activity.ThreadID, agent.NativeTitle)
+			return value, "codex", err
+		}
+	}
+	if agent.NativeTitle == nil || agent.NativeTitle.Path == "" || agent.NativeTitle.ThreadID == "" {
+		return book.NativeTitle{}, "", fmt.Errorf("no native title binding")
+	}
+	if filepath.Base(filepath.Clean(agent.NativeTitle.Path)) == "session_index.jsonl" {
+		value, err := book.ReadCodexNativeTitle(agent.NativeTitle.Path, agent.NativeTitle.ThreadID, agent.NativeTitle)
+		return value, "codex", err
+	}
+	value, err := book.ReadNativeTitle(agent.NativeTitle.Path, agent.NativeTitle.ThreadID, agent.NativeTitle)
+	return value, "claude", err
 }
 
 func (a *app) liveName(name string) string {

@@ -18,6 +18,8 @@ import (
 
 type Agent struct {
 	ArchivedAt       string              `json:"archivedAt,omitempty"`
+	Lifetime         string              `json:"lifetime,omitempty"`
+	LifecycleNote    string              `json:"lifecycleNote,omitempty"`
 	Local            *cache.LocalBinding `json:"localRuntime,omitempty"`
 	IdentityThreadID string              `json:"identityThreadId,omitempty"`
 	StatusAt         time.Time           `json:"statusAt,omitempty"`
@@ -250,6 +252,17 @@ func displayFolder(folder string) string {
 }
 
 func LoadFleet(paths []string) (Fleet, error) {
+	return loadFleet(paths, false)
+}
+
+// LoadFleetAll includes archived registrations for explicit historical views
+// such as status --all and tree --all. Normal operational callers use
+// LoadFleet, which retains the long-standing active-only behavior.
+func LoadFleetAll(paths []string) (Fleet, error) {
+	return loadFleet(paths, true)
+}
+
+func loadFleet(paths []string, includeArchived bool) (Fleet, error) {
 	fleet := Fleet{Agents: map[string]Agent{}, Parents: map[string]string{}, Sources: map[string][]string{}, Root: "server-main"}
 	loaded := 0
 	for _, path := range paths {
@@ -268,7 +281,7 @@ func LoadFleet(paths []string) (Fleet, error) {
 			defaultParent = fleet.Root
 		}
 		for _, agent := range file.Agents {
-			if invalidName(agent.Name) || agent.ArchivedAt != "" {
+			if invalidName(agent.Name) || agent.ArchivedAt != "" && !includeArchived {
 				continue
 			}
 			fleet.Sources[agent.Name] = append(fleet.Sources[agent.Name], path)
@@ -326,6 +339,12 @@ func merge(old, next Agent) Agent {
 	}
 	if next.Class != "" {
 		old.Class = next.Class
+	}
+	if next.Lifetime != "" {
+		old.Lifetime = next.Lifetime
+	}
+	if next.LifecycleNote != "" {
+		old.LifecycleNote = next.LifecycleNote
 	}
 	if next.Role != "" {
 		old.Role = next.Role
@@ -589,6 +608,10 @@ func RenameArchived(paths []string, old, name string) ([]string, error) {
 				continue
 			}
 			agent["name"] = name
+			if lifetime, _ := agent["lifetime"].(string); lifetime == LifetimeEphemeral {
+				agent["lifetime"] = LifetimePersistent
+				delete(agent, "lifecycleNote")
+			}
 			return []string{filepath.Base(path) + ": archived name " + old + " -> " + name}
 		}
 		return nil
@@ -623,6 +646,11 @@ func renameInBook(raw map[string]any, old, name, path string) []string {
 		who, _ := agent["name"].(string)
 		if who == old {
 			agent["name"] = name
+			if lifetime, _ := agent["lifetime"].(string); lifetime == LifetimeEphemeral {
+				agent["lifetime"] = LifetimePersistent
+				delete(agent, "lifecycleNote")
+				changes = append(changes, label+": "+name+" promoted to persistent")
+			}
 			who = name
 			changes = append(changes, label+": name "+old+" -> "+name)
 		}
@@ -709,6 +737,14 @@ func editBook(path string, change func(map[string]any) []string) ([]string, erro
 // altered anything; when it did not, the file is left untouched so a concurrent
 // hand edit cannot be lost to a no-op write.
 func mutate(paths []string, name string, change func(map[string]any) bool) error {
+	return mutateRegistration(paths, name, false, change)
+}
+
+func mutateActive(paths []string, name string, change func(map[string]any) bool) error {
+	return mutateRegistration(paths, name, true, change)
+}
+
+func mutateRegistration(paths []string, name string, activeOnly bool, change func(map[string]any) bool) error {
 	paths = Paths(paths)
 	if len(paths) == 0 {
 		return fmt.Errorf("agentbook is not configured")
@@ -720,7 +756,7 @@ func mutate(paths []string, name string, change func(map[string]any) bool) error
 			continue
 		}
 		for _, agent := range file.Agents {
-			if agent.Name == name {
+			if agent.Name == name && (!activeOnly || agent.ArchivedAt == "") {
 				target = path
 				break
 			}
@@ -756,12 +792,17 @@ func mutate(paths []string, name string, change func(map[string]any) bool) error
 	}
 	agents, _ := raw["agents"].([]any)
 	changed := false
+	found := false
 	for _, value := range agents {
 		agent, ok := value.(map[string]any)
-		if ok && agent["name"] == name {
+		if ok && agent["name"] == name && (!activeOnly || agent["archivedAt"] == nil || agent["archivedAt"] == "") {
+			found = true
 			changed = change(agent)
 			break
 		}
+	}
+	if activeOnly && !found {
+		return fmt.Errorf("unknown agent: %s", name)
 	}
 	if !changed {
 		return nil
@@ -803,11 +844,16 @@ func writeBook(target string, raw map[string]any, mode os.FileMode) error {
 // --parent / --role) and, when set, beat anything inference would produce.
 type Registration struct {
 	ClearLocal bool
-	Local      *cache.LocalBinding
-	Launch     *bptmux.OpenOptions
-	Sender     string
-	Parent     string
-	Role       string
+	// Lifetime is written for a new registration. UpdateLifetime also applies
+	// it to an existing registration; this distinction keeps legacy records
+	// persistent when an ordinary bp run reuses their name.
+	Lifetime       string
+	UpdateLifetime bool
+	Local          *cache.LocalBinding
+	Launch         *bptmux.OpenOptions
+	Sender         string
+	Parent         string
+	Role           string
 }
 
 // SetStatus records an agent's status in whichever book holds it, creating the
@@ -898,6 +944,13 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 			// Explicit pins correct an existing entry in place — in its own
 			// book, never as a second entry elsewhere.
 			pinned := false
+			if reg.UpdateLifetime {
+				if current, _ := agent["lifetime"].(string); current != reg.Lifetime {
+					agent["lifetime"] = reg.Lifetime
+					delete(agent, "lifecycleNote")
+					pinned = true
+				}
+			}
 			if reg.Local != nil {
 				agent["localRuntime"] = reg.Local
 				pinned = true
@@ -936,6 +989,9 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 	}
 	if !found {
 		agent := map[string]any{"name": name, "folder": folder, "class": class, "role": role, "status": status, "statusAt": time.Now().UTC().Format(time.RFC3339Nano)}
+		if reg.Lifetime != "" {
+			agent["lifetime"] = reg.Lifetime
+		}
 		if reg.Local != nil {
 			agent["localRuntime"] = reg.Local
 		}

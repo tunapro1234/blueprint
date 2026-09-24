@@ -331,3 +331,49 @@ func TestRenameClosedCodexWithoutStoredBindingWarnsAgentbookOnly(t *testing.T) {
 		t.Fatalf("missing closed Codex stale-title warning: %q", warning)
 	}
 }
+
+func TestRenameSameNameRepairsStaleCodexTitle(t *testing.T) {
+	const oldTitle = "old-codex-title"
+	index := filepath.Join(t.TempDir(), "session_index.jsonl")
+	if err := os.WriteFile(index, []byte(`{"id":"repair-thread","thread_name":"`+oldTitle+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	native := &book.NativeTitle{ThreadID: "repair-thread", Path: index, Text: oldTitle}
+	fix := newSimpleCodexRenameFixture(t, false, false, native)
+	before, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fix.app.rename([]string{"codex-worker", "codex-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	value, err := book.ReadCodexNativeTitle(index, "repair-thread", nil)
+	if err != nil || value.Text != "codex-worker" {
+		t.Fatalf("repaired Codex title=%q err=%v", value.Text, err)
+	}
+	if after, err := os.ReadFile(index); err != nil || bytes.HasPrefix(after, before) == false || bytes.Count(after, []byte{'\n'}) != 2 {
+		t.Fatalf("same-name Codex repair did not append once: %q err=%v", after, err)
+	}
+	if output := readTestOutput(t, fix.app.out); !strings.Contains(output, "reapplied codex native title") {
+		t.Fatalf("repair output=%q", output)
+	}
+}
+
+func TestRenameSameNameReportsCodexTitleAlreadyMatching(t *testing.T) {
+	index := filepath.Join(t.TempDir(), "session_index.jsonl")
+	original := []byte(`{"id":"repair-thread","thread_name":"codex-worker"}` + "\n")
+	if err := os.WriteFile(index, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	native := &book.NativeTitle{ThreadID: "repair-thread", Path: index, Text: "codex-worker"}
+	fix := newSimpleCodexRenameFixture(t, false, false, native)
+	if err := fix.app.rename([]string{"codex-worker", "codex-worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.ReadFile(index); err != nil || !bytes.Equal(after, original) {
+		t.Fatalf("already-matching title was changed: %q err=%v", after, err)
+	}
+	if output := readTestOutput(t, fix.app.out); !strings.Contains(output, "already matches; no repair needed") {
+		t.Fatalf("repair output=%q", output)
+	}
+}

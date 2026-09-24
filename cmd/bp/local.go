@@ -120,25 +120,47 @@ func (a *app) initLocalBook() error {
 
 func (a *app) localRun(args []string) error {
 	name, parent, role := "", "", ""
+	lifetime := book.LifetimePersistent
+	if a.config.Lifecycle.EphemeralDefault {
+		lifetime = book.LifetimeEphemeral
+	}
+	lifetimeExplicit := false
 	// bp's own options come before the harness; everything after it belongs to
 	// the native CLI. --parent/--role mirror bp open, so a coordinator can
 	// launch with native flags AND place the agent in the right tree (#23).
 options:
-	for len(args) >= 2 {
+	for len(args) > 0 {
 		switch args[0] {
 		case "--name":
+			if len(args) < 2 {
+				return fmt.Errorf("--name requires an agent name")
+			}
 			name = args[1]
 		case "--parent":
+			if len(args) < 2 {
+				return fmt.Errorf("--parent requires an agent name")
+			}
 			parent = args[1]
 		case "--role":
+			if len(args) < 2 {
+				return fmt.Errorf("--role requires role text")
+			}
 			role = args[1]
+		case "--ephemeral":
+			lifetime, lifetimeExplicit = book.LifetimeEphemeral, true
+			args = args[1:]
+			continue
+		case "--persistent":
+			lifetime, lifetimeExplicit = book.LifetimePersistent, true
+			args = args[1:]
+			continue
 		default:
 			break options
 		}
 		args = args[2:]
 	}
 	if len(args) == 0 || !localHarness(args[0]) {
-		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] <codex|claude|opencode|hermes> [arguments...]")
+		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] <codex|claude|opencode|hermes> [arguments...]")
 	}
 	programName := args[0]
 	if programName == "custom" {
@@ -315,9 +337,11 @@ options:
 	}
 	// Placement travels on the launcher's own environment, not the session's,
 	// so nothing else started in this tmux session inherits it.
-	if parent != "" || role != "" {
-		command = append([]string{"env", "BP_RUN_PARENT=" + quoteShell(parent), "BP_RUN_ROLE=" + quoteShell(role)}, command...)
+	lifetimeUpdate := ""
+	if lifetimeExplicit {
+		lifetimeUpdate = "1"
 	}
+	command = append([]string{"env", "BP_RUN_PARENT=" + quoteShell(parent), "BP_RUN_ROLE=" + quoteShell(role), "BP_RUN_LIFETIME=" + quoteShell(lifetime), "BP_RUN_LIFETIME_UPDATE=" + quoteShell(lifetimeUpdate)}, command...)
 	argv := []string{"new-session", "-s", name, "-c", cwd, "-e", "BP_EXIT_REPORT=" + exitReport}
 	if resumeGuard != nil {
 		argv = append(argv, "-d")
@@ -439,10 +463,12 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 			return err
 		}
 	}
-	reg := book.Registration{Local: local, ClearLocal: local == nil}
+	reg := book.Registration{Local: local, ClearLocal: local == nil, Lifetime: os.Getenv("BP_RUN_LIFETIME"), UpdateLifetime: os.Getenv("BP_RUN_LIFETIME_UPDATE") == "1"}
 	reg.Parent, reg.Role = localPlacement(fleet, name, os.Getenv("BP_RUN_PARENT"), os.Getenv("BP_RUN_ROLE"))
 	os.Unsetenv("BP_RUN_PARENT")
 	os.Unsetenv("BP_RUN_ROLE")
+	os.Unsetenv("BP_RUN_LIFETIME")
+	os.Unsetenv("BP_RUN_LIFETIME_UPDATE")
 	if managed {
 		reg.Role, reg.Parent = "", ""
 	} else if launch := nativeLaunch(args[1], args[4:]); launch != nil {
@@ -609,6 +635,10 @@ func (a *app) localWorker(args []string) error {
 		a.finishLocalExit(name, parent, harness, os.Getenv("BP_EXIT_REPORT"))
 		if err := book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{}); err != nil {
 			fmt.Fprintln(a.err, "record closed session:", err)
+		} else if a.config.Lifecycle.ArchiveOnClose {
+			for _, result := range a.archiveClosedEphemerals() {
+				fmt.Fprintln(a.err, result)
+			}
 		}
 	}()
 	ctx, cancel := context.WithCancel(a.ctx)

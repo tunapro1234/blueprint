@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/release"
 )
@@ -23,6 +24,7 @@ type doctorCheck struct {
 	Next     string   `json:"next_step,omitempty"`
 	Name     string   `json:"name"`
 	OK       bool     `json:"ok"`
+	Warning  bool     `json:"warning,omitempty"`
 	Detail   string   `json:"detail"`
 }
 
@@ -167,7 +169,9 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 	} else {
 		for _, c := range checks {
 			mark := "OK"
-			if !c.OK {
+			if c.Warning {
+				mark = "WARN"
+			} else if !c.OK {
 				mark = "FAIL"
 			}
 			fmt.Printf("%s %-18s %s\n", mark, c.Name, c.Detail)
@@ -213,7 +217,7 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			continue
 		}
 		entry := fleet.Agents[name]
-		if entry.Local != nil {
+		if entry.Local != nil && !entry.IsEphemeral() {
 			path := filepath.Join(filepath.Dir(entry.Local.Path), "exit.json")
 			if data, err := os.ReadFile(path); err == nil {
 				var exit localExitReport
@@ -223,6 +227,9 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			}
 		}
 		if !client.HasSession(ctx, name) {
+			if mismatch, ok := doctorNativeTitleMismatch(entry, nil); ok {
+				checks = append(checks, mismatch)
+			}
 			if selected != "" {
 				checks = append(checks, doctorCheck{Name: "runtime", Agent: name, OK: true, Detail: name + ": no tmux session; historical registration is not an active writer"})
 			}
@@ -255,6 +262,9 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			}
 		}
 		state := book.RuntimeFor(ctx, client, fleet, name)
+		if mismatch, ok := doctorNativeTitleMismatch(entry, &state); ok {
+			checks = append(checks, mismatch)
+		}
 		a := state.Activity
 		if a == nil {
 			continue
@@ -274,4 +284,19 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 		checks = append(checks, check)
 	}
 	return checks
+}
+
+func doctorNativeTitleMismatch(agent book.Agent, state *cache.State) (doctorCheck, bool) {
+	value, _, err := observedNativeTitle(agent, state)
+	if err != nil || value.Text == "" || value.Text == agent.Name {
+		return doctorCheck{}, false
+	}
+	return doctorCheck{
+		Name:    "native_title/" + agent.Name,
+		Agent:   agent.Name,
+		OK:      true,
+		Warning: true,
+		Detail:  fmt.Sprintf("bp name %q does not match native title %q", agent.Name, value.Text),
+		Next:    "bp rename " + agent.Name + " " + agent.Name,
+	}, true
 }

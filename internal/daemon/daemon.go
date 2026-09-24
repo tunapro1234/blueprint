@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,10 +19,12 @@ import (
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
 	"blueprint/internal/cache"
+	"blueprint/internal/codexrpc"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/fed"
 	"blueprint/internal/msgq"
+	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/tokens"
 )
@@ -33,6 +37,8 @@ type Service struct {
 	log    *log.Logger
 	wg     sync.WaitGroup
 }
+
+var archiveThreadIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
 func New(logger *log.Logger, cfg config.Config) *Service {
 	if logger == nil {
@@ -223,14 +229,90 @@ func (s *Service) reconcileExitedAgents(ctx context.Context) error {
 	for _, name := range sessions {
 		live[name] = true
 	}
-	_, err = book.ReconcileClosed(book.Paths(s.config.Agentbooks), live, func(pid int) bool {
+	paths := book.Paths(s.config.Agentbooks)
+	_, err = book.ReconcileClosed(paths, live, func(pid int) bool {
 		if pid <= 1 {
 			return false
 		}
 		err := syscall.Kill(pid, 0)
 		return err == nil || err == syscall.EPERM
 	}, time.Now())
+	if err != nil || !s.config.Lifecycle.ArchiveOnClose {
+		return err
+	}
+	results, err := book.ArchiveClosedEphemerals(paths, func(agent book.Agent) error {
+		return s.archiveGuard(ctx, agent)
+	})
+	for _, result := range results {
+		s.log.Print(result)
+	}
 	return err
+}
+
+func (s *Service) archiveGuard(ctx context.Context, agent book.Agent) error {
+	if s.tmux == nil {
+		return fmt.Errorf("cannot verify closed session: tmux is unavailable")
+	}
+	sessions, err := s.tmux.Sessions(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot verify closed session: %w", err)
+	}
+	for _, session := range sessions {
+		if session == agent.Name {
+			return fmt.Errorf("%s has a tmux session; exit its CLI before archive (no process was stopped)", agent.Name)
+		}
+	}
+
+	if agent.Launch != nil && agent.Launch.Remote != "" {
+		id := agent.IdentityThreadID
+		if id == "" {
+			id = agent.Launch.ResumeID
+		}
+		if !archiveThreadIDPattern.MatchString(id) {
+			return fmt.Errorf("%s has no valid remote thread binding; inspect bp doctor --agent %s", agent.Name, agent.Name)
+		}
+		home := bptmux.CodexProcessInfo(0).Home
+		if agent.Local != nil && agent.Local.Home != "" {
+			home = agent.Local.Home
+		}
+		socket := bptmux.CodexSocket(home, agent.Launch.Remote)
+		if socket == "" {
+			return fmt.Errorf("%s remote thread state cannot be verified; no record changed", agent.Name)
+		}
+		remoteCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		rpc, err := codexrpc.DialUnix(remoteCtx, socket)
+		if err != nil {
+			return fmt.Errorf("cannot verify remote thread is unloaded: %w", err)
+		}
+		defer rpc.Close()
+		thread, err := rpc.ThreadRead(remoteCtx, id)
+		if err != nil || thread.ID != id || thread.Status.Type != "notLoaded" {
+			return fmt.Errorf("%s remote thread is loaded or unverified; no record changed", agent.Name)
+		}
+	}
+
+	if s.queue != nil {
+		messages, err := s.queue.List()
+		if err != nil {
+			return err
+		}
+		for _, message := range messages {
+			if message.To == agent.Name || strings.TrimSuffix(message.From, "?") == agent.Name {
+				return fmt.Errorf("%s has pending channel %s; inspect bp qstat %s first", agent.Name, message.ID, message.ID)
+			}
+		}
+	}
+	if s.config.StateDir != "" {
+		count, over, err := pending.Stat(s.config.StateDir, agent.Name)
+		if err != nil {
+			return err
+		}
+		if count+over > 0 {
+			return fmt.Errorf("%s has pending announcements; preserve and resolve them before archive", agent.Name)
+		}
+	}
+	return nil
 }
 
 func (s *Service) startFederation(ctx context.Context) {

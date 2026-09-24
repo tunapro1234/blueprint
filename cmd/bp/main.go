@@ -43,8 +43,8 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp version [--json] | bp update [--check] [--json] | bp doctor [--agent <name>] [--json]
-bp archive <name> | bp archive --list [--json] | bp restore <name>
-bp status [--json] | bp tree
+bp archive <name> | bp archive --list [--json] | bp archive --stale [--dry-run] | bp restore <name>
+bp status [--json] [--all] | bp tree [--all]
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
 bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
@@ -52,15 +52,16 @@ bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
-bp run [--name <name>] [--parent <name>] [--role <text>] <codex|claude|opencode|hermes> [arguments...]
+bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] <codex|claude|opencode|hermes> [arguments...]
                               # bp open also accepts --opencode for managed sessions
-bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
 bp attach <agent>@<server>      # delegate the same command to a registered remote
 bp schema export [<project-dir>] [--lead <agent>]
 bp continue [<project-dir>] [--dry-run] [--yes]
 bp history export [<project-dir>] [--agent <name>] [--keep N] [--stdout]
 bp reparent <agent> <new-parent>
+bp keep <name> | bp release <name>  # persistent / ephemeral lifetime
 bp worktree add <repo-directory> <topic>
 bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
@@ -355,6 +356,10 @@ func (a *app) run(args []string) error {
 		return a.archive(args[1:], true)
 	case "restore":
 		return a.archive(args[1:], false)
+	case "keep":
+		return a.setLifetime(args[1:], book.LifetimePersistent)
+	case "release":
+		return a.setLifetime(args[1:], book.LifetimeEphemeral)
 	case "rename":
 		return a.rename(args[1:])
 	case "reparent":
@@ -670,6 +675,23 @@ func (a *app) fleet() (book.Fleet, map[string]book.State, error) {
 	return fleet, states, err
 }
 
+func (a *app) listingFleet(all bool) (book.Fleet, map[string]book.State, error) {
+	if !all || a.loadFleet != nil {
+		return a.fleet()
+	}
+	fleet, err := book.LoadFleetAll(book.Paths(a.config.Agentbooks))
+	if err != nil {
+		return book.Fleet{}, nil, err
+	}
+	states, err := book.LiveStates(a.ctx, a.tmux, &fleet)
+	return fleet, states, err
+}
+
+func hiddenClosedEphemeral(agent book.Agent, states map[string]book.State) bool {
+	_, alive := states[agent.Name]
+	return agent.IsEphemeral() && agent.Status == "closed" && !alive
+}
+
 // Mismatch kinds: the two ways tmux and the agentbook can contradict each other.
 // Both are reported rather than silently reconciled — bp cannot know which side
 // is stale, and a hidden disagreement is what let a running agent sit behind a
@@ -724,29 +746,36 @@ func tmuxStateLabel(state book.State, alive bool) string {
 }
 
 func (a *app) status(args []string) error {
-	asJSON := false
+	asJSON, all := false, false
 	for _, arg := range args {
-		if arg != "--json" {
+		if arg != "--json" && arg != "--all" {
 			return fmt.Errorf("unknown status option: %s", arg)
 		}
-		if asJSON {
+		if arg == "--json" && asJSON {
 			return fmt.Errorf("--json may only be specified once")
 		}
-		asJSON = true
+		if arg == "--all" && all {
+			return fmt.Errorf("--all may only be specified once")
+		}
+		asJSON = asJSON || arg == "--json"
+		all = all || arg == "--all"
 	}
 	if err := a.reconcileDeadAgents(); err != nil {
 		return err
 	}
-	fleet, states, err := a.fleet()
+	fleet, states, err := a.listingFleet(all)
 	if err != nil {
 		return err
 	}
 	cacheStates := a.cacheStates(fleet, states)
 	if asJSON {
-		return a.statusJSON(fleet, states, cacheStates)
+		return a.statusJSON(fleet, states, cacheStates, all)
 	}
 	fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK")
 	for _, name := range fleet.SortedNames() {
+		if !all && hiddenClosedEphemeral(fleet.Agents[name], states) {
+			continue
+		}
 		state, alive := states[name]
 		tmuxState := tmuxStateLabel(state, alive)
 		bookState := fleet.Agents[name].Status
@@ -788,6 +817,11 @@ func (a *app) reconcileDeadAgents() error {
 		live[name] = true
 	}
 	_, err = book.ReconcileClosed(paths, live, processIsLive, time.Now())
+	if err == nil && a.config.Lifecycle.ArchiveOnClose {
+		for _, result := range a.archiveClosedEphemerals() {
+			fmt.Fprintln(a.err, result)
+		}
+	}
 	return err
 }
 
@@ -848,10 +882,14 @@ type statusThread struct {
 	Window    *int64 `json:"context_window,omitempty"`
 }
 
-func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State) error {
+func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, showAll ...bool) error {
+	all := len(showAll) > 0 && showAll[0]
 	report := statusReport{SchemaVersion: 2, ObservedAt: time.Now().UTC(), Producer: currentProducer(), Agents: make([]statusAgent, 0, len(fleet.Agents))}
 	report.Daemon, report.DaemonVerification = buildinfo.Recorded(filepath.Join(a.config.StateDir, "daemon-runtime.json"))
 	for _, name := range fleet.SortedNames() {
+		if !all && hiddenClosedEphemeral(fleet.Agents[name], states) {
+			continue
+		}
 		state, alive := states[name]
 		agent := fleet.Agents[name]
 		row := statusAgent{
@@ -939,13 +977,17 @@ func (a *app) cacheStates(fleet book.Fleet, observed map[string]book.State) map[
 }
 
 func (a *app) tree(args []string) error {
-	if len(args) > 0 {
-		if err := rejectFlag("tree", args[0]); err != nil {
-			return err
+	all := false
+	for _, arg := range args {
+		if arg != "--all" {
+			return fmt.Errorf("unknown tree option: %s", arg)
 		}
-		return fmt.Errorf("usage: bp tree")
+		if all {
+			return fmt.Errorf("usage: bp tree [--all]")
+		}
+		all = true
 	}
-	fleet, states, err := a.fleet()
+	fleet, states, err := a.listingFleet(all)
 	if err != nil {
 		return err
 	}
@@ -958,8 +1000,28 @@ func (a *app) tree(args []string) error {
 		if name == fleet.Root {
 			continue
 		}
+		if !all && hiddenClosedEphemeral(fleet.Agents[name], states) {
+			continue
+		}
 		parent := fleet.Parents[name]
-		if _, ok := fleet.Agents[parent]; !ok || parent == name {
+		seenParents := map[string]bool{}
+		for parent != "" && parent != fleet.Root {
+			if seenParents[parent] {
+				parent = fleet.Root
+				break
+			}
+			seenParents[parent] = true
+			ancestor, ok := fleet.Agents[parent]
+			if !ok {
+				parent = fleet.Root
+				break
+			}
+			if all || !hiddenClosedEphemeral(ancestor, states) {
+				break
+			}
+			parent = fleet.Parents[parent]
+		}
+		if parent == "" || parent == name {
 			parent = fleet.Root
 		}
 		children[parent] = append(children[parent], name)
@@ -980,6 +1042,9 @@ func (a *app) tree(args []string) error {
 			}
 		}
 		agent := fleet.Agents[name]
+		if !all && hiddenClosedEphemeral(agent, states) {
+			return
+		}
 		live := "closed"
 		if state, ok := states[name]; ok {
 			switch {
@@ -1178,7 +1243,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1209,10 +1274,16 @@ func (a *app) open(args []string) error {
 	resumeRequested, threadExplicit, freshRequested := false, false, false
 	rebind := false
 	worktreeTopic := ""
-	reg := book.Registration{}
+	reg := book.Registration{Lifetime: book.LifetimePersistent}
+	if stored.Agents[name].IsEphemeral() {
+		reg.UpdateLifetime = true
+	}
 	for index := 2; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
+		case "--ephemeral":
+			reg.Lifetime = book.LifetimeEphemeral
+			reg.UpdateLifetime = true
 		case "--resume":
 			opts.Resume = true
 			resumeRequested = true
@@ -1343,7 +1414,7 @@ func (a *app) open(args []string) error {
 			a.applyOpenBar(name)
 			// Nothing to launch — but explicit --parent/--role is a correction
 			// of the agentbook entry, so it still applies to a running agent.
-			if reg.Parent != "" || reg.Role != "" {
+			if reg.Parent != "" || reg.Role != "" || reg.UpdateLifetime {
 				reg.Sender = a.sender()
 				if err := book.SetStatus(a.config.Agentbooks, name, "open", dir, reg); err != nil {
 					return err
@@ -1713,6 +1784,11 @@ func (a *app) close(args []string) error {
 	}
 	if err := book.SetStatus(a.config.Agentbooks, name, "closed", "", book.Registration{Sender: a.sender()}); err != nil {
 		return err
+	}
+	if a.config.Lifecycle.ArchiveOnClose {
+		for _, result := range a.archiveClosedEphemerals() {
+			fmt.Fprintln(a.err, result)
+		}
 	}
 	if !registered {
 		before = "unregistered"

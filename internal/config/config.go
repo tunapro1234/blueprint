@@ -45,6 +45,7 @@ type Config struct {
 	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
 	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
 	Bar              BarConfig               `json:"bar" yaml:"bar"`
+	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
 	InvalidConfig    string                  `json:"-" yaml:"-"`
 }
 
@@ -59,6 +60,14 @@ type RemoteConfig struct {
 	Transport string `json:"transport,omitempty" yaml:"transport,omitempty"`
 	MoshPorts string `json:"moshPorts,omitempty" yaml:"moshPorts,omitempty"`
 	Elevate   string `json:"elevate,omitempty" yaml:"elevate,omitempty"`
+}
+
+// LifecycleConfig controls throwaway local registrations. Both defaults are
+// enabled; users can independently keep bp run registrations persistent or
+// defer archiving until an explicit command.
+type LifecycleConfig struct {
+	EphemeralDefault bool `json:"ephemeralDefault" yaml:"ephemeralDefault"`
+	ArchiveOnClose   bool `json:"archiveOnClose" yaml:"archiveOnClose"`
 }
 
 // BarConfig controls which metrics appear in the tmux status bar and their order.
@@ -108,6 +117,12 @@ type overrides struct {
 	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
 	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
 	Bar              *barOverrides            `json:"bar" yaml:"bar"`
+	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
+}
+
+type lifecycleOverrides struct {
+	EphemeralDefault *bool `json:"ephemeralDefault" yaml:"ephemeralDefault"`
+	ArchiveOnClose   *bool `json:"archiveOnClose" yaml:"archiveOnClose"`
 }
 
 type barOverrides struct {
@@ -263,6 +278,7 @@ func resolvePaths(c *Config, user string) {
 
 func defaults(home string, legacy bool) Config {
 	bar := BarConfig{Context: "used", Widgets: []string{"ctx", "temp", "queue", "model", "quota"}}
+	lifecycle := LifecycleConfig{EphemeralDefault: true, ArchiveOnClose: true}
 	if legacy {
 		return Config{
 			Home:     home,
@@ -280,6 +296,7 @@ func defaults(home string, legacy bool) Config {
 			ClipboardDir:     "/srv/server-main/clipboard",
 			WABridge:         true,
 			Bar:              bar,
+			Lifecycle:        lifecycle,
 			LocalObservation: true,
 			LocalMouse:       true,
 			UpdateCheck:      true,
@@ -292,6 +309,7 @@ func defaults(home string, legacy bool) Config {
 		TokenAgentbooks:  []string{filepath.Join(home, "agentbook.json")},
 		StateDir:         filepath.Join(home, "state"),
 		Bar:              bar,
+		Lifecycle:        lifecycle,
 		LocalObservation: true,
 		LocalMouse:       true,
 		UpdateCheck:      true,
@@ -299,6 +317,12 @@ func defaults(home string, legacy bool) Config {
 }
 
 func apply(result *Config, values overrides) {
+	if values.Lifecycle != nil && values.Lifecycle.EphemeralDefault != nil {
+		result.Lifecycle.EphemeralDefault = *values.Lifecycle.EphemeralDefault
+	}
+	if values.Lifecycle != nil && values.Lifecycle.ArchiveOnClose != nil {
+		result.Lifecycle.ArchiveOnClose = *values.Lifecycle.ArchiveOnClose
+	}
 	if values.Bar != nil && values.Bar.DefaultColor != nil {
 		result.Bar.DefaultColor = *values.Bar.DefaultColor
 	}

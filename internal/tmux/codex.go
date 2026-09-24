@@ -149,6 +149,41 @@ func codexComposerBox(pane string) (string, int, bool) {
 	return strings.Join(out, "\n"), start, true
 }
 
+// codexComposerViewportFillsPane recognizes the measured short-pane scroll
+// shape: Codex's composer is anchored to its footer, and every captured row
+// above its first visible prompt is blank. In that layout a visible suffix is
+// a viewport into the composer, not evidence that the paste lost its head.
+func codexComposerViewportFillsPane(pane string, top int) bool {
+	_, parsedTop, ok := codexComposerBox(pane)
+	if !ok || parsedTop != top || top < 0 {
+		return false
+	}
+	lines := strings.Split(pane, "\n")
+	if top > len(lines) {
+		return false
+	}
+	for _, line := range lines[:top] {
+		line = ansiSeq.ReplaceAllString(StripDim(line), "")
+		if stripSpace(line) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// codexComposerTailMatches identifies a visible suffix only when Codex's
+// viewport-filling layout proves that the rest may be scrolled out of view.
+// A tail with any real transcript above the composer is left to the damaged
+// paste guard, which refuses to submit it.
+func codexComposerTailMatches(pane, want string) bool {
+	box, top, ok := codexComposerBox(pane)
+	if !ok || !codexComposerViewportFillsPane(pane, top) {
+		return false
+	}
+	got, want := stripSpace(box), stripSpace(want)
+	return len([]rune(got)) >= pasteRelatedMin && !strings.HasPrefix(want, got) && strings.HasSuffix(want, got)
+}
+
 // codexPlaceholderOnly recognises the idle composer's own sentence, so an empty
 // Codex composer reads as empty rather than as a human typing.
 func codexPlaceholderOnly(text string) bool {

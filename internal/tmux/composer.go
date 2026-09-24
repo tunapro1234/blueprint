@@ -115,13 +115,16 @@ const composerBoxScrollRows = 30
 // composerBoxScrolled reports whether the box may be showing only part of its
 // content, in which case a SHORT read is not evidence of damage.
 //
-// Two signals, either one enough:
-//   - the box starts at the very top of the capture (top <= 1): it has consumed
-//     the screen, so there is no room left for it to grow and the TUI must be
-//     scrolling inside it;
-//   - an implausible interior height (composerBoxScrollRows).
-func composerBoxScrolled(box string, top int) bool {
-	return top <= 1 || composerBoxRows(box) >= composerBoxScrollRows
+// The signals are:
+//   - the box starts within the first two capture rows (top <= 1): it has
+//     consumed the screen, so there is no room left for it to grow;
+//   - an implausible interior height (composerBoxScrollRows);
+//   - a Codex composer fills the pane from an otherwise blank top through its
+//     footer. This third signal is limited to Codex, where the short-pane
+//     tail-only rendering was observed; the other TUI readers need their own
+//     captured evidence before their behavior changes.
+func composerBoxScrolled(pane, box string, top int) bool {
+	return top <= 1 || composerBoxRows(box) >= composerBoxScrollRows || codexComposerViewportFillsPane(pane, top)
 }
 
 // isComposerStatus reports whether the line is the status/footer row a Claude
@@ -274,7 +277,7 @@ func composerBoxText(pane string) (string, bool) {
 // FOREIGN — the rows we cannot see could hold the rest of our own message.
 func composerJudgeText(pane string) (string, bool) {
 	box, top, ok := composerBoxAt(pane)
-	if !ok || composerBoxScrolled(box, top) {
+	if !ok || composerBoxScrolled(pane, box, top) {
 		return "", false
 	}
 	return stripSpace(box), true

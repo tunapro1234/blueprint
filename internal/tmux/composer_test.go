@@ -242,7 +242,7 @@ func TestComposerBoxPrefersTheNearestBorderAboveTheBox(t *testing.T) {
 	if top != 2 {
 		t.Fatalf("top border index=%d, want 2 (the box's own border)", top)
 	}
-	if composerBoxScrolled(box, top) {
+	if composerBoxScrolled(pane, box, top) {
 		t.Fatal("a box with transcript above it was called scrolled")
 	}
 }
@@ -895,7 +895,7 @@ func TestComposerBoxAgainstLiveCaptures(t *testing.T) {
 			readable++
 		}
 		t.Logf("%-24s ok=%-5v rows=%-3d chars=%-5d scrolled=%-5v typing=%-5v filled=%-5v busy=%-5v reason=%q",
-			entry.Name(), ok, composerBoxRows(box), len(stripSpace(box)), composerBoxScrolled(box, top),
+			entry.Name(), ok, composerBoxRows(box), len(stripSpace(box)), composerBoxScrolled(pane, box, top),
 			Typing(pane), composerFilled(pane), Busy(pane), ComposerBlockReason(pane, nil))
 	}
 	if total == 0 {

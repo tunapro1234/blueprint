@@ -329,12 +329,21 @@ func scan(file *os.File) (scanResult, error) {
 		if len(raw) > 0 {
 			lineNo++
 			line := bytes.TrimSuffix(raw, []byte{'\n'})
+			if len(bytes.TrimSpace(line)) == 0 {
+				// Blank lines carry no record; they are skipped as before and
+				// compacted away by the next rewrite.
+				if readErr != nil {
+					if errors.Is(readErr, io.EOF) {
+						break
+					}
+					return scanResult{}, readErr
+				}
+				continue
+			}
 			reason := ""
 			var entry Entry
 			switch {
 			case !utf8.Valid(line):
-				reason = ReasonUnparseable
-			case strings.TrimSpace(string(line)) == "":
 				reason = ReasonUnparseable
 			case json.Unmarshal(line, &entry) != nil:
 				reason = ReasonUnparseable

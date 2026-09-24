@@ -21,33 +21,25 @@ import (
 )
 
 // rename renames an agent everywhere bp knows about it: the tmux session, the
-// agentbooks, the usage state files, and the agent's own transcript title.
+// agentbooks, the usage state files, and the agent's native conversation title.
 //
-// Two things it deliberately does NOT do. It never edits session .jsonl files —
-// the title is changed by sending /rename to the pane, and the reader already
-// takes the newest custom-title record. And it never edits the agent's source
-// tree; a live reference like a hook's TARGET_AGENT is reported for a human to
-// fix, because silently rewriting someone's code is not a rename's job.
+// Two things it deliberately does NOT do. It never rewrites conversation
+// transcripts: Claude records its title through /rename in the pane, and
+// Codex's session_index.jsonl is updated only by appending Codex's native name
+// record. And it never edits the agent's source tree; a live reference like a
+// hook's TARGET_AGENT is reported for a human to fix, because silently
+// rewriting someone's code is not a rename's job.
 //
 // Historical records (timeline.md, policy.log, msgq/done, daily notes) are left
 // alone on purpose: they correctly hold the name the agent had that day.
 //
-// ORDER MATTERS, and it is the opposite of the obvious one. Four of the five
-// steps are local file or tmux edits that either work or fail loudly. The fifth
-// — making the agent retitle its own transcript, by typing /rename into its
-// composer — is the only one that can fail for reasons bp does not control (a
-// composer in vim INSERT mode, a mid-turn pane, a TUI that ate the keystrokes).
-// It used to run LAST as a best-effort warning, which is how `bp rename
-// worktrack-main worktrack` produced a half-renamed agent: session and
-// agentbook on the new name, transcript still on the old one. That is not
-// cosmetic — bp finds an agent's transcript by matching the in-file custom
-// title against the agent name, so the CACHE column went blank, bp compact
-// reported "transcript okunamadi", and `rush worktrack` had nothing to attach.
-//
-// So the unreliable step goes FIRST and everything else is downstream of it. If
-// the pane refuses, nothing else has happened yet: bp exits non-zero, says
-// plainly that nothing was renamed and prints the command to run by hand. That
-// is all-or-nothing without needing a rollback path that could itself fail.
+// ORDER MATTERS: the native title step runs before tmux and agentbook changes.
+// Claude's /rename can fail if the pane refuses input or does not write the
+// title; Codex must append and verify its own session-index record. A failure
+// is reported before bp claims the rename succeeded. This prevents the
+// half-renamed state that once left Claude's transcript title old while the
+// session and agentbook carried the new name, making the CACHE column blank
+// and bp compact unable to find the conversation.
 func (a *app) rename(args []string) error {
 	dry := false
 	noRetitle := false
@@ -58,18 +50,15 @@ func (a *app) rename(args []string) error {
 		case "--dry-run", "-n":
 			dry = true
 		case "--no-retitle":
-			// For the one rename this command could not do: an agent renaming
-			// ITSELF. Step 1 types /rename into the target pane and refuses a
-			// pane that is mid-turn — and an agent asking for its own rename is
-			// by definition mid-turn, so it could never get past it (ada,
-			// 2026-09-02).
+			// Skip the native title step for an agent renaming ITSELF. Claude's
+			// pane is busy by definition, and an unknown Codex thread binding also
+			// needs an escape hatch that does not guess at a session index.
 			//
-			// It is a real amputation, not a shortcut: the transcript keeps the
-			// OLD custom title, and that title is what resolves an agent to its
-			// session file. Until the agent types /rename itself, bp cannot read
-			// its context or last turn (blank CACHE column), `bp compact` reports
-			// "transcript okunamadi", and `bp open --resume` finds no prior
-			// conversation to resume. So it is allowed, and it says so loudly.
+			// The Claude transcript keeps its OLD custom title until the agent
+			// types /rename itself. Until then bp cannot read its context or last
+			// turn (blank CACHE column), `bp compact` reports "transcript
+			// okunamadi", and `bp open --resume` cannot find its conversation.
+			// So it is allowed, and it says so loudly.
 			noRetitle = true
 		case "--archived":
 			archivedOnly = true
@@ -195,26 +184,88 @@ func (a *app) rename(args []string) error {
 	}
 	defer releaseClaims()
 
-	// 1. Transcript title, via the agent's own pane. First, because it is the
-	// step that can fail: everything below is only reached once the agent's own
-	// transcript has been observed carrying the new name. Only Claude understands
-	// /rename; typing it at a codex or shell pane would just run it as a command,
-	// so those panes skip the step entirely (nothing to retitle).
+	// 1. Native title. First, because it can fail: everything below is only
+	// reached after Claude's transcript or Codex's session index confirms the new
+	// name. Claude understands /rename; Codex's title is an append-only index
+	// record and must never be typed into its pane.
+	var codexNativeTitle *book.NativeTitle
+	claudeRetitleSkipped := false
+	codexRetitleSkipped := false
+	codexTitleUnavailable := false
+	bookCodex := false
+	if entry, ok := fleet.Agents[old]; ok {
+		bookCodex = agentbookRunsCodex(entry)
+	}
+	paneClaude, paneCodex := false, false
+	if liveOld {
+		paneClaude = a.paneRunsClaude(old)
+		if !paneClaude && !bookCodex {
+			paneCodex = a.paneRunsCodex(old)
+		}
+	}
+	codexAgent := bookCodex || paneCodex
 	switch {
-	case noRetitle:
+	case paneClaude && noRetitle:
 		fmt.Fprintf(a.out, "--no-retitle: %s pane'ine /rename YAZILMADI; transcript basligi %q olarak kaliyor\n", old, old)
+		claudeRetitleSkipped = true
+	case codexAgent && noRetitle:
+		if !liveOld && bookCodex {
+			if _, ok := closedCodexNativeTitle(fleet.Agents[old]); !ok {
+				fmt.Fprintf(a.out, "no live tmux session for %s (agentbook only)\n", old)
+				codexTitleUnavailable = true
+				break
+			}
+		}
+		report("--no-retitle: skip Codex native title update for %s", old)
+		codexRetitleSkipped = true
+	case !liveOld && bookCodex:
+		entry := fleet.Agents[old]
+		native, ok := closedCodexNativeTitle(entry)
+		if !ok {
+			fmt.Fprintf(a.out, "no live tmux session for %s (agentbook only)\n", old)
+			codexTitleUnavailable = true
+			break
+		}
+		if dry {
+			report("append Codex thread_name %s to %s using its stored thread binding", name, filepath.Base(native.Path))
+			break
+		}
+		title, err := book.AppendCodexNativeTitle(native.Path, native.ThreadID, name)
+		if err != nil {
+			a.reportCodexRenameRefused(old, name, err)
+			return errReported
+		}
+		codexNativeTitle = &title
+		report("no live tmux session for %s; append Codex thread_name %s to %s", old, name, filepath.Base(title.Path))
 	case !liveOld:
 		fmt.Fprintf(a.out, "no live tmux session for %s (agentbook only)\n", old)
-	case !a.paneRunsClaude(old):
-		fmt.Fprintf(a.out, "the %s pane is not a Claude agent: no transcript title to change\n", old)
-	case dry:
-		report("send /rename %s to the %s pane and wait for its transcript title", name, old)
-	default:
+		claudeRetitleSkipped = noRetitle
+	case paneClaude:
+		if dry {
+			report("send /rename %s to the %s pane and wait for its transcript title", name, old)
+			break
+		}
 		if err := a.renamePane(fleet, old, name); err != nil {
 			a.reportRenameRefused(old, name, err)
 			return errReported
 		}
 		report("send /rename %s to the %s pane and wait for its transcript title", name, old)
+	case codexAgent:
+		if dry {
+			report("append Codex thread_name %s to the bound session index", name)
+			break
+		}
+		title, err := a.renameCodexNativeTitle(fleet, old, name)
+		if err != nil {
+			a.reportCodexRenameRefused(old, name, err)
+			return errReported
+		}
+		codexNativeTitle = &title
+		report("append Codex thread_name %s to %s", name, filepath.Base(title.Path))
+	case dry:
+		report("no Claude or Codex native title to change for %s", old)
+	default:
+		fmt.Fprintf(a.out, "the %s pane is not a Claude or Codex agent: no native title to change\n", old)
 	}
 
 	// 2. tmux session.
@@ -239,6 +290,14 @@ func (a *app) rename(args []string) error {
 		}
 		for _, change := range changes {
 			report("update %s", change)
+		}
+		if codexNativeTitle != nil {
+			if err := book.SetNativeTitle(a.config.Agentbooks, name, *codexNativeTitle); err != nil {
+				fmt.Fprintf(a.err, "\nWARNING: Codex title is %q, but agentbook nativeTitle metadata for %s was not updated: %v\n", name, name, err)
+				fmt.Fprintln(a.err, "bp rename did not report success; inspect bp status and the agentbook before retrying.")
+				return errReported
+			}
+			report("update %s nativeTitle metadata", name)
 		}
 	}
 	if dry {
@@ -286,11 +345,17 @@ func (a *app) rename(args []string) error {
 	} else {
 		fmt.Fprintf(a.out, "\nrenamed %s -> %s. Verify with: bp status && bp tree\n", old, name)
 	}
-	if noRetitle && !dry {
+	if claudeRetitleSkipped && !dry {
 		// Said at the END, where it is read: the rename LOOKS complete and the one
 		// piece that is missing is invisible until something goes quiet.
 		fmt.Fprintf(a.err, "\nEKSIK KALAN TEK ADIM — %s kendi pane'inde SU KOMUTU YAZMALI:\n  /rename %s\n", name, name)
 		fmt.Fprintf(a.err, "o yazilana kadar transcript basligi %q kalir: bp bu agent'in baglamini/son turunu OKUYAMAZ (bp status'ta CACHE bos), bp compact 'transcript okunamadi' der ve bp open --resume onceki konusmayi bulamaz.\n", old)
+	}
+	if codexRetitleSkipped && !dry {
+		fmt.Fprintf(a.err, "\nUYARI — CODEX BAŞLIĞI ESKİ KALDI: %s için native title %q olarak kaldı; --no-retitle nedeniyle değiştirilmedi.\n", name, old)
+	}
+	if codexTitleUnavailable && !dry {
+		fmt.Fprintf(a.err, "\nUYARI — CODEX BAŞLIĞI ESKİ KALDI: %s için agentbook'ta nativeTitle.threadId ve session_index.jsonl yolu bulunamadı; Codex native title değiştirilmedi.\n", name)
 	}
 	return nil
 }
@@ -469,6 +534,87 @@ func (a *app) paneRunsClaude(session string) bool {
 		return false
 	}
 	return strings.Contains(commands[session], "claude")
+}
+
+// paneRunsCodex recognizes Codex from the active pane's process. "node" is
+// shared with other tools, so it also needs Codex UI evidence from that pane.
+func (a *app) paneRunsCodex(session string) bool {
+	process, err := a.tmux.PaneProcess(a.ctx, session)
+	if err != nil || !bptmux.IsCodexCommand(process.Command) {
+		return false
+	}
+	if process.Command != "node" {
+		return true
+	}
+	pane, err := a.tmux.CaptureAnsi(a.ctx, session)
+	return err == nil && bptmux.CodexPane(pane)
+}
+
+func agentbookRunsCodex(agent book.Agent) bool {
+	if agent.Local != nil && agent.Local.Harness == "codex" {
+		return true
+	}
+	if agent.Launch != nil && agent.Launch.Codex && !agent.Launch.Hermes {
+		return true
+	}
+	_, ok := closedCodexNativeTitle(agent)
+	return ok
+}
+
+func closedCodexNativeTitle(agent book.Agent) (book.NativeTitle, bool) {
+	if agent.NativeTitle == nil || agent.NativeTitle.ThreadID == "" || !filepath.IsAbs(agent.NativeTitle.Path) || filepath.Base(filepath.Clean(agent.NativeTitle.Path)) != "session_index.jsonl" {
+		return book.NativeTitle{}, false
+	}
+	return *agent.NativeTitle, true
+}
+
+func (a *app) renameCodexNativeTitle(fleet book.Fleet, session, name string) (book.NativeTitle, error) {
+	agent, ok := fleet.Agents[session]
+	if !ok {
+		return book.NativeTitle{}, fmt.Errorf("%s has no agentbook binding", session)
+	}
+	state, recognized := book.RuntimeState(a.ctx, a.tmux, agent)
+	activity := state.Activity
+	if !recognized || activity == nil || (state.Runtime != "codex" && state.Runtime != "codex-remote") || activity.ThreadID == "" {
+		reason := "no verified Codex thread binding"
+		if activity != nil && activity.Reason != "" {
+			reason += ": " + activity.Reason
+		}
+		return book.NativeTitle{}, errors.New(reason)
+	}
+	indexPath, err := codexSessionIndexPath(agent, activity.ThreadID, activity.TranscriptPath)
+	if err != nil {
+		return book.NativeTitle{}, err
+	}
+	return book.AppendCodexNativeTitle(indexPath, activity.ThreadID, name)
+}
+
+func codexSessionIndexPath(agent book.Agent, threadID, transcriptPath string) (string, error) {
+	if agent.Local != nil && agent.Local.Home != "" {
+		home := agent.Local.Home
+		if transcriptPath != "" {
+			rel, err := filepath.Rel(filepath.Join(home, "sessions"), transcriptPath)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+				return "", fmt.Errorf("bound Codex transcript is outside its CODEX_HOME")
+			}
+		}
+		return filepath.Join(home, "session_index.jsonl"), nil
+	}
+	for dir := filepath.Dir(transcriptPath); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if filepath.Base(dir) == "sessions" {
+			return filepath.Join(filepath.Dir(dir), "session_index.jsonl"), nil
+		}
+	}
+	if title := agent.NativeTitle; title != nil && title.ThreadID == threadID && filepath.Base(title.Path) == "session_index.jsonl" {
+		return title.Path, nil
+	}
+	return "", fmt.Errorf("could not locate the bound Codex session index")
+}
+
+func (a *app) reportCodexRenameRefused(old, name string, err error) {
+	fmt.Fprintf(a.err, "\nWARNING: Codex native title for %s was not confirmed as %q: %v\n", old, name, err)
+	fmt.Fprintf(a.err, "bp rename stopped before changing the tmux session or agentbooks. Verify with: bp name %s\n", old)
+	fmt.Fprintf(a.err, "If the thread binding is unavailable and the canonical name should still change, retry with: bp rename %s %s --no-retitle (the Codex title will stay old).\n", old, name)
 }
 
 // isProse reports whether a hit is documentation rather than something that

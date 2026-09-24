@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 // NativeTitle is display metadata, not an agent identity or an authority pin.
@@ -24,6 +26,65 @@ func ReadNativeTitle(path, id string, previous *NativeTitle) (NativeTitle, error
 // ReadCodexNativeTitle reads the native append-only session name index by exact thread ID.
 func ReadCodexNativeTitle(path, id string, previous *NativeTitle) (NativeTitle, error) {
 	return readNativeTitle(path, id, previous, true)
+}
+
+// AppendCodexNativeTitle updates Codex's session name using its native
+// append-only session_index.jsonl record format. It never truncates or rewrites
+// the index file, and creates a missing index only when its parent directory
+// already exists.
+func AppendCodexNativeTitle(path, id, title string) (NativeTitle, error) {
+	if id == "" || title == "" {
+		return NativeTitle{}, fmt.Errorf("Codex thread ID and title are required")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return NativeTitle{}, fmt.Errorf("open Codex session index: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return NativeTitle{}, fmt.Errorf("stat Codex session index: %w", err)
+	}
+	if info.Size() > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], info.Size()-1); err != nil {
+			return NativeTitle{}, fmt.Errorf("read Codex session index tail: %w", err)
+		}
+		if last[0] != '\n' {
+			return NativeTitle{}, fmt.Errorf("Codex session index has an incomplete final record")
+		}
+	}
+
+	record := struct {
+		ID         string `json:"id"`
+		ThreadName string `json:"thread_name"`
+		UpdatedAt  string `json:"updated_at"`
+	}{ID: id, ThreadName: title, UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+	line, err := json.Marshal(record)
+	if err != nil {
+		return NativeTitle{}, fmt.Errorf("encode Codex title record: %w", err)
+	}
+	line = append(line, '\n')
+	n, err := f.Write(line)
+	if err != nil {
+		return NativeTitle{}, fmt.Errorf("append Codex title record: %w", err)
+	}
+	if n != len(line) {
+		return NativeTitle{}, fmt.Errorf("append Codex title record: %w", io.ErrShortWrite)
+	}
+	if err := f.Sync(); err != nil {
+		return NativeTitle{}, fmt.Errorf("sync Codex title record: %w", err)
+	}
+
+	value, err := ReadCodexNativeTitle(path, id, nil)
+	if err != nil {
+		return NativeTitle{}, fmt.Errorf("verify Codex title record: %w", err)
+	}
+	if value.Text != title {
+		return NativeTitle{}, fmt.Errorf("Codex session index now reports %q, not %q", value.Text, title)
+	}
+	return value, nil
 }
 
 func readNativeTitle(path, id string, previous *NativeTitle, codex bool) (NativeTitle, error) {

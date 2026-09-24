@@ -60,11 +60,11 @@ bp worktree list <repo-directory>
 bp worktree rm <repo-directory> <topic> [--force]
 bp close <name>
 bp rename <old-name> <new-name> [--dry-run] [--no-retitle] [--archived]
-                             # --no-retitle: skip typing /rename into the pane, so an
-                             # agent can rename ITSELF (its own pane is always busy).
-                             # The transcript keeps the OLD title until that agent
-                             # types /rename <new> — bp cannot read its context (blank
-                             # CACHE), compact and open --resume stop finding it.
+                             # --no-retitle: skip Claude /rename and Codex native title;
+                             # use for self-renames or an unavailable Codex thread binding.
+                             # The Codex title stays old and bp warns after the rename.
+                             # The Claude transcript keeps its old title until it types
+                             # /rename <new>; CACHE and --resume depend on that title.
 bp msg [--force|--force-busy] <name> <message...>
                              # bp stamps a [sender] envelope; never write your own
                              # a /slash command goes bare, and only down the hierarchy

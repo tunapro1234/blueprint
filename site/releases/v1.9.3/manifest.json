@@ -1,0 +1,12 @@
+{
+  "version": "1.9.3",
+  "revision": "9dd4ff2af4145ec95460677777181ca3247a9911",
+  "published": "2026-09-24T15:11:20.483208+00:00",
+  "sha256": {
+    "bp-linux-amd64": "afa43a9142078aea3e9485a0e3755bc4da236d987bc06da1e63f2f761d32cb04",
+    "bp-linux-arm64": "00120b85f0d538867ec4b70ccc8ac27e2bbd66ee16bade4a12864842c27ba8e3",
+    "bp-darwin-amd64": "a1c3173a6c6203d21108350488ac05f5e1d248b1616c09e3287abf7f57683851",
+    "bp-darwin-arm64": "172d895cde3918b402c76d903f0b7fe89da62aeab7ec9a56dcde89f546f352a9",
+    "install.sh": "4d1184e2765ffd90e6c8511207a2f3e35343a3c629fa14b85c0d50cf960d4268"
+  }
+}

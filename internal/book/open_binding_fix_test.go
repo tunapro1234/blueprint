@@ -15,24 +15,112 @@ func TestOpenBindingNeedsExplicitRebindForChangedFolderOrThread(t *testing.T) {
 		"nativeTitle": map[string]any{"threadId": "thread-old"},
 	}}})
 
-	err := CheckOpenBinding([]string{path}, "worker", "/repo/new", "thread-new", false, false, false)
+	err := CheckOpenBinding([]string{path}, "worker", "/repo/new", "thread-new", false, false, false, false)
 	if err == nil || !strings.Contains(err.Error(), "thread-old") || !strings.Contains(err.Error(), "--rebind") {
 		t.Fatalf("conflict=%v, want old/new binding and --rebind guidance", err)
 	}
-	if err := CheckOpenBinding([]string{path}, "worker", "/repo/new", "thread-new", false, false, true); err != nil {
+	if err := CheckOpenBinding([]string{path}, "worker", "/repo/new", "thread-new", false, false, true, false); err != nil {
 		t.Fatalf("explicit rebind rejected: %v", err)
 	}
 }
 
-func TestOpenBindingRejectsThreadClaimedByArchivedRecordEvenWithRebind(t *testing.T) {
+func TestOpenBindingIgnoresArchivedThreadClaimEvenWithRebind(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "book.json")
 	writeBookFile(t, path, map[string]any{"agents": []any{
 		map[string]any{"name": "worker", "folder": "/repo", "status": "closed"},
 		map[string]any{"name": "retired", "folder": "/old", "archivedAt": "2026-01-01", "nativeTitle": map[string]any{"threadId": "thread-one"}},
 	}})
-	err := CheckOpenBinding([]string{path}, "worker", "/repo", "thread-one", false, false, true)
-	if err == nil || !strings.Contains(err.Error(), "retired (archived)") {
-		t.Fatalf("conflict=%v, want archived owner", err)
+	err := CheckOpenBinding([]string{path}, "worker", "/repo", "thread-one", false, false, true, false)
+	if err != nil {
+		t.Fatalf("archived owner should not block: %v", err)
+	}
+}
+
+func TestOpenBindingArchivedThreadDoesNotBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.json")
+	writeBookFile(t, path, map[string]any{"agents": []any{
+		map[string]any{"name": "airpods", "folder": "/repo", "status": "closed"},
+		map[string]any{"name": "retired", "folder": "/old", "status": "closed", "archivedAt": "2026-01-01", "nativeTitle": map[string]any{"threadId": "thread-one"}},
+	}})
+	if err := CheckOpenBinding([]string{path}, "airpods", "/repo", "thread-one", false, false, false, false); err != nil {
+		t.Fatalf("archived thread owner blocked a new binding: %v", err)
+	}
+}
+
+func TestOpenBindingClosedThreadListsEveryHolderAndAdoptHint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.json")
+	writeBookFile(t, path, map[string]any{"agents": []any{
+		map[string]any{"name": "airpods", "folder": "/repo", "status": "closed"},
+		map[string]any{"name": "claude-tuna-8da88b", "folder": "/repo", "status": "closed", "identityThreadId": "thread-one"},
+		map[string]any{"name": "claude-tuna-a360d0", "folder": "/old", "status": "closed", "archivedAt": "2026-01-01", "launch": map[string]any{"resumeId": "thread-one"}},
+	}})
+	err := CheckOpenBinding([]string{path}, "airpods", "/repo", "thread-one", false, false, false, false)
+	if err == nil {
+		t.Fatal("closed thread holder was ignored")
+	}
+	for _, want := range []string{"claude-tuna-8da88b", "closed", path, "claude-tuna-a360d0", "archived", "--adopt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("conflict %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestAdoptThreadMovesClosedAndArchivedReferencesWithoutDeletingRows(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "main.json")
+	second := filepath.Join(root, "workers.json")
+	writeBookFile(t, first, map[string]any{"agents": []any{
+		map[string]any{"name": "airpods", "folder": "/repo", "status": "closed"},
+		map[string]any{"name": "claude-tuna-8da88b", "folder": "/repo", "status": "closed", "identityThreadId": "thread-one"},
+	}})
+	writeBookFile(t, second, map[string]any{"agents": []any{
+		map[string]any{"name": "claude-tuna-a360d0", "folder": "/old", "status": "closed", "archivedAt": "2026-01-01", "launch": map[string]any{"resume": true, "resumeId": "thread-one"}},
+	}})
+	moved, err := AdoptThread([]string{first, second}, "airpods", "thread-one", func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 2 || moved[0].Name != "claude-tuna-8da88b" || moved[1].Name != "claude-tuna-a360d0" {
+		t.Fatalf("moved bindings = %+v", moved)
+	}
+	for _, path := range []string{first, second} {
+		file, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (path == first && len(file.Agents) != 2) || (path == second && len(file.Agents) != 1) {
+			t.Fatalf("agent rows were deleted from %s: %+v", path, file.Agents)
+		}
+	}
+	bindings, err := ThreadBindings([]string{first, second}, "thread-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 0 {
+		t.Fatalf("old thread references remain: %+v", bindings)
+	}
+	file, err := Load(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Agents[0].ArchivedAt == "" || file.Agents[0].Status != "closed" {
+		t.Fatalf("adoption changed archived/status state: %+v", file.Agents[0])
+	}
+}
+
+func TestAdoptThreadRefusesLiveHolder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "book.json")
+	writeBookFile(t, path, map[string]any{"agents": []any{
+		map[string]any{"name": "airpods", "folder": "/repo", "status": "closed"},
+		map[string]any{"name": "live-holder", "folder": "/repo", "status": "open", "identityThreadId": "thread-one"},
+	}})
+	_, err := AdoptThread([]string{path}, "airpods", "thread-one", func(name string) bool { return name == "live-holder" })
+	if err == nil || !strings.Contains(err.Error(), "bp attach live-holder") {
+		t.Fatalf("live thread conflict = %v", err)
+	}
+	bindings, err := ThreadBindings([]string{path}, "thread-one")
+	if err != nil || len(bindings) != 1 || bindings[0].Name != "live-holder" {
+		t.Fatalf("live holder changed after failed adoption: %+v, %v", bindings, err)
 	}
 }
 

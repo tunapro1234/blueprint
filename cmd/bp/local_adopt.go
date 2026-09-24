@@ -1,14 +1,52 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"syscall"
 
 	"blueprint/internal/book"
 	bptmux "blueprint/internal/tmux"
 )
+
+func (a *app) hasTmuxSession(name string) bool {
+	if a.tmux == nil {
+		return false
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.tmux.HasSession(ctx, name)
+}
+
+func (a *app) checkThreadBinding(target, thread string, adopt bool) error {
+	return book.CheckThreadBinding(a.config.Agentbooks, target, thread, adopt, a.hasTmuxSession)
+}
+
+func (a *app) adoptThreadBinding(target, thread string) error {
+	moved, err := book.AdoptThread(a.config.Agentbooks, target, thread, a.hasTmuxSession)
+	if err != nil {
+		return err
+	}
+	out := a.out
+	if out == nil {
+		out = os.Stdout
+	}
+	for _, binding := range moved {
+		state := binding.Status
+		if binding.Archived {
+			state = "archived"
+		} else if state == "" {
+			state = "unknown"
+		}
+		fmt.Fprintf(out, "adopted thread %s from %s (%s) in %s\n", thread, binding.Name, state, binding.Path)
+	}
+	return nil
+}
 
 // adoptNativeThread reuses a registration carrying the exact native title
 // thread. It never mints a second record for a conversation already known to
@@ -33,7 +71,7 @@ func (a *app) adoptNativeThread(thread, requested string) (string, bool, error) 
 	}
 	for _, agent := range matches {
 		if agent.Status == "open" && a.localRecordProcessLive(agent) {
-			return "", false, fmt.Errorf("native thread %s already belongs to open agent %s with a live process; refusing to create a second session", thread, agent.Name)
+			return "", false, fmt.Errorf("native thread %s is held by live agent %s; use bp attach %s instead of creating a second session", thread, agent.Name, agent.Name)
 		}
 	}
 	sort.Slice(matches, func(i, j int) bool {

@@ -57,9 +57,9 @@ bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
-bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] <codex|claude|opencode|hermes> [arguments...]
+bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] <codex|claude|opencode|hermes> [arguments...]
                               # bp open also accepts --opencode for managed sessions
-bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
 bp attach <agent>@<server>      # delegate the same command to a registered remote
 bp schema export [<project-dir>] [--lead <agent>]
@@ -1268,7 +1268,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--no-sandbox] [--no-prompt] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1297,7 +1297,7 @@ func (a *app) open(args []string) error {
 	}
 	harness := ""
 	resumeRequested, threadExplicit, freshRequested := false, false, false
-	rebind := false
+	rebind, adopt := false, false
 	worktreeTopic := ""
 	reg := book.Registration{Lifetime: book.LifetimePersistent}
 	if stored.Agents[name].IsEphemeral() {
@@ -1356,6 +1356,8 @@ func (a *app) open(args []string) error {
 			opts.NoPrompt = true
 		case "--rebind":
 			rebind = true
+		case "--adopt":
+			adopt = true
 		case "--worktree":
 			if index+1 >= len(args) {
 				return fmt.Errorf("--worktree requires a topic")
@@ -1397,7 +1399,10 @@ func (a *app) open(args []string) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, rebind); err != nil {
+	if err := a.checkThreadBinding(name, opts.ResumeID, adopt); err != nil {
+		return err
+	}
+	if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, rebind, adopt); err != nil {
 		return err
 	}
 	// The fleet answers two questions below: is --parent a real agent, and does
@@ -1425,7 +1430,7 @@ func (a *app) open(args []string) error {
 		}
 	}
 	if rebind && a.tmux.HasSession(a.ctx, name) {
-		if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, false); err != nil {
+		if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, false, adopt); err != nil {
 			return fmt.Errorf("cannot rebind a live tmux session; close it before retrying: %w", err)
 		}
 	}
@@ -1511,8 +1516,19 @@ func (a *app) open(args []string) error {
 	if err := opts.Validate(); err != nil {
 		return err
 	}
-	if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, rebind); err != nil {
+	if err := a.checkThreadBinding(name, opts.ResumeID, adopt); err != nil {
 		return err
+	}
+	if err := book.CheckOpenBinding(a.config.Agentbooks, name, dir, opts.ResumeID, opts.Codex, !opts.Resume, rebind, adopt); err != nil {
+		return err
+	}
+	if adopt {
+		if opts.ResumeID == "" {
+			return fmt.Errorf("--adopt requires a resolved --resume or --thread id")
+		}
+		if err := a.adoptThreadBinding(name, opts.ResumeID); err != nil {
+			return err
+		}
 	}
 	reg.Launch = &opts
 	// Reviving used to print nothing until it finished or timed out minutes

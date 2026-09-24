@@ -44,7 +44,7 @@ func TestRunRefusesASecondLiveOpenOwnerOfNativeThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app{ctx: context.Background(), config: bpconfig.Config{Agentbooks: []string{path}}}
-	if _, _, err := a.adoptNativeThread("thread-live", ""); err == nil || !strings.Contains(err.Error(), "refusing to create a second session") {
+	if _, _, err := a.adoptNativeThread("thread-live", ""); err == nil || !strings.Contains(err.Error(), "bp attach live-agent") {
 		t.Fatalf("error=%v, want live-owner refusal", err)
 	}
 }

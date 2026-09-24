@@ -143,12 +143,12 @@ func RecordStatus(paths []string, name string) (string, bool, error) {
 }
 
 // CheckOpenBinding enforces the identity boundary for bp open. Rebinding the
-// named record requires an explicit flag, while a thread claimed by any other
-// record (including an archived row) is always refused.
+// named record requires an explicit flag. Archived rows retain their historical
+// thread metadata but do not reserve a thread against a new active owner.
 // codex reports which harness the caller is opening. A harness switch (a
 // Claude open over a Codex record, or the reverse) necessarily names a
 // different conversation, so it is not a silent rebind and is not refused.
-func CheckOpenBinding(paths []string, name, folder, thread string, codex, newConversation, rebind bool) error {
+func CheckOpenBinding(paths []string, name, folder, thread string, codex, newConversation, rebind, adopt bool) error {
 	records, err := Records(paths)
 	if err != nil {
 		return err
@@ -186,19 +186,74 @@ func CheckOpenBinding(paths []string, name, folder, thread string, codex, newCon
 				name, threadLabel(boundThread), displayFolder(existing.Folder), threadLabel(requestedThread), displayFolder(requestedFolder))
 		}
 	}
-	if thread != "" {
-		for _, record := range records {
-			if record.Agent.Name == name && record.Agent.ArchivedAt == "" || !containsString(agentThreads(&record.Agent), thread) {
-				continue
-			}
-			state := ""
-			if record.Agent.ArchivedAt != "" {
-				state = " (archived)"
-			}
-			return fmt.Errorf("thread %s is already bound to %s%s in %s", thread, record.Agent.Name, state, record.Path)
-		}
+	if err := checkThreadBindings(bindingsFromRecords(records, thread), name, thread, adopt, nil); err != nil {
+		return err
 	}
 	return nil
+}
+
+// CheckThreadBinding enforces thread ownership across all configured books.
+// Live-session probes are supplied by the caller so archived records can stay
+// historical while a real tmux owner always blocks adoption.
+func CheckThreadBinding(paths []string, target, thread string, adopt bool, live func(string) bool) error {
+	bindings, err := ThreadBindings(paths, thread)
+	if err != nil {
+		return err
+	}
+	return checkThreadBindings(bindings, target, thread, adopt, live)
+}
+
+func checkThreadBindings(bindings []ThreadBinding, target, thread string, adopt bool, live func(string) bool) error {
+	if thread == "" {
+		return nil
+	}
+	var holders []string
+	activeHolder := false
+	for _, binding := range bindings {
+		if binding.Name == target && !binding.Archived {
+			continue
+		}
+		state := binding.Status
+		if state == "" {
+			state = "unknown"
+		}
+		if binding.Archived {
+			state = "archived"
+		} else {
+			activeHolder = true
+			if live != nil && live(binding.Name) {
+				return fmt.Errorf("thread %s is held by live tmux session %s; use bp attach %s", thread, binding.Name, binding.Name)
+			}
+		}
+		holders = append(holders, fmt.Sprintf("%s (%s) in %s", binding.Name, state, binding.Path))
+	}
+	if activeHolder && !adopt {
+		sort.Strings(holders)
+		return fmt.Errorf("thread %s is already bound to %s; use --adopt to move it to %s", thread, strings.Join(holders, ", "), target)
+	}
+	return nil
+}
+
+func bindingsFromRecords(records []Record, thread string) []ThreadBinding {
+	if thread == "" {
+		return nil
+	}
+	var bindings []ThreadBinding
+	for _, record := range records {
+		if containsString(agentThreads(&record.Agent), thread) {
+			bindings = append(bindings, ThreadBinding{
+				Name: record.Agent.Name, Status: record.Agent.Status,
+				Path: record.Path, Archived: record.Agent.ArchivedAt != "",
+			})
+		}
+	}
+	sort.Slice(bindings, func(i, j int) bool {
+		if bindings[i].Name != bindings[j].Name {
+			return bindings[i].Name < bindings[j].Name
+		}
+		return bindings[i].Path < bindings[j].Path
+	})
+	return bindings
 }
 
 func agentThread(agent *Agent) string {

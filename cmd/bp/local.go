@@ -120,6 +120,7 @@ func (a *app) initLocalBook() error {
 
 func (a *app) localRun(args []string) error {
 	name, parent, role := "", "", ""
+	nameExplicit, adopt := false, false
 	lifetime := book.LifetimePersistent
 	if a.config.Lifecycle.EphemeralDefault {
 		lifetime = book.LifetimeEphemeral
@@ -135,7 +136,7 @@ options:
 			if len(args) < 2 {
 				return fmt.Errorf("--name requires an agent name")
 			}
-			name = args[1]
+			name, nameExplicit = args[1], true
 		case "--parent":
 			if len(args) < 2 {
 				return fmt.Errorf("--parent requires an agent name")
@@ -146,6 +147,10 @@ options:
 				return fmt.Errorf("--role requires role text")
 			}
 			role = args[1]
+		case "--adopt":
+			adopt = true
+			args = args[1:]
+			continue
 		case "--ephemeral":
 			lifetime, lifetimeExplicit = book.LifetimeEphemeral, true
 			args = args[1:]
@@ -160,7 +165,10 @@ options:
 		args = args[2:]
 	}
 	if len(args) == 0 || !localHarness(args[0]) {
-		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] <codex|claude|opencode|hermes> [arguments...]")
+		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] <codex|claude|opencode|hermes> [arguments...]")
+	}
+	if adopt && !nameExplicit {
+		return fmt.Errorf("--adopt requires --name so the thread has an explicit destination")
 	}
 	programName := args[0]
 	if programName == "custom" {
@@ -180,6 +188,9 @@ options:
 		return err
 	}
 	if os.Getenv("TMUX") != "" || !a.interactiveTerminal() || batchCommand(args[0], args[1:]) {
+		if adopt {
+			return fmt.Errorf("--adopt requires a managed interactive bp run outside tmux")
+		}
 		return syscall.Exec(program, append([]string{program}, args[1:]...), os.Environ())
 	}
 	a.updateNotice()
@@ -212,6 +223,10 @@ options:
 			defer guard.close()
 		}
 		if existing != "" {
+			if nameExplicit && name != existing {
+				guard.close()
+				return fmt.Errorf("Codex thread %s is held by live tmux session %s; use bp attach %s", guard.thread, existing, existing)
+			}
 			if err := a.recordClaudeResume(guard); err != nil {
 				return err
 			}
@@ -250,6 +265,10 @@ options:
 			}
 			defer resumeGuard.close()
 			if existing != "" {
+				if nameExplicit && name != existing {
+					resumeGuard.close()
+					return fmt.Errorf("Claude conversation %s is held by live tmux session %s; use bp attach %s", thread, existing, existing)
+				}
 				resumeGuard.close()
 				return a.attachLocal(existing)
 			}
@@ -257,18 +276,32 @@ options:
 			args = append([]string{"claude"}, resolved...)
 		}
 	}
+	if adopt && resumeThread == "" {
+		return fmt.Errorf("--adopt requires a resolved resume thread")
+	}
 	if resumeThread != "" {
-		existing, attach, err := a.adoptNativeThread(resumeThread, name)
-		if err != nil {
-			return err
-		}
-		if existing != "" {
-			name = existing
-			if resumeGuard != nil {
-				resumeGuard.close()
+		if nameExplicit {
+			if err := a.checkThreadBinding(name, resumeThread, adopt); err != nil {
+				return err
 			}
-			if attach {
-				return a.attachLocal(existing)
+			if adopt {
+				if err := a.adoptThreadBinding(name, resumeThread); err != nil {
+					return err
+				}
+			}
+		} else {
+			existing, attach, err := a.adoptNativeThread(resumeThread, name)
+			if err != nil {
+				return err
+			}
+			if existing != "" {
+				name = existing
+				if resumeGuard != nil {
+					resumeGuard.close()
+				}
+				if attach {
+					return a.attachLocal(existing)
+				}
 			}
 		}
 	}

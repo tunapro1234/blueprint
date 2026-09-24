@@ -59,6 +59,13 @@ new one; it cannot be combined with `--resume` or `--thread`. Project schemas
 use this for closed agents when `history: none` is selected. Managed OpenCode
 launches use `bp open ... --opencode`.
 
+When a thread is also recorded on another closed registration, `bp open` and
+named `bp run` report every holder and require `--adopt` to move the binding to
+the requested name. For example, `bp run --name work --adopt claude --resume <uuid>`
+clears that thread reference from the other closed or archived rows, keeps those
+rows intact, and prints each move. A live tmux session always blocks adoption;
+attach to that session with `bp attach <name>` first.
+
 Messages wait when the target is working, its state is uncertain, or the user is
 typing. A transport acknowledgement alone is not proof of agent delivery.
 

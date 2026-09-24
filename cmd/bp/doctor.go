@@ -458,7 +458,7 @@ func doctorNativeTitleAdoptionHint(agentName, title string, agentbooks []string)
 			if record.Agent.ArchivedAt != "" {
 				status = "archived"
 			}
-			return "", fmt.Sprintf(`adopt unavailable: %q is used by agent %s (%s)`, title, record.Agent.Name, status)
+			return "", fmt.Sprintf(`adopt unavailable: agent %q already exists (%s)`, title, status)
 		}
 	}
 	return "", fmt.Sprintf(`adopt unavailable: cannot verify whether %q is free`, title)

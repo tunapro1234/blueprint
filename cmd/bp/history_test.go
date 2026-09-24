@@ -205,6 +205,61 @@ func TestCodexHistoryMovesRolloutAndSessionIndex(t *testing.T) {
 	}
 }
 
+func TestCodexHistoryExportRefreshesPortableSessionIndex(t *testing.T) {
+	t.Setenv("AGENTBOOK", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := filepath.Join(home, ".codex")
+	t.Setenv("CODEX_HOME", codexHome)
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePortableSchema(t, project, "codex")
+	bookPath := filepath.Join(t.TempDir(), "agentbook.json")
+	const firstID = "0190aabb-ccdd-7eef-8123-456789abcdef"
+	const secondID = "0190aabb-ccdd-7eef-8123-456789abcde0"
+	writeSchemaBook(t, bookPath, "worker", []book.Agent{{
+		Name: "worker", Folder: project, Launch: &bptmux.OpenOptions{Codex: true, ResumeID: firstID},
+	}})
+	writeRollout := func(id string) {
+		t.Helper()
+		path := filepath.Join(codexHome, "sessions", "2026", "09", "24", "rollout-"+id+".jsonl")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		data := []byte("{\"type\":\"session_meta\",\"payload\":{\"id\":\"" + id + "\",\"cwd\":\"" + project + "\"}}\n")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRollout(firstID)
+	firstRow := []byte("{\"id\":\"" + firstID + "\",\"thread_name\":\"first\"}\n")
+	if err := os.WriteFile(filepath.Join(codexHome, "session_index.jsonl"), firstRow, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{config: bpconfig.Config{Agentbooks: []string{bookPath}}, out: schemaOutput(t), err: schemaOutput(t)}
+	if err := a.exportHistory(historyExportOptions{Project: project, Keep: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	writeRollout(secondID)
+	secondRow := []byte("{\"id\":\"" + secondID + "\",\"thread_name\":\"second\"}\n")
+	if err := os.WriteFile(filepath.Join(codexHome, "session_index.jsonl"), append(firstRow, secondRow...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeSchemaBook(t, bookPath, "worker", []book.Agent{{
+		Name: "worker", Folder: project, Launch: &bptmux.OpenOptions{Codex: true, ResumeID: secondID},
+	}})
+	if err := a.exportHistory(historyExportOptions{Project: project, Keep: 1}); err != nil {
+		t.Fatalf("second export failed: %v", err)
+	}
+	portableIndex := filepath.Join(project, projectschema.Directory, "history", "worker", "codex", "session_index.jsonl")
+	if got, err := os.ReadFile(portableIndex); err != nil || !bytes.Equal(got, secondRow) {
+		t.Fatalf("portable Codex index = %q, %v; want %q", got, err, secondRow)
+	}
+}
+
 func TestHistoryExportStdoutWritesTarAndNeverOverwritesDifferentContent(t *testing.T) {
 	t.Setenv("AGENTBOOK", "")
 	home := t.TempDir()

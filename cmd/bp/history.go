@@ -143,7 +143,7 @@ func (a *app) exportHistory(opts historyExportOptions) error {
 	}
 	for _, entry := range entries {
 		target := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(entry.Name, "history/")))
-		if err := writeNoConflict(target, entry.Data, entry.Mode); err != nil {
+		if err := writePortableHistoryEntry(target, entry); err != nil {
 			return err
 		}
 		_ = os.Chtimes(target, entry.ModTime, entry.ModTime)
@@ -153,6 +153,22 @@ func (a *app) exportHistory(opts historyExportOptions) error {
 	}
 	fmt.Fprintf(a.out, "exported %d history file(s) to %s (keeping %d session(s) per agent)\n", len(entries), root, opts.Keep)
 	return nil
+}
+
+func writePortableHistoryEntry(path string, entry historyEntry) error {
+	name := strings.TrimPrefix(filepath.ToSlash(entry.Name), "history/")
+	parts := strings.Split(name, "/")
+	if len(parts) != 3 || parts[1] != "codex" || parts[2] != "session_index.jsonl" {
+		return writeNoConflict(path, entry.Data, entry.Mode)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	mode := entry.Mode
+	if mode == 0 {
+		mode = 0o600
+	}
+	return writeAtomic(path, entry.Data, mode)
 }
 
 func historyEntriesForAgent(agent book.Agent, keep int) ([]historyEntry, error) {

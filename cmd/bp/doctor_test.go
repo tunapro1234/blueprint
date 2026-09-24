@@ -27,25 +27,38 @@ func TestDoctorDeniedSocketDoesNotReportClosedWriter(t *testing.T) {
 
 func TestDoctorNativeTitleMismatchExplainsRetitleAndAdoption(t *testing.T) {
 	doctorTestTmux(t, false)
+	t.Setenv("AGENTBOOK", "")
 	for _, test := range []struct {
-		name      string
-		reserve   bool
-		wantAdopt bool
+		name            string
+		title           string
+		reservation     *book.Agent
+		wantAdopt       bool
+		wantUnavailable string
 	}{
-		{name: "available native title", wantAdopt: true},
-		{name: "title already registered", reserve: true},
+		{name: "available native title", title: "native-alias", wantAdopt: true},
+		{name: "title used by closed registration", title: "native-alias", reservation: &book.Agent{Name: "native-alias", Status: "closed"}, wantUnavailable: `adopt unavailable: "native-alias" is used by agent native-alias (closed)`},
+		{name: "title used by archived registration", title: "native-alias", reservation: &book.Agent{Name: "native-alias", Status: "closed", ArchivedAt: "2026-09-01T00:00:00Z"}, wantUnavailable: `adopt unavailable: "native-alias" is used by agent native-alias (archived)`},
+		{name: "invalid free-form title", title: "native alias", wantUnavailable: `adopt unavailable: "native alias" is not a valid agent name`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			transcript := filepath.Join(root, "session.jsonl")
-			originalTranscript := []byte(`{"type":"custom-title","customTitle":"native-alias","sessionId":"thread"}` + "\n")
+			title := test.title
+			if title == "" {
+				title = "native-alias"
+			}
+			line, err := json.Marshal(map[string]string{"type": "custom-title", "customTitle": title, "sessionId": "thread"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalTranscript := append(line, '\n')
 			if err := os.WriteFile(transcript, originalTranscript, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			bookPath := filepath.Join(root, "agentbook.json")
 			entries := []book.Agent{{Name: "canonical-name"}}
-			if test.reserve {
-				entries = append(entries, book.Agent{Name: "native-alias"})
+			if test.reservation != nil {
+				entries = append(entries, *test.reservation)
 			}
 			bookData, err := json.Marshal(book.File{Agents: entries})
 			if err != nil {
@@ -57,11 +70,11 @@ func TestDoctorNativeTitleMismatchExplainsRetitleAndAdoption(t *testing.T) {
 			}
 			entry := book.Agent{
 				Name:        "canonical-name",
-				NativeTitle: &book.NativeTitle{ThreadID: "thread", Path: transcript, Text: "native-alias"},
+				NativeTitle: &book.NativeTitle{ThreadID: "thread", Path: transcript, Text: title},
 			}
 			fleet := book.Fleet{Agents: map[string]book.Agent{"canonical-name": entry}}
-			if test.reserve {
-				fleet.Agents["native-alias"] = book.Agent{Name: "native-alias"}
+			if test.reservation != nil {
+				fleet.Agents[title] = *test.reservation
 			}
 			cfg := config.Config{StateDir: filepath.Join(root, "state"), Agentbooks: []string{bookPath}}
 			checks := doctorRuntimeChecks(cfg, fleet, "canonical-name")
@@ -80,9 +93,15 @@ func TestDoctorNativeTitleMismatchExplainsRetitleAndAdoption(t *testing.T) {
 					t.Errorf("next hint %q does not explain retitling", found.Next)
 				}
 			}
-			adoption := "bp rename canonical-name native-alias (adopt the native title as the bp name)"
+			adoption := "bp rename canonical-name " + title + " (adopt the native title as the bp name)"
 			if strings.Contains(found.Next, adoption) != test.wantAdopt {
 				t.Fatalf("next hint %q adoption-present=%t want %t", found.Next, strings.Contains(found.Next, adoption), test.wantAdopt)
+			}
+			if test.wantUnavailable != "" && !strings.Contains(found.Next, test.wantUnavailable) {
+				t.Errorf("next hint %q does not explain why adoption is unavailable; want %q", found.Next, test.wantUnavailable)
+			}
+			if strings.Contains(found.Next, root) {
+				t.Errorf("next hint contains an agentbook/transcript path: %q", found.Next)
 			}
 			afterBook, err := os.ReadFile(bookPath)
 			if err != nil || string(afterBook) != string(bookData) {

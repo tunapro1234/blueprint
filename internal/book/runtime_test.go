@@ -115,6 +115,30 @@ func TestRemoteRetiredArgvNeedsExplicitPinAndLiveServer(t *testing.T) {
 	}
 }
 
+func TestUnboundCodexThreadIncludesRecoveryHintInDeliveryReason(t *testing.T) {
+	agent := Agent{Name: "ghost", Folder: "/srv/work"}
+	activity := &cache.Activity{State: "unknown"}
+	state := readCodexRuntime(context.Background(), bptmux.CodexProcess{Home: t.TempDir()}, agent, activity)
+	if activity.Reason != "no valid explicit thread binding" {
+		t.Fatalf("machine-readable reason changed: %q", activity.Reason)
+	}
+	for _, part := range []string{
+		"close it first with bp close 'ghost'",
+		"reopen with bp open 'ghost' '/srv/work' --codex (omit --no-prompt)",
+		"bind a known thread with bp open 'ghost' '/srv/work' --codex --thread THREAD_ID --rebind",
+	} {
+		if !strings.Contains(activity.RecoveryHint, part) {
+			t.Fatalf("recovery hint %q missing %q", activity.RecoveryHint, part)
+		}
+	}
+	fleet := Fleet{Sources: map[string][]string{"ghost": {"/srv/agentbook.json"}}}
+	state.Activity = activity
+	blocked := runtimeBlockReason("ghost", fleet, state, false)
+	if !strings.Contains(blocked, activity.Reason) || !strings.Contains(blocked, activity.RecoveryHint) {
+		t.Fatalf("delivery refusal lacks binding cause or recovery hint: %s", blocked)
+	}
+}
+
 func TestRemoteTranscriptUsesVerifiedPathDespiteBirthCwd(t *testing.T) {
 	home := t.TempDir()
 	id := "01a0711e-1b8b-76a2-954a-76f9e1a44ceb"

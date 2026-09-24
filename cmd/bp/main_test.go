@@ -1157,6 +1157,45 @@ func TestStatusHumanOutputIsUnchanged(t *testing.T) {
 	}
 }
 
+func TestStatusShowsCodexThreadRecoveryHint(t *testing.T) {
+	hint := "no thread binding yet; run bp close 'ghost', then reopen with a prompt"
+	fleet := book.Fleet{
+		Root:  "server-main",
+		Order: []string{"ghost"},
+		Agents: map[string]book.Agent{
+			"ghost": {Name: "ghost", Folder: "/srv/ghost", Status: "open"},
+		},
+		Parents: map[string]string{},
+	}
+	states := map[string]book.State{
+		"ghost": {
+			Alive: true,
+			Runtime: &bpcache.State{Runtime: "codex", Activity: &bpcache.Activity{
+				State: "unknown", Reason: "no valid explicit thread binding", RecoveryHint: hint,
+			}},
+		},
+	}
+	a := &app{
+		out:       testOutput(t),
+		loadFleet: func() (book.Fleet, map[string]book.State, error) { return fleet, states, nil },
+		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+	}
+	if err := a.status(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestOutput(t, a.out); !strings.Contains(got, "  recovery: "+hint) {
+		t.Fatalf("human status omitted recovery hint:\n%s", got)
+	}
+
+	a.out = testOutput(t)
+	if err := a.status([]string{"--json"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestOutput(t, a.out); !strings.Contains(got, `"recovery_hint": "`+hint+`"`) {
+		t.Fatalf("JSON status omitted recovery hint:\n%s", got)
+	}
+}
+
 func TestStatusJSON(t *testing.T) {
 	a := statusTestApp(t)
 	if err := a.status([]string{"--json"}); err != nil {
@@ -1838,7 +1877,7 @@ func TestOpenRecordsOpeningBeforeTheSessionExists(t *testing.T) {
 	client, session, snapshot := openTestTmux(t, bookPath, "  ›  ", false)
 	a := openTestApp(t, bookPath, client)
 
-	if err := a.open([]string{"ghost", dir, "--codex", "--no-prompt"}); err != nil {
+	if err := a.open([]string{"ghost", dir, "--codex"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(session); err != nil {
@@ -1860,7 +1899,7 @@ func TestOpenRollsBackToClosedWhenTmuxRefuses(t *testing.T) {
 	client, session, snapshot := openTestTmux(t, bookPath, "  ›  ", true)
 	a := openTestApp(t, bookPath, client)
 
-	if err := a.open([]string{"ghost", dir, "--codex", "--no-prompt"}); err == nil {
+	if err := a.open([]string{"ghost", dir, "--codex"}); err == nil {
 		t.Fatal("open succeeded although new-session failed")
 	}
 	if _, err := os.Stat(session); err == nil {
@@ -1890,7 +1929,7 @@ func TestInterruptedOpenLeavesOpeningVisibleInStatus(t *testing.T) {
 	a := openTestApp(t, bookPath, client)
 	a.ctx = ctx
 
-	if err := a.open([]string{"ghost", dir, "--codex", "--no-prompt"}); err == nil {
+	if err := a.open([]string{"ghost", dir, "--codex"}); err == nil {
 		t.Fatal("interrupted open reported success")
 	}
 	if _, err := os.Stat(session); err != nil {
@@ -2772,7 +2811,7 @@ func TestLocalOpenParentDoesNotComeFromSharedFolder(t *testing.T) {
 			a.resolveSender = func() identity.Identity {
 				return identity.Identity{Label: tc.sender, Certain: tc.certain, Source: "tmux"}
 			}
-			args := []string{"new-agent", dir, "--codex", "--no-prompt"}
+			args := []string{"new-agent", dir, "--codex"}
 			if tc.explicit != "" {
 				args = append(args, "--parent", tc.explicit)
 			}

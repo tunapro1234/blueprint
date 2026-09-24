@@ -117,3 +117,50 @@ func TestManualCompactCompletionClearsStaleLocalTurn(t *testing.T) {
 		})
 	}
 }
+
+// A crash-resumed harness leaves the pre-crash turn open in its transcript
+// (Codex writes no turn_aborted for "Conversation interrupted"). Before this
+// fix such agents read "unknown: local turn evidence stale" forever and bp
+// msg queued to them indefinitely.
+func TestOpenTurnFromBeforeProcessStartIsNotLive(t *testing.T) {
+	now := time.Now().UTC()
+	opened := now.Add(-2 * time.Hour)
+	for _, tc := range []struct {
+		name    string
+		started time.Time
+		want    string
+	}{
+		{"resumed after crash", now.Add(-time.Hour), "idle"},
+		{"same process still in turn", now.Add(-3 * time.Hour), "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := processStartedAt
+			t.Cleanup(func() { processStartedAt = saved })
+			processStartedAt = func(pid int) (time.Time, bool) { return tc.started, pid == 123 }
+			dir := t.TempDir()
+			id := "11111111-1111-1111-1111-111111111111"
+			path := filepath.Join(dir, id+".jsonl")
+			row := `{"type":"user","timestamp":"` + opened.Format(time.RFC3339Nano) + `","message":{"content":"old task"}}`
+			if err := os.WriteFile(path, []byte(row+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			b := &cache.LocalBinding{Path: filepath.Join(dir, "observation.json"), PID: 123, Harness: "claude"}
+			data, _ := json.Marshal(cache.LocalObservation{SessionID: id, TranscriptPath: path, CWD: dir, ObservedAt: now})
+			if err := os.WriteFile(b.Path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			a := &cache.Activity{State: "unknown", ObservedAt: now}
+			localRuntime(b, 123, a)
+			if a.State != tc.want {
+				t.Fatalf("%+v; want %s", a, tc.want)
+			}
+		})
+	}
+}
+
+func TestProcessStartedAtReadsThisProcess(t *testing.T) {
+	started, ok := processStartedAt(os.Getpid())
+	if !ok || started.After(time.Now()) || time.Since(started) > 24*time.Hour {
+		t.Fatalf("started=%v ok=%v", started, ok)
+	}
+}

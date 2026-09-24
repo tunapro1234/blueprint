@@ -413,8 +413,11 @@ func doctorNativeTitleMismatch(agent book.Agent, state *cache.State, agentbooks 
 		return doctorCheck{}, false
 	}
 	next := fmt.Sprintf("bp rename %s %s (retitle the native session to %q)", agent.Name, agent.Name, agent.Name)
-	if validAgentName(value.Text) && len(agentbooks) > 0 && book.RenameConflict(agentbooks, agent.Name, value.Text) == nil {
-		next += fmt.Sprintf("; bp rename %s %s (adopt the native title as the bp name)", agent.Name, value.Text)
+	adoption, unavailable := doctorNativeTitleAdoptionHint(agent.Name, value.Text, agentbooks)
+	if adoption != "" {
+		next += "; " + adoption
+	} else if unavailable != "" {
+		next += "; " + unavailable
 	}
 	return doctorCheck{
 		Name:    "native_title/" + agent.Name,
@@ -424,4 +427,39 @@ func doctorNativeTitleMismatch(agent book.Agent, state *cache.State, agentbooks 
 		Detail:  fmt.Sprintf("bp name %q does not match native title %q", agent.Name, value.Text),
 		Next:    next,
 	}, true
+}
+
+func doctorNativeTitleAdoptionHint(agentName, title string, agentbooks []string) (adoption, unavailable string) {
+	if !validAgentName(title) {
+		return "", fmt.Sprintf(`adopt unavailable: %q is not a valid agent name`, title)
+	}
+	paths := book.Paths(agentbooks)
+	if len(paths) == 0 {
+		return "", ""
+	}
+	if book.RenameConflict(paths, agentName, title) == nil {
+		return fmt.Sprintf("bp rename %s %s (adopt the native title as the bp name)", agentName, title), ""
+	}
+
+	// RenameConflict is the authority for whether adoption is safe. Look up the
+	// owning record only to explain the conflict, without exposing its book path.
+	records, err := book.Records(paths)
+	if err == nil {
+		for _, record := range records {
+			if record.Agent.Name != title {
+				continue
+			}
+			status := record.Agent.Status
+			switch status {
+			case "open", "closed", "opening":
+			default:
+				status = "registered"
+			}
+			if record.Agent.ArchivedAt != "" {
+				status = "archived"
+			}
+			return "", fmt.Sprintf(`adopt unavailable: %q is used by agent %s (%s)`, title, record.Agent.Name, status)
+		}
+	}
+	return "", fmt.Sprintf(`adopt unavailable: cannot verify whether %q is free`, title)
 }

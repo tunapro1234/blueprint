@@ -307,10 +307,11 @@ func TestAnnounceDefersColdAndSendsWarm(t *testing.T) {
 	if len(sent) != 1 || !strings.HasPrefix(sent[0], "warm:") {
 		t.Fatalf("sent=%v, want only warm", sent)
 	}
-	entries, _, err := pending.Load(stateDir, "cold")
+	snapshot, err := pending.Load(stateDir, "cold")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries := snapshot.Entries
 	if len(entries) != 1 || entries[0].Text != "hello" || entries[0].Kind != "announce" {
 		t.Fatalf("cold pending=%+v", entries)
 	}
@@ -334,10 +335,11 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		if err := a.message([]string{"alp", "hello"}); err != nil {
 			t.Fatal(err)
 		}
-		entries, _, err := pending.Load(stateDir, "alp")
+		snapshot, err := pending.Load(stateDir, "alp")
 		if err != nil {
 			t.Fatal(err)
 		}
+		entries := snapshot.Entries
 		if len(entries) != 1 || entries[0].Kind != "msg" || entries[0].From != "ada" || entries[0].Text != "hello" {
 			t.Fatalf("pending=%+v", entries)
 		}
@@ -372,10 +374,11 @@ func TestMessageQueuesOfflineAndAttachesPendingOnce(t *testing.T) {
 		if calls != 1 || !strings.Contains(delivered, "accumulated announcements") || !strings.HasSuffix(delivered, "\n\n[ada] direct") {
 			t.Fatalf("calls=%d delivered=%q", calls, delivered)
 		}
-		entries, _, err := pending.Load(stateDir, "alp")
+		snapshot, err := pending.Load(stateDir, "alp")
 		if err != nil {
 			t.Fatal(err)
 		}
+		entries := snapshot.Entries
 		if len(entries) != 0 {
 			t.Fatalf("pending was not cleared: %+v", entries)
 		}
@@ -2368,6 +2371,48 @@ func TestQueueListAndStatusNameTheReasonAMessageWaits(t *testing.T) {
 	}
 	if strings.Contains(status, "is still busy") {
 		t.Fatalf("bp qstat still reports a bare busy state:\n%s", status)
+	}
+}
+
+func TestQueueListShowsHeldAndGoodSpoolsAlongsideBrokenSpool(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stateDir, "pending"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	valid := pending.Entry{TS: time.Now().Unix(), From: "sender", Kind: "msg", Text: "deliverable"}
+	encoded, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixed := append([]byte(`{"ts":1,"from":"bilinmiyor","kind":"msg","text":"legacy"}`+"\n"), append(encoded, '\n')...)
+	if err := os.WriteFile(filepath.Join(stateDir, "pending", "mixed.jsonl"), mixed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pending.Append(stateDir, "good", pending.Entry{TS: time.Now().Unix(), From: "sender", Kind: "announce", Text: "also deliverable"}); err != nil {
+		t.Fatal(err)
+	}
+	brokenPath := filepath.Join(stateDir, "pending", "broken.jsonl")
+	if err := os.Mkdir(brokenPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	out := testOutput(t)
+	a := &app{config: bpconfig.Config{StateDir: stateDir}, queue: msgq.New(filepath.Join(stateDir, "msgq")), out: out}
+	err = a.queueList(nil)
+	if err == nil {
+		t.Fatal("queueList should return the broken spool error after listing all spools")
+	}
+	listing := readTestOutput(t, out)
+	for _, want := range []string{
+		"(message queue empty)",
+		"pending mixed: 1 deliverable, 1 held, 0 dropped",
+		"line 1: sender identity unavailable; anonymous delivery blocked",
+		"pending good: 1 deliverable, 0 held, 0 dropped",
+		"pending broken: ERROR",
+	} {
+		if !strings.Contains(listing, want) {
+			t.Fatalf("bp q output missing %q:\n%s", want, listing)
+		}
 	}
 }
 

@@ -1978,7 +1978,7 @@ func (a *app) readCache(folders map[string]string) map[string]bpcache.State {
 // pane that is genuinely past the digest — the handshake asked for in the incident
 // review needs no extra probe of its own.
 func (a *app) flushPending(name string) error {
-	entries, dropped, err := pending.Load(a.config.StateDir, name)
+	snapshot, err := pending.Load(a.config.StateDir, name)
 	if errors.Is(err, pending.ErrReadOnly) {
 		// This client cannot prune or clear the spool (a sandboxed agent with the
 		// state tree mounted read-only — measured on probot-out-codex,
@@ -1990,8 +1990,13 @@ func (a *app) flushPending(name string) error {
 		fmt.Fprintf(a.err, "NOTE: pending announcements for %s were NOT ADDED — the spool is read-only in this environment (%v). The message is being sent alone; a client with write access will deliver the announcements.\n", name, err)
 		return nil
 	}
-	if err != nil || len(entries) == 0 {
+	if err != nil {
 		return err
+	}
+	a.reportHeldPending(name, snapshot.Held)
+	entries, dropped := snapshot.Entries, snapshot.Dropped
+	if len(entries) == 0 {
+		return nil
 	}
 	release, lockErr := a.lockPane(name)
 	if lockErr != nil {
@@ -2059,6 +2064,12 @@ func formatDigest(entries []pending.Entry, dropped int) string {
 		fmt.Fprintf(&digest, "\n(+%d old announcements dropped)", dropped)
 	}
 	return digest.String()
+}
+
+func (a *app) reportHeldPending(name string, held []pending.HeldRecord) {
+	for _, record := range held {
+		fmt.Fprintf(a.err, "NOTE: 1 pending record for %s held: %s; inspect %s line %d\n", name, record.Reason, filepath.Join(a.config.StateDir, "pending", name+".jsonl"), record.Line)
+	}
 }
 
 func humanTokens(value int) string {
@@ -2205,18 +2216,17 @@ func (a *app) message(args []string) error {
 	attachPending := !strings.HasPrefix(message, "/")
 	var entries []pending.Entry
 	if attachPending {
-		// Load prunes the spool, so it runs only on the branch that actually
-		// delivers the digest — the one place the drop count is shown. A slash
-		// command carries no digest: loading for it would trim the queue with
-		// nobody ever told what went missing.
-		loaded, dropped, err := pending.Load(a.config.StateDir, name)
+		// Only attach pending entries to messages that carry a digest. Slash
+		// commands carry no digest, so they leave the pending spool alone.
+		loaded, err := pending.Load(a.config.StateDir, name)
 		if err != nil {
 			return err
 		}
-		entries = loaded
+		a.reportHeldPending(name, loaded.Held)
+		entries = loaded.Entries
 		message = "[" + sender + "] " + message
 		if len(entries) > 0 {
-			message = formatDigest(entries, dropped) + "\n\n" + message
+			message = formatDigest(entries, loaded.Dropped) + "\n\n" + message
 		}
 	}
 	// Nothing goes into the pane while an identical message is still in flight. This
@@ -3334,7 +3344,7 @@ func (a *app) queueList(args []string) error {
 		return err
 	}
 	if len(rows) == 0 {
-		fmt.Fprintln(a.out, "(queue empty)")
+		fmt.Fprintln(a.out, "(message queue empty)")
 	} else {
 		for _, row := range rows {
 			text := []rune(row.Msg)
@@ -3350,14 +3360,24 @@ func (a *app) queueList(args []string) error {
 			}
 		}
 	}
-	agents, items, err := pending.Counts(a.config.StateDir)
-	if err != nil {
-		return err
+	summary, countErr := pending.Counts(a.config.StateDir)
+	if summary.Agents > 0 || countErr != nil {
+		fmt.Fprintf(a.out, "pending: %d agents, %d deliverable items, %d held, %d dropped\n", summary.Agents, summary.Items, summary.Held, summary.Dropped)
 	}
-	if items > 0 {
-		fmt.Fprintf(a.out, "pending: %d agents, %d items\n", agents, items)
+	for _, spool := range summary.Spools {
+		if spool.Err != nil {
+			fmt.Fprintf(a.out, "pending %s: ERROR %s\n", spool.Agent, spool.Err)
+			continue
+		}
+		if spool.Items == 0 && spool.Dropped == 0 && len(spool.Held) == 0 {
+			continue
+		}
+		fmt.Fprintf(a.out, "pending %s: %d deliverable, %d held, %d dropped — %s\n", spool.Agent, spool.Items, len(spool.Held), spool.Dropped, spool.Path)
+		for _, held := range spool.Held {
+			fmt.Fprintf(a.out, "    line %d: %s\n", held.Line, held.Reason)
+		}
 	}
-	return nil
+	return countErr
 }
 
 func (a *app) queueStatus(args []string) error {

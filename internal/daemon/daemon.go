@@ -304,12 +304,12 @@ func (s *Service) archiveGuard(ctx context.Context, agent book.Agent) error {
 		}
 	}
 	if s.config.StateDir != "" {
-		count, over, err := pending.Stat(s.config.StateDir, agent.Name)
+		status, err := pending.Stat(s.config.StateDir, agent.Name)
 		if err != nil {
 			return err
 		}
-		if count+over > 0 {
-			return fmt.Errorf("%s has pending announcements; preserve and resolve them before archive", agent.Name)
+		if status.Items+status.Dropped > 0 || len(status.Held) > 0 {
+			return fmt.Errorf("%s has pending announcements (%d deliverable, %d held); preserve and resolve them before archive", agent.Name, status.Items, len(status.Held))
 		}
 	}
 	return nil

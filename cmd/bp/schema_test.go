@@ -134,10 +134,10 @@ func TestContinueRequiresTrustAndMaterializesParentsFirst(t *testing.T) {
 			t.Errorf("history:none did not start a fresh, explicitly rebound thread: %s", joined)
 		}
 	}
-	if got := strings.Join(opened[1], " "); !strings.Contains(got, "--parent lead") || !strings.Contains(got, "--no-sandbox") || !strings.Contains(got, "--model gpt-example") || !strings.Contains(got, "model_reasoning_effort=high") {
+	if got := strings.Join(opened[1], " "); !strings.Contains(got, "--parent lead") || !strings.Contains(got, "--no-sandbox") || !strings.Contains(got, "--model gpt-example") || !strings.Contains(got, "model_reasoning_effort=high") || strings.Contains(got, "--no-prompt") {
 		t.Fatalf("worker launch args lost schema settings: %s", got)
 	}
-	if got := strings.Join(opened[0], " "); !strings.Contains(got, "--claude") || !strings.Contains(got, "--model claude-example") || !strings.Contains(got, "--effort high") {
+	if got := strings.Join(opened[0], " "); !strings.Contains(got, "--claude") || !strings.Contains(got, "--model claude-example") || !strings.Contains(got, "--effort high") || !strings.Contains(got, "--no-prompt") {
 		t.Fatalf("lead launch args lost schema settings: %s", got)
 	}
 	if _, err := os.Stat(a.schemaTrustPath(root)); err != nil {

@@ -144,6 +144,9 @@ func (a *app) attach(args []string) error {
 		if record.Agent.Launch == nil {
 			return fmt.Errorf("stale record for %s: launch metadata is missing; refusing to create an empty session", name)
 		}
+		if record.Agent.Launch.OpenCode {
+			return fmt.Errorf("cannot revive %s: opencode conversation resume is unavailable; refusing to open a different conversation", name)
+		}
 		folder := book.FirstPath(record.Agent.Folder)
 		if folder == "" {
 			return fmt.Errorf("stale record for %s: working directory is missing; refusing to create an empty session", name)

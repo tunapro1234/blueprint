@@ -89,6 +89,14 @@ delegated to `bp attach` on the destination, so remote agentbook state is never
 guessed locally. No password or transport credential is stored beyond an SSH
 identity-file path.
 
+Project-local `.blueprint/schema.yaml` files declare portable agent trees using
+relative folders. `bp continue` validates and plans the complete tree before
+confirmation, checks folder collisions, then opens parents before children.
+Per-project trust is keyed by the absolute project folder and schema content
+hash. Optional history is kept outside Git by default; local Claude/Codex
+transcripts are imported into the native store for the moved folder, while
+remote history is fetched over SSH without storing credentials in the schema.
+
 ## Optional P2P transport
 
 A separate `bp p2p serve` worker owns the machine key, network host and outgoing

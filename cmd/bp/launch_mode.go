@@ -21,6 +21,7 @@ var launchValueFlags = map[string]map[string]bool{
 		"--append-system-prompt": true, "--system-prompt": true, "--allowedTools": true,
 		"--allowed-tools": true, "--disallowedTools": true, "--disallowed-tools": true,
 		"--mcp-config": true, "--agent": true, "--fallback-model": true},
+	"opencode": {"-m": true, "--model": true, "--agent": true},
 }
 
 // Flags that bp owns or that select a conversation rather than a mode. They
@@ -34,10 +35,10 @@ var launchDropped = map[string]map[string]bool{
 // a later bp open --resume reproduces it (#25): the conversation id, and every
 // native flag with its value. Prompts and subcommands are not part of it.
 func nativeLaunch(harness string, args []string) *bptmux.OpenOptions {
-	if harness != "codex" && harness != "claude" {
+	if harness != "codex" && harness != "claude" && harness != "opencode" {
 		return nil // OpenOptions cannot express other harnesses
 	}
-	opts := &bptmux.OpenOptions{Codex: harness == "codex"}
+	opts := &bptmux.OpenOptions{Codex: harness == "codex", OpenCode: harness == "opencode"}
 	values, dropped := launchValueFlags[harness], launchDropped[harness]
 	resumeNext := false
 	for i := 0; i < len(args); i++ {

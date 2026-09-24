@@ -20,7 +20,9 @@ func TestNativeLaunchRecordsModeNotConversationOrPrompt(t *testing.T) {
 	if fresh := nativeLaunch("codex", []string{"-m", "gpt-x", "write tests"}); fresh.Resume || !reflect.DeepEqual(fresh.Args, []string{"-m", "gpt-x"}) {
 		t.Fatalf("fresh codex launch: %+v", fresh)
 	}
-	if nativeLaunch("opencode", nil) != nil {
-		t.Fatal("OpenOptions cannot express opencode")
+	opencode := nativeLaunch("opencode", []string{"--model", "example/model", "run", "fix the bug"})
+	if opencode == nil || !opencode.OpenCode || opencode.Codex || opencode.Resume ||
+		!reflect.DeepEqual(opencode.Args, []string{"--model", "example/model"}) {
+		t.Fatalf("opencode launch: %+v", opencode)
 	}
 }

@@ -54,6 +54,11 @@ effort, search flags and parent; `--no-revive` limits the command to live sessio
 Inside tmux it switches the current client, while an outer terminal attaches a
 new client without detaching any other client.
 
+`bp open` accepts `--fresh` to ignore a stored conversation binding and start a
+new one; it cannot be combined with `--resume` or `--thread`. Project schemas
+use this for closed agents when `history: none` is selected. Managed OpenCode
+launches use `bp open ... --opencode`.
+
 Messages wait when the target is working, its state is uncertain, or the user is
 typing. A transport acknowledgement alone is not proof of agent delivery.
 
@@ -131,6 +136,39 @@ The existing `bp remote [<agent>...]` Claude remote-control action remains
 available, except that `list`, `add`, and `rm` are reserved subcommand words.
 Optional `lush` and `rush` wrappers call `bp attach` and `bp shell`; setup does
 not replace an existing alias or function with either name.
+
+### Portable project trees
+
+Keep a project’s agent tree in `<project>/.blueprint/schema.yaml` and recreate
+it on another machine:
+
+```sh
+bp schema export [<project-dir>] [--lead <agent>]
+bp continue [<project-dir>] [--dry-run] [--yes]
+bp history export [<project-dir>] [--agent <name>] [--keep N]
+bp history export --stdout --agent <name>  # remote history transfer
+```
+
+The version 1 schema records relative folders, parents, runtime, role, color,
+and optional model, effort and launch mode. `bp continue --dry-run` prints the
+full plan. The first real use in a project, and every schema content change,
+requires review and confirmation; a non-interactive run must pass `--yes`.
+Live agents are left running. Closed agents with `history: none` start fresh;
+`history: file` imports portable transcripts before resuming. A name already
+registered for another folder is refused; there is no automatic prefix or
+suffix override. `bp rename` reports schemas that still contain the old name
+and leaves those committed files for a human to update.
+
+History modes are `none`, `file`, and `remote`. Portable history supports Claude
+JSONL transcripts and Codex rollout files with their session-index rows; use
+`history: none` for Hermes or OpenCode trees. Export keeps one session per agent
+by default; `--keep N` changes that limit. Different existing transcript
+contents are never overwritten. `.blueprint/.gitignore`
+ignores history by default because it can contain private conversation data;
+use `git add -f .blueprint/history` only when you intend to commit it. Remote
+history accepts `ssh://user@host[:port]` or a name from the local `remotes:`
+config block and transfers tar data over SSH. No credentials belong in the
+project schema.
 
 `bp onboard` prepares `$BP_HOME/main/ONBOARDING.md`. The coordinator creates tailored
 `MACHINE.md` guidance there. Existing files and real coordinators are preserved.

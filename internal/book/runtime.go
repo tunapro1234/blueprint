@@ -249,7 +249,7 @@ func remoteTranscript(home, id, path string) bool {
 }
 
 func launchThread(agent Agent, codex bool) string {
-	if agent.Launch != nil && agent.Launch.Codex == codex && !agent.Launch.Hermes {
+	if agent.Launch != nil && agent.Launch.Codex == codex && !agent.Launch.Hermes && !agent.Launch.OpenCode {
 		return agent.Launch.ResumeID
 	}
 	return ""

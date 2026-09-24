@@ -107,6 +107,17 @@ their children are archived or reparented.
 includes them. `bp archive --stale --dry-run` previews closed registrations with
 a missing bound transcript unless they are explicitly persistent.
 
+## Window border reset
+
+`bp windows watch` uses an explicit reset color when a window no longer maps to
+an agent. The default is white; set `windows.resetColor` to a named accent or
+xterm color index such as `245`.
+
+```yaml
+windows:
+  resetColor: white
+```
+
 ## Other available settings
 
 | Key | Purpose |

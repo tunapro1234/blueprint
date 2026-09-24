@@ -1176,6 +1176,7 @@ func TestStatusJSON(t *testing.T) {
 	alpha := report.Agents[0]
 	want := map[string]any{
 		"name": "alpha", "tmux": "working", "status": "open", "folder": "/srv/alpha", "parent": "server-main",
+		"awaiting_user": false, "unread": false,
 		"usage_scope": "last_context_snapshot",
 		"ctx_tokens":  float64(312_000), "cache_age_seconds": float64(90), "last_human_age_seconds": float64(90_000),
 		"model": "claude-opus-5",

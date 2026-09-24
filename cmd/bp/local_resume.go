@@ -288,6 +288,9 @@ func (a *app) recordClaudeResume(g *localResumeGuard) error {
 }
 
 func (a *app) attachLocal(name string) error {
+	if err := a.markLooked(name, time.Now().UTC()); err != nil {
+		return fmt.Errorf("record last looked: %w", err)
+	}
 	fmt.Fprintf(a.out, "bp: attached to %s; existing process, input and launch settings preserved\n", name)
 	operation := "attach-session"
 	if os.Getenv("TMUX") != "" {

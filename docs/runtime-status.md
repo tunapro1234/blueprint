@@ -5,10 +5,12 @@ checks. Calls made at different times can legitimately report different states.
 
 | Field | Meaning |
 | --- | --- |
-| `schema_version` | Current schema: `2` |
+| `schema_version` | Current schema: `3` |
 | `producer` | CLI executable SHA-256, PID and build information |
 | `daemon`, `daemon_verification` | Daemon record and verification against its running executable |
 | `agents[].name`, `display_name` | Stable registry identity and optional native display name |
+| `agents[].awaiting_user` | The last completed conversational turn ended with the agent speaking |
+| `agents[].unread` | The latest reply is newer than the last `bp focus` or local `bp con` for this agent |
 | `activity.state` | `idle`, `working`, `unknown`, `blocked`, `dead` |
 | `activity.source`, `reason` | Observation source and missing/conflicting evidence |
 | `activity.observed_at`, `last_event_at` | Observation time versus native event time |

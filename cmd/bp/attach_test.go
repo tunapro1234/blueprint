@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"blueprint/internal/book"
+	"blueprint/internal/config"
+	bptmux "blueprint/internal/tmux"
 )
 
 func TestResolveAttachRecordPrecedenceAndAmbiguity(t *testing.T) {
@@ -73,6 +79,52 @@ func TestAttachCommandUsesExactTargetAndSwitchesInsideTmux(t *testing.T) {
 	}
 	if got := strings.Join(inside.Args, " "); got != "/usr/bin/tmux switch-client -t =lead" {
 		t.Fatalf("inside command = %q", got)
+	}
+}
+
+func TestAttachRecordsLastLookedBeforeReplacingWithTmux(t *testing.T) {
+	root := t.TempDir()
+	bookPath := filepath.Join(root, "agentbook.json")
+	data, err := json.Marshal(book.File{Agents: []book.Agent{{Name: "worker"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bookPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tmuxBin := filepath.Join(root, "tmux")
+	if err := os.WriteFile(tmuxBin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", "")
+	var replaced commandSpec
+	a := &app{
+		ctx: context.Background(),
+		config: config.Config{
+			Agentbooks: []string{bookPath},
+			StateDir:   filepath.Join(root, "state"),
+		},
+		tmux:           &bptmux.Client{Bin: tmuxBin},
+		out:            testOutput(t),
+		err:            testOutput(t),
+		replaceProcess: func(spec commandSpec) error { replaced = spec; return nil },
+	}
+	if err := a.attach([]string{"worker"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(replaced.Args, " "); got != tmuxBin+" attach-session -t =worker" {
+		t.Fatalf("replacement command = %q", got)
+	}
+	data, err = os.ReadFile(filepath.Join(a.config.StateDir, lastLookedFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen seenState
+	if err := json.Unmarshal(data, &seen); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Agents["worker"].IsZero() {
+		t.Fatal("attach did not record the agent as last looked")
 	}
 }
 

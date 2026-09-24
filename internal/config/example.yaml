@@ -28,6 +28,11 @@ bar:
   widgets: [ctx, temp, queue, model, quota]
 
 # Optional integrations are disabled by default.
+
+# Explicit color used when a watched window no longer belongs to an agent.
+windows:
+  resetColor: white
+
 waBridge: false
 # usageHistory: ~/usage/history.jsonl
 # codex:

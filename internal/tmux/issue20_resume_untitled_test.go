@@ -10,7 +10,7 @@ import (
 // Issue #20/#22: `bp open --resume --thread <id>` refused a conversation whose
 // native title was empty ("session pin … missing or title differs"), leaving
 // auto-named sessions and never-renamed coordinators with no bp-managed resume.
-func TestIssue20ExplicitPinResumesUntitledConversation(t *testing.T) {
+func TestIssue20_ExplicitPinResumesUntitledConversation(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "-work")
 	if err := os.MkdirAll(dir, 0700); err != nil {

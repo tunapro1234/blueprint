@@ -67,7 +67,7 @@ func (*noSessionError) Error() string { return "can't find session" }
 
 // Issue #6: a first-run trust prompt made open time out with the bare
 // "agent did not become ready" and kept the blocked harness alive forever.
-func TestIssue6TrustPromptTimeoutNamesCauseAndRemovesOrphan(t *testing.T) {
+func TestIssue06_TrustPromptTimeoutNamesCauseAndRemovesOrphan(t *testing.T) {
 	h := &launchHarness{capture: "Accessing workspace:\n/work/new\nQuick safety check: Is this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel\n"}
 	err := h.client().Open(context.Background(), "agent", "/work/new", OpenOptions{NoPrompt: true}, nil)
 	if err == nil {
@@ -88,7 +88,7 @@ func TestIssue6TrustPromptTimeoutNamesCauseAndRemovesOrphan(t *testing.T) {
 }
 
 // A session that existed before the open is not killed on timeout.
-func TestIssue6TimeoutKeepsPreexistingSession(t *testing.T) {
+func TestIssue06_TimeoutKeepsPreexistingSession(t *testing.T) {
 	h := &launchHarness{exists: true, capture: "$ \n"}
 	err := h.client().Open(context.Background(), "agent", "/work", OpenOptions{NoPrompt: true}, nil)
 	if err == nil || !strings.Contains(err.Error(), "retained") {
@@ -101,7 +101,7 @@ func TestIssue6TimeoutKeepsPreexistingSession(t *testing.T) {
 
 // Issue #20: a managed pane left as "Pane is dead" (remain-on-exit) after the
 // harness exits could not be re-entered: open saw command "bp" and refused.
-func TestIssue20OpenRespawnsDeadPaneInPlace(t *testing.T) {
+func TestIssue20_OpenRespawnsDeadPaneInPlace(t *testing.T) {
 	h := &launchHarness{exists: true, dead: true, capture: "bypass permissions\n"}
 	var warnings []string
 	err := h.client().Open(context.Background(), "main", "/work", OpenOptions{NoPrompt: true}, func(s string) { warnings = append(warnings, s) })

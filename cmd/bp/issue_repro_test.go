@@ -86,7 +86,7 @@ func issueCalls(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestIssue03StatusReconcilesAnOpenRecordWithoutATmuxSession(t *testing.T) {
+func TestIssue03_StatusReconcilesAnOpenRecordWithoutATmuxSession(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{
@@ -104,7 +104,7 @@ func TestIssue03StatusReconcilesAnOpenRecordWithoutATmuxSession(t *testing.T) {
 	}
 }
 
-func TestIssue03CloseDoesNotClaimAStaleOpenRecordWasAlreadyClosed(t *testing.T) {
+func TestIssue03_CloseDoesNotClaimAStaleOpenRecordWasAlreadyClosed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{{"name": "ghost", "folder": dir, "status": "open"}})
@@ -121,7 +121,7 @@ func TestIssue03CloseDoesNotClaimAStaleOpenRecordWasAlreadyClosed(t *testing.T) 
 	}
 }
 
-func TestIssue09UnresolvedSenderCannotPassAsACertainAgentName(t *testing.T) {
+func TestIssue09_UnresolvedSenderCannotPassAsACertainAgentName(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{{"name": "target", "folder": dir, "status": "open"}})
@@ -144,7 +144,7 @@ func TestIssue09UnresolvedSenderCannotPassAsACertainAgentName(t *testing.T) {
 	}
 }
 
-func TestIssue10OpenClaudeUsesManagedLaunchAndObserver(t *testing.T) {
+func TestIssue10_OpenClaudeUsesManagedLaunchAndObserver(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{
@@ -164,7 +164,7 @@ func TestIssue10OpenClaudeUsesManagedLaunchAndObserver(t *testing.T) {
 	}
 }
 
-func TestIssue12RenameMigratesPendingQueueTargets(t *testing.T) {
+func TestIssue12_RenameMigratesPendingQueueTargets(t *testing.T) {
 	dir, state := t.TempDir(), t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{{"name": "old-name", "folder": dir, "status": "open"}})
@@ -187,7 +187,7 @@ func TestIssue12RenameMigratesPendingQueueTargets(t *testing.T) {
 	}
 }
 
-func TestIssue13OpenAppliesTheBpBarToItsSession(t *testing.T) {
+func TestIssue13_OpenAppliesTheBpBarToItsSession(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{{"name": "ghost", "folder": dir, "status": "closed"}})
@@ -204,7 +204,7 @@ func TestIssue13OpenAppliesTheBpBarToItsSession(t *testing.T) {
 	}
 }
 
-func TestIssue14ArchivedClaudeResumeDoesNotBecomeTheNextRunName(t *testing.T) {
+func TestIssue14_ArchivedClaudeResumeDoesNotBecomeTheNextRunName(t *testing.T) {
 	dir, home, state := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	const thread = "22222222-2222-2222-2222-222222222222"
@@ -218,8 +218,9 @@ func TestIssue14ArchivedClaudeResumeDoesNotBecomeTheNextRunName(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "agentbook.json")
+	archivedName := "claude-" + thread
 	issueWriteBook(t, path, []map[string]any{
-		{"name": "old-archived", "folder": dir, "status": "closed", "archivedAt": "2026-09-01T00:00:00Z", "localRuntime": map[string]any{"path": obsPath, "pid": 77, "harness": "claude", "cwd": dir}},
+		{"name": archivedName, "folder": dir, "status": "closed", "archivedAt": "2026-09-01T00:00:00Z", "localRuntime": map[string]any{"path": obsPath, "pid": 77, "harness": "claude", "cwd": dir}},
 	})
 	tmux, _, _ := issueTmux(t, "", false)
 	a := issueApp(t, path, state, tmux)
@@ -230,12 +231,12 @@ func TestIssue14ArchivedClaudeResumeDoesNotBecomeTheNextRunName(t *testing.T) {
 	if guard != nil {
 		defer guard.close()
 	}
-	if existing == "old-archived" || guard.name == "old-archived" {
+	if existing == archivedName || guard.name == archivedName {
 		t.Fatalf("archived registration blocked or captured a new run: existing=%q guard=%+v", existing, guard)
 	}
 }
 
-func TestIssue17OpenCodeGetsARuntimeObservationPlan(t *testing.T) {
+func TestIssue17_OpenCodeGetsARuntimeObservationPlan(t *testing.T) {
 	a := &app{config: bpconfig.Config{LocalObservation: true, StateDir: t.TempDir()}}
 	args, path, err := a.prepareLocalObservation("opencode", []string{"--model", "test-model"})
 	if err != nil {
@@ -248,7 +249,7 @@ func TestIssue17OpenCodeGetsARuntimeObservationPlan(t *testing.T) {
 
 // #18: the worker used to read the pane once and gave up (no reap) when tmux
 // had not marked it dead yet, or reported "status , signal " as a failure.
-func TestIssue18OpenCodeExitReapsItsDeadPane(t *testing.T) {
+func TestIssue18_OpenCodeExitReapsItsDeadPane(t *testing.T) {
 	dir, state := t.TempDir(), t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{{"name": "opencode-agent", "folder": dir, "status": "open"}})
@@ -282,7 +283,7 @@ func TestIssue18OpenCodeExitReapsItsDeadPane(t *testing.T) {
 	}
 }
 
-func TestIssue23RunHelpDocumentsParentAndRole(t *testing.T) {
+func TestIssue23_RunHelpDocumentsParentAndRole(t *testing.T) {
 	// Other commands document --parent too; only the bp run line counts.
 	for _, line := range strings.Split(usage, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "bp run ") {
@@ -295,7 +296,7 @@ func TestIssue23RunHelpDocumentsParentAndRole(t *testing.T) {
 	t.Fatal("usage has no bp run line")
 }
 
-func TestIssue24OpenRefusesToRebindAnExistingAgentFolder(t *testing.T) {
+func TestIssue24_OpenRefusesToRebindAnExistingAgentFolder(t *testing.T) {
 	oldDir, newDir := t.TempDir(), t.TempDir()
 	path := filepath.Join(t.TempDir(), "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{{"name": "ghost", "folder": oldDir, "status": "closed"}})
@@ -311,7 +312,7 @@ func TestIssue24OpenRefusesToRebindAnExistingAgentFolder(t *testing.T) {
 	}
 }
 
-func TestIssue25OpenPreservesNativeLaunchModeFields(t *testing.T) {
+func TestIssue25_OpenPreservesNativeLaunchModeFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agentbook.json")
 	issueWriteBook(t, path, []map[string]any{

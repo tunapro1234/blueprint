@@ -13,8 +13,10 @@ def atomic_copy(source,target):
     os.chmod(name,source.stat().st_mode&0o777);os.replace(name,target)
 def snapshot_source(root, revision, destination):
     # A separate checkout includes only the committed tree, never untracked Go
-    # files or changes arriving while the release is being compiled.
+    # files or changes arriving while the release is being compiled. Large
+    # release binaries under site/ are not build inputs.
     run('git','clone','--quiet','--shared','--no-checkout',str(root),str(destination))
+    run('git','sparse-checkout','set','--no-cone','/*','!/site/',cwd=destination)
     run('git','checkout','--quiet','--detach',revision,cwd=destination)
     return destination
 
@@ -68,32 +70,33 @@ def main():
         promote_release(target,ROOT/'site',version,names,stage)
         print('Completed existing release promotion:',target,flush=True)
         return
-    source=snapshot_source(ROOT,revision,stage/'source')
-    if (source/'internal/release/version.txt').read_text().strip()!=version or (source/'internal/release/release.pub').read_bytes()!=public:
-        raise RuntimeError('release inputs changed during snapshot; retry from the intended commit')
-    if json.loads((source/'npm/package.json').read_text())['version']!=version or (source/'npm/release.pub').read_bytes()!=public or public.decode().strip() not in (source/'install.sh').read_text():
-        raise RuntimeError('committed release version/public key copies differ')
-    def build(name):
-        _,system,arch=name.split('-')
-        run('go','build','-mod=readonly','-buildvcs=true','-trimpath','-o',str(stage/name),'./cmd/bp',cwd=source,env=dict(os.environ,GOOS=system,GOARCH=arch,CGO_ENABLED='0',GOCACHE='/tmp/blueprint-go-cache',GOWORK='off',GOFLAGS='',GOENV='off'))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:list(pool.map(build,names))
-    shutil.copy2(source/'install.sh',stage/'install.sh')
-    manifest=dict(version=version,revision=revision,published=datetime.datetime.now(datetime.timezone.utc).isoformat(),sha256={name:digest(stage/name) for name in names+['install.sh']})
-    (stage/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    (stage/'checksums.txt').write_text('# bp-release '+version+'\n'+''.join(value+'  '+name+'\n' for name,value in manifest['sha256'].items()))
-    for payload,signature in [('manifest.json','manifest.sig'),('checksums.txt','checksums.sig')]:
-        run('openssl','pkeyutl','-sign','-inkey',str(args.key),'-rawin','-in',str(stage/payload),'-out',str(stage/signature))
-        run('openssl','pkeyutl','-verify','-pubin','-inkey',str(source/'internal/release/release.pub'),'-rawin','-in',str(stage/payload),'-sigfile',str(stage/signature))
-    print('Verified release candidate:',stage,flush=True)
-    if not args.publish:return
-    target.parent.mkdir(exist_ok=True)
-    # Stage under the served filesystem, then expose the complete version at once.
-    hidden=pathlib.Path(tempfile.mkdtemp(prefix='.publish-',dir=target.parent))
-    for artifact in stage.iterdir():
-        if artifact.is_file():shutil.copy2(artifact,hidden/artifact.name)
-    hidden.chmod(0o755)
-    for p in hidden.iterdir():p.chmod(0o755 if p.name.startswith('bp-') or p.name=='install.sh' else 0o644)
-    os.rename(hidden,target)
-    promote_release(target,ROOT/'site',version,names,stage)
-    print('Published:',target,'revision',revision,flush=True)
+    with tempfile.TemporaryDirectory(prefix='release-v'+version+'-source-') as temp:
+        source=snapshot_source(ROOT,revision,pathlib.Path(temp)/'source')
+        if (source/'internal/release/version.txt').read_text().strip()!=version or (source/'internal/release/release.pub').read_bytes()!=public:
+            raise RuntimeError('release inputs changed during snapshot; retry from the intended commit')
+        if json.loads((source/'npm/package.json').read_text())['version']!=version or (source/'npm/release.pub').read_bytes()!=public or public.decode().strip() not in (source/'install.sh').read_text():
+            raise RuntimeError('committed release version/public key copies differ')
+        def build(name):
+            _,system,arch=name.split('-')
+            run('go','build','-mod=readonly','-buildvcs=true','-trimpath','-o',str(stage/name),'./cmd/bp',cwd=source,env=dict(os.environ,GOOS=system,GOARCH=arch,CGO_ENABLED='0',GOCACHE='/tmp/blueprint-go-cache',GOWORK='off',GOFLAGS='',GOENV='off'))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:list(pool.map(build,names))
+        shutil.copy2(source/'install.sh',stage/'install.sh')
+        manifest=dict(version=version,revision=revision,published=datetime.datetime.now(datetime.timezone.utc).isoformat(),sha256={name:digest(stage/name) for name in names+['install.sh']})
+        (stage/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+        (stage/'checksums.txt').write_text('# bp-release '+version+'\n'+''.join(value+'  '+name+'\n' for name,value in manifest['sha256'].items()))
+        for payload,signature in [('manifest.json','manifest.sig'),('checksums.txt','checksums.sig')]:
+            run('openssl','pkeyutl','-sign','-inkey',str(args.key),'-rawin','-in',str(stage/payload),'-out',str(stage/signature))
+            run('openssl','pkeyutl','-verify','-pubin','-inkey',str(source/'internal/release/release.pub'),'-rawin','-in',str(stage/payload),'-sigfile',str(stage/signature))
+        print('Verified release candidate:',stage,flush=True)
+        if not args.publish:return
+        target.parent.mkdir(exist_ok=True)
+        # Stage under the served filesystem, then expose the complete version at once.
+        hidden=pathlib.Path(tempfile.mkdtemp(prefix='.publish-',dir=target.parent))
+        for artifact in stage.iterdir():
+            if artifact.is_file():shutil.copy2(artifact,hidden/artifact.name)
+        hidden.chmod(0o755)
+        for p in hidden.iterdir():p.chmod(0o755 if p.name.startswith('bp-') or p.name=='install.sh' else 0o644)
+        os.rename(hidden,target)
+        promote_release(target,ROOT/'site',version,names,stage)
+        print('Published:',target,'revision',revision,flush=True)
 if __name__=='__main__':main()

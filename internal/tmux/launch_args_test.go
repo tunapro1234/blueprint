@@ -40,6 +40,83 @@ func TestOpenPassesRecordedArgsAfterBinaryWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestRemoteCodexResumeDropsPermissionOverridesButKeepsOtherFlags(t *testing.T) {
+	id := "019a0d02-a847-76d1-ba01-8b67fbe755c1"
+	args := []string{
+		"--yolo", "--dangerously-bypass-approvals-and-sandbox", "--full-auto",
+		"-s", "workspace-write", "-s=read-only", "--sandbox", "read-only",
+		"-a", "on-request", "-a=never", "--ask-for-approval=never", "--ask-for-approval", "untrusted",
+		"-c", "sandbox_mode=workspace-write", "-c=sandbox_workspace_write.writable_roots=[\"/tmp\"]",
+		"--config=approval_policy=never", "--config", "permissions/permission_profile.default=untrusted",
+		"--add-dir", "/private/a", "--add-dir=/private/b",
+		"-m", "gpt-6-sol", "--profile", "worker", "-c", "model=gpt-6-sol", "--config=model_reasoning_effort=medium", "--search",
+	}
+	h := &launchHarness{capture: "› Ask Codex to do anything\n"}
+	opts := OpenOptions{Codex: true, NoSandbox: true, Resume: true, ResumeID: id, Remote: "unix://", NoPrompt: true, Args: args}
+	if err := h.client().Open(context.Background(), "agent", "/work", opts, nil); err != nil {
+		t.Fatal(err)
+	}
+	var launch string
+	for _, call := range h.calls {
+		if strings.HasPrefix(call, "send-keys") && strings.Contains(call, "command codex") {
+			launch = call
+			break
+		}
+	}
+	for _, want := range []string{"CODEX_BWRAPPED=1 command codex", "--remote 'unix://'", "resume '" + id + "'", "'-c' 'model=gpt-6-sol'", "'--config=model_reasoning_effort=medium'", "'--search'"} {
+		if !strings.Contains(launch, want) {
+			t.Errorf("remote resume launch %q missing %q", launch, want)
+		}
+	}
+	for _, forbidden := range []string{
+		"--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto",
+		"--sandbox", "workspace-write", "read-only", "--ask-for-approval", "on-request", "never", "untrusted", "approval_policy",
+		"sandbox_mode", "sandbox_workspace_write", "permission_profile", "--add-dir", "/private/a", "/private/b",
+	} {
+		if strings.Contains(launch, forbidden) {
+			t.Errorf("remote resume launch retained permission override %q: %s", forbidden, launch)
+		}
+	}
+}
+
+func TestRemoteFreshAndLocalCodexResumeKeepBypassBehavior(t *testing.T) {
+	id := "019a0d02-a847-76d1-ba01-8b67fbe755c1"
+	for _, test := range []struct {
+		name   string
+		opts   OpenOptions
+		resume bool
+	}{
+		{name: "fresh remote", opts: OpenOptions{Codex: true, NoSandbox: true, Remote: "unix://", NoPrompt: true, Args: []string{"--full-auto", "-c", "sandbox_mode=workspace-write"}}},
+		{name: "local resume", opts: OpenOptions{Codex: true, NoSandbox: true, Resume: true, ResumeID: id, NoPrompt: true, Args: []string{"--full-auto", "-c", "sandbox_mode=workspace-write"}}, resume: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := &launchHarness{capture: "› Ask Codex to do anything\n"}
+			if err := h.client().Open(context.Background(), "agent", "/work", test.opts, nil); err != nil {
+				t.Fatal(err)
+			}
+			var launch string
+			for _, call := range h.calls {
+				if strings.HasPrefix(call, "send-keys") && strings.Contains(call, "command codex") {
+					launch = call
+					break
+				}
+			}
+			if !strings.Contains(launch, "CODEX_BWRAPPED=1 command codex") || !strings.Contains(launch, "--dangerously-bypass-approvals-and-sandbox") {
+				t.Fatalf("launch lost bypass behavior: %s", launch)
+			}
+			if !strings.Contains(launch, "--full-auto") || !strings.Contains(launch, "sandbox_mode=workspace-write") {
+				t.Fatalf("launch changed recorded arguments: %s", launch)
+			}
+			if test.resume && !strings.Contains(launch, "resume '"+id+"'") {
+				t.Fatalf("local resume lost its thread id: %s", launch)
+			}
+			if !test.resume && !strings.Contains(launch, "--remote 'unix://'") {
+				t.Fatalf("fresh remote launch lost its endpoint: %s", launch)
+			}
+		})
+	}
+}
+
 func TestDirectLaunchBypassesInteractiveShellAliases(t *testing.T) {
 	h := &launchHarness{capture: "bypass permissions\n"}
 	if err := h.client().Open(context.Background(), "agent", "/work", OpenOptions{

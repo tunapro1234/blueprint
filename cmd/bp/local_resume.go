@@ -21,6 +21,8 @@ import (
 
 var claudeResumeUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
+const claudeUnboundTimeout = 2 * time.Minute
+
 var errManagedSessionUnavailable = errors.New("managed session unavailable")
 
 func physicalPath(path string) string {
@@ -216,13 +218,39 @@ func (a *app) guardClaudeResume(thread, requested, cwd string) (*localResumeGuar
 			continue
 		}
 		observation, obsErr := cache.ReadLocalObservation(agent.Local, agent.Local.PID)
-		live := a.tmux.HasSession(a.ctx, agent.Name)
+		live := a.hasTmuxSession(agent.Name)
 		if obsErr != nil {
 			if live && !owners[agent.Name] && physicalPath(agent.Local.CWD) == physicalPath(cwd) {
-				return fail(fmt.Errorf("Claude session %s is still unbound; retry once its session is known", agent.Name))
+				// A recorded explicit resume ID rules out ownership of a different
+				// requested thread. A visible first-run modal likewise means Claude
+				// has not reached session startup, and an old unbound launch cannot
+				// remain a folder-wide lock forever.
+				if agent.Launch != nil && agent.Launch.ResumeID != "" && !strings.EqualFold(agent.Launch.ResumeID, thread) {
+					continue
+				}
+				if pane, err := a.tmux.Capture(a.ctx, agent.Name); err == nil && bptmux.LaunchWait(pane) != "" {
+					continue
+				}
+				since, err := a.unboundSince(root, agent.Name, agent.StatusAt)
+				if err != nil {
+					return fail(fmt.Errorf("track unbound duration for Claude session %s: %w", agent.Name, err))
+				}
+				elapsed := time.Since(since)
+				if elapsed < 0 {
+					elapsed = 0
+				}
+				if elapsed > claudeUnboundTimeout {
+					continue
+				}
+				reason := "it has not reported a Claude thread yet"
+				if agent.Launch != nil && strings.EqualFold(agent.Launch.ResumeID, thread) {
+					reason = "its launch explicitly names this thread, which may still be starting"
+				}
+				return fail(fmt.Errorf("Claude session %s is still unbound (%s; unbound for %s); run bp attach %s to inspect it, or bp close %s", agent.Name, reason, elapsed.Round(time.Second), agent.Name, agent.Name))
 			}
 			continue
 		}
+		a.clearUnboundSince(root, agent.Name)
 		if observation.SessionID != thread {
 			// Native /clear or /resume can move a live pane to another thread.
 			// Its newer callback overrides a claim from an earlier launch.
@@ -249,6 +277,9 @@ func (a *app) guardClaudeResume(thread, requested, cwd string) (*localResumeGuar
 	}
 	if len(names) == 1 {
 		g.name = names[0]
+		if requested != "" && requested != g.name {
+			return fail(fmt.Errorf("Claude conversation %s is held by live tmux session %s; use bp attach %s", thread, g.name, g.name))
+		}
 		return g, names[0], nil
 	}
 	g.name = requested
@@ -276,6 +307,42 @@ func (a *app) guardClaudeResume(thread, requested, cwd string) (*localResumeGuar
 		}
 	}
 	return g, "", nil
+}
+
+func unboundMarker(root, name string) string {
+	key := sha256.Sum256([]byte(name))
+	return filepath.Join(root, fmt.Sprintf("unbound-%x.json", key))
+}
+
+func (a *app) unboundSince(root, name string, statusAt time.Time) (time.Time, error) {
+	if !statusAt.IsZero() {
+		return statusAt, nil
+	}
+	path := unboundMarker(root, name)
+	var marker struct {
+		Since time.Time `json:"since"`
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		if unmarshalErr := json.Unmarshal(raw, &marker); unmarshalErr != nil || marker.Since.IsZero() {
+			return time.Time{}, fmt.Errorf("invalid unbound timer %s", path)
+		}
+		return marker.Since, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return time.Time{}, err
+	}
+	marker.Since = time.Now().UTC()
+	raw, err := json.Marshal(marker)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return time.Time{}, err
+	}
+	return marker.Since, nil
+}
+
+func (a *app) clearUnboundSince(root, name string) {
+	_ = os.Remove(unboundMarker(root, name))
 }
 
 func (a *app) recordClaudeResume(g *localResumeGuard) error {

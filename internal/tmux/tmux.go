@@ -2278,6 +2278,10 @@ func launchWait(pane string) string {
 	return ""
 }
 
+// LaunchWait exposes the visible pre-session blockers used by managed launch
+// diagnostics. It never answers or dismisses the prompt.
+func LaunchWait(pane string) string { return launchWait(pane) }
+
 // paneDead reports whether the session's target pane has exited but is kept
 // on screen by remain-on-exit.
 func (c *Client) paneDead(ctx context.Context, session string) bool {

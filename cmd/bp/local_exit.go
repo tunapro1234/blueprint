@@ -23,6 +23,37 @@ type localExitReport struct {
 	Signal   string `json:"signal,omitempty"`
 	Screen   string `json:"screen,omitempty"`
 	RoutedTo string `json:"routed_to,omitempty"`
+	Agent    string `json:"agent,omitempty"`
+}
+
+// retainSessionLaunchFailure records errors returned before _session replaces
+// itself with the native CLI. Its tmux pane is held open by main until the user
+// acknowledges the error.
+func retainSessionLaunchFailure(args []string, err error) {
+	if err == nil || len(args) < 2 || args[0] != "_session" || !identity.ValidName(args[1]) {
+		return
+	}
+	path := os.Getenv("BP_EXIT_REPORT")
+	if !filepath.IsAbs(path) {
+		return
+	}
+	harness := "bp"
+	if len(args) > 2 && localHarness(args[2]) {
+		harness = args[2]
+	}
+	report := localExitReport{Agent: args[1], Harness: harness, Status: "1", Screen: err.Error()}
+	data, marshalErr := json.Marshal(report)
+	if marshalErr == nil {
+		_ = os.WriteFile(path, data, 0o600)
+	}
+}
+
+func holdFailedSessionPane(args []string) bool {
+	return len(args) > 0 && args[0] == "_session" && os.Getenv("BP_EXIT_REPORT") != "" && os.Getenv("TMUX") != "" && terminal(os.Stdin)
+}
+
+func localExitFailed(report localExitReport) bool {
+	return report.Status != "0" && report.Status != "130" && report.Signal != "2" && report.RoutedTo == ""
 }
 
 var activeWriterError = regexp.MustCompile(`thread ([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}) already has an active writer`)
@@ -74,8 +105,8 @@ func (a *app) finishLocalExit(name string, parent int, harness, reportPath strin
 		break
 	}
 	pane := fields[0]
-	report := localExitReport{Harness: harness, Status: fields[3], Signal: fields[4]}
-	failed := report.Status != "0" && report.Status != "130" && report.Signal != "2"
+	report := localExitReport{Agent: name, Harness: harness, Status: fields[3], Signal: fields[4]}
+	failed := localExitFailed(report)
 	if failed {
 		screen, err := run("capture-pane", "-p", "-J", "-S", "-100", "-t", pane)
 		if err != nil {
@@ -132,7 +163,7 @@ func (a *app) reportLocalExit(path string) error {
 	if err := json.Unmarshal(data, &report); err != nil {
 		return err
 	}
-	if report.RoutedTo != "" || report.Status == "0" || report.Status == "130" || report.Signal == "2" {
+	if !localExitFailed(report) {
 		return nil
 	}
 	if messagetext.Validate(report.Screen) == nil {

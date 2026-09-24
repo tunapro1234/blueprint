@@ -186,12 +186,44 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 	return nil
 }
 
+func retainedLocalExitEvidence(cfg bpconfig.Config) map[string]map[string]localExitReport {
+	evidence := map[string]map[string]localExitReport{}
+	if cfg.StateDir == "" {
+		return evidence
+	}
+	paths, _ := filepath.Glob(filepath.Join(cfg.StateDir, "local", "*", "exit.json"))
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var exit localExitReport
+		if json.Unmarshal(data, &exit) != nil || exit.Agent == "" || !localExitFailed(exit) {
+			continue
+		}
+		if evidence[exit.Agent] == nil {
+			evidence[exit.Agent] = map[string]localExitReport{}
+		}
+		evidence[exit.Agent][path] = exit
+	}
+	return evidence
+}
+
+func localExitDoctorChecks(name string, evidence map[string]localExitReport) []doctorCheck {
+	var checks []doctorCheck
+	for path, exit := range evidence {
+		checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
+	}
+	return checks
+}
+
 // Read only: diagnose the target without repairing books, clearing input or
 // restarting a writer. Native thread evidence survives conflict reporting.
 func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string) []doctorCheck {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	client := bptmux.New()
+	exitEvidence := retainedLocalExitEvidence(cfg)
 	if selected != "" {
 		if _, ok := fleet.Agents[selected]; !ok {
 			if rows, err := book.Archives(cfg.Agentbooks); err == nil {
@@ -200,6 +232,9 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 						return []doctorCheck{{Name: "archive", Agent: selected, OK: true, Detail: "registration archived in " + row.Path + "; native history remains intact", Next: "bp restore " + selected}}
 					}
 				}
+			}
+			if checks := localExitDoctorChecks(selected, exitEvidence[selected]); len(checks) > 0 {
+				return checks
 			}
 			return []doctorCheck{{Name: "agent", Detail: "agent not registered: " + selected, Next: "bp book --json"}}
 		}
@@ -217,14 +252,22 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			continue
 		}
 		entry := fleet.Agents[name]
+		seenExit := map[string]bool{}
 		if entry.Local != nil && !entry.IsEphemeral() {
 			path := filepath.Join(filepath.Dir(entry.Local.Path), "exit.json")
 			if data, err := os.ReadFile(path); err == nil {
 				var exit localExitReport
-				if json.Unmarshal(data, &exit) == nil && exit.Status != "0" && exit.Status != "130" && exit.Signal != "2" && exit.RoutedTo == "" {
+				if json.Unmarshal(data, &exit) == nil && localExitFailed(exit) {
 					checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
+					seenExit[path] = true
 				}
 			}
+		}
+		for path, exit := range exitEvidence[name] {
+			if seenExit[path] {
+				continue
+			}
+			checks = append(checks, doctorCheck{Name: "native_exit/" + name, Agent: name, Detail: exit.Harness + " exited with status " + exit.Status, Next: "Read native exit evidence: " + path + "; do not remove writer locks or blindly retry."})
 		}
 		if !client.HasSession(ctx, name) {
 			if mismatch, ok := doctorNativeTitleMismatch(entry, nil); ok {
@@ -282,6 +325,14 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			check.Detail += "; historical/moved registrations ignored: " + strings.Join(a.HistoricalBindings, ", ")
 		}
 		checks = append(checks, check)
+	}
+	if selected == "" {
+		for name, evidence := range exitEvidence {
+			if _, registered := fleet.Agents[name]; registered {
+				continue
+			}
+			checks = append(checks, localExitDoctorChecks(name, evidence)...)
+		}
 	}
 	return checks
 }

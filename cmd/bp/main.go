@@ -2,6 +2,7 @@ package main
 
 import (
 	"blueprint/internal/messagetext"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -232,7 +233,13 @@ func main() {
 		return
 	}
 	if err != nil {
+		args := os.Args[1:]
+		retainSessionLaunchFailure(args, err)
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		if holdFailedSessionPane(args) {
+			fmt.Fprintln(os.Stderr, "bp run failed; press Enter to close this pane")
+			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		}
 		os.Exit(1)
 	}
 	a := &app{ctx: ctx, config: config, tmux: bptmux.New(), queue: msgq.New(config.MsgqRoot), out: os.Stdout, err: os.Stderr}
@@ -242,7 +249,12 @@ func main() {
 	}
 	if err := a.run(args); err != nil {
 		if !errors.Is(err, errReported) {
+			retainSessionLaunchFailure(args, err)
 			fmt.Fprintln(os.Stderr, "ERROR:", err)
+			if holdFailedSessionPane(args) {
+				fmt.Fprintln(os.Stderr, "bp run failed; press Enter to close this pane")
+				_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+			}
 		}
 		os.Exit(1)
 	}

@@ -2311,9 +2311,10 @@ func codexRemoteResumePermissionConfig(value string) bool {
 		return false
 	}
 	key = strings.TrimSpace(key)
-	return key == "sandbox_mode" || key == "approval_policy" ||
+	return key == "sandbox_mode" || key == "approval_policy" || key == "default_permissions" ||
+		key == "permission_profile" || key == "permissions" ||
 		strings.HasPrefix(key, "sandbox_workspace_write.") ||
-		strings.HasPrefix(key, "permissions/permission_profile")
+		strings.HasPrefix(key, "permission_profile.") || strings.HasPrefix(key, "permissions.")
 }
 
 // launchBinary names the harness executable in an Open command. Keep this in

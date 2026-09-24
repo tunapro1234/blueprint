@@ -47,7 +47,7 @@ func TestRemoteCodexResumeDropsPermissionOverridesButKeepsOtherFlags(t *testing.
 		"-s", "workspace-write", "-s=read-only", "--sandbox", "read-only",
 		"-a", "on-request", "-a=never", "--ask-for-approval=never", "--ask-for-approval", "untrusted",
 		"-c", "sandbox_mode=workspace-write", "-c=sandbox_workspace_write.writable_roots=[\"/tmp\"]",
-		"--config=approval_policy=never", "--config", "permissions/permission_profile.default=untrusted",
+		"--config=approval_policy=never", "--config", "permission_profile.default=untrusted", "-c", "default_permissions=workspace", "-c=permissions.filesystem=[]",
 		"--add-dir", "/private/a", "--add-dir=/private/b",
 		"-m", "gpt-6-sol", "--profile", "worker", "-c", "model=gpt-6-sol", "--config=model_reasoning_effort=medium", "--search",
 	}
@@ -71,7 +71,7 @@ func TestRemoteCodexResumeDropsPermissionOverridesButKeepsOtherFlags(t *testing.
 	for _, forbidden := range []string{
 		"--dangerously-bypass-approvals-and-sandbox", "--yolo", "--full-auto",
 		"--sandbox", "workspace-write", "read-only", "--ask-for-approval", "on-request", "never", "untrusted", "approval_policy",
-		"sandbox_mode", "sandbox_workspace_write", "permission_profile", "--add-dir", "/private/a", "/private/b",
+		"sandbox_mode", "sandbox_workspace_write", "permission_profile", "default_permissions", "permissions.filesystem", "--add-dir", "/private/a", "/private/b",
 	} {
 		if strings.Contains(launch, forbidden) {
 			t.Errorf("remote resume launch retained permission override %q: %s", forbidden, launch)

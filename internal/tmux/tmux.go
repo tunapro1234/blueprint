@@ -643,6 +643,24 @@ func (c *Client) HasSession(ctx context.Context, session string) bool {
 	return err == nil
 }
 
+// PaneDead reports whether a pane's foreground command has exited while tmux
+// keeps the pane visible with remain-on-exit. Callers must observe this before
+// replacing a command so a live process or shell draft is never killed.
+func (c *Client) PaneDead(ctx context.Context, session string) (bool, error) {
+	out, err := c.run(ctx, nil, "display-message", "-p", "-t", "="+session+":", "#{pane_dead}")
+	if err != nil {
+		return false, err
+	}
+	switch strings.TrimSpace(string(out)) {
+	case "1":
+		return true, nil
+	case "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected pane-dead response for %s", session)
+	}
+}
+
 func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 	out, err := c.run(ctx, nil, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
@@ -2263,8 +2281,8 @@ func launchWait(pane string) string {
 // paneDead reports whether the session's target pane has exited but is kept
 // on screen by remain-on-exit.
 func (c *Client) paneDead(ctx context.Context, session string) bool {
-	out, err := c.run(ctx, nil, "display-message", "-p", "-t", "="+session+":", "#{pane_dead}")
-	return err == nil && strings.TrimSpace(string(out)) == "1"
+	dead, err := c.PaneDead(ctx, session)
+	return err == nil && dead
 }
 
 // notReady turns a readiness timeout into something the operator can act on

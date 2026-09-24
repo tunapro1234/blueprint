@@ -43,6 +43,7 @@ type Config struct {
 	Fed              *FedConfig              `json:"fed,omitempty" yaml:"fed,omitempty"`
 	P2P              *p2p.Config             `json:"p2p,omitempty" yaml:"p2p,omitempty"`
 	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
+	CLIUpdates       map[string][]string     `json:"cliUpdates,omitempty" yaml:"cliUpdates,omitempty"`
 	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
 	Bar              BarConfig               `json:"bar" yaml:"bar"`
 	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
@@ -122,6 +123,7 @@ type overrides struct {
 	P2P              *p2p.Config              `json:"p2p" yaml:"p2p"`
 	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
 	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
+	CLIUpdates       *map[string][]string     `json:"cliUpdates" yaml:"cliUpdates"`
 	Bar              *barOverrides            `json:"bar" yaml:"bar"`
 	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
 	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
@@ -290,6 +292,7 @@ func defaults(home string, legacy bool) Config {
 	bar := BarConfig{Context: "used", Widgets: []string{"ctx", "temp", "queue", "model", "quota"}}
 	lifecycle := LifecycleConfig{EphemeralDefault: true, ArchiveOnClose: true}
 	windows := WindowsConfig{ResetColor: "white"}
+	cliUpdates := defaultCLIUpdates()
 	if legacy {
 		return Config{
 			Home:     home,
@@ -312,6 +315,7 @@ func defaults(home string, legacy bool) Config {
 			LocalObservation: true,
 			LocalMouse:       true,
 			UpdateCheck:      true,
+			CLIUpdates:       cliUpdates,
 		}
 	}
 	return Config{
@@ -326,6 +330,16 @@ func defaults(home string, legacy bool) Config {
 		LocalObservation: true,
 		LocalMouse:       true,
 		UpdateCheck:      true,
+		CLIUpdates:       cliUpdates,
+	}
+}
+
+func defaultCLIUpdates() map[string][]string {
+	return map[string][]string{
+		"claude":   {"claude", "update"},
+		"codex":    {"npm", "install", "-g", "@openai/codex@latest"},
+		"opencode": {"opencode", "upgrade"},
+		"hermes":   {"hermes", "update"},
 	}
 }
 
@@ -405,6 +419,14 @@ func apply(result *Config, values overrides) {
 				remote.Transport = "ssh"
 			}
 			result.Remotes[name] = remote
+		}
+	}
+	if values.CLIUpdates != nil {
+		if result.CLIUpdates == nil {
+			result.CLIUpdates = map[string][]string{}
+		}
+		for harness, command := range *values.CLIUpdates {
+			result.CLIUpdates[harness] = append([]string(nil), command...)
 		}
 	}
 	if values.Bar != nil && values.Bar.Context != nil {

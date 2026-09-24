@@ -45,6 +45,7 @@ import (
 const usage = `blueprint (bp) — agent infrastructure CLI
 
 bp version [--json] | bp update [--check] [--json] | bp doctor [--agent <name>] [--json]
+bp update [--clis] [--models <from=to...>] [--all] [--agent <name>...] [--set-defaults] [--dry-run] [--yes] [--json]
 bp archive <name> | bp archive --list [--json] | bp archive --stale [--dry-run] | bp restore <name>
 bp status [--json] [--all] | bp tree [--all]
 bp windows [--json] | bp windows watch
@@ -133,6 +134,8 @@ type app struct {
 	replaceProcess  func(commandSpec) error
 	openForContinue func([]string) error
 	interactive     func() bool
+	fleetUpdater    fleetUpdateBackend
+	confirmUpdate   func() (bool, error)
 
 	detectCompositor func() (compositor.Adapter, error)
 	processLister    windowmap.ProcessLister
@@ -1385,6 +1388,11 @@ func (a *app) open(args []string) error {
 	}
 	if freshRequested && (resumeRequested || threadExplicit) {
 		return fmt.Errorf("--fresh cannot be combined with --resume or --thread")
+	}
+	if storedAgent, ok := stored.Agents[name]; ok {
+		if err := applyStoredFleetUpdate(storedAgent, &opts); err != nil {
+			return err
+		}
 	}
 	if err := opts.Validate(); err != nil {
 		return err

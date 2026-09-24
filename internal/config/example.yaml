@@ -48,6 +48,13 @@ waBridge: false
 # Check signed releases in the background at most daily; never starts a model turn.
 updateCheck: true
 
+# Native CLI updater argv used by bp update --clis. Values are not shell strings.
+# cliUpdates:
+#   claude: [claude, update]
+#   codex: [npm, install, -g, "@openai/codex@latest"]
+#   opencode: [opencode, upgrade]
+#   hermes: [hermes, update]
+
 # P2P is opt-in. First print this machine's public identity: bp p2p id
 # See docs/p2p.md for peer allowlists and rendezvous configuration.
 # p2p:

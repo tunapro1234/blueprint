@@ -364,6 +364,10 @@ func writeHistoryTar(writer io.Writer, entries []historyEntry) error {
 }
 
 func writeNoConflict(path string, data []byte, mode os.FileMode) error {
+	return writeNoConflictWithHook(path, data, mode, nil)
+}
+
+func writeNoConflictWithHook(path string, data []byte, mode os.FileMode, beforeCreate func() error) error {
 	existing, err := os.ReadFile(path)
 	if err == nil {
 		if bytes.Equal(existing, data) {
@@ -380,7 +384,47 @@ func writeNoConflict(path string, data []byte, mode os.FileMode) error {
 	if mode == 0 {
 		mode = 0o600
 	}
-	return writeAtomic(path, data, mode)
+	if beforeCreate != nil {
+		if err := beforeCreate(); err != nil {
+			return err
+		}
+	}
+	return writeAtomicNoReplace(path, data, mode)
+}
+
+func writeAtomicNoReplace(path string, data []byte, mode os.FileMode) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".bp-history-*")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err == nil {
+		err = temporary.Sync()
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Link(name, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, readErr := os.ReadFile(path)
+			if readErr == nil && bytes.Equal(existing, data) {
+				return nil
+			}
+			if readErr == nil {
+				return fmt.Errorf("refusing to overwrite different history file: %s", path)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func prunePortableHistory(root string, agents []string, keep int) error {

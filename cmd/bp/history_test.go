@@ -335,6 +335,20 @@ func TestHistoryExportStdoutWritesTarAndNeverOverwritesDifferentContent(t *testi
 	}
 }
 
+func TestWriteNoConflictPreservesConcurrentFileCreation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	concurrent := []byte("created by another exporter\n")
+	err := writeNoConflictWithHook(path, []byte("stale snapshot\n"), 0o600, func() error {
+		return os.WriteFile(path, concurrent, 0o600)
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite different history file") {
+		t.Fatalf("concurrent conflicting create error = %v", err)
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(got, concurrent) {
+		t.Fatalf("concurrent file after refused overwrite = %q, %v", got, readErr)
+	}
+}
+
 func TestPrunePortableHistoryKeepsNewestSessionsPerRuntime(t *testing.T) {
 	root := t.TempDir()
 	base := time.Date(2026, time.September, 24, 12, 0, 0, 0, time.UTC)

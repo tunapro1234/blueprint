@@ -145,13 +145,28 @@ func TestOpenLaunchesHermesAndWaitsForItsIdleComposer(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(h.mutations, "\n")
-	if !strings.Contains(joined, "send-keys -t =agent: hermes Enter") {
+	if !strings.Contains(joined, "send-keys -t =agent: command hermes Enter") {
 		t.Fatalf("hermes was not launched: %s", joined)
 	}
 	for _, forbidden := range []string{"claude", "--resume", "/rename", "/remote-control"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("a Hermes open sent %q: %s", forbidden, joined)
 		}
+	}
+}
+
+func TestOpenCodeDirectLaunchBypassesShellAliases(t *testing.T) {
+	h := &openHarness{
+		paneCommand: "zsh",
+		capture:     openCodePane([]string{"Ask anything..."}, false),
+	}
+	opts := OpenOptions{OpenCode: true, NoPrompt: true, Args: []string{"--model", "ox"}}
+	if err := openClient(h).Open(context.Background(), "agent", "/srv/agent", opts, nil); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(h.mutations, "\n")
+	if !strings.Contains(joined, "send-keys -t =agent: command opencode '--model' 'ox' Enter") {
+		t.Fatalf("OpenCode launch does not bypass interactive aliases: %s", joined)
 	}
 }
 

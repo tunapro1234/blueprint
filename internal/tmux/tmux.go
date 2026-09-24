@@ -2261,6 +2261,34 @@ func launchArgs(command string, args []string) string {
 	return strings.Join(out, " ")
 }
 
+// launchBinary names the harness executable in an Open command. Keep this in
+// sync with the command selection below: launchArgs and the shell-escape step
+// use it to locate the executable after any environment assignments.
+func launchBinary(opts OpenOptions) string {
+	switch {
+	case opts.OpenCode:
+		return "opencode"
+	case opts.Hermes:
+		return hermesBin
+	case opts.Codex:
+		return "codex"
+	default:
+		return "claude"
+	}
+}
+
+// bypassShellAliases prefixes the harness executable with the shell's command
+// builtin. bp types direct launches into an interactive user shell, where an
+// alias or function named after a harness could otherwise silently change the
+// argv bp constructed. The whole-word lookup skips assignment values such as a
+// Claude session name containing "claude".
+func bypassShellAliases(command, bin string) string {
+	if at := strings.Index(" "+command+" ", " "+bin+" "); at >= 0 {
+		return command[:at] + "command " + command[at:]
+	}
+	return command
+}
+
 // launchWait names what a booting harness is visibly waiting on, or "" while
 // it is simply starting. Only for display: nothing here answers a prompt.
 func launchWait(pane string) string {
@@ -2489,18 +2517,10 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	if opts.OpenCode {
 		command = "opencode"
 	}
+	bin := launchBinary(opts)
 	if extra := launchArgs(command, opts.Args); extra != "" {
 		// Right after the binary: Codex takes its global flags before the
 		// `resume` subcommand, Claude accepts them anywhere.
-		bin := "claude"
-		switch {
-		case opts.OpenCode:
-			bin = "opencode"
-		case opts.Hermes:
-			bin = hermesBin
-		case opts.Codex:
-			bin = "codex"
-		}
 		// The binary as a whole word: a session name may itself contain
 		// "claude" in the RC prefix assignment before it.
 		padded := " " + command + " "
@@ -2515,6 +2535,13 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	nativeOnboarding := opts.Codex && !opts.Resume && !opts.NoPrompt
 	if nativeOnboarding {
 		command += " " + shellQuote(fmt.Sprintf(portableOnboarding, session))
+	}
+	// Managed launches carry the already constructed command as one quoted
+	// argument to _open-session, which invokes it through non-interactive `env`.
+	// Direct launches are parsed by the user's interactive shell, so bypass its
+	// aliases and functions explicitly while retaining any leading assignment.
+	if opts.Launcher == "" {
+		command = bypassShellAliases(command, bin)
 	}
 	if opts.Launcher != "" {
 		command = "exec " + opts.Launcher + " " + shellQuote(command)

@@ -58,6 +58,9 @@ func TestIssue10_ClaudeOpenUsesManagedLauncher(t *testing.T) {
 	if !strings.Contains(launch, "exec env ") || !strings.Contains(launch, "_open-session 'ghost' claude") {
 		t.Fatalf("Claude launch is not managed (alias-expanded, unobserved): %q", launch)
 	}
+	if !strings.Contains(launch, "'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=ghost claude --dangerously-skip-permissions'") || strings.Contains(launch, "'CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=ghost command claude") {
+		t.Fatalf("managed launcher command was changed into an env argument named command: %q", launch)
+	}
 }
 
 // Issue #13: bp open left the tmux global default bar; the bp bar (bp name /

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	bptmux "blueprint/internal/tmux"
 )
@@ -340,6 +341,21 @@ func TestRenameSameNameRepairsStaleCodexTitle(t *testing.T) {
 	}
 	native := &book.NativeTitle{ThreadID: "repair-thread", Path: index, Text: oldTitle}
 	fix := newSimpleCodexRenameFixture(t, false, false, native)
+	file, err := book.Load(fix.bookPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.Agents[0].Local = &cache.LocalBinding{
+		Path: filepath.Join(filepath.Dir(fix.bookPath), "local", "run", "observation.json"),
+		PID:  42, Harness: "codex", Home: filepath.Dir(index),
+	}
+	bookData, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fix.bookPath, append(bookData, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(index)
 	if err != nil {
 		t.Fatal(err)

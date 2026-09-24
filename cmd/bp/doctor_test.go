@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,77 @@ func TestDoctorDeniedSocketDoesNotReportClosedWriter(t *testing.T) {
 	checks := doctorRuntimeChecks(config.Config{}, fleet, "hypr-codex")
 	if len(checks) != 1 || checks[0].OK || checks[0].Name != "tmux_access" || !strings.Contains(checks[0].Detail, "Operation not permitted") {
 		t.Fatalf("denied socket misdiagnosed: %+v", checks)
+	}
+}
+
+func TestDoctorNativeTitleMismatchExplainsRetitleAndAdoption(t *testing.T) {
+	doctorTestTmux(t, false)
+	for _, test := range []struct {
+		name      string
+		reserve   bool
+		wantAdopt bool
+	}{
+		{name: "available native title", wantAdopt: true},
+		{name: "title already registered", reserve: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			transcript := filepath.Join(root, "session.jsonl")
+			originalTranscript := []byte(`{"type":"custom-title","customTitle":"native-alias","sessionId":"thread"}` + "\n")
+			if err := os.WriteFile(transcript, originalTranscript, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			bookPath := filepath.Join(root, "agentbook.json")
+			entries := []book.Agent{{Name: "canonical-name"}}
+			if test.reserve {
+				entries = append(entries, book.Agent{Name: "native-alias"})
+			}
+			bookData, err := json.Marshal(book.File{Agents: entries})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bookData = append(bookData, '\n')
+			if err := os.WriteFile(bookPath, bookData, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			entry := book.Agent{
+				Name:        "canonical-name",
+				NativeTitle: &book.NativeTitle{ThreadID: "thread", Path: transcript, Text: "native-alias"},
+			}
+			fleet := book.Fleet{Agents: map[string]book.Agent{"canonical-name": entry}}
+			if test.reserve {
+				fleet.Agents["native-alias"] = book.Agent{Name: "native-alias"}
+			}
+			cfg := config.Config{StateDir: filepath.Join(root, "state"), Agentbooks: []string{bookPath}}
+			checks := doctorRuntimeChecks(cfg, fleet, "canonical-name")
+			var found *doctorCheck
+			for i := range checks {
+				if checks[i].Name == "native_title/canonical-name" {
+					found = &checks[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("doctor omitted the title mismatch: %+v", checks)
+			}
+			for _, want := range []string{`bp rename canonical-name canonical-name (retitle the native session to "canonical-name")`} {
+				if !strings.Contains(found.Next, want) {
+					t.Errorf("next hint %q does not explain retitling", found.Next)
+				}
+			}
+			adoption := "bp rename canonical-name native-alias (adopt the native title as the bp name)"
+			if strings.Contains(found.Next, adoption) != test.wantAdopt {
+				t.Fatalf("next hint %q adoption-present=%t want %t", found.Next, strings.Contains(found.Next, adoption), test.wantAdopt)
+			}
+			afterBook, err := os.ReadFile(bookPath)
+			if err != nil || string(afterBook) != string(bookData) {
+				t.Fatalf("doctor changed the agentbook: %v", err)
+			}
+			afterTranscript, err := os.ReadFile(transcript)
+			if err != nil || string(afterTranscript) != string(originalTranscript) {
+				t.Fatalf("doctor changed the native transcript: %v", err)
+			}
+		})
 	}
 }
 

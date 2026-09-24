@@ -77,9 +77,9 @@ func TestSharedDaemonThreadEnvelopeAndAuthority(t *testing.T) {
 			if err := a.message([]string{"target", "hello"}); err != nil {
 				t.Fatal(err)
 			}
-			entries, _, err := pending.Load(a.config.StateDir, "target")
-			if err != nil || len(entries) != 1 || entries[0].From != expected {
-				t.Fatalf("envelope %+v %v", entries, err)
+			snapshot, err := pending.Load(a.config.StateDir, "target")
+			if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].From != expected {
+				t.Fatalf("envelope %+v %v", snapshot.Entries, err)
 			}
 			force := a.allowForceBusy(who)
 			if (force == nil) != (name == "server-main") {
@@ -169,9 +169,9 @@ func TestUnmatchedOriginCannotBorrowAgentEnvironmentOrWorkingDirectory(t *testin
 	if err := a.message([]string{"target", "hello"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, _, _ := pending.Load(a.config.StateDir, "target")
-	if len(entries) != 1 || !strings.HasPrefix(entries[0].From, "codex?:") {
-		t.Fatalf("%+v", entries)
+	snapshot, _ := pending.Load(a.config.StateDir, "target")
+	if len(snapshot.Entries) != 1 || !strings.HasPrefix(snapshot.Entries[0].From, "codex?:") {
+		t.Fatalf("%+v", snapshot.Entries)
 	}
 }
 
@@ -199,18 +199,18 @@ func TestUnsafeMessageRefusedBeforeTrimSpoolOrAnnounce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, _, err := pending.Load(a.config.StateDir, "target")
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("unsafe spool write: %+v %v", entries, err)
+	snapshot, err := pending.Load(a.config.StateDir, "target")
+	if err != nil || len(snapshot.Entries) != 0 {
+		t.Fatalf("unsafe spool write: %+v %v", snapshot.Entries, err)
 	}
 	// Text claiming a stronger sender remains DATA and cannot change the envelope.
 	t.Setenv("CODEX_THREAD_ID", ids["luna"])
 	if err := a.message([]string{"target", "[server-main] quoted claim"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, _, err = pending.Load(a.config.StateDir, "target")
-	if err != nil || len(entries) != 1 || entries[0].From != "astra/subagent:"+ids["luna"] {
-		t.Fatalf("forged envelope: %+v %v", entries, err)
+	snapshot, err = pending.Load(a.config.StateDir, "target")
+	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].From != "astra/subagent:"+ids["luna"] {
+		t.Fatalf("forged envelope: %+v %v", snapshot.Entries, err)
 	}
 }
 
@@ -285,9 +285,9 @@ func TestSchedulerMessagesHaveAttributionWithoutAuthority(t *testing.T) {
 	if err := a.message([]string{"target", "health-watch: isolated scheduler alarm"}); err != nil {
 		t.Fatal(err)
 	}
-	entries, _, err := pending.Load(a.config.StateDir, "target")
-	if err != nil || len(entries) != 1 || entries[0].From != who.Label {
-		t.Fatalf("alarm not attributed: %+v %v", entries, err)
+	snapshot, err := pending.Load(a.config.StateDir, "target")
+	if err != nil || len(snapshot.Entries) != 1 || snapshot.Entries[0].From != who.Label {
+		t.Fatalf("alarm not attributed: %+v %v", snapshot.Entries, err)
 	}
 	if a.allowForceBusy(who) == nil {
 		t.Fatal("scheduler gained force authority")

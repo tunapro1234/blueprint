@@ -260,6 +260,32 @@ func TestCodexHistoryExportRefreshesPortableSessionIndex(t *testing.T) {
 	}
 }
 
+func TestCodexIndexImportPreservesConcurrentAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session_index.jsonl")
+	initial := []byte("{\"id\":\"existing\"}\n")
+	if err := os.WriteFile(path, initial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selected := []byte("{\"id\":\"selected\",\"thread_name\":\"imported\"}\n")
+	concurrent := []byte("{\"id\":\"concurrent\",\"thread_name\":\"new session\"}\n")
+	err := appendCodexIndexRowsWithHook(path, selected, "selected", func() error {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = file.Write(concurrent)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append(append(append([]byte(nil), initial...), concurrent...), selected...)
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("Codex index after concurrent append = %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestHistoryExportStdoutWritesTarAndNeverOverwritesDifferentContent(t *testing.T) {
 	t.Setenv("AGENTBOOK", "")
 	home := t.TempDir()

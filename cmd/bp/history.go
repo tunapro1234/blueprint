@@ -550,6 +550,10 @@ func rewriteCodexCWD(data []byte, folder string) ([]byte, string, error) {
 }
 
 func appendCodexIndexRows(path string, rows []byte, id string) error {
+	return appendCodexIndexRowsWithHook(path, rows, id, nil)
+}
+
+func appendCodexIndexRowsWithHook(path string, rows []byte, id string, beforeAppend func() error) error {
 	var selected [][]byte
 	scanner := bufio.NewScanner(bytes.NewReader(rows))
 	for scanner.Scan() {
@@ -567,23 +571,53 @@ func appendCodexIndexRows(path string, rows []byte, id string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		return fmt.Errorf("Codex session index has an incomplete final record")
+	}
+	var pending bytes.Buffer
+	seen := make(map[string]bool, len(selected))
 	for _, row := range selected {
-		if bytes.Contains(existing, append(append([]byte{'\n'}, row...), '\n')) || bytes.HasPrefix(existing, append(row, '\n')) {
+		key := string(row)
+		if seen[key] || codexIndexHasRow(existing, row) {
 			continue
 		}
-		if len(existing) > 0 && existing[len(existing)-1] != '\n' {
-			return fmt.Errorf("Codex session index has an incomplete final record")
-		}
-		existing = append(existing, row...)
-		existing = append(existing, '\n')
+		seen[key] = true
+		pending.Write(row)
+		pending.WriteByte('\n')
 	}
-	if len(existing) == 0 {
+	if pending.Len() == 0 {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return writeAtomic(path, existing, 0o600)
+	if beforeAppend != nil {
+		if err := beforeAppend(); err != nil {
+			return err
+		}
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	written, err := file.Write(pending.Bytes())
+	if err != nil {
+		return err
+	}
+	if written != pending.Len() {
+		return io.ErrShortWrite
+	}
+	return file.Sync()
+}
+
+func codexIndexHasRow(index, row []byte) bool {
+	for _, existing := range bytes.Split(index, []byte{'\n'}) {
+		if bytes.Equal(existing, row) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) importRemoteHistory(loaded projectschema.Loaded) (map[string]string, error) {

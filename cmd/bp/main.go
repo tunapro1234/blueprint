@@ -137,6 +137,9 @@ type app struct {
 	interactive     func() bool
 	fleetUpdater    fleetUpdateBackend
 	confirmUpdate   func() (bool, error)
+	releaseChecker  updateReleaseChecker
+	releaseReplace  updateReplacer
+	releaseCommand  updateCommandRunner
 
 	detectCompositor func() (compositor.Adapter, error)
 	processLister    windowmap.ProcessLister

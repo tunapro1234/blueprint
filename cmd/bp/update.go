@@ -24,6 +24,14 @@ type updateResult struct {
 	Error     string    `json:"error,omitempty"`
 }
 
+type updateReleaseChecker interface {
+	Latest(context.Context) (release.Manifest, error)
+	Download(context.Context, release.Manifest, string) ([]byte, error)
+}
+
+type updateReplacer func(string, []byte, func(string) error, func() error) (string, error)
+type updateCommandRunner func(context.Context, string, ...string) error
+
 func printVersion(args []string) error {
 	if len(args) > 1 || len(args) == 1 && args[0] != "--json" {
 		return fmt.Errorf("usage: bp version [--json]")
@@ -60,9 +68,12 @@ func (a *app) update(args []string) error {
 	if !check && npmManagedExecutable() {
 		return fmt.Errorf("npm-managed installation: run npm install -g @tunapro/blueprint@latest; bp update --check remains available")
 	}
-	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
-	checker := release.Default()
-	m, err := checker.Latest(ctx)
+	checkCtx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
+	checker := a.releaseChecker
+	if checker == nil {
+		checker = release.Default()
+	}
+	m, err := checker.Latest(checkCtx)
 	cancel()
 	result := updateResult{Current: release.Version(), Latest: m.Version, Available: release.Newer(m.Version, release.Version()), CheckedAt: time.Now().UTC()}
 	if err != nil {
@@ -84,7 +95,7 @@ func (a *app) update(args []string) error {
 		_ = json.NewEncoder(a.out).Encode(result)
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("check release metadata: %w", err)
 	}
 	if check || !result.Available {
 		if !jsonOutput {
@@ -101,20 +112,27 @@ func (a *app) update(args []string) error {
 	}
 	self, err := os.Executable()
 	if err != nil {
-		return err
+		return fmt.Errorf("locate installed bp binary: %w", err)
 	}
 	data, err := checker.Download(a.ctx, m, release.Platform())
 	if err != nil {
-		return err
+		return fmt.Errorf("download %s: %w; if the update keeps failing, reinstall with the signed installer: curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/install.sh | sh -s -- --local", release.Platform(), err)
 	}
 	run := func(path string, args ...string) error {
-		cmd := exec.CommandContext(ctx, path, args...)
+		if a.releaseCommand != nil {
+			return a.releaseCommand(a.ctx, path, args...)
+		}
+		cmd := exec.CommandContext(a.ctx, path, args...)
 		cmd.Stdout, cmd.Stderr = a.out, a.err
 		return cmd.Run()
 	}
-	backup, err := release.Replace(self, data, func(path string) error { return run(path, "setup", "--check") }, func() error { return run(self, "setup") })
+	replace := a.releaseReplace
+	if replace == nil {
+		replace = release.Replace
+	}
+	backup, err := replace(self, data, func(path string) error { return run(path, "setup", "--check") }, func() error { return run(self, "setup") })
 	if err != nil {
-		return err
+		return fmt.Errorf("install downloaded bp: %w", err)
 	}
 	fmt.Fprintf(a.out, "Updated bp %s → %s. Backup: %s. Open agents keep running.\n", release.Version(), m.Version, backup)
 	return nil

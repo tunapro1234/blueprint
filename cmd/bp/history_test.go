@@ -97,6 +97,35 @@ func TestClaudeHistoryMovesWithProjectAndImportsToNativePath(t *testing.T) {
 	}
 }
 
+func TestClaudeHistoryImportRejectsSymlinkTranscript(t *testing.T) {
+	t.Setenv("AGENTBOOK", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	outside := filepath.Join(t.TempDir(), "private.jsonl")
+	secret := []byte("private data\n")
+	if err := os.WriteFile(outside, secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	portable := filepath.Join(t.TempDir(), "worker", "claude")
+	if err := os.MkdirAll(portable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(portable, "12345678-1234-4234-8234-123456789abc.jsonl")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	folder := t.TempDir()
+	if _, err := importClaudeHistory(portable, folder); err == nil {
+		t.Fatal("portable symlink transcript was imported")
+	}
+	native := filepath.Join(bptmux.ClaudeProjectDir(folder), "12345678-1234-4234-8234-123456789abc.jsonl")
+	if data, err := os.ReadFile(native); err == nil {
+		t.Fatalf("native transcript was created from symlink target: %q", data)
+	}
+}
+
 func TestCodexHistoryMovesRolloutAndSessionIndex(t *testing.T) {
 	t.Setenv("AGENTBOOK", "")
 	home := t.TempDir()

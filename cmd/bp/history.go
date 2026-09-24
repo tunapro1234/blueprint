@@ -441,6 +441,9 @@ func newestJSONL(root string, exclude string) (string, error) {
 		if err != nil {
 			return err
 		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("portable history entry %s is not a regular file", path)
+		}
 		files = append(files, historyEntry{Name: path, ModTime: info.ModTime()})
 		return nil
 	})

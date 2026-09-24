@@ -94,12 +94,23 @@ func (c *Checker) get(ctx context.Context, path string, limit int64) ([]byte, er
 	}
 	data, err := readWithStall(ctx, response.Body, limit+1, c.bodyStallTimeout())
 	if err != nil {
-		return nil, fmt.Errorf("GET %s after %d bytes: %w", url, len(data), err)
+		return nil, fmt.Errorf("GET %s after %s: %w", url, bodyProgress(int64(len(data)), response.ContentLength), err)
 	}
 	if int64(len(data)) > limit {
 		return nil, fmt.Errorf("GET %s after %d bytes: release response too large", url, len(data))
 	}
 	return data, nil
+}
+
+func bodyProgress(received, total int64) string {
+	const megabyte = 1_000_000
+	if total >= megabyte {
+		return fmt.Sprintf("%.0f MB of %.0f MB", float64(received)/megabyte, float64(total)/megabyte)
+	}
+	if total > 0 {
+		return fmt.Sprintf("%d of %d bytes", received, total)
+	}
+	return fmt.Sprintf("%d bytes", received)
 }
 
 func (c *Checker) bodyStallTimeout() time.Duration {
@@ -162,7 +173,7 @@ func readWithStall(ctx context.Context, body io.ReadCloser, limit int64, stall t
 			return data, ctx.Err()
 		case <-timer.C:
 			_ = body.Close()
-			return data, fmt.Errorf("body stalled for %s", stall)
+			return data, fmt.Errorf("stalled after %s", stall)
 		}
 	}
 	return data, nil

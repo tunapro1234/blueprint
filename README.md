@@ -234,6 +234,8 @@ curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/ins
 bp version --json
 bp update --check
 bp update
+bp update --clis --dry-run
+bp update --models claude-opus-5=claude-opus-5-5 gpt-5.6-sol=gpt-6-sol --dry-run
 bp doctor --json
 bp setup --disable
 ```
@@ -250,6 +252,21 @@ The updater verifies the signed
 manifest and binary checksum, keeps a backup, and restores the previous binary if
 setup fails. Running agents are not restarted. Server installations use an explicit
 host rollout so CLI and daemon versions are verified together.
+
+`bp update` without fleet flags retains that binary-only behavior. `--clis` updates
+installed native harness CLIs and rolling-restarts eligible live agents;
+`--models from=to ...` migrates only matching models while preserving each agent's
+observed reasoning effort and launch mode. `--all` combines both operations.
+Use repeatable `--agent <name>` to limit the plan and, with `--clis`, the native
+harnesses to update. The coordinator is restarted last. Busy, modal, draft-bearing,
+unloaded, or incompletely observed agents are deferred without touching their
+panes. Closed resumable records retain the model map for their next
+`bp open --resume`.
+
+Fleet updates print a plan and require confirmation on a terminal. Non-interactive
+runs require `--yes`; `--dry-run` never changes CLIs, panes, defaults, or records.
+Add `--json` for the same per-agent result as structured data. Future-launch
+defaults change only with `--set-defaults`, which writes timestamped backups first.
 
 Local agent startup can show a cached update notice. `updateCheck: false` in YAML
 disables its daily background check. No model prompt is sent. Disabling shell

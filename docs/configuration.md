@@ -107,6 +107,25 @@ their children are archived or reparented.
 includes them. `bp archive --stale --dry-run` previews closed registrations with
 a missing bound transcript unless they are explicitly persistent.
 
+## Native CLI update commands
+
+Fleet updates use argument arrays rather than shell strings. The defaults are
+equivalent to `claude update`, `npm install -g @openai/codex@latest`,
+`opencode upgrade`, and `hermes update`. Override only the harnesses that need a
+different package-manager path:
+
+```yaml
+cliUpdates:
+  claude: [/opt/claude/bin/claude, update]
+  codex: [/opt/node/bin/npm, install, -g, "@openai/codex@latest"]
+```
+
+An explicitly empty command skips that harness; omitted keys retain their
+defaults. `bp update --clis` also skips a harness whose native executable is not
+installed. Commands are executed directly; shell expansion and command
+substitution are not applied.
+
+
 ## Window border reset
 
 `bp windows watch` uses an explicit reset color when a window no longer maps to

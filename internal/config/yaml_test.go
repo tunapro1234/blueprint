@@ -63,6 +63,21 @@ func TestWindowsResetColorDefaultsAndValidatesOverrides(t *testing.T) {
 	}
 }
 
+func TestCLIUpdateCommandsDefaultAndOverride(t *testing.T) {
+	c, err := yamlConfig(t, "config.yaml", "{}")
+	if err != nil || !reflect.DeepEqual(c.CLIUpdates["codex"], []string{"npm", "install", "-g", "@openai/codex@latest"}) || !reflect.DeepEqual(c.CLIUpdates["claude"], []string{"claude", "update"}) {
+		t.Fatalf("default CLI updates=%v, err=%v", c.CLIUpdates, err)
+	}
+	c, err = yamlConfig(t, "config.yaml", "cliUpdates:\n  codex: [/opt/npm, install, codex]\n")
+	if err != nil || !reflect.DeepEqual(c.CLIUpdates["codex"], []string{"/opt/npm", "install", "codex"}) || !reflect.DeepEqual(c.CLIUpdates["claude"], []string{"claude", "update"}) {
+		t.Fatalf("overridden CLI updates=%v, err=%v", c.CLIUpdates, err)
+	}
+	c, err = yamlConfig(t, "config.yaml", "cliUpdates:\n  codex: []\n")
+	if err != nil || len(c.CLIUpdates["codex"]) != 0 || len(c.CLIUpdates["claude"]) == 0 {
+		t.Fatalf("explicitly disabled CLI update=%v, err=%v", c.CLIUpdates, err)
+	}
+}
+
 func TestYAMLConfigPathsAndDisabledValues(t *testing.T) {
 	c, err := yamlConfig(t, "config.yaml", `# portable paths
 agentbooks: [agents/book.json]

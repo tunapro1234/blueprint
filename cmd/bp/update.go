@@ -38,6 +38,11 @@ func printVersion(args []string) error {
 	return nil
 }
 func (a *app) update(args []string) error {
+	for _, arg := range args {
+		if arg != "--check" && arg != "--json" {
+			return a.fleetUpdate(args)
+		}
+	}
 	check, jsonOutput := false, false
 	for _, arg := range args {
 		switch arg {

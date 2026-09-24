@@ -34,6 +34,18 @@ type Agent struct {
 	Color            string              `json:"color,omitempty"`
 	ColorOverride    string              `json:"colorOverride,omitempty"`
 	NativeTitle      *NativeTitle        `json:"nativeTitle,omitempty"`
+	FleetUpdate      *FleetUpdate        `json:"fleetUpdate,omitempty"`
+}
+
+// FleetUpdate keeps a requested model migration with the durable agent record.
+// Closed agents apply it on their next explicit resume; deferred live agents
+// retain the reason for an operator instead of being retried behind their back.
+type FleetUpdate struct {
+	Models         map[string]string `json:"models,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	Effort         string            `json:"effort,omitempty"`
+	DeferredReason string            `json:"deferredReason,omitempty"`
+	RecordedAt     time.Time         `json:"recordedAt"`
 }
 
 type File struct {
@@ -367,6 +379,9 @@ func merge(old, next Agent) Agent {
 	if next.NativeTitle != nil {
 		old.NativeTitle = next.NativeTitle
 	}
+	if next.FleetUpdate != nil {
+		old.FleetUpdate = next.FleetUpdate
+	}
 	return old
 }
 
@@ -519,6 +534,22 @@ func SetColorOverride(paths []string, name, colour string) error {
 		} else {
 			agent["colorOverride"] = colour
 		}
+		return true
+	})
+}
+
+// SetFleetUpdate stores a model migration or deferral on an existing record.
+func SetFleetUpdate(paths []string, name string, update FleetUpdate) error {
+	return mutate(paths, name, func(agent map[string]any) bool {
+		encoded, err := json.Marshal(update)
+		if err != nil {
+			return false
+		}
+		var value map[string]any
+		if json.Unmarshal(encoded, &value) != nil {
+			return false
+		}
+		agent["fleetUpdate"] = value
 		return true
 	})
 }

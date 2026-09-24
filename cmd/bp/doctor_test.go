@@ -36,8 +36,8 @@ func TestDoctorNativeTitleMismatchExplainsRetitleAndAdoption(t *testing.T) {
 		wantUnavailable string
 	}{
 		{name: "available native title", title: "native-alias", wantAdopt: true},
-		{name: "title used by closed registration", title: "native-alias", reservation: &book.Agent{Name: "native-alias", Status: "closed"}, wantUnavailable: `adopt unavailable: "native-alias" is used by agent native-alias (closed)`},
-		{name: "title used by archived registration", title: "native-alias", reservation: &book.Agent{Name: "native-alias", Status: "closed", ArchivedAt: "2026-09-01T00:00:00Z"}, wantUnavailable: `adopt unavailable: "native-alias" is used by agent native-alias (archived)`},
+		{name: "title used by closed registration", title: "native-alias", reservation: &book.Agent{Name: "native-alias", Status: "closed"}, wantUnavailable: `adopt unavailable: agent "native-alias" already exists (closed)`},
+		{name: "title used by archived registration", title: "native-alias", reservation: &book.Agent{Name: "native-alias", Status: "closed", ArchivedAt: "2026-09-01T00:00:00Z"}, wantUnavailable: `adopt unavailable: agent "native-alias" already exists (archived)`},
 		{name: "invalid free-form title", title: "native alias", wantUnavailable: `adopt unavailable: "native alias" is not a valid agent name`},
 	} {
 		t.Run(test.name, func(t *testing.T) {

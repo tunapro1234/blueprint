@@ -1210,6 +1210,32 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	return c.clearWithCtrlU(ctx, session, nil)
 }
 
+// sendStartupCommand types one of bp open's own slash commands and makes sure it
+// did not stay in the composer. A fresh Claude pane can swallow the Enter (the
+// slash-command menu is still drawing), which left "/remote-control" sitting
+// unsubmitted: the onboarding prompt then bounced off a non-empty composer and
+// every queued message waited behind it. SubmitStuck presses Enter only while
+// the composer holds exactly this text, so a retry can never submit anything
+// else.
+func (c *Client) sendStartupCommand(ctx context.Context, session, command string) {
+	if err := c.Send(ctx, session, command); err != nil {
+		c.finishStartupCommand(ctx, session, command)
+	}
+}
+
+// finishStartupCommand presses Enter on a startup command still sitting whole in
+// the composer. Send leaves it there when the pane is still redrawing after the
+// paste (the slash-command menu): it reports ErrUnverified and never presses
+// Enter, by design.
+func (c *Client) finishStartupCommand(ctx context.Context, session, command string) {
+	for tries := 0; tries < 3; tries++ {
+		if submitted, err := c.SubmitStuck(ctx, session, []string{command}); submitted || err != nil {
+			return
+		}
+		c.Sleep(500 * time.Millisecond)
+	}
+}
+
 // SubmitStuck presses ENTER on a composer that provably holds one of texts
 // EXACTLY, and does nothing else. It reports whether the composer then cleared.
 //
@@ -2876,9 +2902,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	progress("harness ready")
 	c.Sleep(time.Second)
 	if !opts.Codex && !opts.Hermes && !opts.OpenCode {
-		_ = c.Send(ctx, session, "/rename "+session)
+		c.sendStartupCommand(ctx, session, "/rename "+session)
 		c.Sleep(time.Second)
-		_ = c.Send(ctx, session, "/remote-control")
+		c.sendStartupCommand(ctx, session, "/remote-control")
 		// When RC is already active (a resumed session reconnects on its own)
 		// the command opens the Continue/Disconnect menu instead of just
 		// printing the URL, and the menu can render seconds late. Sweep until

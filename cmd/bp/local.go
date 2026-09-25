@@ -591,7 +591,7 @@ func (a *app) configureLocalBar(name string) error {
 	for _, option := range [][2]string{
 		{"mouse", mouse},
 		{"status", "on"}, {"status-style", "bg=" + barGap + ",fg=colour231"},
-		{"status-left", command("name")}, {"status-right", command("bar")},
+		{"status-left", localBarStatusFormat("name", command("name"))}, {"status-right", localBarStatusFormat("bar", command("bar"))},
 		{"status-left-length", "48"}, {"status-right-length", "120"}, {"status-interval", "2"},
 	} {
 		if err := a.tmux.SetOption(a.ctx, "="+name+":", option[0], option[1]); err != nil {
@@ -599,6 +599,10 @@ func (a *app) configureLocalBar(name string) error {
 		}
 	}
 	return nil
+}
+
+func localBarStatusFormat(option, fallback string) string {
+	return "#{?@bp-" + option + ",#{@bp-" + option + "}," + fallback + "}"
 }
 
 // ownsLocalSession is display/lifecycle provenance, never sender authority.

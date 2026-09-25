@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# bp-attach <agent|title> — the SHARED core of lush (local) and rush (server).
+#
+# The same rules apply on both sides:
+#   1. The agent is looked up in the bp book: EXACT name > title; unarchived >
+#      archived; when ambiguous the candidates are listed and it stops
+#      (2026-09-23: lush main opened the wrong thread).
+#   2. A live tmux session is attached. Targets match EXACTLY with "=": when
+#      tmux -t cannot find the name it matches by PREFIX (2026-09-24: ftc-simple ->
+#      ftc-simple-worker). set-option needs the "=name:" form.
+#   3. A closed agent is revived with bp open using its recorded
+#      harness/thread/permission mode.
+#   4. An unknown name is an ERROR; no empty session is opened. A tmux session
+#      that is not an agent but has exactly this name is still attached.
+#   5. Every step is printed with its elapsed time (blueprint #22).
+#
+# Environment:
+#   BP_ATTACH_CODEX_YOLO=1   open codex with --no-sandbox even when the record has no noSandbox
+#   BP_ATTACH_CLAUDE_SKIP=1  --dangerously-skip-permissions on the claude fallback path
+#   BP_ATTACH_PAUSE=1        keep the screen for 15 s on error (so mosh does not close at once)
+#
+# The permanent solution lives in bp itself: blueprint #2 (bp attach), #24, #25.
+set -u
+
+T0=$(date +%s%N)
+step() {
+  local d=$(( ($(date +%s%N) - T0) / 100000000 ))
+  printf '\033[2m[bp-attach %d.%ds]\033[0m %s\n' $((d / 10)) $((d % 10)) "$*" >&2
+}
+die() {
+  printf '\033[31mbp-attach: %s\033[0m\n' "$*" >&2
+  if [ "${BP_ATTACH_PAUSE:-}" = 1 ] && [ -t 0 ]; then
+    read -r -t 15 -p "(press Enter to exit)" _ || true
+  fi
+  exit 1
+}
+
+arg="${1:-}"
+[ -n "$arg" ] || die "usage: bp-attach <agent-name|title>"
+command -v bp >/dev/null || die "bp not found"
+
+# Inside tmux use switch-client instead of attach (avoids the nested-session error).
+attach() {
+  if [ -n "${TMUX:-}" ]; then tmux switch-client -t "=$1"; else tmux attach -d -t "=$1"; fi
+}
+
+# Session-level bp bar (blueprint #13: bp open does not set it up itself).
+bar() {
+  local sess="$1" agent="$2" bp_bin idx envp
+  bp_bin="$(command -v bp)" || return 0
+  # Leave the bar alone when it already shows this agent (on the server bp open may set it itself).
+  tmux show-options -t "=$sess:" status-left 2>/dev/null | grep -qF "name '$agent'" && return 0
+  # BP_HOME is passed only when set: on the server bp keeps its data outside ~/.blueprint.
+  envp="env ${BP_HOME:+BP_HOME='$BP_HOME'} HOME='$HOME' PATH='$PATH' '$bp_bin'"
+  idx=$(bp color "$agent" --json 2>/dev/null | sed -n 's/.*"index":[[:space:]]*\([0-9]*\).*/\1/p')
+  [ -n "$idx" ] || idx=236
+  tmux set-option -t "=$sess:" status on
+  tmux set-option -t "=$sess:" status-interval 2
+  tmux set-option -t "=$sess:" status-left "#($envp name '$agent')"
+  tmux set-option -t "=$sess:" status-left-length 48
+  tmux set-option -t "=$sess:" status-right "#($envp bar '$agent')"
+  tmux set-option -t "=$sess:" status-right-length 120
+  tmux set-option -t "=$sess:" status-style "bg=colour${idx},fg=colour231"
+}
+
+step "looking up '$arg' in the bp book..."
+out=$(bp book --json 2>/dev/null | python3 -c '
+import json, sys
+arg = sys.argv[1]; low = arg.lower()
+try:
+    agents = json.load(sys.stdin).get("agents") or {}
+except Exception as e:
+    print("ERR"); print("cannot read bp book: %s" % e); sys.exit()
+if isinstance(agents, dict):
+    agents = list(agents.values())
+def title(a):
+    return ((a.get("nativeTitle") or {}).get("text")) or ""
+exact = [a for a in agents if a.get("name", "").lower() == low]
+cands = exact or [a for a in agents if title(a).lower() == low]
+if not cands:
+    print("NONE"); sys.exit()
+rank = lambda a: (not a.get("archivedAt"), a.get("status") == "open",
+                  bool((a.get("nativeTitle") or {}).get("threadId") or (a.get("launch") or {}).get("resumeId")))
+cands.sort(key=rank, reverse=True)
+if len(cands) > 1 and rank(cands[0]) == rank(cands[1]):
+    print("ERR")
+    print("ambiguous, use one of these names: " + ", ".join(sorted(a["name"] for a in cands)))
+    sys.exit()
+a = cands[0]
+lr = a.get("localRuntime") or {}
+ln = a.get("launch") or {}
+cwd = a.get("folder") or lr.get("cwd") or ""
+if ln.get("codex"): rt = "codex"
+elif ln.get("hermes"): rt = "hermes"
+elif ln.get("claude"): rt = "claude"
+elif lr.get("harness"): rt = lr["harness"]
+else: rt = next((h for h in ("codex", "hermes", "opencode") if a["name"].startswith(h + "-")), "claude")
+print("OK")
+for v in (a["name"], title(a), cwd, rt, a.get("status") or "",
+          ln.get("resumeId") or (a.get("nativeTitle") or {}).get("threadId") or "",
+          "1" if ln.get("noSandbox") else "", "1" if a.get("archivedAt") else ""):
+    print(v)
+' "$arg")
+{ IFS= read -r kind; IFS= read -r name; IFS= read -r title; IFS= read -r cwd
+  IFS= read -r rt; IFS= read -r astat; IFS= read -r rid; IFS= read -r nosb; IFS= read -r arch; } <<< "$out"
+
+if [ "$kind" = NONE ]; then
+  # Not an agent, but a tmux session with exactly this name exists (e.g. opened by hand): attach it.
+  if tmux has-session -t "=$arg" 2>/dev/null; then
+    step "no agent record; attaching tmux session '$arg'"
+    attach "$arg"; exit
+  fi
+  die "no agent or tmux session named '$arg' (no empty session was opened)"
+fi
+[ "$kind" = OK ] || die "${name:-cannot read bp book}"
+step "found: $name ($rt, $astat${arch:+, archived}) — $cwd"
+
+for sess in "$name" "$title"; do
+  [ -n "$sess" ] || continue
+  if tmux has-session -t "=$sess" 2>/dev/null; then
+    step "live session '$sess' — attaching"
+    bar "$sess" "$name"
+    attach "$sess"; exit
+  fi
+done
+
+[ -n "$arch" ] && die "$name is archived; first run: bp restore $name"
+[ -n "$cwd" ] || die "working directory of $name is unknown"
+
+rtflag=""
+case "$rt" in claude) rtflag=--claude ;; codex) rtflag=--codex ;; hermes) rtflag=--hermes ;; esac
+args=(--resume)
+[ -n "$rtflag" ] && args+=("$rtflag")
+[ -n "$rid" ] && args+=(--thread "$rid")
+# Permission mode: the recorded noSandbox is kept (blueprint #25); locally lush always opens codex in yolo mode.
+if [ "$rt" = codex ] && { [ -n "$nosb" ] || [ "${BP_ATTACH_CODEX_YOLO:-}" = 1 ]; }; then
+  args+=(--no-sandbox)
+fi
+args+=(--no-prompt)
+# ALWAYS open with the canonical name: opening by title creates a second record named after the title (blueprint #5).
+step "closed — reviving: bp open $name ${args[*]}"
+if bp open "$name" "$cwd" "${args[@]}"; then
+  step "bp open done — waiting for the session"
+else
+  # bp open refused (e.g. empty/different title: blueprint #20). Fallback: bp run --name,
+  # same thread, same permission mode. bp run does not record anything when run inside
+  # tmux, so it always runs without TMUX from a separate launcher session.
+  [ -n "$rid" ] || die "bp open failed and there is no thread id ($name). Diagnose: bp doctor --agent $name"
+  cli=()
+  case "$rt" in
+    claude)
+      cli=(claude)
+      [ "${BP_ATTACH_CLAUDE_SKIP:-}" = 1 ] && cli+=(--dangerously-skip-permissions)
+      cli+=(--resume "$rid") ;;
+    codex)
+      cli=(codex resume "$rid")
+      if [ "${BP_ATTACH_CODEX_YOLO:-}" = 1 ]; then cli+=(--search --yolo)
+      elif [ -n "$nosb" ]; then cli+=(--dangerously-bypass-approvals-and-sandbox); fi ;;
+    *) die "bp open failed ($name, $rt). Diagnose: bp doctor --agent $name" ;;
+  esac
+  step "bp open refused — fallback: bp run --name $name ${cli[*]}"
+  launcher="bp-attach-launch-$$"
+  tmux new-session -d -s "$launcher" -c "$cwd" "env -u TMUX -u TMUX_PANE bp run --name $(printf '%q' "$name") $(printf '%q ' "${cli[@]}")"
+  trap 'tmux kill-session -t "=$launcher" 2>/dev/null' EXIT
+fi
+for i in $(seq 1 40); do
+  if tmux has-session -t "=$name" 2>/dev/null; then
+    step "session ready: $name — attaching"
+    if [ -n "${launcher:-}" ]; then
+      sleep 2   # let bp run finish recording; then the launcher session is closed, the agent lives on
+      tmux kill-session -t "=$launcher" 2>/dev/null
+    fi
+    bar "$name" "$name"
+    attach "$name"; exit
+  fi
+  sleep 0.3
+done
+die "agent did not open: tmux session '$name' did not appear within 12 s. Check: bp status | grep $name ; bp doctor --agent $name"

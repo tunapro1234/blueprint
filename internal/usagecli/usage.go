@@ -1,10 +1,10 @@
 package usagecli
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"blueprint/internal/codexauth"
@@ -75,58 +75,151 @@ func hasClaude(s Sample) bool { return s.Claude5 != nil && s.Claude7 != nil }
 // on the current plan and leave outage rows rendering as nulls.
 func hasCodex(s Sample) bool { return s.Codex5 != nil }
 
-func readSamples(path string) ([]Sample, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	samples := make([]Sample, 0, 256)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var sample Sample
-		if err := json.Unmarshal(line, &sample); err != nil {
-			return nil, err
-		}
-		samples = append(samples, sample)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(samples) == 0 {
-		return nil, fmt.Errorf("history is empty")
-	}
-	return samples, nil
+// latestCache remembers the last resolution per history file. The daemon's bar
+// renderer asks once per attached agent every scan; the file only changes when
+// the collector appends a row.
+var latestCache = struct {
+	sync.Mutex
+	entries map[string]latestEntry
+}{entries: map[string]latestEntry{}}
+
+type latestEntry struct {
+	size     int64
+	modified time.Time
+	resolved Resolved
 }
 
 // Latest resolves the newest row with per-provider fallback to the most
 // recent non-null row within fallbackWindow of the newest timestamp.
 func Latest(path string) (Resolved, error) {
-	samples, err := readSamples(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		return Resolved{}, err
 	}
-	return resolve(samples), nil
+	latestCache.Lock()
+	entry, ok := latestCache.entries[path]
+	latestCache.Unlock()
+	if ok && entry.size == info.Size() && entry.modified.Equal(info.ModTime()) {
+		return entry.resolved, nil
+	}
+	samples, err := readTailSamples(path)
+	if err != nil {
+		return Resolved{}, err
+	}
+	resolved := resolve(samples)
+	latestCache.Lock()
+	if len(latestCache.entries) > 16 {
+		latestCache.entries = map[string]latestEntry{}
+	}
+	latestCache.entries[path] = latestEntry{size: info.Size(), modified: info.ModTime(), resolved: resolved}
+	latestCache.Unlock()
+	return resolved, nil
 }
 
-func resolve(samples []Sample) Resolved {
-	newest := samples[len(samples)-1]
-	resolved := Resolved{TS: newest.TS, Claude: newest, Codex: newest}
+// readTailSamples returns, oldest first, the newest rows that resolve can
+// look at: back to the first row outside fallbackWindow (or until both
+// providers have a usable row) and at least back to the newest codex reading.
+// resolve over this suffix equals resolve over the whole history, without
+// decoding megabytes of old rows.
+func readTailSamples(path string) ([]Sample, error) {
+	var reversed []Sample
+	var decodeErr error
+	var inWindow func(Sample) bool
+	claudeFound, codexFound, codexLast, windowDone := false, false, false, false
+	scanReverse(path, func(line []byte) bool {
+		if len(line) == 0 {
+			return true
+		}
+		var sample Sample
+		if err := json.Unmarshal(line, &sample); err != nil {
+			decodeErr = err
+			return false
+		}
+		reversed = append(reversed, sample)
+		if inWindow == nil {
+			inWindow = windowFrom(sample)
+		}
+		if !windowDone {
+			if !inWindow(sample) {
+				windowDone = true
+			} else {
+				claudeFound = claudeFound || hasClaude(sample)
+				codexFound = codexFound || hasCodex(sample)
+				windowDone = claudeFound && codexFound
+			}
+		}
+		codexLast = codexLast || hasCodex(sample)
+		return !(windowDone && codexLast)
+	})
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	if len(reversed) == 0 {
+		return nil, fmt.Errorf("history is empty")
+	}
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return reversed, nil
+}
+
+// scanReverse visits the file's lines newest first.
+func scanReverse(path string, visit func([]byte) bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	offset := info.Size()
+	var carry []byte
+	for offset > 0 {
+		n := int64(64 * 1024)
+		if offset < n {
+			n = offset
+		}
+		offset -= n
+		block := make([]byte, n, n+int64(len(carry)))
+		if _, err := f.ReadAt(block, offset); err != nil {
+			return
+		}
+		block = append(block, carry...)
+		end := len(block)
+		for i := end - 1; i >= 0; i-- {
+			if block[i] != '\n' {
+				continue
+			}
+			if !visit(block[i+1 : end]) {
+				return
+			}
+			end = i
+		}
+		carry = block[:end]
+	}
+	visit(carry)
+}
+
+func windowFrom(newest Sample) func(Sample) bool {
 	var horizon time.Time
 	if ts, err := time.Parse(time.RFC3339, newest.TS); err == nil {
 		horizon = ts.Add(-fallbackWindow)
 	}
-	inWindow := func(s Sample) bool {
+	return func(s Sample) bool {
 		if horizon.IsZero() {
 			return true
 		}
 		ts, err := time.Parse(time.RFC3339, s.TS)
 		return err == nil && !ts.Before(horizon)
 	}
+}
+
+func resolve(samples []Sample) Resolved {
+	newest := samples[len(samples)-1]
+	resolved := Resolved{TS: newest.TS, Claude: newest, Codex: newest}
+	inWindow := windowFrom(newest)
 	for i := len(samples) - 1; i >= 0 && (!hasClaude(resolved.Claude) || !hasCodex(resolved.Codex)); i-- {
 		s := samples[i]
 		if !inWindow(s) {

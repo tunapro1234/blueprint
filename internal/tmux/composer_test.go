@@ -1423,3 +1423,34 @@ func TestPartialPasteThatNeverCompletesIsQueued(t *testing.T) {
 	}
 	assertNoEscape(t, h.mutations)
 }
+
+func TestFinishStartupCommandSubmitsOnlyItsOwnCommand(t *testing.T) {
+	stuck := claudePane("❯ /remote-control")
+	empty := claudePane("❯ ")
+	cases := []struct {
+		name     string
+		captures []string
+		enters   int
+	}{
+		// The live failure: Send typed the command while the slash menu was still
+		// drawing and pressed no Enter. The retry finishes it.
+		{"stuck then submitted", []string{stuck, empty}, 1},
+		// The first Enter only closed the menu; the second one submits.
+		{"stuck twice", []string{stuck, stuck, stuck, empty}, 2},
+		// Anything but the exact command is never submitted.
+		{"other text", []string{claudePane("❯ /remote-control please"), claudePane("❯ /remote-control please"), claudePane("❯ /remote-control please")}, 0},
+		{"empty composer", []string{empty, empty, empty}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &sendHarness{captures: tc.captures}
+			testClient(h).finishStartupCommand(context.Background(), "target", "/remote-control")
+			if got := countEnter(h.mutations); got != tc.enters {
+				t.Fatalf("Enter presses=%d, want %d: %v", got, tc.enters, h.mutations)
+			}
+			if len(h.captures) != 0 {
+				t.Fatalf("%d captures left unread", len(h.captures))
+			}
+		})
+	}
+}

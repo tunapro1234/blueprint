@@ -26,6 +26,11 @@ type workflowDriver struct {
 	fleet        book.Fleet
 	fleetByAgent map[string]book.Fleet
 	owner        string
+	// typing serializes Send and Compact across agent goroutines. The app's
+	// pane locks are reentrant per process, and the queue dispatch a delivery
+	// runs walks every line, so without this one goroutine's pass could type
+	// into a pane another goroutine is clearing. Waits stay concurrent.
+	typing sync.Mutex
 }
 
 func (a *app) workflowStore() *workflow.Store { return workflow.NewStore(a.config.StateDir) }
@@ -106,7 +111,9 @@ func (d *workflowDriver) Observe(ctx context.Context, agent string) (workflow.Ob
 
 func (d *workflowDriver) Send(ctx context.Context, agent, text string) (workflow.Delivery, error) {
 	queuedAt := time.Now().UTC()
+	d.typing.Lock()
 	queued, channel, err := d.app.deliver(agent, d.owner, text)
+	d.typing.Unlock()
 	delivery := workflow.Delivery{ChannelID: channel, QueuedAt: queuedAt}
 	if errors.Is(err, bptmux.ErrUnverified) {
 		delivery.Status = workflow.DeliveryFailed
@@ -165,7 +172,9 @@ func (d *workflowDriver) WaitDelivery(ctx context.Context, agent string, deliver
 }
 
 func (d *workflowDriver) Compact(_ context.Context, agent string) error {
+	d.typing.Lock()
 	queued, channel, err := d.app.compactDeliver(agent, d.owner)
+	d.typing.Unlock()
 	if errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrTyping) || errors.Is(err, bptmux.ErrPaneLocked) {
 		return workflow.ErrCompactBusy
 	}

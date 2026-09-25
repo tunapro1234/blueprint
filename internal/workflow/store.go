@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -33,6 +34,7 @@ type Run struct {
 	StopRequested bool              `json:"stop_requested,omitempty"`
 	RestartCount  int               `json:"restart_count,omitempty"`
 	Current       map[string]string `json:"current,omitempty"`
+	AgentUnits    map[string]int    `json:"agent_units,omitempty"`
 }
 
 type Event struct {
@@ -288,33 +290,53 @@ func (s *Store) LoadRun(id string) (Run, error) {
 	return run, nil
 }
 
-func (s *Store) SaveRun(run Run) error {
+// UpdateRun serializes read-modify-write updates across Store instances and
+// processes. Callers should mutate only the fields they own.
+func (s *Store) UpdateRun(id string, update func(*Run) error) (Run, error) {
+	if !validRunID(id) {
+		return Run{}, fmt.Errorf("invalid workflow run id %q", id)
+	}
+	if update == nil {
+		return Run{}, errors.New("workflow run update is nil")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validRunID(run.ID) {
-		return fmt.Errorf("invalid workflow run id %q", run.ID)
-	}
-	run.UpdatedAt = s.now()
-	data, err := json.MarshalIndent(run, "", "  ")
+	runDir := s.RunPath(id)
+	lock, err := os.OpenFile(filepath.Join(runDir, "run.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return err
+		return Run{}, err
 	}
-	return atomicWrite(filepath.Join(s.RunPath(run.ID), "run.json"), append(data, '\n'), 0600)
-}
-
-func (s *Store) RequestStop(id string) (Run, error) {
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Run{}, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
 	run, err := s.LoadRun(id)
 	if err != nil {
 		return Run{}, err
 	}
-	if run.Status == "done" || run.Status == "stopped" || run.Status == "error" {
-		return run, nil
+	if err := update(&run); err != nil {
+		return Run{}, err
 	}
-	run.StopRequested, run.Status = true, "stopping"
-	if err := s.SaveRun(run); err != nil {
+	run.UpdatedAt = s.now()
+	data, err := json.MarshalIndent(run, "", "  ")
+	if err != nil {
+		return Run{}, err
+	}
+	if err := atomicWrite(filepath.Join(runDir, "run.json"), append(data, '\n'), 0600); err != nil {
 		return Run{}, err
 	}
 	return run, nil
+}
+
+func (s *Store) RequestStop(id string) (Run, error) {
+	return s.UpdateRun(id, func(run *Run) error {
+		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" {
+			return nil
+		}
+		run.StopRequested, run.Status = true, "stopping"
+		return nil
+	})
 }
 
 func (s *Store) AppendEvent(id string, event Event) error {

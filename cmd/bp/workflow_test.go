@@ -12,6 +12,8 @@ import (
 	"blueprint/internal/book"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/identity"
+	"blueprint/internal/msgq"
+	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/workflow"
 )
 
@@ -65,6 +67,108 @@ prompt:
 	return a, store, workdir
 }
 
+func TestWorkflowNotifyUsesRunLabel(t *testing.T) {
+	a := &app{}
+	var target, sender, message string
+	a.deliverMessage = func(to, from, text string) (bool, string, error) {
+		target, sender, message = to, from, text
+		return false, "", nil
+	}
+	if err := a.workflowNotifier("run-123")(context.Background(), "owner", "workflow finished"); err != nil {
+		t.Fatal(err)
+	}
+	if target != "owner" || sender != "workflow:run-123" || message != "workflow finished" {
+		t.Fatalf("notification envelope target=%q sender=%q message=%q", target, sender, message)
+	}
+}
+
+func TestWorkflowTimesOutputGroupsAndRoundsSorted(t *testing.T) {
+	a, store, workdir := workflowCLIFixture(t)
+	definition, err := workflow.ReadDefinition(store.WorkflowPath("sample"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.CreateRun(store.WorkflowPath("sample"), definition, workdir, []string{"worker"}, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []workflow.TimeRow{
+		{Run: run.ID, Workflow: "sample", Unit: "one", Agent: "z-agent", Model: "z-model", Result: "done", Rounds: 3, FinishedAt: time.Now()},
+		{Run: run.ID, Workflow: "sample", Unit: "two", Agent: "a-agent", Model: "a-model", Result: "done", Rounds: 1, FinishedAt: time.Now()},
+		{Run: run.ID, Workflow: "sample", Unit: "three", Agent: "m-agent", Model: "m-model", Result: "done", Rounds: 2, FinishedAt: time.Now()},
+	} {
+		if err := store.AppendTime(run.ID, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ordered := []string{"agent a-agent:", "agent m-agent:", "agent z-agent:", "model a-model:", "model m-model:", "model z-model:", "rounds 1:", "rounds 2:", "rounds 3:"}
+	for attempt := 0; attempt < 20; attempt++ {
+		a.out = testOutput(t)
+		if err := a.workflowTimes(store, []string{run.ID}); err != nil {
+			t.Fatal(err)
+		}
+		output := readTestOutput(t, a.out)
+		last := -1
+		for _, text := range ordered {
+			index := strings.Index(output, text)
+			if index <= last {
+				t.Fatalf("workflow times output order at %q on attempt %d: %s", text, attempt, output)
+			}
+			last = index
+		}
+	}
+}
+
+func TestWorkflowFleetReloadOncePerUnitForObservation(t *testing.T) {
+	fleet := book.Fleet{
+		Root: "root",
+		Agents: map[string]book.Agent{
+			"root":     {Name: "root"},
+			"worker-a": {Name: "worker-a", Parent: "root", Status: "open"},
+			"worker-b": {Name: "worker-b", Parent: "root", Status: "open"},
+		},
+		Parents: map[string]string{"worker-a": "root", "worker-b": "root"},
+	}
+	loads := 0
+	a := &app{ctx: context.Background(), tmux: bptmux.New(), queue: msgq.New(t.TempDir())}
+	a.tmux.Bin = "/bin/false"
+	a.loadFleet = func() (book.Fleet, map[string]book.State, error) {
+		loads++
+		return fleet, nil, nil
+	}
+	driver := a.newWorkflowDriverBase("root")
+	for _, agent := range []string{"worker-a", "worker-b"} {
+		if err := a.workflowAuthorityFor(driver, "root", agent); err != nil {
+			t.Fatal(err)
+		}
+		if got := driver.fleetFor(agent).Root; got != "root" {
+			t.Fatalf("unit authority did not bind refreshed fleet for %s: root=%q", agent, got)
+		}
+		if _, err := driver.Observe(context.Background(), agent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if loads != 2 {
+		t.Fatalf("fleet loaded %d times for two units; want once per unit including observation", loads)
+	}
+}
+
+func TestWorkflowWaitDeliveryRecognizesUnverifiedTerminalStatus(t *testing.T) {
+	queue := msgq.New(t.TempDir())
+	id, err := queue.Enqueue("worker", "owner", "a prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := queue.CloseDelivered("worker", "a prompt", "delivered (unverified)"); !ok {
+		t.Fatal("could not prepare an unverified terminal delivery")
+	}
+	driver := &workflowDriver{app: &app{queue: queue}}
+	delivery, err := driver.WaitDelivery(context.Background(), "worker", workflow.Delivery{Status: workflow.DeliveryQueued, ChannelID: id}, time.Second)
+	if err != nil || delivery.Status != workflow.DeliveryFailed || !strings.HasPrefix(delivery.Reason, "not delivered") {
+		t.Fatalf("unverified terminal record stayed queued: delivery=%#v err=%v", delivery, err)
+	}
+}
+
 func TestWorkflowStartAuthorityAndDaemonChecks(t *testing.T) {
 	t.Run("unverified caller refused", func(t *testing.T) {
 		a, _, workdir := workflowCLIFixture(t)
@@ -111,8 +215,10 @@ func TestWorkflowStatusAndTimesTextAndJSON(t *testing.T) {
 	if err := store.AppendTime(run.ID, workflow.TimeRow{Run: run.ID, Workflow: "sample", Unit: "one", Agent: "worker", Model: "gpt-6-luna", Result: "done", Rounds: 1, WorkSeconds: 12, FinishedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	run.Status = "done"
-	if err := store.SaveRun(run); err != nil {
+	if _, err := store.UpdateRun(run.ID, func(current *workflow.Run) error {
+		current.Status = "done"
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.workflow([]string{"status", run.ID}); err != nil {

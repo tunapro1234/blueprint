@@ -43,9 +43,8 @@ func TestSupervisorRestartBackoffAndCap(t *testing.T) {
 				if attempt < 3 {
 					return errors.New("unexpected exit")
 				}
-				current, _ := store.LoadRun(runID)
-				current.Status = "done"
-				return store.SaveRun(current)
+				_, err := store.UpdateRun(runID, func(current *Run) error { current.Status = "done"; return nil })
+				return err
 			}, nil
 		}
 		supervisor := NewSupervisor(store, store.StateDir, launch, nil)
@@ -84,6 +83,42 @@ func TestSupervisorRestartBackoffAndCap(t *testing.T) {
 	})
 }
 
+func TestSupervisorResetsRestartCountAfterLongChild(t *testing.T) {
+	clock := newFakeClock()
+	store, run := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	if _, err := store.UpdateRun(run.ID, func(current *Run) error {
+		current.RestartCount = 5
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	launch := func(_ context.Context, id string) (ChildWait, error) {
+		attempts++
+		attempt := attempts
+		return func() error {
+			if attempt == 1 {
+				clock.Advance(10 * time.Minute)
+				return errors.New("late crash")
+			}
+			_, err := store.UpdateRun(id, func(current *Run) error { current.Status = "done"; return nil })
+			return err
+		}, nil
+	}
+	supervisor := NewSupervisor(store, store.StateDir, launch, nil)
+	supervisor.MaxRestarts = 6
+	supervisor.Now = clock.Now
+	supervisor.Delay = func(context.Context, time.Duration) error { return nil }
+	if err := supervisor.Start(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitSupervisor(t, supervisor, run.ID)
+	updated, err := store.LoadRun(run.ID)
+	if err != nil || attempts != 2 || updated.Status != "done" || updated.RestartCount != 1 {
+		t.Fatalf("long-lived child did not reset its crash budget: attempts=%d run=%#v err=%v", attempts, updated, err)
+	}
+}
+
 func TestSupervisorAgentLockAndStartupRestore(t *testing.T) {
 	clock := newFakeClock()
 	store, first := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
@@ -108,9 +143,8 @@ func TestSupervisorAgentLockAndStartupRestore(t *testing.T) {
 		return func() error {
 			started <- struct{}{}
 			<-release
-			current, _ := store.LoadRun(id)
-			current.Status = "done"
-			return store.SaveRun(current)
+			_, err := store.UpdateRun(id, func(current *Run) error { current.Status = "done"; return nil })
+			return err
 		}, nil
 	}
 	supervisor := NewSupervisor(store, store.StateDir, launch, nil)
@@ -129,9 +163,7 @@ func TestSupervisorAgentLockAndStartupRestore(t *testing.T) {
 	waitSupervisor(t, supervisor, first.ID)
 
 	// A fresh manager resumes runs persisted as running when its daemon starts.
-	secondRun, _ := store.LoadRun(second.ID)
-	secondRun.Status = "running"
-	if err := store.SaveRun(secondRun); err != nil {
+	if _, err := store.UpdateRun(second.ID, func(current *Run) error { current.Status = "running"; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	var restored int
@@ -140,9 +172,8 @@ func TestSupervisorAgentLockAndStartupRestore(t *testing.T) {
 			restored++
 		}
 		return func() error {
-			current, _ := store.LoadRun(id)
-			current.Status = "done"
-			return store.SaveRun(current)
+			_, err := store.UpdateRun(id, func(current *Run) error { current.Status = "done"; return nil })
+			return err
 		}, nil
 	}, nil)
 	if err := restore.restore(); err != nil {

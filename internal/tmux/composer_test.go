@@ -40,6 +40,39 @@ func claudePane(rows ...string) string {
 	return strings.Join(lines, "\n")
 }
 
+func removeLastComposerRow(pane string) string {
+	lines := strings.Split(pane, "\n")
+	status := -1
+	for i, line := range lines {
+		if isComposerStatus(line) {
+			status = i
+		}
+	}
+	if status < 0 {
+		return pane
+	}
+	bottom := status - 1
+	for bottom >= 0 && stripSpace(StripDim(lines[bottom])) == "" {
+		bottom--
+	}
+	top := -1
+	for i := bottom - 1; i >= 0; i-- {
+		if isComposerBoxBorder(lines[i]) {
+			top = i
+			break
+		}
+	}
+	if top < 0 || bottom <= top+1 {
+		return pane
+	}
+	if bottom-top == 2 {
+		lines[top+1] = emptyRow
+	} else {
+		lines = append(lines[:bottom-1], lines[bottom:]...)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // screenFillingPane is a composer that has consumed the whole capture: its top
 // border is the first row, so the box has no room left to grow and the TUI must be
 // scrolling inside it.
@@ -369,6 +402,7 @@ func TestSendClearsAndRepastesADamagedHangingPaste(t *testing.T) {
 	h := &sendHarness{
 		captures: []string{
 			claudePane("❯ " + truncated),    // gate: ours, damaged
+			claudePane("❯ " + truncated),    // clear budget capture
 			claudePane(emptyRow),            // after C-u: clean
 			claudePane(emptyRow),            // readyToSend pass 1
 			claudePane(emptyRow),            // readyToSend pass 2
@@ -466,6 +500,7 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 			claudePane(emptyRow),       // readyToSend pass 2
 			claudePane("❯ " + mangled), // post-paste: damaged
 			claudePane("❯ " + mangled), // LOOK TWICE: still damaged after the settle -> repair
+			claudePane("❯ " + mangled), // clear budget capture
 			claudePane(emptyRow),       // after C-u
 			claudePane("❯ " + mangled), // the re-paste is damaged too
 			claudePane("❯ " + mangled), // and still damaged on the second look
@@ -484,6 +519,34 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 		t.Fatalf("expected the one repair re-paste, got: %v", h.mutations)
 	}
 	assertNoEscape(t, h.mutations)
+}
+
+func TestSendDoesNotSubmitARepairedPasteThatIsStillPartial(t *testing.T) {
+	mangled := stuckMessage[:45] + stuckMessage[80:]
+	partial := stuckMessage[:70]
+	h := &sendHarness{
+		captures: []string{
+			claudePane(emptyRow),       // gate: empty, reused as readyToSend pass 1
+			claudePane(emptyRow),       // readyToSend pass 2
+			claudePane("❯ " + mangled), // post-paste: damaged
+			claudePane("❯ " + mangled), // LOOK TWICE: still damaged -> repair
+			claudePane("❯ " + mangled), // clear budget capture
+			claudePane(emptyRow),       // after C-u
+			claudePane("❯ " + partial), // the re-paste is still only a prefix
+			claudePane("❯ " + partial), // still-frame check confirms the prefix
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("err=%v, want ErrNotReady so the incomplete repair is queued", err)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("Enter was pressed on a partial re-paste: %v", h.mutations)
+	}
+	if countInjections(h.mutations) != 2 {
+		t.Fatalf("expected only the original paste and one repair, got: %v", h.mutations)
+	}
 }
 
 // --- a moving pane never produces proof ------------------------------------
@@ -559,6 +622,7 @@ func TestSendSubmitsWhenTheRepairedPasteMatches(t *testing.T) {
 			claudePane(emptyRow),            // readyToSend pass 2
 			claudePane("❯ " + mangled),      // post-paste: damaged
 			claudePane("❯ " + mangled),      // LOOK TWICE: still damaged -> repair
+			claudePane("❯ " + mangled),      // clear budget capture
 			claudePane(emptyRow),            // after C-u
 			claudePane("❯ " + stuckMessage), // re-paste is whole -> Enter
 			claudePane(emptyRow),            // cleared -> verified
@@ -691,7 +755,25 @@ func assertNoEscape(t *testing.T, mutations []string) {
 
 func TestClearComposerPressesCtrlUAndNeverEscape(t *testing.T) {
 	h := &sendHarness{
-		captures:   []string{claudePane(emptyRow), claudePane(emptyRow)},
+		captures:   []string{claudePane(emptyRow), claudePane(emptyRow), claudePane(emptyRow)},
+		activities: []string{},
+	}
+	if err := testClient(h).ClearComposer(context.Background(), "target"); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != 1 {
+		t.Fatalf("expected 1 C-u, got %d: %v", got, h.mutations)
+	}
+	assertNoEscape(t, h.mutations)
+}
+
+// A pane whose composer is not drawn as a readable box (nothing visible before
+// or after the press) still settles: the slash command bp types next is the
+// point, and there was nothing of anyone's to protect.
+func TestClearComposerSettlesAPaneWithoutAReadableBox(t *testing.T) {
+	plain := "some agent output\n\n"
+	h := &sendHarness{
+		captures:   []string{plain, plain, plain},
 		activities: []string{},
 	}
 	if err := testClient(h).ClearComposer(context.Background(), "target"); err != nil {
@@ -737,6 +819,7 @@ func TestClearWithCtrlURepeatsUntilTheBoxIsEmpty(t *testing.T) {
 	long := strings.Repeat("a line from our own message ", 6)
 	h := &sendHarness{
 		captures: []string{
+			claudePane("❯ "+long[:120], "  "+long[120:]), // initial view sizes the budget
 			claudePane("❯ "+long[:120], "  "+long[120:]),
 			claudePane("❯ " + long[:120]),
 			claudePane("❯ " + long[:60]),
@@ -757,7 +840,8 @@ func TestClearWithCtrlUStopsAtForeignText(t *testing.T) {
 	long := strings.Repeat("a line from our own message ", 6)
 	h := &sendHarness{
 		captures: []string{
-			claudePane("❯ " + long[:100]),
+			claudePane("❯ " + long[:100]),                   // initial view
+			claudePane("❯ " + long[:100]),                   // still ours after the first press
 			claudePane("❯ someone has just started typing"), // not ours -> stop
 		},
 		activities: []string{},
@@ -772,9 +856,76 @@ func TestClearWithCtrlUStopsAtForeignText(t *testing.T) {
 	assertNoEscape(t, h.mutations)
 }
 
+func TestClearWithCtrlUStopsWhenTextIsAppended(t *testing.T) {
+	message := strings.Repeat("our own message ", 12)
+	h := &sendHarness{clearPane: claudePane("❯ " + message)}
+	h.clearRow = func(string) string {
+		return claudePane("❯ " + message + " human draft")
+	}
+	err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{message})
+	if !errors.Is(err, ErrTyping) || !strings.Contains(err.Error(), "humandraft") {
+		t.Fatalf("err=%v, want a loud stop that identifies the appended draft", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != 1 {
+		t.Fatalf("expected to stop after the first changed composer capture, got %d presses: %v", got, h.mutations)
+	}
+	assertNoEscape(t, h.mutations)
+}
+
+func TestClearWithCtrlURefusesRecentKeyboardActivity(t *testing.T) {
+	message := strings.Repeat("our own message ", 12)
+	h := &sendHarness{
+		clearPane:  claudePane("❯ " + message),
+		activities: []string{"target\t1000\n"},
+	}
+	h.clearRow = func(pane string) string { return pane }
+	err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{message})
+	if !errors.Is(err, ErrTyping) {
+		t.Fatalf("err=%v, want ErrTyping during recent keyboard activity", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != 0 {
+		t.Fatalf("recent user activity received C-u: %v", h.mutations)
+	}
+}
+
+func TestClearWithCtrlURefusesAnIncompleteScrollingView(t *testing.T) {
+	message := strings.Repeat("message visible in this tail ", 4)
+	pane := screenFillingPane("❯ "+message, "  continuation row")
+	h := &sendHarness{captures: []string{pane}}
+	err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{message})
+	if !errors.Is(err, ErrTyping) || !strings.Contains(err.Error(), "remaining visible composer text=") {
+		t.Fatalf("err=%v, want a loud refusal with the visible remainder", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != 0 {
+		t.Fatalf("an incomplete composer view received C-u: %v", h.mutations)
+	}
+}
+
+func TestClearWithCtrlURequiresAnObservedEmptyComposerAfterKey(t *testing.T) {
+	h := &sendHarness{captures: []string{claudePane("❯ " + stuckMessage), ""}}
+	err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{stuckMessage})
+	if !errors.Is(err, ErrTyping) || !strings.Contains(err.Error(), "remaining visible composer text=\"\"") {
+		t.Fatalf("err=%v, want a loud refusal when the post-key box is unreadable", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != 1 {
+		t.Fatalf("expected one guarded C-u before the unreadable recapture, got %d: %v", got, h.mutations)
+	}
+}
+
+func TestSubmitStuckRefusesAnIncompleteScrollingView(t *testing.T) {
+	pane := screenFillingPane("❯ "+stuckMessage, "  continuation row")
+	h := &sendHarness{captures: []string{pane}}
+	if submitted, err := testClient(h).SubmitStuck(context.Background(), "target", []string{stuckMessage}); err != nil || submitted {
+		t.Fatalf("submitted=%v err=%v, want no submit from a partial view", submitted, err)
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("partial composer received Enter: %v", h.mutations)
+	}
+}
+
 func TestClearWithCtrlUIsBounded(t *testing.T) {
 	long := strings.Repeat("a line from our own message ", 6)
-	captures := make([]string, composerClearAttempts+2)
+	captures := make([]string, composerClearMargin+2)
 	for i := range captures {
 		captures[i] = claudePane("❯ " + long)
 	}
@@ -782,8 +933,66 @@ func TestClearWithCtrlUIsBounded(t *testing.T) {
 	if err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{long}); !errors.Is(err, ErrTyping) {
 		t.Fatalf("err=%v, want ErrTyping at the bound", err)
 	}
-	if got := countKey(h.mutations, "C-u"); got != composerClearAttempts {
-		t.Fatalf("expected %d C-u presses at the bound, got %d", composerClearAttempts, got)
+	if got := countKey(h.mutations, "C-u"); got != composerClearMargin+1 {
+		t.Fatalf("expected %d C-u presses at the bound, got %d", composerClearMargin+1, got)
+	}
+}
+
+func TestClearWithCtrlUUsesEveryWrappedRowBeyondEight(t *testing.T) {
+	const rows = 12
+	const rowChars = 48
+	message := strings.Repeat("x", rows*rowChars)
+	composerRows := make([]string, rows)
+	for i := range composerRows {
+		row := strings.Repeat("x", rowChars)
+		if i == 0 {
+			composerRows[i] = "❯ " + row
+		} else {
+			composerRows[i] = "  " + row
+		}
+	}
+	start := claudePane(composerRows...)
+	calls := 0
+	h := &sendHarness{clearPane: start}
+	h.clearRow = func(pane string) string {
+		before, _, ok := composerBoxAt(pane)
+		if !ok {
+			t.Fatal("fake pane lost its composer box")
+		}
+		next := removeLastComposerRow(pane)
+		after, _, ok := composerBoxAt(next)
+		if !ok || composerBoxRows(before)-composerBoxRows(after) != 1 {
+			t.Fatalf("one C-u did not remove exactly one wrapped row: %d -> %d", composerBoxRows(before), composerBoxRows(after))
+		}
+		calls++
+		return next
+	}
+	if err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{message}); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if calls != rows || countKey(h.mutations, "C-u") != rows {
+		t.Fatalf("C-u calls=%d mutations=%v, want %d one-row clears", calls, h.mutations, rows)
+	}
+	if !ComposerEmpty(h.clearPane) {
+		remaining, _ := composerBoxText(h.clearPane)
+		t.Fatalf("clear left a composer prefix behind: %q", remaining)
+	}
+}
+
+func TestCodexSingleCtrlUCanClearAllWrappedRows(t *testing.T) {
+	message := strings.Repeat("x", 666)
+	wrapped := strings.Join(wrapText(message, 73), "\n")
+	calls := 0
+	h := &sendHarness{clearPane: modernCodexPane(wrapped)}
+	h.clearRow = func(string) string {
+		calls++
+		return modernCodexPane("Ask Codex to do anything")
+	}
+	if err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{message}); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if calls != 1 || countKey(h.mutations, "C-u") != 1 || !ComposerEmpty(h.clearPane) {
+		t.Fatalf("clear calls=%d mutations=%v empty=%v, want one full-buffer clear", calls, h.mutations, ComposerEmpty(h.clearPane))
 	}
 }
 
@@ -802,7 +1011,7 @@ func TestClearDeliveredNeedsProofBeforeErasingAnything(t *testing.T) {
 		{"already empty", claudePane(emptyRow), false, 0},
 	}
 	for _, tc := range cases {
-		h := &sendHarness{captures: []string{tc.pane, claudePane(emptyRow)}}
+		h := &sendHarness{captures: []string{tc.pane, tc.pane, claudePane(emptyRow)}}
 		cleared, err := testClient(h).ClearDelivered(context.Background(), "target", []string{delivered})
 		if err != nil {
 			t.Errorf("%s: err=%v", tc.name, err)

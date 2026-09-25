@@ -239,9 +239,9 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 		switch {
 		case m.Cleanup:
 			res.State = "delivered"
-		case m.Status == "delivered (unverified)":
+		case msgq.IsUnverifiedDelivery(m.Status):
 			res.State = "unverified"
-		case strings.HasPrefix(m.Status, "delivered"):
+		case msgq.IsVerifiedDelivery(m.Status):
 			res.State = "delivered"
 		case m.Status != "":
 			res.State = "failed"

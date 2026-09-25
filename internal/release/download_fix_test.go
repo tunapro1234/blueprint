@@ -50,7 +50,7 @@ func TestDownloadUsesPerReadStallLimitAndReportsURLAndBytes(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	checker := &Checker{Base: server.URL, HTTP: server.Client(), StallTimeout: 60 * time.Millisecond, DownloadRetry: 0}
+	checker := &Checker{Base: server.URL, HTTP: server.Client(), StallTimeout: 250 * time.Millisecond, DownloadRetry: 0}
 	got, err := checker.Download(context.Background(), manifest, Platform())
 	if err != nil || string(got) != string(payload) {
 		t.Fatalf("progressing body failed: %q err=%v", got, err)

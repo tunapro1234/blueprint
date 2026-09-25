@@ -1,0 +1,12 @@
+{
+  "version": "1.9.7",
+  "revision": "06caee95448cfffd19d49ab98f5392ce5591121c",
+  "published": "2026-09-25T09:56:31.828255+00:00",
+  "sha256": {
+    "bp-linux-amd64": "0d54fc5709d31023080b83c703bfc86d00020d55b8e3a9a7ee0dc12d650b9a3b",
+    "bp-linux-arm64": "1c0361d6536ac0e99666b861c16315517b15647292e69a819be5a6d331f9c10f",
+    "bp-darwin-amd64": "34efbe4a39e911432397f506098d4ce583fbea253110bec7172e6a179961e65b",
+    "bp-darwin-arm64": "6a8970c980dfa49978ed870c9def25cfabf9b874202429ed581d2862cad4b0c6",
+    "install.sh": "4d1184e2765ffd90e6c8511207a2f3e35343a3c629fa14b85c0d50cf960d4268"
+  }
+}

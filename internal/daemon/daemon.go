@@ -45,6 +45,9 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 		logger = log.New(os.Stderr, "blueprint: ", log.LstdFlags)
 	}
 	queue := msgq.New(cfg.MsgqRoot)
+	if fleet, err := book.LoadFleet(book.Paths(cfg.Agentbooks)); err == nil && fleet.Root != "" {
+		queue.NoticeOwner = fleet.Root
+	}
 	// Reconciliation: before the queue re-pastes anything, it asks the target's own
 	// transcript whether the message already arrived. Without this, a message that
 	// landed some other way (hand-delivered, or submitted out of a composer where

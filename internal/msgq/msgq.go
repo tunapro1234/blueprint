@@ -119,9 +119,12 @@ type Origin struct {
 }
 
 type Queue struct {
-	Root   string
-	Sender *SenderEvidence
-	Now    func() time.Time
+	Root string
+	// NoticeOwner is the configured coordinator/orchestrator session to use when
+	// a sender label does not resolve to a live session.
+	NoticeOwner string
+	Sender      *SenderEvidence
+	Now         func() time.Time
 	// Witness, when set, reports whether a message has ALREADY reached the target
 	// — read out of the agent's own transcript, not off the screen. Dispatch asks
 	// it before pasting a queued message again, because a message can land
@@ -167,6 +170,12 @@ func (q *Queue) pending() string { return filepath.Join(q.Root, "pending") }
 func (q *Queue) done() string    { return filepath.Join(q.Root, "done") }
 
 const (
+	// StatusUnconfirmed records an injected message without claiming delivery.
+	StatusUnconfirmed = "unconfirmed"
+	// StatusHangingComposer is positive evidence that the message never left the
+	// composer. It must never be consumed as a successful delivery.
+	StatusHangingComposer = "not delivered (hanging in composer)"
+
 	// unverifiedReason is what a record says while the screen could not confirm
 	// a delivery and the transcript has not yet spoken. It is a WAIT, not a
 	// failure: the text may well be in the agent already, which is exactly why
@@ -192,7 +201,7 @@ const (
 	// Enter is enough", an operator pressed it, and 81 characters of a
 	// 716-character instruction were delivered — cut mid-word, the remaining 635
 	// in no transcript anywhere.
-	damagedPasteReason = "a TORN copy of this message is in the composer — DO NOT PRESS ENTER (it would deliver the torn message); bp will clear and resend it"
+	damagedPasteReason = "a torn copy of this message remains in the composer; DO NOT PRESS ENTER because that would send only the fragment; bp did not clear or resend it"
 	// tornClearedReason marks the recovery itself, so a reader who sees the
 	// message pasted twice in one pane knows the first copy was torn and erased.
 	tornClearedReason = "torn paste cleared; the message will be resent from the beginning"
@@ -201,7 +210,8 @@ const (
 	// TUI; bp cannot tell which, and there is nothing left to press Enter on. The
 	// wording exists because the previous one kept advising an Enter that landed
 	// on an empty composer (probot-outreach, 2026-08-23).
-	unverifiedGoneReason = "delivery was unverified and the text is no longer in the composer; bp cannot act — resend it if it did not arrive"
+	unverifiedGoneReason  = "delivery was unverified and the text is no longer in the composer; bp cannot act — resend it if it did not arrive"
+	shortUnverifiedReason = "short injected message cannot be located by the transcript witness"
 	// exhaustedReason is the other way into the same waiting state: the screen
 	// kept claiming a proven failure and three pastes could not be verified.
 	// Continuing would only produce more copies of a message that may already
@@ -535,7 +545,7 @@ func read(path string) (Message, error) {
 }
 
 func (message *Message) clearDeliveredWait() {
-	if message.Status != "delivered" && (!strings.HasPrefix(message.Status, "delivered (") || message.Status == "delivered (unverified)") {
+	if !IsVerifiedDelivery(message.Status) {
 		return
 	}
 	if message.Reason != "" {
@@ -545,6 +555,22 @@ func (message *Message) clearDeliveredWait() {
 	message.NextTry = 0
 }
 
+// IsVerifiedDelivery reports whether a stored queue status is allowed to mean
+// success. The historical "delivered (unverified)" value is deliberately
+// excluded even though it shares the delivered prefix.
+func IsVerifiedDelivery(status string) bool {
+	if status == "delivered (unverified)" || status == StatusUnconfirmed || strings.HasPrefix(status, "not delivered") {
+		return false
+	}
+	return status == "delivered" || strings.HasPrefix(status, "delivered (")
+}
+
+// IsUnverifiedDelivery recognises the new and historical labels for an
+// unconfirmed injection so every status consumer keeps old records non-success.
+func IsUnverifiedDelivery(status string) bool {
+	return status == StatusUnconfirmed || status == "delivered (unverified)"
+}
+
 func englishStatus(status string) string {
 	switch status {
 	// Older peers and persisted queue records may still use these Turkish tokens.
@@ -552,6 +578,10 @@ func englishStatus(status string) string {
 		return "delivered"
 	case "iptal (hedef kapali)":
 		return "canceled (target closed)"
+	case "delivered (unverified)":
+		// Keep the historic on-disk label readable, but never expose it through
+		// queue APIs as a successful delivery status.
+		return StatusUnconfirmed
 	default:
 		return status
 	}
@@ -953,7 +983,25 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 	if reason := q.recoveryBlock(rec); reason != "" {
 		return false, fmt.Errorf("%s", reason)
 	}
-	return target.SubmitStuck(ctx, rec.To, []string{rec.Msg})
+	submitted, err := target.SubmitStuck(ctx, rec.To, []string{rec.Msg})
+	if err != nil {
+		return false, err
+	}
+	since := time.Unix(0, int64(rec.TS*1e9))
+	if q.Witness != nil && q.Witness(rec.To, rec.Msg, since) {
+		return true, nil
+	}
+	if !submitted {
+		return false, nil
+	}
+	pane, err := target.CaptureAnsi(ctx, rec.To)
+	if err != nil {
+		return false, fmt.Errorf("verify hanging-paste submit: %w", err)
+	}
+	if !bptmux.ComposerEmpty(pane) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (q *Queue) clearTornPaste(ctx context.Context, target Target, rec record) (bool, error) {
@@ -1020,35 +1068,61 @@ func noticeHome(from string) string {
 	return from
 }
 
+func (q *Queue) resolveNoticeHome(ctx context.Context, target Target, from, id string, report func(string)) string {
+	primary := noticeHome(from)
+	if target == nil || target.HasSession(ctx, primary) {
+		return primary
+	}
+	if strings.HasSuffix(from, "?") {
+		stripped := strings.TrimSuffix(from, "?")
+		if stripped != "" && target.HasSession(ctx, stripped) {
+			if report != nil {
+				report(fmt.Sprintf("msgq: sender label %q has no session; routing notice for %s to verified session %q", from, id, stripped))
+			}
+			return stripped
+		}
+	}
+	owner := q.NoticeOwner
+	if owner != "" && owner != primary && target.HasSession(ctx, owner) {
+		if report != nil {
+			report(fmt.Sprintf("msgq: sender %q has no session; routing notice for %s to configured coordinator %q", from, id, owner))
+		}
+		return owner
+	}
+	if report != nil {
+		report(fmt.Sprintf("msgq: SENDER NOTICE FOR %s CANNOT BE DELIVERED — %q has no session (from=%q, configured coordinator=%q); the delivery result appears only in this log",
+			id, primary, from, owner))
+	}
+	return ""
+}
+
 func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string, message Message, report func(string)) bool {
 	// The window exists to give the transcript witness time. A target that keeps
 	// no transcript has no witness to wait for, so it is settled at once.
-	witnessPossible := q.HasTranscript == nil || q.HasTranscript(message.To)
-	if witnessPossible && q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
+	witnessCanFindText := q.CanWitness == nil || q.CanWitness(message.Msg)
+	witnessPossible := witnessCanFindText && (q.HasTranscript == nil || q.HasTranscript(message.To))
+	knownNotDelivered := strings.HasPrefix(message.Reason, hangingPasteReason) || message.Reason == shortUnverifiedReason || strings.HasPrefix(message.Reason, damagedPasteReason)
+	if !knownNotDelivered && witnessPossible && q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
 		return false
-	}
-	// Which of the two roads got here decides the wording: an injection nobody
-	// could confirm may well have landed, while an attempt that never got past a
-	// verdict of failure probably did not.
-	status := "delivered (unverified)"
-	switch {
-	case message.Reason == exhaustedReason:
-		status = "not delivered (verification failed)"
-	case message.Reason == damagedPasteReason:
-		// bp watched its OWN torn copy sit in the composer and refused to submit
-		// it. That is not an uncertain delivery, it is a known non-delivery, and
-		// calling it "delivered (unverified)" is how one of these was closed on
-		// 2026-08-31 after six days pending — server-main's weekly-scan
-		// instruction to probot-main, which never reached that agent at all.
-		status = "not delivered (torn paste)"
 	}
 	// Ask the pane what is true NOW. A notice written from the failure's own
 	// memory describes a moment that has usually passed.
-	hanging := false
+	hanging, torn := false, false
 	if target != nil {
 		if pane, err := target.CaptureAnsi(ctx, message.To); err == nil {
-			hanging = stillHolds(pane, message.Msg)
+			hanging = bptmux.ExactPaste(pane, []string{message.Msg})
+			torn = bptmux.DamagedPaste(pane, []string{message.Msg})
 		}
+	}
+	// Neither an unknown injection nor a torn composer may be labelled delivered.
+	status := StatusUnconfirmed
+	switch {
+	case hanging:
+		status = StatusHangingComposer
+	case torn || strings.HasPrefix(message.Reason, damagedPasteReason):
+		status = "not delivered (torn paste)"
+	case message.Reason == exhaustedReason:
+		status = "not delivered (verification failed)"
 	}
 	if q.shouldNotify(message) {
 		// Notified is persisted BEFORE the notice is queued. A crash in between
@@ -1057,20 +1131,9 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 		// this change exists to end.
 		message.Notified = true
 		q.update(path, message, report)
-		home := noticeHome(message.From)
-		switch {
-		case target != nil && !target.HasSession(ctx, home):
-			// A notice queued to a session that does not exist would be silently
-			// cancelled as "target closed" on the next pass — the notification
-			// channel swallowing its own notifications. Say it LOUDLY instead of
-			// queueing it into the void; the record's own closing line below still
-			// carries the failed delivery.
-			if report != nil {
-				report(fmt.Sprintf("msgq: SENDER NOTICE FOR %s CANNOT BE DELIVERED — %q has no session (from=%q); the delivery result appears only in this log",
-					message.ID, home, message.From))
-			}
-		default:
-			if _, err := q.enqueueLocked(home, "bp", noticeText(message, hanging), enqueueOptions{}); err != nil {
+		home := q.resolveNoticeHome(ctx, target, message.From, message.ID, report)
+		if home != "" {
+			if _, err := q.enqueueLocked(home, "bp", noticeText(message, hanging, torn), enqueueOptions{}); err != nil {
 				if report != nil {
 					report(fmt.Sprintf("msgq: sender notice for %s could not be delivered: %v", message.ID, err))
 				}
@@ -1127,17 +1190,29 @@ func paneTail(pane string, rows int) string {
 // fixed by hand (2026-08-23): "a signal that says something HAPPENED but not
 // whether it is still happening". Four stale notices hide the fifth real one, so
 // the state goes in the FIRST WORDS, where a glance finds it.
-func noticeText(message Message, stillHanging bool) string {
+func noticeText(message Message, stillHanging, stillTorn bool) string {
 	head := []rune(strings.TrimSpace(message.Msg))
 	if len(head) > noticeHeadRunes {
 		head = head[:noticeHeadRunes]
 	}
 	state := "MAY HAVE RESOLVED LATER: the text is no longer in the composer — no action is needed if it arrived; resend if it did not"
 	if stillHanging {
-		state = "STILL HANGING: the message is in the composer RIGHT NOW and has not been sent — one Enter is enough when the pane is idle"
+		state = "STILL HANGING: the exact message is in the composer RIGHT NOW and has not been sent — verify the pane is idle before one Enter"
+	} else if stillTorn {
+		state = "TORN COPY STILL PRESENT: DO NOT PRESS ENTER because the composer contains only a fragment; bp did not clear or resend it"
+	} else if strings.HasPrefix(message.Reason, damagedPasteReason) {
+		state = "A TORN COPY WAS NOT SENT and no composer text remains; bp did not clear or resend it — resend only if it did not arrive"
 	}
-	return fmt.Sprintf("bp: delivery of message %s to %s was unverified. %s. Inspect with bp peek %s. Start: %s",
-		message.ID, message.To, state, message.To, string(head))
+	if blockedAt := strings.Index(message.Reason, "; recovery blocked: "); stillHanging && blockedAt >= 0 {
+		blocker := strings.TrimSpace(message.Reason[blockedAt+len("; recovery blocked: "):])
+		state = fmt.Sprintf("STILL HANGING: the exact message is in the composer RIGHT NOW and has not been sent — bp left it untouched because ownership is unverified (%s); do not press Enter until the target binding is verified", blocker)
+	}
+	result := "delivery was unverified"
+	if stillHanging || stillTorn || strings.HasPrefix(message.Reason, damagedPasteReason) || message.Reason == exhaustedReason {
+		result = "message was not delivered"
+	}
+	return fmt.Sprintf("bp: %s (message %s to %s). %s. Inspect with bp peek %s. Start: %s",
+		result, message.ID, message.To, state, message.To, string(head))
 }
 
 // writePending rewrites a pending record in place, atomically. The temp file is
@@ -1454,7 +1529,25 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	if rec.NoRepaste {
 		if reason := q.recoveryBlock(rec); !rec.ForceBusy && reason != "" {
 			q.remember(rec.path, rec.Message, reason, report)
-			// Unknown delivery cannot authorize keys; let ordinary expiry report it.
+			// Unknown ownership cannot authorize keys. A readable exact/torn copy
+			// is already proof of non-delivery, so close it with a loud notice now.
+			if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil {
+				settled := rec.Message
+				switch {
+				case bptmux.ExactPaste(pane, []string{rec.Msg}):
+					settled.Reason = hangingPasteReason + "; recovery blocked: " + reason
+				case bptmux.DamagedPaste(pane, []string{rec.Msg}):
+					settled.Reason = damagedPasteReason + "; recovery blocked: " + reason
+				default:
+					settled = Message{}
+				}
+				if settled.ID != "" {
+					if !q.settleUnrepasted(ctx, target, rec.path, settled, report) {
+						line.block(rec.ID)
+					}
+					return
+				}
+			}
 			if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {
 				line.block(rec.ID)
 			}
@@ -1490,8 +1583,9 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// The alternative is what happened on 2026-08-25: the record sat
 			// telling a human to press Enter, and Enter delivered 81 characters
 			// of a 716-character instruction.
+			clearReason := damagedPasteReason
 			if rec.TornClears < tornClearMax {
-				if cleared, err := q.clearTornPaste(ctx, target, rec); err == nil && cleared {
+				if cleared, clearErr := q.clearTornPaste(ctx, target, rec); clearErr == nil && cleared {
 					message := rec.Message
 					message.NoRepaste = false
 					message.TornClears++
@@ -1503,11 +1597,13 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 					}
 					line.block(rec.ID)
 					return
+				} else if clearErr != nil {
+					clearReason += "; " + clearErr.Error()
 				}
 			}
 			// Could not erase it (busy pane, refusal, or the bound is spent):
 			// say plainly that Enter is the wrong key here.
-			q.remember(rec.path, rec.Message, damagedPasteReason, report)
+			q.remember(rec.path, rec.Message, clearReason, report)
 			// With the budget spent this record can never be delivered by bp, so
 			// it must be CLOSED rather than held. Held is what happened to
 			// q379943625: the bound was reached on 25 Aug and the record sat
@@ -1519,7 +1615,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				// choose the closing status, and q.remember above only wrote it to
 				// disk.
 				spent := rec.Message
-				spent.Reason = damagedPasteReason
+				spent.Reason = clearReason
 				if q.settleUnrepasted(ctx, target, rec.path, spent, report) {
 					return
 				}
@@ -1540,8 +1636,16 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// doing its job, and it has its own ceiling below (holdForce). Two
 			// tests caught me changing that path tonight; the interlock stays
 			// exactly as ada and I built it.
-			q.remember(rec.path, rec.Message, hangingPasteReason, report)
-			line.block(rec.ID)
+			unsettled := rec.Message
+			reason := hangingPasteReason
+			if bptmux.DamagedPaste(pane, []string{rec.Msg}) {
+				reason = damagedPasteReason
+			}
+			unsettled.Reason = reason
+			q.remember(rec.path, unsettled, reason, report)
+			if !q.settleUnrepasted(ctx, target, rec.path, unsettled, report) {
+				line.block(rec.ID)
+			}
 			return
 		}
 		// The text is NOT in the composer any more (it was submitted, cleared, or
@@ -1563,7 +1667,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		// would report a proven failure as a probable delivery. (Caught by
 		// TestProvenFailureBacksOffAndStopsAtThreeAttempts, which is exactly the
 		// kind of thing a blanket assignment breaks quietly.)
-		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason || rec.Reason == damagedPasteReason {
+		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason || strings.HasPrefix(rec.Reason, damagedPasteReason) {
 			q.remember(rec.path, rec.Message, unverifiedGoneReason, report)
 		}
 		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) && rec.ForceBusy {
@@ -1709,13 +1813,20 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			return
 		}
 		if errors.Is(err, bptmux.ErrTyping) {
+			if report != nil {
+				report(fmt.Sprintf("msgq: %s -> %s was not sent; composer clear stopped with the visible remainder recorded: %v", message.ID, message.To, err))
+			}
 			return
 		}
 		if errors.Is(err, bptmux.ErrBusy) {
 			// The pane started a turn between the capture above and the paste.
 			// Nothing was injected — this is the ordinary busy wait, recorded under
 			// the same reason the capture would have given.
-			q.remember(rec.path, message, bptmux.BlockedByBusyPane, report)
+			reason := bptmux.BlockedByBusyPane
+			if strings.Contains(err.Error(), "composer clear stopped") {
+				reason = err.Error()
+			}
+			q.remember(rec.path, message, reason, report)
 			return
 		}
 		if errors.Is(err, bptmux.ErrNotReady) {
@@ -1759,14 +1870,28 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				}
 				return
 			}
-			// Too short for the witness to identify (a slash command): nothing will
-			// ever settle it, so waiting would only mean waiting forever.
-			if err := q.finish(rec.path, message, "delivered (unverified)"); err != nil && report != nil {
-				report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+			// Short commands cannot be found by the transcript witness. Never close
+			// them as delivered without a witness. An exact idle composer gets the
+			// same guarded one-Enter recovery as a witnessable hanging paste.
+			message.NoRepaste = true
+			message.Reason = shortUnverifiedReason
+			shortRec := rec
+			shortRec.Message = message
+			if submitted, submitErr := q.finishHangingPaste(ctx, target, shortRec); submitErr == nil && submitted {
+				if err := q.finish(rec.path, message, "delivered (hanging paste completed)"); err != nil && report != nil {
+					report(fmt.Sprintf("msgq: could not finish %s: %v", message.ID, err))
+				}
+				return
 			}
-			if report != nil {
-				report(fmt.Sprintf("delivered (UNVERIFIED): %s -> %s; check with bp peek %s", message.ID, message.To, message.To))
+			if pane, capErr := target.CaptureAnsi(ctx, rec.To); capErr == nil {
+				switch {
+				case bptmux.ExactPaste(pane, []string{message.Msg}):
+					message.Reason = hangingPasteReason
+				case bptmux.DamagedPaste(pane, []string{message.Msg}):
+					message.Reason = damagedPasteReason
+				}
 			}
+			q.settleUnrepasted(ctx, target, rec.path, message, report)
 			return
 		}
 		if report != nil {

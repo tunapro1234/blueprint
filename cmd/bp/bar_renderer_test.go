@@ -34,7 +34,7 @@ func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 		}}, nil
 	}
 	var rendered []string
-	renderer.render = func(_ context.Context, name string, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(_ context.Context, name string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
 		rendered = append(rendered, name)
 		return barRenderOutput{name: "plate", bar: "line", style: "style"}, nil
 	}
@@ -48,8 +48,8 @@ func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 		t.Fatalf("agentbook loads=%d, want one per scan", loads)
 	}
 	first := readBarRendererOps(t, ops)
-	if got := strings.Count(first, "list-sessions -F"); got != 1 {
-		t.Fatalf("session scans=%d, want one list-sessions request", got)
+	if got := strings.Count(first, "list-panes -a -F"); got != 1 {
+		t.Fatalf("session scans=%d, want one list-panes -a request", got)
 	}
 	if got := countTmuxSets(first); got != 3 {
 		t.Fatalf("first scan set-option calls=%d, want 3 (name, bar, style): %s", got, first)
@@ -66,7 +66,7 @@ func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 	if loads != 2 {
 		t.Fatalf("agentbook loads=%d after two scans, want 2", loads)
 	}
-	renderer.render = func(_ context.Context, _ string, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(_ context.Context, _ string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
 		return barRenderOutput{name: "plate", bar: "changed", style: "style"}, nil
 	}
 	if err := renderer.scan(context.Background()); err != nil {
@@ -81,13 +81,54 @@ func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 	}
 }
 
+func TestBarRendererRewritesRecreatedSession(t *testing.T) {
+	renderer, ops := newTestBarRenderer(t, "agent\t1\t$1\n", book.Fleet{Agents: map[string]book.Agent{
+		"agent": {Name: "agent", Status: "open"},
+	}})
+	renderer.render = func(_ context.Context, _ string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
+		return barRenderOutput{name: "plate", bar: "line", style: "style"}, nil
+	}
+	sessionsFile := filepath.Join(filepath.Dir(ops), "sessions")
+	scan := func(sessions string) int {
+		t.Helper()
+		if err := os.WriteFile(sessionsFile, []byte(testSessionPanes(sessions)), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ops, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := renderer.scan(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return countTmuxSets(readBarRendererOps(t, ops))
+	}
+	if got := scan("agent\t1\t$1\n"); got != 3 {
+		t.Fatalf("first scan sets=%d, want 3", got)
+	}
+	if got := scan("agent\t1\t$1\n"); got != 0 {
+		t.Fatalf("unchanged scan sets=%d, want 0", got)
+	}
+	// Closed and reopened under the same name: tmux gives a new id and the new
+	// session has none of the old options, so identical text must be set again.
+	if got := scan("agent\t1\t$7\n"); got != 3 {
+		t.Fatalf("recreated session sets=%d, want 3", got)
+	}
+	// Gone for one scan, then back with the same id: still rewritten.
+	if got := scan(""); got != 0 {
+		t.Fatalf("empty scan sets=%d, want 0", got)
+	}
+	if got := scan("agent\t1\t$7\n"); got != 3 {
+		t.Fatalf("returning session sets=%d, want 3", got)
+	}
+}
+
 func TestBarRendererSlowAgentDoesNotBlockFastAgent(t *testing.T) {
 	renderer, ops := newTestBarRenderer(t, "slow\t1\nfast\t1\n", book.Fleet{Agents: map[string]book.Agent{
 		"slow": {Name: "slow", Status: "open"}, "fast": {Name: "fast", Status: "open"},
 	}})
 	renderer.renderTimeout = 80 * time.Millisecond
 	releaseSlow := make(chan struct{})
-	renderer.render = func(ctx context.Context, name string, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(ctx context.Context, name string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
 		if name == "slow" {
 			<-releaseSlow // Simulate a renderer dependency that ignores cancellation.
 			return barRenderOutput{}, nil
@@ -116,8 +157,7 @@ func TestBarRendererProductionPathUsesOneFleetAndSessionScan(t *testing.T) {
 	ops := filepath.Join(dir, "tmux-ops")
 	bin := filepath.Join(dir, "tmux")
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + quoteShell(ops) + "\ncase \"$1\" in\n" +
-		"list-sessions) printf 'agent\\t1\\n' ;;\n" +
-		"list-panes) printf '1\\tbash\\t42\\n' ;;\n" +
+		"list-panes) printf 'agent\\t1\\t$1\\t0\\t1\\tvim\\t41\\nagent\\t1\\t$1\\t1\\t0\\tbash\\t42\\n' ;;\n" +
 		"capture-pane) printf 'shell prompt\\n' ;;\n" +
 		"*) exit 0 ;;\nesac\n"
 	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
@@ -141,8 +181,13 @@ func TestBarRendererProductionPathUsesOneFleetAndSessionScan(t *testing.T) {
 		t.Fatal(err)
 	}
 	commands := readBarRendererOps(t, ops)
-	if loads != 1 || strings.Count(commands, "list-sessions -F") != 1 {
-		t.Fatalf("production scan repeated shared loads: fleet=%d sessions=%d; commands=%s", loads, strings.Count(commands, "list-sessions -F"), commands)
+	if loads != 1 || strings.Count(commands, "list-panes -a -F") != 1 {
+		t.Fatalf("production scan repeated shared loads: fleet=%d sessions=%d; commands=%s", loads, strings.Count(commands, "list-panes -a -F"), commands)
+	}
+	// The scan listing already carries the pane process; a per-agent
+	// list-panes would bring back one exec per attached agent per scan.
+	if got := strings.Count(commands, "list-panes"); got != 1 {
+		t.Fatalf("list-panes calls=%d, want only the scan listing; commands=%s", got, commands)
 	}
 }
 
@@ -154,11 +199,11 @@ func BenchmarkBarRendererScan15Sessions(b *testing.B) {
 	agents := make(map[string]book.Agent, 15)
 	for i := 0; i < 15; i++ {
 		name := fmt.Sprintf("agent-%02d", i)
-		fmt.Fprintf(&sessionOutput, "%s\t1\n", name)
+		fmt.Fprintf(&sessionOutput, "%s\t1\t$%d\t1\t1\tbash\t%d\n", name, i, 100+i)
 		agents[name] = book.Agent{Name: name, Status: "open"}
 	}
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + quoteShell(ops) + "\ncase \"$1\" in\n" +
-		"list-sessions) cat <<'SESSIONS'\n" + sessionOutput.String() + "SESSIONS\n;;\n" +
+		"list-panes) cat <<'SESSIONS'\n" + sessionOutput.String() + "SESSIONS\n;;\n" +
 		"*) exit 0 ;;\nesac\n"
 	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
 		b.Fatal(err)
@@ -170,7 +215,7 @@ func BenchmarkBarRendererScan15Sessions(b *testing.B) {
 		last:      make(map[string]renderedBar), failures: make(map[string]string),
 		models: newBarModelCache(), renderTimeout: time.Second,
 	}
-	renderer.render = func(_ context.Context, name string, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(_ context.Context, name string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
 		return barRenderOutput{name: name, bar: "line", style: "style"}, nil
 	}
 	firstBefore := rendererCPUTime()
@@ -204,7 +249,7 @@ func TestBarRendererClearUnsetsOnlyOptionsItSet(t *testing.T) {
 	renderer, ops := newTestBarRenderer(t, "one\t1\n", book.Fleet{Agents: map[string]book.Agent{
 		"one": {Name: "one", Status: "open"},
 	}})
-	renderer.render = func(_ context.Context, _ string, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(_ context.Context, _ string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
 		return barRenderOutput{name: "plate", bar: "line", style: "style"}, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -240,7 +285,7 @@ func TestBarRendererLogsOnlyFailureStateChanges(t *testing.T) {
 	var logs bytes.Buffer
 	renderer.logger = log.New(&logs, "", 0)
 	fail := true
-	renderer.render = func(_ context.Context, _ string, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(_ context.Context, _ string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
 		if fail {
 			return barRenderOutput{}, fmt.Errorf("pane unavailable")
 		}
@@ -349,8 +394,12 @@ func newTestBarRenderer(t *testing.T, sessions string, fleet book.Fleet) (*barRe
 	t.Helper()
 	dir := t.TempDir()
 	ops := filepath.Join(dir, "tmux-ops")
+	sessionsFile := filepath.Join(dir, "sessions")
+	if err := os.WriteFile(sessionsFile, []byte(testSessionPanes(sessions)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + quoteShell(ops) + "\ncase \"$1\" in\n" +
-		"list-sessions) cat <<'SESSIONS'\n" + sessions + "SESSIONS\n;;\n" +
+		"list-panes) cat " + quoteShell(sessionsFile) + "\n;;\n" +
 		"*) exit 0 ;;\nesac\n"
 	bin := filepath.Join(dir, "tmux")
 	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
@@ -363,10 +412,28 @@ func newTestBarRenderer(t *testing.T, sessions string, fleet book.Fleet) (*barRe
 	renderer := &barRenderer{
 		app: &app{tmux: tmux}, tmux: tmux,
 		loadFleet: func() (book.Fleet, error) { return fleet, nil },
-		last:      make(map[string]renderedBar), failures: make(map[string]string),
+		last:      make(map[string]renderedBar), sessionIDs: make(map[string]string), failures: make(map[string]string),
 		models: newBarModelCache(), renderTimeout: time.Second,
 	}
 	return renderer, ops
+}
+
+// testSessionPanes turns "name\tattached[\tid]" lines into the list-panes -a
+// rows the scan reads, one active pane per session.
+func testSessionPanes(sessions string) string {
+	var out strings.Builder
+	for i, line := range strings.Split(strings.TrimSpace(sessions), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		id := fmt.Sprintf("$%d", 100+i)
+		if len(fields) > 2 {
+			id = fields[2]
+		}
+		fmt.Fprintf(&out, "%s\t%s\t%s\t1\t1\tbash\t%d\n", fields[0], fields[1], id, 1000+i)
+	}
+	return out.String()
 }
 
 func readBarRendererOps(t *testing.T, path string) string {

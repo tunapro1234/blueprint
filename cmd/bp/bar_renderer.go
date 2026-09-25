@@ -27,7 +27,9 @@ type barRenderOutput struct {
 	name, bar, style string
 }
 
-type barAgentRender func(context.Context, string, book.Fleet, []string) (barRenderOutput, error)
+// barAgentRender renders one agent from the scan's shared snapshot. process is
+// the session's pane process from the scan listing, zero when it had none.
+type barAgentRender func(context.Context, string, bptmux.PaneProcess, book.Fleet, []string) (barRenderOutput, error)
 
 type barRenderer struct {
 	app           *app
@@ -36,6 +38,7 @@ type barRenderer struct {
 	loadFleet     func() (book.Fleet, error)
 	render        barAgentRender
 	last          map[string]renderedBar
+	sessionIDs    map[string]string
 	failures      map[string]string
 	scanFailure   string
 	models        *barModelCache
@@ -47,7 +50,7 @@ func newBarRenderer(a *app, logger *log.Logger) *barRenderer {
 	r := &barRenderer{
 		app: a, tmux: a.tmux, logger: logger,
 		loadFleet: func() (book.Fleet, error) { return book.LoadFleet(book.Paths(a.config.Agentbooks)) },
-		last:      make(map[string]renderedBar), failures: make(map[string]string),
+		last:      make(map[string]renderedBar), sessionIDs: make(map[string]string), failures: make(map[string]string),
 		models: newBarModelCache(), renderTimeout: barAgentRenderTimeout,
 	}
 	r.render = r.renderAgent
@@ -84,13 +87,16 @@ func (r *barRenderer) scan(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load agentbook: %w", err)
 	}
+	r.forgetReplacedSessions(sessions)
 	allSessions := make([]string, 0, len(sessions))
 	var targets []string
+	processes := make(map[string]bptmux.PaneProcess)
 	for _, session := range sessions {
 		allSessions = append(allSessions, session.Name)
 		agent, ok := fleet.Agents[session.Name]
 		if ok && agent.Status == "open" && agent.ArchivedAt == "" && session.Attached > 0 {
 			targets = append(targets, session.Name)
+			processes[session.Name] = session.Process
 		}
 	}
 
@@ -102,11 +108,11 @@ func (r *barRenderer) scan(ctx context.Context) error {
 	results := make(chan result, len(targets))
 	cancels := make(map[string]context.CancelFunc, len(targets))
 	for _, name := range targets {
-		name := name
+		name, process := name, processes[name]
 		renderCtx, cancel := context.WithTimeout(ctx, r.renderTimeout)
 		cancels[name] = cancel
 		go func() {
-			output, err := r.render(renderCtx, name, fleet, allSessions)
+			output, err := r.render(renderCtx, name, process, fleet, allSessions)
 			results <- result{name: name, output: output, err: err}
 		}()
 	}
@@ -162,6 +168,33 @@ func (r *barRenderer) scan(ctx context.Context) error {
 	return nil
 }
 
+// forgetReplacedSessions drops what the renderer remembers about sessions that
+// are gone or were recreated under the same name. The skip-unchanged check
+// compares against that memory, so a stale entry would leave a new session
+// without @bp-bar and silently back on the #() fallback.
+func (r *barRenderer) forgetReplacedSessions(sessions []bptmux.SessionAttachment) {
+	current := make(map[string]string, len(sessions))
+	for _, session := range sessions {
+		current[session.Name] = session.ID
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for name := range r.last {
+		id, present := current[name]
+		if !present || id != r.sessionIDs[name] {
+			delete(r.last, name)
+		}
+	}
+	for name := range r.sessionIDs {
+		if _, present := current[name]; !present {
+			delete(r.sessionIDs, name)
+		}
+	}
+	for name, id := range current {
+		r.sessionIDs[name] = id
+	}
+}
+
 func errorsJoin(errs []error) error {
 	if len(errs) == 0 {
 		return nil
@@ -208,16 +241,22 @@ func (r *barRenderer) set(ctx context.Context, session, option, value, field str
 	return nil
 }
 
-func (r *barRenderer) renderAgent(ctx context.Context, name string, fleet book.Fleet, sessions []string) (barRenderOutput, error) {
+func (r *barRenderer) renderAgent(ctx context.Context, name string, process bptmux.PaneProcess, fleet book.Fleet, sessions []string) (barRenderOutput, error) {
 	agent, ok := fleet.Agents[name]
 	if !ok || agent.Status != "open" || agent.ArchivedAt != "" {
 		return barRenderOutput{}, fmt.Errorf("agent registration is no longer open")
 	}
-	state := book.RuntimeForWithSessions(ctx, r.tmux, fleet, name, sessions)
-	process, err := r.tmux.PaneProcess(ctx, name)
-	if err != nil {
-		return barRenderOutput{}, fmt.Errorf("read pane process: %w", err)
+	// The scan listing supplies the process and one capture serves the
+	// runtime state, the title and the accent; each extra tmux call is paid
+	// for every attached agent every scan.
+	if process.PID == 0 {
+		var err error
+		if process, err = r.tmux.PaneProcess(ctx, name); err != nil {
+			return barRenderOutput{}, fmt.Errorf("read pane process: %w", err)
+		}
 	}
+	pane, paneErr := r.tmux.CaptureAnsi(ctx, name)
+	state := book.RuntimeForObserved(ctx, r.tmux, fleet, name, sessions, process, pane, paneErr)
 	workerApp := *r.app
 	workerApp.ctx = ctx
 	folder := workerApp.barFolderWithFleet(name, fleet)
@@ -225,7 +264,7 @@ func (r *barRenderer) renderAgent(ctx context.Context, name string, fleet book.F
 		return barRenderOutput{}, fmt.Errorf("agent folder unavailable")
 	}
 	label := workerApp.liveNameWithState(agent, &state, fleet, process)
-	accent := workerApp.barAccentWithFleet(name, label, &fleet)
+	accent := workerApp.barAccentFrom(name, label, &fleet, func() (string, error) { return pane, paneErr })
 	line := workerApp.barLineForScan(name, folder, process, state, r.models)
 	return barRenderOutput{name: barNamePlate(label, accent), bar: line, style: barStatusStyle(accent)}, nil
 }

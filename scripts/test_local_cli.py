@@ -1335,7 +1335,7 @@ class LocalCLITest(unittest.TestCase):
         (home / "agentbook.json").write_text(json.dumps(dict(orchestrator="main", agents=[
             dict(name="managed", folder=str(self.root), status="closed", parent="main", role="keep role")
         ])))
-        result = subprocess.run([self.binary, "open", "managed", str(self.root), "--codex", "--no-prompt"],
+        result = subprocess.run([self.binary, "open", "managed", str(self.root), "--codex"],
                                 env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         entry = json.loads((home / "agentbook.json").read_text())["agents"][0]

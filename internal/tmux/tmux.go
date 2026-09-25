@@ -692,16 +692,22 @@ func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 }
 
 // SessionAttachment records whether a session has at least one attached client.
+// ID is tmux's session id ($N): a session closed and recreated under the same
+// name gets a new one, and with it none of the old session's options. Process
+// is what PaneProcess would return for the session; its PID is zero when the
+// listing carried no usable pane row.
 type SessionAttachment struct {
 	Name     string
 	Attached int
+	ID       string
+	Process  PaneProcess
 }
 
-// SessionsWithAttachments lists session names and attached-client counts in a
-// single tmux request. Callers that render per-session state can reuse the
-// complete session list when resolving runtime bindings.
+// SessionsWithAttachments lists every session with its attached-client count,
+// id and active-window pane process in a single tmux request, so a caller that
+// renders per-session state pays one exec per scan instead of one per session.
 func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachment, error) {
-	out, err := c.run(ctx, nil, "list-sessions", "-F", "#{session_name}\t#{session_attached}")
+	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{session_attached}\t#{session_id}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}")
 	if err != nil {
 		lower := strings.ToLower(err.Error())
 		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
@@ -709,19 +715,47 @@ func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachme
 		}
 		return nil, err
 	}
+	return parseSessionPanes(string(out)), nil
+}
+
+// parseSessionPanes folds list-panes -a rows into one entry per session, in
+// listing order. The process follows PaneProcess: the active pane of the
+// session's current window, else that window's first pane.
+func parseSessionPanes(out string) []SessionAttachment {
 	var sessions []SessionAttachment
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.SplitN(strings.TrimSpace(line), "\t", 2)
-		if len(fields) != 2 || fields[0] == "" {
+	index := make(map[string]int)
+	activePane := make(map[string]bool)
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 7)
+		if len(fields) != 7 || fields[0] == "" {
 			continue
 		}
-		attached, parseErr := strconv.Atoi(fields[1])
+		attached, parseErr := strconv.Atoi(strings.TrimSpace(fields[1]))
 		if parseErr != nil || attached < 0 {
 			continue
 		}
-		sessions = append(sessions, SessionAttachment{Name: fields[0], Attached: attached})
+		i, seen := index[fields[0]]
+		if !seen {
+			i = len(sessions)
+			index[fields[0]] = i
+			sessions = append(sessions, SessionAttachment{Name: fields[0], Attached: attached, ID: strings.TrimSpace(fields[2])})
+		}
+		if strings.TrimSpace(fields[3]) != "1" || activePane[fields[0]] {
+			continue
+		}
+		pid, pidErr := strconv.Atoi(strings.TrimSpace(fields[6]))
+		if pidErr != nil {
+			continue
+		}
+		process := PaneProcess{Command: strings.TrimSpace(fields[5]), PID: pid}
+		if strings.TrimSpace(fields[4]) == "1" {
+			sessions[i].Process = process
+			activePane[fields[0]] = true
+		} else if sessions[i].Process.PID == 0 {
+			sessions[i].Process = process
+		}
 	}
-	return sessions, nil
+	return sessions
 }
 
 // Clients returns attached client processes, which lets callers associate a

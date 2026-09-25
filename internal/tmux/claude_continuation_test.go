@@ -84,3 +84,43 @@ func TestClaudeContinuationDoesNotFollowPromptText(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+// Repeated reads come from the per-transcript cache; an appended handoff or
+// a line that turns the window unreadable must still be seen at once.
+func TestClaudeContinuationCacheFollowsAppends(t *testing.T) {
+	const old = "5f014104-7325-4e17-bde5-4d675b216f42"
+	const next = "b9c94862-2cdf-4b04-b490-679f6f83065d"
+	projects := t.TempDir()
+	dir := filepath.Join(projects, "-work")
+	_ = os.MkdirAll(dir, 0700)
+	start := time.Now().Add(-time.Minute)
+	path := filepath.Join(dir, old+".jsonl")
+	_ = os.WriteFile(filepath.Join(dir, next+".jsonl"), []byte(`{"type":"user","sessionId":"`+next+`","cwd":"/work"}`+"\n"), 0600)
+	appendLine := func(line string) {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	check := func(want string, wantErr bool) {
+		t.Helper()
+		for i := 0; i < 2; i++ {
+			got, err := claudeContinuation(projects, "/work", old, start.UnixMilli())
+			if (err != nil) != wantErr || (!wantErr && got != want) {
+				t.Fatalf("read %d: got=%q err=%v, want %q wantErr=%v", i, got, err, want, wantErr)
+			}
+		}
+	}
+	appendLine(`{"type":"user","sessionId":"` + old + `","cwd":"/work"}`)
+	check(old, false)
+	b, _ := json.Marshal(map[string]any{"type": "continued-in", "sessionId": old, "continuedInSessionId": next, "timestamp": start.Add(time.Second).UTC().Format(time.RFC3339Nano)})
+	appendLine(string(b))
+	check(next, false)
+	appendLine(`{"type":`)
+	check("", true)
+}

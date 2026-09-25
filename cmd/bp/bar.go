@@ -117,6 +117,12 @@ func (a *app) barAccentWithLabel(agent, label string) string {
 }
 
 func (a *app) barAccentWithFleet(agent, label string, fleet *book.Fleet) string {
+	return a.barAccentFrom(agent, label, fleet, func() (string, error) { return a.tmux.CaptureAnsi(a.ctx, agent) })
+}
+
+// barAccentFrom takes the pane from the caller so a renderer that already
+// captured it does not capture it again.
+func (a *app) barAccentFrom(agent, label string, fleet *book.Fleet, capture func() (string, error)) string {
 	stored := ""
 	if fleet == nil {
 		loaded, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
@@ -137,7 +143,7 @@ func (a *app) barAccentWithFleet(agent, label string, fleet *book.Fleet) string 
 			return index
 		}
 	}
-	live, ok := a.paneAccent(agent, label)
+	live, ok := a.paneAccentIn(capture, agent, label)
 	if !ok {
 		if stored != "" {
 			return stored
@@ -153,7 +159,11 @@ func (a *app) barAccentWithFleet(agent, label string, fleet *book.Fleet) string 
 }
 
 func (a *app) paneAccent(agent, label string) (string, bool) {
-	pane, err := a.tmux.CaptureAnsi(a.ctx, agent)
+	return a.paneAccentIn(func() (string, error) { return a.tmux.CaptureAnsi(a.ctx, agent) }, agent, label)
+}
+
+func (a *app) paneAccentIn(capture func() (string, error), agent, label string) (string, bool) {
+	pane, err := capture()
 	if err != nil {
 		return "", false
 	}

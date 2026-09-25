@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,58 +33,33 @@ func claudeContinuation(projects, cwd, id string, startedAt int64) (string, erro
 		if err != nil {
 			return "", fmt.Errorf("Claude continuation transcript: %w", err)
 		}
-		f, err := os.Open(path)
+		events, scanErr, err := claudeContinuationEvents(path)
 		if err != nil {
 			return "", err
-		}
-		info, err := f.Stat()
-		if err != nil {
-			f.Close()
-			return "", err
-		}
-		const limit int64 = 256 * 1024
-		offset := info.Size() - limit
-		if offset < 0 {
-			offset = 0
-		}
-		scan := bufio.NewScanner(io.NewSectionReader(f, offset, info.Size()-offset))
-		scan.Buffer(make([]byte, 4096), int(limit))
-		if offset > 0 {
-			scan.Scan()
 		}
 		next := ""
 		var nextAt time.Time
-		for scan.Scan() {
-			var row struct{ Type, SessionID, ContinuedInSessionID, Timestamp string }
-			if json.Unmarshal(scan.Bytes(), &row) != nil {
-				f.Close()
+		for _, row := range events {
+			if row.unreadable {
 				return "", fmt.Errorf("unreadable Claude continuation evidence")
-			}
-			if row.Type != "continued-in" {
-				continue
 			}
 			stamp, e := time.Parse(time.RFC3339Nano, row.Timestamp)
 			if e != nil {
-				f.Close()
 				return "", fmt.Errorf("invalid Claude continuation timestamp")
 			}
 			if stamp.Before(after) {
 				continue
 			}
 			if row.SessionID != id || !codexThreadID.MatchString(row.ContinuedInSessionID) || stamp.After(time.Now().Add(time.Minute)) {
-				f.Close()
 				return "", fmt.Errorf("invalid Claude continuation binding")
 			}
 			if next != "" && next != row.ContinuedInSessionID {
-				f.Close()
 				return "", fmt.Errorf("conflicting Claude continuations")
 			}
 			next, nextAt = row.ContinuedInSessionID, stamp
 		}
-		err = scan.Err()
-		f.Close()
-		if err != nil {
-			return "", err
+		if scanErr != nil {
+			return "", scanErr
 		}
 		if next == "" {
 			return id, nil
@@ -94,6 +70,79 @@ func claudeContinuation(projects, cwd, id string, startedAt int64) (string, erro
 		id, after = next, nextAt
 	}
 	return "", fmt.Errorf("Claude continuation exceeds limit")
+}
+
+// claudeContinuationEvent is one line of a transcript's continuation window
+// that the hop logic looks at: a continued-in record, or the unreadable line
+// that ends the window.
+type claudeContinuationEvent struct {
+	Type, SessionID, ContinuedInSessionID, Timestamp string
+	unreadable                                       bool
+}
+
+type claudeContinuationScan struct {
+	size     int64
+	modified time.Time
+	events   []claudeContinuationEvent
+	scanErr  error
+}
+
+// The bar asks every scan for every Claude agent; its transcript usually has
+// not grown since, and decoding 256 KiB of JSON per agent every two seconds
+// was the renderer's largest cost. Transcripts are appended, so an unchanged
+// size and modification time mean an unchanged window.
+var claudeContinuationScans = struct {
+	sync.Mutex
+	byPath map[string]claudeContinuationScan
+}{byPath: make(map[string]claudeContinuationScan)}
+
+// claudeContinuationEvents returns the continued-in records of the last
+// 256 KiB of path in order, cut at the first unreadable line, plus the
+// scanner's error. err reports only open and stat failures.
+func claudeContinuationEvents(path string) (events []claudeContinuationEvent, scanErr, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	claudeContinuationScans.Lock()
+	cached, ok := claudeContinuationScans.byPath[path]
+	claudeContinuationScans.Unlock()
+	if ok && cached.size == info.Size() && cached.modified.Equal(info.ModTime()) {
+		return cached.events, cached.scanErr, nil
+	}
+	const limit int64 = 256 * 1024
+	offset := info.Size() - limit
+	if offset < 0 {
+		offset = 0
+	}
+	scan := bufio.NewScanner(io.NewSectionReader(f, offset, info.Size()-offset))
+	scan.Buffer(make([]byte, 4096), int(limit))
+	if offset > 0 {
+		scan.Scan()
+	}
+	for scan.Scan() {
+		var row claudeContinuationEvent
+		if json.Unmarshal(scan.Bytes(), &row) != nil {
+			events = append(events, claudeContinuationEvent{unreadable: true})
+			break
+		}
+		if row.Type == "continued-in" {
+			events = append(events, row)
+		}
+	}
+	scanErr = scan.Err()
+	claudeContinuationScans.Lock()
+	if len(claudeContinuationScans.byPath) >= 256 {
+		claudeContinuationScans.byPath = make(map[string]claudeContinuationScan)
+	}
+	claudeContinuationScans.byPath[path] = claudeContinuationScan{size: info.Size(), modified: info.ModTime(), events: events, scanErr: scanErr}
+	claudeContinuationScans.Unlock()
+	return events, scanErr, nil
 }
 
 func claudeContinuationTarget(projects, cwd, id string) bool {

@@ -147,8 +147,8 @@ func localCodexObservation(binding *cache.LocalBinding, pid int) (cache.LocalObs
 		return found, err
 	}
 	for _, id := range ids {
-		paths, err := filepath.Glob(filepath.Join(binding.Home, "sessions", "*", "*", "*", "*-"+id+".jsonl"))
-		if err != nil || len(paths) != 1 {
+		paths := cache.RolloutPathsByID(binding.Home, id)
+		if len(paths) != 1 {
 			continue
 		}
 		actualID, cwd, ok := localCodexHeader(paths[0])

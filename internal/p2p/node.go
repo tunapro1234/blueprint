@@ -29,21 +29,22 @@ type presence struct {
 	Expires   time.Time
 }
 type Node struct {
-	Host         host.Host
-	Root         string
-	Config       Config
-	Queue        *msgq.Queue
-	Log          io.Writer
-	lock         *os.File
-	mdns         mdns.Service
-	relay        io.Closer
-	mu           sync.Mutex
-	discovery    map[peer.ID]presence
-	stepMu       sync.Mutex
-	discoveryMu  sync.Mutex
-	ctx          context.Context
-	inbound      chan struct{}
-	inboundRetry time.Duration
+	Host          host.Host
+	Root          string
+	Config        Config
+	Queue         *msgq.Queue
+	Log           io.Writer
+	lock          *os.File
+	mdns          mdns.Service
+	relay         io.Closer
+	mu            sync.Mutex
+	discovery     map[peer.ID]presence
+	stepMu        sync.Mutex
+	discoveryMu   sync.Mutex
+	ctx           context.Context
+	inbound       chan struct{}
+	inboundRetry  time.Duration
+	ResolveLookup func(string) LookupResponse
 }
 
 func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, error) {
@@ -109,7 +110,7 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 		n.Close()
 		return nil, fmt.Errorf("read saved peer addresses: %w", err)
 	}
-	for _, p := range []protocol.ID{MessageProtocol, StatusProtocol, DiscoveryProtocol, PingProtocol} {
+	for _, p := range []protocol.ID{MessageProtocol, StatusProtocol, DiscoveryProtocol, PingProtocol, LookupProtocol} {
 		p := p
 		h.SetStreamHandler(p, func(s network.Stream) { n.handle(s, p) })
 	}
@@ -162,6 +163,10 @@ func queueID(id peer.ID, channel string) string {
 }
 
 func (n *Node) handle(s network.Stream, p protocol.ID) {
+	if p == LookupProtocol {
+		n.handleLookup(s)
+		return
+	}
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(rpcTimeout))
 	var req request
@@ -247,6 +252,30 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 		}
 	}
 	if err := writeFrame(s, res); err != nil {
+		_ = s.Reset()
+	}
+}
+
+func (n *Node) handleLookup(s network.Stream) {
+	defer s.Close()
+	_ = s.SetDeadline(time.Now().Add(rpcTimeout))
+	if _, _, ok := n.peerPolicy(s.Conn().RemotePeer()); !ok {
+		_ = s.Reset()
+		return
+	}
+	var req LookupRequest
+	if err := readFrame(s, &req); err != nil || !ValidLookupQuery(req.Find) {
+		_ = s.Reset()
+		return
+	}
+	result := LookupResponse{}
+	if n.ResolveLookup != nil {
+		result = n.ResolveLookup(req.Find)
+	}
+	if !result.Found || result.Name == "" || (result.State != "live" && result.State != "closed" && result.State != "archived") {
+		result = LookupResponse{}
+	}
+	if err := writeFrame(s, result); err != nil {
 		_ = s.Reset()
 	}
 }

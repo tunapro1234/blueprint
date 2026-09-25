@@ -110,6 +110,15 @@ if [ "$kind" = NONE ]; then
     step "no agent record; attaching tmux session '$arg'"
     attach "$arg"; exit
   fi
+  if command -v timeout >/dev/null 2>&1; then
+    if tips=$(timeout 3 bp p2p lookup "$arg" 2>/dev/null); then
+      if [ -n "$tips" ]; then
+        while IFS= read -r line; do
+          [ -n "$line" ] && printf '\033[2m%s\033[0m\n' "$line" >&2
+        done <<< "$tips"
+      fi
+    fi
+  fi
   die "no agent or tmux session named '$arg' (no empty session was opened)"
 fi
 [ "$kind" = OK ] || die "${name:-cannot read bp book}"

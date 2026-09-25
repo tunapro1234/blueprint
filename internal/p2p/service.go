@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -103,6 +104,28 @@ func (n *Node) Serve(ctx context.Context, dispatch func([]string)) error {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(res)
+	})
+	mux.HandleFunc("/lookup", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method", 405)
+			return
+		}
+		query := r.URL.Query().Get("find")
+		if !ValidLookupQuery(query) {
+			http.Error(w, "invalid lookup query", 400)
+			return
+		}
+		budget := 2 * time.Second
+		if value := r.URL.Query().Get("timeout"); value != "" {
+			parsed, err := time.ParseDuration(value)
+			if err != nil || parsed <= 0 || parsed > 15*time.Second {
+				http.Error(w, "invalid lookup timeout", 400)
+				return
+			}
+			budget = parsed
+		}
+		report := n.lookupPeers(r.Context(), query, budget)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 	mux.HandleFunc("/stop", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -215,6 +238,72 @@ func Control(ctx context.Context, root, method, endpoint string, result any) err
 func Ping(ctx context.Context, root, alias string) error {
 	return Control(ctx, root, http.MethodGet, "/ping?peer="+url.QueryEscape(alias), &response{})
 }
+
+func Lookup(ctx context.Context, root, query string, budget time.Duration) (LookupReport, error) {
+	if !ValidLookupQuery(query) {
+		return LookupReport{}, fmt.Errorf("invalid lookup query")
+	}
+	if budget <= 0 || budget > 15*time.Second {
+		return LookupReport{}, fmt.Errorf("invalid lookup timeout")
+	}
+	var report LookupReport
+	endpoint := "/lookup?find=" + url.QueryEscape(query) + "&timeout=" + url.QueryEscape(budget.String())
+	if err := Control(ctx, root, http.MethodGet, endpoint, &report); err != nil {
+		return LookupReport{}, err
+	}
+	return report, nil
+}
+
+func (n *Node) lookupPeers(ctx context.Context, query string, budget time.Duration) LookupReport {
+	report := LookupReport{Query: query, Peers: []LookupPeerResult{}}
+	aliases := make([]string, 0, len(n.Config.Peers))
+	for alias, configured := range n.Config.Peers {
+		id, err := peer.Decode(configured.ID)
+		if err == nil && len(n.Host.Network().ConnsToPeer(id)) > 0 {
+			aliases = append(aliases, alias)
+		}
+	}
+	sort.Strings(aliases)
+	report.Peers = make([]LookupPeerResult, len(aliases))
+	if len(aliases) == 0 {
+		return report
+	}
+	peerBudget := budget - min(100*time.Millisecond, budget/10)
+	if peerBudget <= 0 {
+		peerBudget = budget
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, peerBudget)
+	defer cancel()
+	var wg sync.WaitGroup
+	for index, alias := range aliases {
+		index, alias := index, alias
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := LookupPeerResult{Peer: alias}
+			configured := n.Config.Peers[alias]
+			id, err := peer.Decode(configured.ID)
+			if err == nil {
+				var response LookupResponse
+				response, err = n.callLookup(lookupCtx, id, query)
+				if err == nil {
+					if response.Found && response.Name != "" && (response.State == "live" || response.State == "closed" || response.State == "archived") {
+						result.Found, result.Name, result.State = true, response.Name, response.State
+					} else if response.Found {
+						err = fmt.Errorf("invalid lookup response")
+					}
+				}
+			}
+			if err != nil {
+				result.Error = "error"
+			}
+			report.Peers[index] = result
+		}()
+	}
+	wg.Wait()
+	return report
+}
+
 func LogPath(root string) string { return filepath.Join(root, "p2p", "service.log") }
 
 // A relay with no inbound messages must not repeatedly probe the whole local

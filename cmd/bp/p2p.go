@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"blueprint/internal/book"
 	"blueprint/internal/p2p"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -101,6 +102,8 @@ func (a *app) p2pCommand(args []string) error {
 		}
 		fmt.Fprintf(a.out, "%s: connected (%s)\n", args[1], time.Since(start).Round(time.Millisecond))
 		return nil
+	case "lookup":
+		return a.p2pLookup(args[1:])
 	case "serve":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp p2p serve")
@@ -117,9 +120,127 @@ func (a *app) p2pCommand(args []string) error {
 		}
 		defer n.Close()
 		n.Log = a.err
+		n.ResolveLookup = a.resolvePeerLookup
 		return n.Serve(ctx, a.dispatchP2P)
 	default:
-		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|serve")
+		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|lookup|serve")
+	}
+}
+
+func (a *app) p2pLookup(args []string) error {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("usage: bp p2p lookup <agent> [--timeout <dur>] [--json]")
+	}
+	query := args[0]
+	if !p2p.ValidLookupQuery(query) {
+		return fmt.Errorf("invalid lookup query")
+	}
+	timeout := 2 * time.Second
+	jsonOutput := false
+	timeoutSeen := false
+	jsonSeen := false
+	for index := 1; index < len(args); index++ {
+		switch args[index] {
+		case "--json":
+			if jsonSeen {
+				return fmt.Errorf("--json may only be specified once")
+			}
+			jsonSeen, jsonOutput = true, true
+		case "--timeout":
+			if timeoutSeen || index+1 >= len(args) {
+				return fmt.Errorf("usage: bp p2p lookup <agent> [--timeout <dur>] [--json]")
+			}
+			timeoutSeen = true
+			index++
+			parsed, err := time.ParseDuration(args[index])
+			if err != nil || parsed <= 0 || parsed > 15*time.Second {
+				return fmt.Errorf("invalid lookup timeout: %s", args[index])
+			}
+			timeout = parsed
+		default:
+			return fmt.Errorf("unknown p2p lookup option: %s", args[index])
+		}
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	report, err := p2p.Lookup(ctx, a.config.StateDir, query, timeout)
+	if err != nil {
+		return &commandExitError{code: 2, message: "p2p service unavailable: " + err.Error()}
+	}
+	found := false
+	for _, result := range report.Peers {
+		found = found || result.Found
+	}
+	if jsonOutput {
+		if err := json.NewEncoder(a.out).Encode(report); err != nil {
+			return err
+		}
+	} else {
+		for _, result := range report.Peers {
+			if result.Found {
+				fmt.Fprintln(a.out, formatP2PLookupTip(query, result))
+			}
+		}
+	}
+	if !found {
+		return &commandExitError{code: 1}
+	}
+	return nil
+}
+
+func (a *app) resolvePeerLookup(query string) p2p.LookupResponse {
+	records, err := book.Records(a.config.Agentbooks)
+	if err != nil {
+		return p2p.LookupResponse{}
+	}
+	var live func(string) bool
+	if a.tmux != nil {
+		live = func(name string) bool { return a.tmux.HasSession(a.ctx, name) }
+	} else {
+		live = func(string) bool { return false }
+	}
+	record, isLive, err := resolveAttachRecord(records, query, live)
+	if err != nil {
+		return p2p.LookupResponse{}
+	}
+	state := "closed"
+	if record.Agent.ArchivedAt != "" {
+		state = "archived"
+	} else if isLive {
+		state = "live"
+	}
+	return p2p.LookupResponse{Found: true, Name: record.Agent.Name, State: state}
+}
+
+func formatP2PLookupTip(query string, result p2p.LookupPeerResult) string {
+	if result.Name == query {
+		return fmt.Sprintf("tip: '%s' exists on peer %s (%s) — attach it on that machine", query, result.Peer, result.State)
+	}
+	return fmt.Sprintf("tip: '%s' matches %s on peer %s (%s) — attach it on that machine", query, result.Name, result.Peer, result.State)
+}
+
+func (a *app) writeP2PLookupTips(query string) {
+	if a.err == nil {
+		return
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	report, err := p2p.Lookup(ctx, a.config.StateDir, query, 2*time.Second)
+	if err != nil {
+		return
+	}
+	for _, result := range report.Peers {
+		if result.Found {
+			fmt.Fprintln(a.err, formatP2PLookupTip(query, result))
+		}
 	}
 }
 

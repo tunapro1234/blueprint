@@ -159,12 +159,25 @@ type Queue struct {
 	Binding      func(to string) string
 	RuntimeBlock func(to string, force bool) string
 	TurnOpen     func(to string) bool
-	mu           sync.Mutex
+	// PaneLock lets an in-process caller share its reentrant lock bookkeeping
+	// with queue dispatch. Standalone daemon queues leave it unset and use flock.
+	PaneLock    func(session string) (func(), error)
+	paneLockMu  sync.RWMutex
+	prepareOnce sync.Once
+	mu          sync.Mutex
 }
 
 func New(root string) *Queue {
 	return &Queue{Root: root, Now: time.Now}
 }
+
+func (q *Queue) SetPaneLock(lock func(session string) (func(), error)) {
+	q.paneLockMu.Lock()
+	q.PaneLock = lock
+	q.paneLockMu.Unlock()
+}
+
+func (q *Queue) PrepareDispatch(prepare func()) { q.prepareOnce.Do(prepare) }
 
 func (q *Queue) pending() string { return filepath.Join(q.Root, "pending") }
 func (q *Queue) done() string    { return filepath.Join(q.Root, "done") }
@@ -569,6 +582,21 @@ func IsVerifiedDelivery(status string) bool {
 // unconfirmed injection so every status consumer keeps old records non-success.
 func IsUnverifiedDelivery(status string) bool {
 	return status == StatusUnconfirmed || status == "delivered (unverified)"
+}
+
+// IsTerminalDelivery reports statuses that cannot become delivered by another
+// queue pass. Verified and unverified outcomes are terminal too, but callers
+// should check them first when they need to distinguish those results.
+func IsTerminalDelivery(status string) bool {
+	if IsVerifiedDelivery(status) || IsUnverifiedDelivery(status) || strings.HasPrefix(status, "not delivered") {
+		return true
+	}
+	for _, prefix := range []string{"failed", "canceled", "cancelled", "expired"} {
+		if strings.HasPrefix(status, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func englishStatus(status string) string {
@@ -1383,6 +1411,12 @@ func paneLockReason(err error) string {
 // `bp msg`, `bp open`'s digest flush and this loop cannot type into one composer
 // at the same time.
 func (q *Queue) lockPane(session string) (func(), error) {
+	q.paneLockMu.RLock()
+	lock := q.PaneLock
+	q.paneLockMu.RUnlock()
+	if lock != nil {
+		return lock(session)
+	}
 	return bptmux.AcquirePaneLock(q.Root, session)
 }
 

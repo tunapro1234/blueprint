@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -157,9 +158,11 @@ type app struct {
 	// process: a command that already holds a pane (compact clears the composer,
 	// then delivers; rename does the same) would otherwise wait out the whole
 	// acquire budget against itself and then report the pane as busy. bp is a
-	// single-threaded CLI, so a counter is the whole of the bookkeeping.
+	// per-pane count preserves nested delivery locks; the mutex protects workers.
 	paneLocks map[string]*heldPaneLock
 }
+
+var appPaneLocksMu sync.Mutex
 
 // heldPaneLock is one flock this process owns, with the number of nested holders.
 type heldPaneLock struct {
@@ -187,22 +190,29 @@ func (a *app) lockPane(name string) (func(), error) {
 	if root == "" || name == "" {
 		return func() {}, nil
 	}
+	appPaneLocksMu.Lock()
 	if a.paneLocks == nil {
 		a.paneLocks = map[string]*heldPaneLock{}
 	}
 	if held, ok := a.paneLocks[name]; ok {
 		held.depth++
+		appPaneLocksMu.Unlock()
 		return func() { a.releasePane(name) }, nil
 	}
+	appPaneLocksMu.Unlock()
 	release, err := bptmux.AcquirePaneLock(root, name)
 	if err != nil {
 		return nil, err
 	}
+	appPaneLocksMu.Lock()
 	a.paneLocks[name] = &heldPaneLock{release: release, depth: 1}
+	appPaneLocksMu.Unlock()
 	return func() { a.releasePane(name) }, nil
 }
 
 func (a *app) releasePane(name string) {
+	appPaneLocksMu.Lock()
+	defer appPaneLocksMu.Unlock()
 	held, ok := a.paneLocks[name]
 	if !ok {
 		return
@@ -2486,19 +2496,22 @@ func (a *app) prepareDispatch() {
 	if a.queue == nil || a.tmux == nil {
 		return
 	}
-	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil && fleet.Root != "" {
-		a.queue.NoticeOwner = fleet.Root
-	}
-	a.queue.CanWitness = book.CanWitness
-	if len(a.config.Agentbooks) > 0 {
-		projects := bptmux.ClaudeProjectsRoot()
-		a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
+	a.queue.PrepareDispatch(func() {
+		a.queue.SetPaneLock(a.lockPane)
+		if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil && fleet.Root != "" {
+			a.queue.NoticeOwner = fleet.Root
+		}
 		a.queue.CanWitness = book.CanWitness
-		a.queue.HasTranscript = book.TranscriptExists(a.config.Agentbooks, projects)
-		a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
-		a.queue.RuntimeBlock = book.RuntimeBlockProbe(a.config.Agentbooks)
-		a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
-	}
+		if len(a.config.Agentbooks) > 0 {
+			projects := bptmux.ClaudeProjectsRoot()
+			a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
+			a.queue.CanWitness = book.CanWitness
+			a.queue.HasTranscript = book.TranscriptExists(a.config.Agentbooks, projects)
+			a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
+			a.queue.RuntimeBlock = book.RuntimeBlockProbe(a.config.Agentbooks)
+			a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
+		}
+	})
 }
 
 // dedupWindow is how long an identical message to the same target counts as still
@@ -3229,6 +3242,24 @@ func (a *app) printCompactTable(rows []compactDecision) {
 	}
 }
 
+func (a *app) compactDeliver(target, sender string) (bool, string, error) {
+	if a.paneBusy(target) {
+		return false, "", bptmux.ErrBusy
+	}
+	release, err := a.lockPane(target)
+	if err != nil {
+		return false, "", err
+	}
+	defer release()
+	if a.paneBusy(target) {
+		return false, "", bptmux.ErrBusy
+	}
+	if err := a.clearComposer(target); err != nil {
+		return false, "", err
+	}
+	return a.deliver(target, sender, "/compact")
+}
+
 func (a *app) compact(args []string) error {
 	opts, err := parseCompactArgs(args)
 	if err != nil {
@@ -3314,42 +3345,14 @@ func (a *app) compact(args []string) error {
 			rows[index].Send, rows[index].Reason = false, compactBusy
 			continue
 		}
-		// The clearing and the send are ONE operation on one composer: bp empties it
-		// and then types into it, and another bp pasting in between would be typing
-		// into a composer this command has just wiped. So both happen under a single
-		// pane lock, which deliver() then re-enters instead of fighting.
-		release, lockErr := a.lockPane(target)
-		if lockErr != nil {
-			// Another bp owns the pane. Skip, never queue: a /compact that lands
-			// after the next turn compacts the wrong conversation.
-			rows[index].Send, rows[index].Reason = false, compactBusy
+		queued, channelID, deliveryErr := a.compactDeliver(target, sender)
+		if errors.Is(deliveryErr, bptmux.ErrBusy) || errors.Is(deliveryErr, bptmux.ErrTyping) || errors.Is(deliveryErr, bptmux.ErrPaneLocked) {
+			rows[index].Send = false
+			rows[index].Reason = compactBusy
 			continue
 		}
-		// Same clearing step as bp rename, for the same reason: /compact is a
-		// slash command bp types itself, and a composer left in a state that only
-		// LOOKS empty makes the send bounce off with "composer is not empty".
-		// ErrBusy/ErrTyping are the pane saying it is in use — skip it exactly
-		// like the check above, never queue (a /compact delivered after the next
-		// turn compacts the wrong conversation).
-		clearErr := a.clearComposer(target)
-		var queued bool
-		var channelID string
-		var deliveryErr error
-		if clearErr == nil {
-			queued, channelID, deliveryErr = a.deliver(target, sender, "/compact")
-		}
-		release()
-		if clearErr != nil {
-			rows[index].Send = false
-			switch {
-			case errors.Is(clearErr, bptmux.ErrBusy), errors.Is(clearErr, bptmux.ErrTyping):
-				rows[index].Reason = compactBusy
-			case errors.Is(clearErr, bptmux.ErrNotAgent):
-				rows[index].Reason = compactNotAgent
-			default:
-				rows[index].Reason = fmt.Sprintf("not delivered: %v", clearErr)
-				tally.errs = append(tally.errs, fmt.Errorf("%s: %w", target, clearErr))
-			}
+		if deliveryErr != nil && !queued && errors.Is(deliveryErr, bptmux.ErrNotAgent) {
+			rows[index].Send, rows[index].Reason = false, compactNotAgent
 			continue
 		}
 		counted := tally.record(target, queued, channelID, deliveryErr)

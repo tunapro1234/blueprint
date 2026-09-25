@@ -1733,10 +1733,12 @@ class LocalCLITest(unittest.TestCase):
     def test_manual_compact_delivers_without_another_user_turn(self):
         import datetime
         received = self.root / "received.jsonl"
+        busy = self.root / "busy"
+        busy.touch()
         shutil.copyfile(self.fake_tui, self.bin / "claude")
         (self.bin / "claude").chmod(0o755)
         self.env.update(BP_FAKE_VIM="insert", BP_FAKE_HARNESS="claude",
-                        BP_FAKE_BUSY=str(self.root / "absent"), BP_FAKE_RECEIVED=str(received))
+                        BP_FAKE_BUSY=str(busy), BP_FAKE_RECEIVED=str(received))
         fd = self.start("claude")
         path = Path(next(self.root.glob("native-*-transcript")).read_text())
         stamp = datetime.datetime.now(datetime.timezone.utc)
@@ -1749,6 +1751,7 @@ class LocalCLITest(unittest.TestCase):
         append({"type":"system","subtype":"compact_boundary","timestamp":stamp.isoformat(),"compactMetadata":{"trigger":"manual"}})
         append({"type":"user","isCompactSummary":True,"timestamp":stamp.isoformat(),"message":{"content":"summary"}})
         append({"type":"user","timestamp":stamp.isoformat(),"message":{"content":"<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>"}})
+        busy.unlink()
         retry=subprocess.run([self.binary,"q","--retry"],env=self.env,capture_output=True,text=True,timeout=15)
         self.assertEqual(retry.returncode,0,retry.stderr)
         channel = re.search(r"CHANNEL=(q[0-9]+)",result.stdout)

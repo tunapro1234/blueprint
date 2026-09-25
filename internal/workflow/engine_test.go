@@ -376,6 +376,9 @@ func TestEngineResumeDoesNotResendAndAuthorityStops(t *testing.T) {
 				_ = store.AppendEvent(run.ID, Event{Key: "one", Unit: "one", Agent: "agent-a", State: "validating", Round: 1, DeliveryID: "queue-1"})
 			}
 			driver := newFakeDriver(clock)
+			if state == "sent" {
+				driver.observations["agent-a"] = []AgentState{Idle, Working, Idle, Idle}
+			}
 			runEngine(t, store, run, driver, clock)
 			if driver.sentCount() != 0 {
 				t.Fatalf("resume from %s resent the unit", state)
@@ -408,6 +411,190 @@ func TestEngineResumeDoesNotResendAndAuthorityStops(t *testing.T) {
 			t.Fatalf("authority loss did not stop run: status=%s sends=%d", updated.Status, driver.sentCount())
 		}
 	})
+}
+
+func TestEngineWaitsThroughUnknownObservations(t *testing.T) {
+	clock := newFakeClock()
+	store, run := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	driver := newFakeDriver(clock)
+	driver.observations["agent-a"] = []AgentState{Unknown, Unknown, Idle, Idle}
+	engine := NewEngine(store, driver)
+	engine.Now, engine.Poll = clock.Now, time.Second
+	waitingWasVisible := false
+	engine.Sleep = func(ctx context.Context, delay time.Duration) error {
+		current, err := store.LoadRun(run.ID)
+		if err == nil && current.Status == "waiting: agent-a unknown" {
+			waitingWasVisible = true
+		}
+		return clock.Sleep(ctx, delay)
+	}
+	if err := engine.Run(context.Background(), run.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Status(run.ID)
+	if err != nil || status.Status != "done" || status.Counts.Done != 1 || !waitingWasVisible {
+		t.Fatalf("unknown observations did not wait visibly and complete: status=%#v visible=%t err=%v", status, waitingWasVisible, err)
+	}
+}
+
+func TestEngineResumeSentWaitsForNewStart(t *testing.T) {
+	clock := newFakeClock()
+	store, run := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	delivered := clock.Now()
+	_ = store.AppendEvent(run.ID, Event{Key: "one", Unit: "one", Agent: "agent-a", State: "sending", Round: 1})
+	_ = store.AppendEvent(run.ID, Event{Key: "one", Unit: "one", Agent: "agent-a", State: "sent", Round: 1, DeliveryID: "queue-1", DeliveredAt: timePointer(delivered)})
+	driver := newFakeDriver(clock)
+	driver.observations["agent-a"] = []AgentState{Idle, Idle, Working, Idle, Idle}
+	engine := NewEngine(store, driver)
+	engine.Now, engine.Sleep, engine.Poll = clock.Now, clock.Sleep, time.Second
+	validatedAfterWorking := false
+	engine.Validator = func(context.Context, string, []string, time.Duration) (int, string, string, error) {
+		driver.mu.Lock()
+		defer driver.mu.Unlock()
+		validatedAfterWorking = driver.positions["agent-a"] >= 5 && len(driver.observations["agent-a"]) > 2 && driver.observations["agent-a"][2] == Working
+		return 0, "", "", nil
+	}
+	if err := engine.Run(context.Background(), run.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Status(run.ID)
+	if err != nil || status.Counts.Done != 1 || !validatedAfterWorking || driver.sentCount() != 0 {
+		t.Fatalf("resume validated stale output: status=%#v validatedAfterWorking=%t sends=%d err=%v", status, validatedAfterWorking, driver.sentCount(), err)
+	}
+}
+
+func TestEngineEveryUnitsCountsPerAgent(t *testing.T) {
+	clock := newFakeClock()
+	yamlText := baseYAML("compact:\n  every_units: 2\n")
+	store, run := makeRun(t, clock, yamlText, `[{"id":"one"},{"id":"two"},{"id":"three"},{"id":"four"}]`, "{{.Key}}", "", "agent-a", "agent-b")
+	driver := newFakeDriver(clock)
+	engine := NewEngine(store, driver)
+	engine.Now, engine.Sleep, engine.Poll = clock.Now, clock.Sleep, time.Millisecond
+	bEntered := make(chan struct{})
+	var entered sync.Once
+	engine.Authority = func(_, agent string) error {
+		if agent == "agent-a" {
+			select {
+			case <-bEntered:
+			case <-time.After(3 * time.Second):
+				return errors.New("agent-b did not claim its unit")
+			}
+			return nil
+		}
+		entered.Do(func() { close(bEntered) })
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			events, _, err := store.Events(run.ID)
+			if err != nil {
+				return err
+			}
+			count := 0
+			for _, event := range events {
+				if event.Agent == "agent-a" && terminalState(event.State) {
+					count++
+				}
+			}
+			if count >= 3 {
+				return nil
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return errors.New("agent-a did not finish three units")
+	}
+	if err := engine.Run(context.Background(), run.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := store.Times(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, row := range rows {
+		counts[row.Agent]++
+	}
+	if counts["agent-a"] != 3 || counts["agent-b"] != 1 || driver.compactCount != 1 {
+		t.Fatalf("assignments=%v compact_count=%d; expected agent-a=3, agent-b=1, and only agent-a to compact", counts, driver.compactCount)
+	}
+	updated, err := store.LoadRun(run.ID)
+	if err != nil || updated.AgentUnits["agent-a"] != 1 || updated.AgentUnits["agent-b"] != 1 {
+		t.Fatalf("per-agent compact counters did not persist after reset: %#v err=%v", updated.AgentUnits, err)
+	}
+}
+
+func TestEngineValidatorTimeoutKillsProcessGroup(t *testing.T) {
+	clock := newFakeClock()
+	yamlText := baseYAML("") + "validate:\n  command: [\"sh\", \"-c\", \"sleep 60 & sleep 60\"]\n  timeout: 1s\n"
+	store, run := makeRun(t, clock, yamlText, `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	driver := newFakeDriver(clock)
+	engine := NewEngine(store, driver)
+	engine.Now, engine.Sleep, engine.Poll = clock.Now, clock.Sleep, time.Millisecond
+	started := time.Now()
+	if err := engine.Run(context.Background(), run.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(started)
+	rows, _, err := store.Times(run.ID)
+	if err != nil || len(rows) != 1 || rows[0].Result != "failed" || rows[0].Reason != "validator timed out" || elapsed >= 5*time.Second {
+		t.Fatalf("validator timeout was not bounded: elapsed=%s rows=%#v err=%v", elapsed, rows, err)
+	}
+}
+
+func TestValidatorDoesNotRewriteBareSnapshotName(t *testing.T) {
+	clock := newFakeClock()
+	store, run := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	if err := os.WriteFile(filepath.Join(store.SnapshotDir(run.ID), "score"), []byte("unrelated snapshot file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	captured := filepath.Join(run.Workdir, "captured-arg")
+	definition := Definition{Validate: ValidateSpec{Command: []string{"sh", "-c", "printf '%s' \"$1\" > captured-arg", "sh", "score"}, Timeout: "2s"}}
+	engine := NewEngine(store, newFakeDriver(clock))
+	if _, _, _, err := engine.runValidator(context.Background(), run, definition, Unit{Key: "one"}, "", clock.Now().Format(time.RFC3339Nano), 1); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(captured)
+	if err != nil || string(data) != "score" {
+		t.Fatalf("bare arg was rewritten to snapshot path: got %q err=%v", data, err)
+	}
+}
+
+func TestWorkflowStoreUpdateRunPreservesConcurrentStop(t *testing.T) {
+	clock := newFakeClock()
+	store, run := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	engineStore := NewStore(store.StateDir)
+	stopStore := NewStore(store.StateDir)
+	firstSave := make(chan struct{})
+	engineDone := make(chan error, 1)
+	go func() {
+		for i := 0; i < 40; i++ {
+			_, err := engineStore.UpdateRun(run.ID, func(current *Run) error {
+				if current.Current == nil {
+					current.Current = make(map[string]string)
+				}
+				current.Current["agent-a"] = fmt.Sprintf("unit-%d", i)
+				if i == 0 {
+					close(firstSave)
+					time.Sleep(2 * time.Millisecond)
+				}
+				return nil
+			})
+			if err != nil {
+				engineDone <- err
+				return
+			}
+		}
+		engineDone <- nil
+	}()
+	<-firstSave
+	if _, err := stopStore.RequestStop(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-engineDone; err != nil {
+		t.Fatal(err)
+	}
+	updated, err := stopStore.LoadRun(run.ID)
+	if err != nil || !updated.StopRequested || updated.Status != "stopping" {
+		t.Fatalf("engine state updates lost stop request: run=%#v err=%v", updated, err)
+	}
 }
 
 func TestValidateOutputAndTimeSummary(t *testing.T) {
@@ -449,10 +636,20 @@ func TestWaitReadOnlySemantics(t *testing.T) {
 	}
 	clock = newFakeClock()
 	driver = newFakeDriver(clock)
-	driver.observations["agent-a"] = []AgentState{Unknown}
-	_, err = Wait(context.Background(), driver, "agent-a", Idle, 2, time.Second, time.Second, clock.Now, clock.Sleep)
-	if !errors.Is(err, ErrAgentUnavailable) {
-		t.Fatalf("want unavailable agent error, got %v", err)
+	driver.observations["agent-a"] = []AgentState{Unknown, Idle, Idle}
+	result, err = Wait(context.Background(), driver, "agent-a", Idle, 2, 5*time.Second, time.Second, clock.Now, clock.Sleep)
+	if err != nil || result.Confirmed != 2 {
+		t.Fatalf("unknown observation did not recover into confirmed idle: result=%#v err=%v", result, err)
+	}
+}
+
+func TestWorkflowWaitUnknownThenIdleContinues(t *testing.T) {
+	clock := newFakeClock()
+	driver := newFakeDriver(clock)
+	driver.observations["agent-a"] = []AgentState{Unknown, Idle}
+	result, err := Wait(context.Background(), driver, "agent-a", Idle, 1, 5*time.Second, time.Second, clock.Now, clock.Sleep)
+	if err != nil || result.Confirmed != 1 || result.Observation.State != Idle {
+		t.Fatalf("bp wait did not recover from unknown: result=%#v err=%v", result, err)
 	}
 }
 

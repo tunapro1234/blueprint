@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"blueprint/internal/book"
@@ -19,9 +21,11 @@ import (
 )
 
 type workflowDriver struct {
-	app   *app
-	fleet book.Fleet
-	owner string
+	app          *app
+	fleetMu      sync.RWMutex
+	fleet        book.Fleet
+	fleetByAgent map[string]book.Fleet
+	owner        string
 }
 
 func (a *app) workflowStore() *workflow.Store { return workflow.NewStore(a.config.StateDir) }
@@ -39,13 +43,35 @@ func (a *app) newWorkflowDriver(owner string) (*workflowDriver, error) {
 	if err != nil {
 		return nil, err
 	}
+	driver := a.newWorkflowDriverBase(owner)
+	driver.fleet = fleet
+	return driver, nil
+}
+
+func (a *app) newWorkflowDriverBase(owner string) *workflowDriver {
 	if a.tmux == nil {
 		a.tmux = bptmux.New()
 	}
 	if a.queue == nil {
 		a.queue = msgq.New(a.config.MsgqRoot)
 	}
-	return &workflowDriver{app: a, fleet: fleet, owner: owner}, nil
+	return &workflowDriver{app: a, fleetByAgent: make(map[string]book.Fleet), owner: owner}
+}
+
+func (d *workflowDriver) setFleet(agent string, fleet book.Fleet) {
+	d.fleetMu.Lock()
+	defer d.fleetMu.Unlock()
+	d.fleetByAgent[agent] = fleet
+	d.fleet = fleet
+}
+
+func (d *workflowDriver) fleetFor(agent string) book.Fleet {
+	d.fleetMu.RLock()
+	defer d.fleetMu.RUnlock()
+	if fleet, ok := d.fleetByAgent[agent]; ok {
+		return fleet
+	}
+	return d.fleet
 }
 
 func (d *workflowDriver) Observe(ctx context.Context, agent string) (workflow.Observation, error) {
@@ -56,7 +82,7 @@ func (d *workflowDriver) Observe(ctx context.Context, agent string) (workflow.Ob
 			d.app.workflowObserveMeasured(time.Since(start))
 		}
 	}()
-	state := book.RuntimeFor(ctx, d.app.tmux, d.fleet, agent)
+	state := book.RuntimeFor(ctx, d.app.tmux, d.fleetFor(agent), agent)
 	activity := state.Activity
 	if activity == nil {
 		return workflow.Observation{State: workflow.Unknown, Detail: "no runtime observation", ObservedAt: time.Now().UTC()}, nil
@@ -113,13 +139,15 @@ func (d *workflowDriver) WaitDelivery(ctx context.Context, agent string, deliver
 	for {
 		record, err := d.app.queue.Record(delivery.ChannelID)
 		if err == nil {
-			status := strings.ToLower(record.Status)
 			switch {
-			case strings.HasPrefix(status, "delivered") && status != "delivered (unverified)":
+			case msgq.IsVerifiedDelivery(record.Status):
 				delivery.Status = workflow.DeliveryDelivered
 				delivery.DeliveredAt = time.Now().UTC()
 				return delivery, nil
-			case strings.HasPrefix(status, "failed"), strings.HasPrefix(status, "canceled"), strings.HasPrefix(status, "cancelled"), strings.HasPrefix(status, "expired"):
+			case msgq.IsUnverifiedDelivery(record.Status):
+				delivery.Status, delivery.Reason = workflow.DeliveryFailed, "not delivered: "+record.Status
+				return delivery, nil
+			case msgq.IsTerminalDelivery(record.Status):
 				delivery.Status, delivery.Reason = workflow.DeliveryFailed, "not delivered: "+record.Status
 				return delivery, nil
 			}
@@ -136,38 +164,18 @@ func (d *workflowDriver) WaitDelivery(ctx context.Context, agent string, deliver
 	}
 }
 
-func (d *workflowDriver) Compact(ctx context.Context, agent string) error {
-	if d.app.paneBusy(agent) {
+func (d *workflowDriver) Compact(_ context.Context, agent string) error {
+	queued, channel, err := d.app.compactDeliver(agent, d.owner)
+	if errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrTyping) || errors.Is(err, bptmux.ErrPaneLocked) {
 		return workflow.ErrCompactBusy
 	}
-	release, err := d.app.lockPane(agent)
-	if err != nil {
-		return workflow.ErrCompactBusy
+	if errors.Is(err, bptmux.ErrUnverified) {
+		return fmt.Errorf("compact was not verified: %w", err)
 	}
-	defer release()
-	if d.app.paneBusy(agent) {
-		return workflow.ErrCompactBusy
+	if queued {
+		return fmt.Errorf("%w: %s", workflow.ErrCompactQueued, channel)
 	}
-	if err := d.app.clearComposer(agent); err != nil {
-		if errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrTyping) {
-			return workflow.ErrCompactBusy
-		}
-		return err
-	}
-	// This operation already owns the pane lock. Sending through app.deliver
-	// would ask the queue to acquire that non-reentrant lock again and turn a
-	// safe compact into an endlessly retried queued message. Client.Send keeps
-	// the same pane, composer, and at-most-once verification gates under our lock.
-	if err := d.app.tmux.Send(ctx, agent, "/compact"); err != nil {
-		if errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrTyping) || errors.Is(err, bptmux.ErrPaneLocked) {
-			return workflow.ErrCompactBusy
-		}
-		if errors.Is(err, bptmux.ErrUnverified) {
-			return fmt.Errorf("compact was not verified: %w", err)
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
 func (a *app) workflow(args []string) error {
@@ -421,15 +429,20 @@ func (a *app) workflowStart(store *workflow.Store, args []string) error {
 		return err
 	}
 	if options.limit > 0 && options.limit < len(run.UnitKeys) {
-		run.Limit = options.limit
-		run.UnitKeys = run.UnitKeys[:options.limit]
-		if err := store.SaveRun(run); err != nil {
+		keys := append([]string(nil), run.UnitKeys[:options.limit]...)
+		run, err = store.UpdateRun(run.ID, func(current *workflow.Run) error {
+			current.Limit, current.UnitKeys = options.limit, keys
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 	}
 	if err := workflow.Start(a.ctx, a.config.StateDir, run.ID); err != nil {
-		run.Status, run.LastError = "error", err.Error()
-		_ = store.SaveRun(run)
+		_, _ = store.UpdateRun(run.ID, func(current *workflow.Run) error {
+			current.Status, current.LastError = "error", err.Error()
+			return nil
+		})
 		return err
 	}
 	fmt.Fprintf(a.out, "started workflow %s as run %s\n", run.Workflow, run.ID)
@@ -525,13 +538,17 @@ func (a *app) workflowResume(store *workflow.Store, args []string) error {
 	if run.Status == "done" {
 		return errors.New("completed workflow runs cannot be resumed")
 	}
-	run.Status, run.LastError, run.StopRequested, run.RetryFailed = "running", "", false, retryFailed
-	if err := store.SaveRun(run); err != nil {
+	if _, err := store.UpdateRun(id, func(current *workflow.Run) error {
+		current.Status, current.LastError, current.StopRequested, current.RetryFailed = "running", "", false, retryFailed
+		return nil
+	}); err != nil {
 		return err
 	}
 	if err := workflow.Start(a.ctx, a.config.StateDir, id); err != nil {
-		run.Status, run.LastError = "error", err.Error()
-		_ = store.SaveRun(run)
+		_, _ = store.UpdateRun(id, func(current *workflow.Run) error {
+			current.Status, current.LastError = "error", err.Error()
+			return nil
+		})
 		return err
 	}
 	fmt.Fprintf(a.out, "resumed workflow run %s\n", id)
@@ -561,19 +578,36 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 		return json.NewEncoder(a.out).Encode(stats)
 	}
 	fmt.Fprintf(a.out, "%s\n", stats.String())
-	for name, group := range stats.ByAgent {
+	for _, name := range sortedGroupKeys(stats.ByAgent) {
+		group := stats.ByAgent[name]
 		fmt.Fprintf(a.out, "agent %s: count=%d done=%d weak=%d failed=%d median_work=%.1fs p90_work=%.1fs\n", name, group.Count, group.Done, group.Weak, group.Failed, group.MedianWork, group.P90Work)
 	}
-	for model, group := range stats.ByModel {
+	for _, model := range sortedGroupKeys(stats.ByModel) {
+		group := stats.ByModel[model]
 		fmt.Fprintf(a.out, "model %s: count=%d done=%d weak=%d failed=%d median_work=%.1fs p90_work=%.1fs\n", model, group.Count, group.Done, group.Weak, group.Failed, group.MedianWork, group.P90Work)
 	}
-	for round, count := range stats.Rounds {
+	rounds := make([]int, 0, len(stats.Rounds))
+	for round := range stats.Rounds {
+		rounds = append(rounds, round)
+	}
+	sort.Ints(rounds)
+	for _, round := range rounds {
+		count := stats.Rounds[round]
 		fmt.Fprintf(a.out, "rounds %d: %d\n", round, count)
 	}
 	for _, slow := range stats.Slowest {
 		fmt.Fprintf(a.out, "slowest: %s agent=%s model=%s result=%s work=%.1fs\n", slow.Unit, slow.Agent, slow.Model, slow.Result, slow.WorkSec)
 	}
 	return nil
+}
+
+func sortedGroupKeys(values map[string]workflow.GroupStats) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (a *app) workflowWait(args []string) error {
@@ -665,19 +699,18 @@ func (a *app) workflowRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	driver, err := a.newWorkflowDriver(run.Owner)
-	if err != nil {
-		run.Status, run.LastError = "error", err.Error()
-		_ = store.SaveRun(run)
-		return err
-	}
+	driver := a.newWorkflowDriverBase(run.Owner)
 	engine := workflow.NewEngine(store, driver)
-	engine.Authority = a.workflowAuthority
-	engine.Notify = func(ctx context.Context, owner, message string) error {
-		_, _, err := a.deliver(owner, owner, message)
+	engine.Authority = func(owner, agent string) error { return a.workflowAuthorityFor(driver, owner, agent) }
+	engine.Notify = a.workflowNotifier(run.ID)
+	return engine.Run(a.ctx, run.ID, retryFailed || run.RetryFailed)
+}
+
+func (a *app) workflowNotifier(runID string) func(context.Context, string, string) error {
+	return func(_ context.Context, owner, message string) error {
+		_, _, err := a.deliver(owner, "workflow:"+runID, message)
 		return err
 	}
-	return engine.Run(a.ctx, run.ID, retryFailed || run.RetryFailed)
 }
 
 func (a *app) workflowAuthority(owner, agent string) error {
@@ -685,6 +718,19 @@ func (a *app) workflowAuthority(owner, agent string) error {
 	if err != nil {
 		return err
 	}
+	return checkWorkflowAuthority(fleet, owner, agent)
+}
+
+func (a *app) workflowAuthorityFor(driver *workflowDriver, owner, agent string) error {
+	fleet, err := a.loadWorkflowFleet()
+	if err != nil {
+		return err
+	}
+	driver.setFleet(agent, fleet)
+	return checkWorkflowAuthority(fleet, owner, agent)
+}
+
+func checkWorkflowAuthority(fleet book.Fleet, owner, agent string) error {
 	if _, ok := fleet.Agents[agent]; !ok {
 		return fmt.Errorf("agent %s is no longer registered", agent)
 	}

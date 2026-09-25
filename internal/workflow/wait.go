@@ -59,8 +59,10 @@ func Wait(ctx context.Context, driver Driver, agent string, until AgentState, co
 		}
 		result.Observation = observation
 		switch observation.State {
-		case Dead, Unknown:
+		case Dead:
 			return result, fmt.Errorf("%w: %s", ErrAgentUnavailable, observationSummary(observation))
+		case Unknown:
+			result.Confirmed = 0
 		case AgentState(until):
 			result.Confirmed++
 			if result.Confirmed >= confirm {

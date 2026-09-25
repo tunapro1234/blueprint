@@ -80,6 +80,7 @@ type Supervisor struct {
 	Delay       DelayFunc
 	Logger      *log.Logger
 	MaxRestarts int
+	Now         func() time.Time
 
 	mu     sync.Mutex
 	active map[string]bool
@@ -307,7 +308,9 @@ func (s *Supervisor) supervise(ctx context.Context, id string, wait ChildWait) {
 		}
 	}()
 	for {
+		childStarted := s.now()
 		err := wait()
+		longChild := s.now().Sub(childStarted) >= 10*time.Minute
 		if ctx.Err() != nil {
 			return
 		}
@@ -319,13 +322,28 @@ func (s *Supervisor) supervise(ctx context.Context, id string, wait ChildWait) {
 		if !resumableStatus(run.Status) {
 			return
 		}
+		if longChild && run.RestartCount != 0 {
+			run, loadErr = s.Store.UpdateRun(id, func(current *Run) error {
+				if resumableStatus(current.Status) {
+					current.RestartCount = 0
+				}
+				return nil
+			})
+			if loadErr != nil {
+				s.Logger.Printf("workflow %s: reset restart count after long child: %v", id, loadErr)
+				return
+			}
+		}
 		if run.RestartCount >= s.maxRestarts() {
 			s.markError(id, fmt.Sprintf("workflow child exited unexpectedly %d times (last exit: %v)", run.RestartCount, err))
 			return
 		}
-		run.RestartCount++
-		if saveErr := s.Store.SaveRun(run); saveErr != nil {
-			s.Logger.Printf("workflow %s: record restart count: %v", id, saveErr)
+		run, loadErr = s.Store.UpdateRun(id, func(current *Run) error {
+			current.RestartCount++
+			return nil
+		})
+		if loadErr != nil {
+			s.Logger.Printf("workflow %s: record restart count: %v", id, loadErr)
 			return
 		}
 		if err := s.delay(ctx, s.restartDelay(run.RestartCount)); err != nil {
@@ -345,9 +363,12 @@ func (s *Supervisor) supervise(ctx context.Context, id string, wait ChildWait) {
 				s.markError(id, fmt.Sprintf("workflow child could not be restarted %d times (last error: %v)", run.RestartCount, err))
 				return
 			}
-			run.RestartCount++
-			if saveErr := s.Store.SaveRun(run); saveErr != nil {
-				s.Logger.Printf("workflow %s: record restart count: %v", id, saveErr)
+			run, loadErr = s.Store.UpdateRun(id, func(current *Run) error {
+				current.RestartCount++
+				return nil
+			})
+			if loadErr != nil {
+				s.Logger.Printf("workflow %s: record restart count: %v", id, loadErr)
 				return
 			}
 			if delayErr := s.delay(ctx, s.restartDelay(run.RestartCount)); delayErr != nil {
@@ -377,6 +398,13 @@ func (s *Supervisor) delay(ctx context.Context, duration time.Duration) error {
 		return s.Delay(ctx, duration)
 	}
 	return sleepContext(ctx, duration)
+}
+
+func (s *Supervisor) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 func (s *Supervisor) lockAgent(agent, runID string) (*os.File, error) {
@@ -432,10 +460,8 @@ func (s *Supervisor) releaseRun(id string) {
 }
 
 func (s *Supervisor) markError(id, reason string) {
-	run, err := s.Store.LoadRun(id)
-	if err != nil {
-		return
-	}
-	run.Status, run.LastError = "error", reason
-	_ = s.Store.SaveRun(run)
+	_, _ = s.Store.UpdateRun(id, func(run *Run) error {
+		run.Status, run.LastError = "error", reason
+		return nil
+	})
 }

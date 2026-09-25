@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -80,6 +81,8 @@ type Engine struct {
 }
 
 var ErrCompactBusy = errors.New("agent became busy before compact")
+var ErrCompactQueued = errors.New("compact delivery queued")
+var ErrValidatorTimeout = errors.New("validator timed out")
 var errStopBoundary = errors.New("workflow stop requested at a unit boundary")
 
 type unitTask struct {
@@ -154,10 +157,14 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	}
 	retryFailed = retryFailed || run.RetryFailed
 	if run.RetryFailed {
-		run.RetryFailed = false
-		if err := e.Store.SaveRun(run); err != nil {
+		updated, err := e.Store.UpdateRun(id, func(current *Run) error {
+			current.RetryFailed = false
+			return nil
+		})
+		if err != nil {
 			return e.fail(id, err)
 		}
+		run = updated
 	}
 	d, err := ReadDefinition(e.Store.SnapshotDir(id))
 	if err != nil {
@@ -175,10 +182,14 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 		keys[i] = unit.Key
 	}
 	if !sameStrings(run.UnitKeys, keys) {
-		run.UnitKeys = keys
-		if err := e.Store.SaveRun(run); err != nil {
+		updated, err := e.Store.UpdateRun(id, func(current *Run) error {
+			current.UnitKeys = append([]string(nil), keys...)
+			return nil
+		})
+		if err != nil {
 			return e.fail(id, err)
 		}
+		run = updated
 	}
 	e.mu.Lock()
 	e.active = &run
@@ -194,6 +205,14 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 		return e.fail(id, err)
 	}
 	latest := latestEvents(events)
+	unitCounts := agentUnitCounts(events)
+	run, err = e.Store.UpdateRun(id, func(current *Run) error {
+		current.AgentUnits = unitCounts
+		return nil
+	})
+	if err != nil {
+		return e.fail(id, err)
+	}
 	recovery := make(map[string][]unitTask)
 	var pending []unitTask
 	for _, unit := range units {
@@ -240,19 +259,18 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 			break
 		}
 	}
-	run, err = e.Store.LoadRun(id)
+	run, err = e.Store.UpdateRun(id, func(current *Run) error {
+		switch {
+		case current.StopRequested || current.Status == "stopping":
+			current.Status, current.LastError = "stopped", ""
+		case allFinished:
+			current.Status, current.LastError = "done", ""
+		default:
+			current.Status = "running"
+		}
+		return nil
+	})
 	if err != nil {
-		return e.fail(id, err)
-	}
-	switch {
-	case run.StopRequested || run.Status == "stopping":
-		run.Status, run.LastError = "stopped", ""
-	case allFinished:
-		run.Status, run.LastError = "done", ""
-	default:
-		run.Status = "running"
-	}
-	if err := e.Store.SaveRun(run); err != nil {
 		return e.fail(id, err)
 	}
 	if (run.Status == "done" || run.Status == "stopped") && (d.Notify == "" || d.Notify == "owner") && e.Notify != nil {
@@ -316,10 +334,10 @@ func setFirstErr(mu *sync.Mutex, first *error, cancel context.CancelFunc, err er
 }
 
 func (e *Engine) fail(id string, cause error) error {
-	if run, err := e.Store.LoadRun(id); err == nil {
+	_, _ = e.Store.UpdateRun(id, func(run *Run) error {
 		run.Status, run.LastError = "error", cause.Error()
-		_ = e.Store.SaveRun(run)
-	}
+		return nil
+	})
 	return cause
 }
 
@@ -353,7 +371,11 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 		value := idle.ContextTokens
 		metrics.ctxStart = &value
 	}
-	if err := e.compactIfNeeded(ctx, run.ID, agent, d, int(completed.Load()), &metrics); errors.Is(err, errStopBoundary) {
+	updated, err := e.Store.LoadRun(run.ID)
+	if err != nil {
+		return err
+	}
+	if err := e.compactIfNeeded(ctx, run.ID, agent, d, updated.AgentUnits[agent], &metrics); errors.Is(err, errStopBoundary) {
 		return nil
 	} else if err != nil {
 		return err
@@ -408,9 +430,27 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 	if previous.State != "sent" && previous.State != "working" && previous.State != "validating" {
 		return fmt.Errorf("cannot resume unit %q from state %q", task.unit.Key, previous.State)
 	}
-	startedAt, err := e.firstWorking(task.unit.Key, run.ID)
-	if err != nil {
-		return err
+	startedAt := time.Time{}
+	if previous.State == "sent" {
+		deliveredAt := previous.At
+		if previous.DeliveredAt != nil {
+			deliveredAt = *previous.DeliveredAt
+		}
+		startedAt, observation, startErr := e.waitForStart(ctx, agent, deliveredAt, d.Timeouts.Start)
+		if startErr != nil {
+			return startErr
+		}
+		metrics.last = observation
+		if startedAt.IsZero() {
+			return e.finishUnit(run, task.unit, agent, metrics, "failed", "never started after verified delivery (last observation: "+observationSummary(observation)+")", max(1, previous.Round), nil, completed, lastFinished)
+		}
+		metrics.startedAt = startedAt
+	}
+	if previous.State != "sent" {
+		startedAt, err = e.firstWorking(task.unit.Key, run.ID)
+		if err != nil {
+			return err
+		}
 	}
 	metrics.startedAt = startedAt
 	idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute))
@@ -521,7 +561,11 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 	code, stdout, stderr, runErr := e.runValidator(ctx, run, d, unit, output, started, round)
 	metrics.validate += e.now().Sub(begin).Seconds()
 	if runErr != nil {
-		return e.finishUnit(run, unit, agent, metrics, "failed", "validator failed: "+runErr.Error(), round, nil, completed, lastFinished)
+		reason := "validator failed: " + runErr.Error()
+		if errors.Is(runErr, ErrValidatorTimeout) {
+			reason = ErrValidatorTimeout.Error()
+		}
+		return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, nil, completed, lastFinished)
 	}
 	if code == 0 {
 		return e.finishUnit(run, unit, agent, metrics, "done", "", round, nil, completed, lastFinished)
@@ -578,6 +622,9 @@ func (e *Engine) runValidator(ctx context.Context, run Run, d Definition, unit U
 		if filepath.IsAbs(args[index]) || strings.HasPrefix(args[index], "-") || strings.Contains(args[index], "{{") {
 			continue
 		}
+		if !strings.Contains(filepath.ToSlash(args[index]), "/") {
+			continue
+		}
 		candidate, err := containedFile(e.Store.SnapshotDir(run.ID), args[index])
 		if err == nil {
 			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -590,10 +637,18 @@ func (e *Engine) runValidator(ctx context.Context, run Run, d Definition, unit U
 	defer cancel()
 	var stdout, stderr limitedBuffer
 	cmd := exec.CommandContext(validateCtx, args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = run.Workdir, nil, &stdout, &stderr
 	err := cmd.Run()
 	if errors.Is(validateCtx.Err(), context.DeadlineExceeded) {
-		return -1, stdout.String(), stderr.String(), fmt.Errorf("validator timed out after %s", timeout)
+		return -1, stdout.String(), stderr.String(), fmt.Errorf("%w after %s", ErrValidatorTimeout, timeout)
 	}
 	if err == nil {
 		return 0, stdout.String(), stderr.String(), nil
@@ -792,7 +847,10 @@ func (e *Engine) waitIdleMode(ctx context.Context, runID, agent string, timeout 
 		case Dead:
 			return last, fmt.Errorf("agent %s is dead", agent)
 		case Unknown:
-			return last, fmt.Errorf("agent %s runtime is unknown: %s", agent, observation.Detail)
+			idleCount, blockedCount = 0, 0
+			if err := e.statusWaitingState(runID, agent, "unknown"); err != nil {
+				return last, err
+			}
 		default:
 			return last, fmt.Errorf("agent %s has unrecognized state %q", agent, observation.State)
 		}
@@ -808,15 +866,13 @@ func (e *Engine) waitIdleMode(ctx context.Context, runID, agent string, timeout 
 func (e *Engine) clearWaiting(runID, agent string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	run, err := e.Store.LoadRun(runID)
-	if err != nil {
-		return err
-	}
-	if run.Status != "waiting: "+agent+" blocked" {
+	run, err := e.Store.UpdateRun(runID, func(current *Run) error {
+		if strings.HasPrefix(current.Status, "waiting: "+agent+" ") {
+			current.Status, current.LastError = "running", ""
+		}
 		return nil
-	}
-	run.Status, run.LastError = "running", ""
-	if err := e.Store.SaveRun(run); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 	if e.active != nil && e.active.ID == runID {
@@ -842,7 +898,10 @@ func (e *Engine) waitForStart(ctx context.Context, agent string, deliveredAt tim
 		case Dead:
 			return time.Time{}, last, fmt.Errorf("agent %s is dead", agent)
 		case Unknown:
-			return time.Time{}, last, fmt.Errorf("agent %s runtime is unknown after delivery: %s", agent, observation.Detail)
+			blockedCount = 0
+			if err := e.statusWaitingForAgentState(agent, "unknown"); err != nil {
+				return time.Time{}, last, err
+			}
 		case Idle:
 			// A fast turn can begin and finish between polls. A newer decisive
 			// transcript event proves that the delivered prompt ran even if no
@@ -914,7 +973,10 @@ func (e *Engine) waitUnitIdle(ctx context.Context, runID, agent string, timeout 
 		case Dead:
 			return false, e.now().Sub(started).Seconds(), last, fmt.Errorf("agent %s is dead", agent)
 		case Unknown:
-			return false, e.now().Sub(started).Seconds(), last, fmt.Errorf("agent %s runtime is unknown: %s", agent, observation.Detail)
+			idleCount, blockedCount = 0, 0
+			if err := e.statusWaitingState(runID, agent, "unknown"); err != nil {
+				return false, 0, last, err
+			}
 		}
 		if !e.now().Before(deadline) {
 			return false, e.now().Sub(started).Seconds(), last, nil
@@ -947,6 +1009,7 @@ func (e *Engine) compactIfNeeded(ctx context.Context, runID, agent string, d Def
 		metrics.compactBefore = &value
 	}
 	started := e.now()
+	queued := false
 	for {
 		err := e.Driver.Compact(ctx, agent)
 		if errors.Is(err, ErrCompactBusy) {
@@ -954,6 +1017,13 @@ func (e *Engine) compactIfNeeded(ctx context.Context, runID, agent string, d Def
 				return waitErr
 			}
 			continue
+		}
+		if errors.Is(err, ErrCompactQueued) {
+			queued = true
+			if appendErr := e.Store.AppendEvent(runID, Event{Agent: agent, State: "compact_pending", Reason: err.Error(), Compact: &CompactRecord{Result: "pending"}}); appendErr != nil {
+				return appendErr
+			}
+			break
 		}
 		if err != nil {
 			return err
@@ -973,11 +1043,29 @@ func (e *Engine) compactIfNeeded(ctx context.Context, runID, agent string, d Def
 		metrics.compactAfter = &value
 	}
 	result := "effective"
-	if metrics.compactBefore != nil && after.ContextKnown && after.ContextTokens > int(float64(*metrics.compactBefore)*0.8) {
+	if queued {
+		result = "pending"
+	} else if metrics.compactBefore != nil && after.ContextKnown && after.ContextTokens > int(float64(*metrics.compactBefore)*0.8) {
 		result = "ineffective"
 	}
 	metrics.compactResult = result
-	return e.Store.AppendEvent(runID, Event{Agent: agent, State: "compact_" + result, Compact: &CompactRecord{Seconds: metrics.compact, Before: metrics.compactBefore, After: metrics.compactAfter, Result: result}})
+	resetAgentUnits := func() error {
+		_, err := e.Store.UpdateRun(runID, func(run *Run) error {
+			if run.AgentUnits == nil {
+				run.AgentUnits = make(map[string]int)
+			}
+			run.AgentUnits[agent] = 0
+			return nil
+		})
+		return err
+	}
+	if queued {
+		return resetAgentUnits()
+	}
+	if err := e.Store.AppendEvent(runID, Event{Agent: agent, State: "compact_" + result, Compact: &CompactRecord{Seconds: metrics.compact, Before: metrics.compactBefore, After: metrics.compactAfter, Result: result}}); err != nil {
+		return err
+	}
+	return resetAgentUnits()
 }
 
 func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
@@ -1044,6 +1132,15 @@ func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetric
 	if err := e.Store.AppendTime(run.ID, row); err != nil {
 		return err
 	}
+	if _, err := e.Store.UpdateRun(run.ID, func(current *Run) error {
+		if current.AgentUnits == nil {
+			current.AgentUnits = make(map[string]int)
+		}
+		current.AgentUnits[agent]++
+		return nil
+	}); err != nil {
+		return err
+	}
 	*lastFinished = finished
 	completed.Add(1)
 	return e.setCurrent(run.ID, agent, "")
@@ -1080,19 +1177,18 @@ func (e *Engine) firstWorking(unitKey, runID string) (time.Time, error) {
 func (e *Engine) setCurrent(runID, agent, unit string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	run, err := e.Store.LoadRun(runID)
-	if err != nil {
-		return err
-	}
-	if run.Current == nil {
-		run.Current = make(map[string]string)
-	}
-	if unit == "" {
-		delete(run.Current, agent)
-	} else {
-		run.Current[agent] = unit
-	}
-	return e.Store.SaveRun(run)
+	_, err := e.Store.UpdateRun(runID, func(run *Run) error {
+		if run.Current == nil {
+			run.Current = make(map[string]string)
+		}
+		if unit == "" {
+			delete(run.Current, agent)
+		} else {
+			run.Current[agent] = unit
+		}
+		return nil
+	})
+	return err
 }
 
 func (e *Engine) setStatus(status, reason string) error {
@@ -1101,12 +1197,14 @@ func (e *Engine) setStatus(status, reason string) error {
 	if e.active == nil {
 		return errors.New("workflow run is not active")
 	}
-	run, err := e.Store.LoadRun(e.active.ID)
+	run, err := e.Store.UpdateRun(e.active.ID, func(current *Run) error {
+		if status == "running" && (current.StopRequested || current.Status == "stopping") {
+			return nil
+		}
+		current.Status, current.LastError = status, reason
+		return nil
+	})
 	if err != nil {
-		return err
-	}
-	run.Status, run.LastError = status, reason
-	if err := e.Store.SaveRun(run); err != nil {
 		return err
 	}
 	e.active = &run
@@ -1119,9 +1217,18 @@ func (e *Engine) stopRequested(runID string) (bool, error) {
 }
 
 func (e *Engine) statusWaiting(runID, agent string) error {
-	return e.setRunStatus(runID, "waiting: "+agent+" blocked", "")
+	return e.statusWaitingState(runID, agent, "blocked")
 }
+
+func (e *Engine) statusWaitingState(runID, agent, state string) error {
+	return e.setRunStatus(runID, "waiting: "+agent+" "+state, "")
+}
+
 func (e *Engine) statusWaitingForAgent(agent string) error {
+	return e.statusWaitingForAgentState(agent, "blocked")
+}
+
+func (e *Engine) statusWaitingForAgentState(agent, state string) error {
 	e.mu.Lock()
 	id := ""
 	if e.active != nil {
@@ -1131,18 +1238,19 @@ func (e *Engine) statusWaitingForAgent(agent string) error {
 	if id == "" {
 		return nil
 	}
-	return e.statusWaiting(id, agent)
+	return e.statusWaitingState(id, agent, state)
 }
 
 func (e *Engine) setRunStatus(id, status, reason string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	run, err := e.Store.LoadRun(id)
+	run, err := e.Store.UpdateRun(id, func(current *Run) error {
+		if current.Status != status || current.LastError != reason {
+			current.Status, current.LastError = status, reason
+		}
+		return nil
+	})
 	if err != nil {
-		return err
-	}
-	run.Status, run.LastError = status, reason
-	if err := e.Store.SaveRun(run); err != nil {
 		return err
 	}
 	if e.active != nil && e.active.ID == id {
@@ -1150,6 +1258,18 @@ func (e *Engine) setRunStatus(id, status, reason string) error {
 		e.active = &copyRun
 	}
 	return nil
+}
+
+func agentUnitCounts(events []Event) map[string]int {
+	counts := make(map[string]int)
+	for _, event := range events {
+		if strings.HasPrefix(event.State, "compact_") {
+			counts[event.Agent] = 0
+		} else if terminalState(event.State) && event.Agent != "" {
+			counts[event.Agent]++
+		}
+	}
+	return counts
 }
 
 func latestEvents(events []Event) map[string]Event {

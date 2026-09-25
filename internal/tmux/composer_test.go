@@ -767,6 +767,24 @@ func TestClearComposerPressesCtrlUAndNeverEscape(t *testing.T) {
 	assertNoEscape(t, h.mutations)
 }
 
+// A pane whose composer is not drawn as a readable box (nothing visible before
+// or after the press) still settles: the slash command bp types next is the
+// point, and there was nothing of anyone's to protect.
+func TestClearComposerSettlesAPaneWithoutAReadableBox(t *testing.T) {
+	plain := "some agent output\n\n"
+	h := &sendHarness{
+		captures:   []string{plain, plain, plain},
+		activities: []string{},
+	}
+	if err := testClient(h).ClearComposer(context.Background(), "target"); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != 1 {
+		t.Fatalf("expected 1 C-u, got %d: %v", got, h.mutations)
+	}
+	assertNoEscape(t, h.mutations)
+}
+
 func TestClearComposerRefusesVisibleTextWithoutPressingAnything(t *testing.T) {
 	h := &sendHarness{
 		captures:   []string{claudePane("❯ an unfinished question")},

@@ -122,10 +122,10 @@ func (f *fakeTarget) SubmitStuck(_ context.Context, _ string, texts []string) (b
 	if f.submitErr != nil {
 		return false, f.submitErr
 	}
+	if bptmux.Busy(f.pane) || !bptmux.ExactPaste(f.pane, texts) {
+		return false, nil
+	}
 	for _, text := range texts {
-		if composerPane(text) != f.pane {
-			continue
-		}
 		f.submitted = append(f.submitted, text)
 		f.pane = composerPane("")
 		return true, nil
@@ -345,6 +345,7 @@ func composerPane(text string) string {
 	}
 	return strings.Join([]string{
 		"  agent: output left from the previous turn",
+		"  agent: older output still visible above the composer",
 		top,
 		row,
 		border,
@@ -678,7 +679,7 @@ func TestDispatchKeepsProvenFailurePendingAndClosesUnverified(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(status, "DELIVERED (UNVERIFIED)") {
+		if !strings.Contains(status, "UNCONFIRMED") || strings.Contains(status, "DELIVERED") {
 			t.Fatalf("status=%q", status)
 		}
 		if !strings.Contains(strings.Join(reports, "\n"), "UNVERIFIED") {
@@ -741,6 +742,90 @@ func TestUndeliverableNoticeIsLoudInsteadOfQueued(t *testing.T) {
 	}
 	if joined := strings.Join(reports, "\n"); !strings.Contains(joined, "CANNOT BE DELIVERED") {
 		t.Fatalf("no loud line about the undeliverable notice:\n%s", joined)
+	}
+}
+
+func TestUncertainSenderNoticeFallsBackToVerifiedSession(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		from     string
+		sessions map[string]bool
+		owner    string
+		want     string
+	}{
+		{"strip uncertain suffix", "server-main?", map[string]bool{"server-main": true}, "coordinator", "server-main"},
+		{"configured coordinator", "ghost-sender?", map[string]bool{"coordinator": true}, "coordinator", "coordinator"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newBoundTestQueue(t.TempDir())
+			q.NoticeOwner = tc.owner
+			target := &fakeTarget{sessions: tc.sessions}
+			var reports []string
+			got := q.resolveNoticeHome(context.Background(), target, tc.from, "qtest", func(line string) { reports = append(reports, line) })
+			if got != tc.want {
+				t.Fatalf("notice home=%q, want %q; probed=%v", got, tc.want, target.sessionsSeen)
+			}
+			if !strings.Contains(strings.Join(reports, "\n"), "routing notice") {
+				t.Fatalf("fallback was not logged: %v", reports)
+			}
+		})
+	}
+}
+
+func TestUnknownBindingHangingPasteIsReportedWithoutKeys(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	q := newBoundTestQueue(t.TempDir())
+	q.Now = func() time.Time { return now }
+	q.NoticeOwner = "coordinator"
+	id, err := enqueueBoundUnverified(t, q, "target", "server-main?", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old binding has become unknown. The exact composer is enough to report
+	// a non-delivery, but it never authorizes a keypress.
+	q.Binding = func(string) string { return "" }
+	target := &fakeTarget{pane: deepPane(witnessable), sessions: map[string]bool{"target": true, "server-main": true}}
+	if !bptmux.ExactPaste(target.pane, []string{witnessable}) {
+		t.Fatalf("fixture did not prove an exact composer paste: %s", target.pane)
+	}
+	var reports []string
+	if err := q.Dispatch(context.Background(), target, func(line string) { reports = append(reports, line) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.submitted) != 0 || len(target.cleared) != 0 {
+		t.Fatalf("unknown binding authorized pane keys: %+v", target)
+	}
+	status, done := q.Finished(id)
+	if !done || status != StatusHangingComposer {
+		pending, _ := q.Record(id)
+		human, _ := q.Status(id)
+		t.Fatalf("finished status=%q done=%v, want %q; pending=%+v status=%q reports=%v", status, done, StatusHangingComposer, pending, human, reports)
+	}
+	notices, err := q.List()
+	if err != nil || len(notices) != 1 || notices[0].To != "server-main" || !strings.Contains(notices[0].Msg, "STILL HANGING") {
+		t.Fatalf("sender notice=%+v err=%v", notices, err)
+	}
+	if joined := strings.Join(reports, "\n"); !strings.Contains(joined, "coordinator") && !strings.Contains(joined, "server-main") {
+		t.Fatalf("loud status did not include the fallback route: %s", joined)
+	}
+}
+
+func TestOwnedIdleHangingPasteSubmitsAndVerifiesEmptyComposer(t *testing.T) {
+	q := newBoundTestQueue(t.TempDir())
+	id, err := enqueueBoundUnverified(t, q, "target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: deepPane(witnessable)}
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.submitted) != 1 || target.submitted[0] != witnessable {
+		t.Fatalf("submitted=%v, want the exact hanging message once", target.submitted)
+	}
+	status, done := q.Finished(id)
+	if !done || !IsVerifiedDelivery(status) || status != "delivered (hanging paste completed)" {
+		t.Fatalf("status=%q done=%v", status, done)
 	}
 }
 
@@ -825,7 +910,7 @@ func TestUnsettledRecordClosesAndTellsTheSender(t *testing.T) {
 		fastFwd  time.Duration
 		wantSend int
 	}{
-		{"unverified injection", bptmux.ErrUnverified, "DELIVERED (UNVERIFIED)", witnessWindow + time.Minute, 1},
+		{"unverified injection", bptmux.ErrUnverified, "UNCONFIRMED", witnessWindow + time.Minute, 1},
 		{"three unverifiable attempts", fmt.Errorf("%w: %s", bptmux.ErrNotReady, "the composer contains other text"), "NOT DELIVERED (VERIFICATION FAILED)", witnessWindow + time.Minute, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1991,13 +2076,17 @@ func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T)
 // notices in one evening described situations already fixed by hand, and the
 // noise hid the one real hanging paste (probot-outreach, 2026-08-23).
 func TestNoticeSaysWhetherThePasteIsStillHanging(t *testing.T) {
-	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, true)
+	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, true, false)
 	if !strings.Contains(hanging, "STILL HANGING") {
 		t.Fatalf("a hanging paste was not announced as such: %q", hanging)
 	}
-	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, false)
+	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, false, false)
 	if !strings.Contains(gone, "MAY HAVE RESOLVED LATER") {
 		t.Fatalf("a resolved case was not marked as such: %q", gone)
+	}
+	torn := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging", Reason: damagedPasteReason}, false, true)
+	if !strings.Contains(torn, "TORN COPY STILL PRESENT") || strings.Contains(torn, "will clear") || strings.Contains(torn, "will be resent") {
+		t.Fatalf("torn notice promises recovery or hides the fragment: %q", torn)
 	}
 	// Both keep the parts an operator navigates by.
 	for _, text := range []string{hanging, gone} {
@@ -2075,9 +2164,15 @@ func TestTornPasteStopsAtTheBound(t *testing.T) {
 	for i := 0; i < tornClearMax; i++ {
 		queue.Dispatch(context.Background(), target, nil)
 		target.pane = torn // it tore again on the way in
-		record, err := read(filepath.Join(queue.pending(), id+".json"))
+		record, err := queue.Record(id)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if record.Status != "" {
+			if i != tornClearMax-1 || record.Status != "not delivered (torn paste)" {
+				t.Fatalf("record closed early or with a false status at clear %d: %+v", i+1, record)
+			}
+			break
 		}
 		record.NoRepaste = true // the re-send came back unverified again
 		if err := writePending(filepath.Join(queue.pending(), id+".json"), record); err != nil {
@@ -2085,14 +2180,17 @@ func TestTornPasteStopsAtTheBound(t *testing.T) {
 		}
 	}
 	queue.Dispatch(context.Background(), target, nil)
-	record, err := read(filepath.Join(queue.pending(), id+".json"))
+	record, err := queue.Record(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if record.TornClears > tornClearMax {
 		t.Fatalf("tornClears=%d, want at most %d", record.TornClears, tornClearMax)
 	}
-	if record.Reason != damagedPasteReason {
+	if record.Status != "not delivered (torn paste)" || IsVerifiedDelivery(record.Status) {
+		t.Fatalf("status=%q, want explicit non-delivery after the clear bound", record.Status)
+	}
+	if !strings.HasPrefix(record.Reason, damagedPasteReason) {
 		t.Fatalf("reason=%q, want the do-not-press-Enter wording", record.Reason)
 	}
 	if len(target.submitted) != 0 {
@@ -2271,7 +2369,7 @@ func TestUnknownRuntimeBlocksNormalAndForcedDelivery(t *testing.T) {
 }
 
 func TestReadDeliveredSeparatesLegacyWaitWithoutRewritingRecord(t *testing.T) {
-	for _, status := range []string{"delivered", "delivered (found in transcript)", "delivered (unverified)", "canceled (by operator)", ""} {
+	for _, status := range []string{"delivered", "delivered (found in transcript)", "delivered (unverified)", StatusUnconfirmed, StatusHangingComposer, "canceled (by operator)", ""} {
 		t.Run(status, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "record.json")
 			data, _ := json.Marshal(Message{ID: "q1", Status: status, Reason: "runtime working", NextTry: 123})
@@ -2282,7 +2380,7 @@ func TestReadDeliveredSeparatesLegacyWaitWithoutRewritingRecord(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			verified := status == "delivered" || status == "delivered (found in transcript)"
+			verified := IsVerifiedDelivery(status)
 			if verified {
 				if got.Reason != "" || got.LastWaitReason != "runtime working" || got.NextTry != 0 {
 					t.Fatalf("%+v", got)
@@ -2290,9 +2388,69 @@ func TestReadDeliveredSeparatesLegacyWaitWithoutRewritingRecord(t *testing.T) {
 			} else if got.Reason != "runtime working" || got.LastWaitReason != "" {
 				t.Fatalf("%+v", got)
 			}
+			if status == "delivered (unverified)" && got.Status != StatusUnconfirmed {
+				t.Fatalf("legacy success-looking status escaped normalization: %+v", got)
+			}
 			after, _ := os.ReadFile(path)
 			if string(after) != string(data) {
 				t.Fatal("read modified historical record")
+			}
+		})
+	}
+}
+
+func TestMixedTerminalStatusesReadAsSuccessOnlyWithProof(t *testing.T) {
+	q := New(t.TempDir())
+	if err := os.MkdirAll(q.done(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		id     string
+		status string
+		wantOK bool
+	}{
+		{"q-old", "delivered (unverified)", false},
+		{"q-new-unknown", StatusUnconfirmed, false},
+		{"q-hanging", StatusHangingComposer, false},
+		{"q-torn", "not delivered (torn paste)", false},
+		{"q-ok", "delivered", true},
+		{"q-witnessed", "delivered (found in transcript)", true},
+	}
+	for _, tc := range tests {
+		path := filepath.Join(q.done(), tc.id+".json")
+		original, err := json.Marshal(Message{ID: tc.id, To: "target", Status: tc.status, Reason: "diagnostic wait", NextTry: 123, Finished: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, original, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range tests {
+		t.Run(tc.id, func(t *testing.T) {
+			m, err := q.Record(tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := IsVerifiedDelivery(m.Status); got != tc.wantOK {
+				t.Fatalf("normalized status %q verified=%v, want %v", m.Status, got, tc.wantOK)
+			}
+			finished, ok := q.Finished(tc.id)
+			if !ok || IsVerifiedDelivery(finished) != tc.wantOK {
+				t.Fatalf("Finished status=%q done=%v", finished, ok)
+			}
+			human, err := q.Status(tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !tc.wantOK && strings.HasPrefix(human, "DELIVERED") {
+				t.Fatalf("human qstat makes an unverified delivery look successful: %q", human)
+			}
+			if !tc.wantOK && (m.Reason != "diagnostic wait" || m.NextTry != 123) {
+				t.Fatalf("failed/unconfirmed record lost diagnostics: %+v", m)
+			}
+			if tc.wantOK && (m.Reason != "" || m.LastWaitReason != "diagnostic wait" || m.NextTry != 0) {
+				t.Fatalf("verified record did not clear only the stale wait: %+v", m)
 			}
 		})
 	}

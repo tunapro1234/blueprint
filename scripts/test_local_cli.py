@@ -16,6 +16,12 @@ import time
 import unittest
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def is_verified_delivery(status):
+    return status == "delivered" or (status.startswith("delivered (") and status != "delivered (unverified)")
+
+
 FAKE = '''#!/usr/bin/env python3
 import json, os, signal, sys
 if os.environ.get("BP_FAKE_ARGS"):
@@ -75,11 +81,13 @@ func main() {
  fmt.Print("\x1b[?2004h")
  defer fmt.Print("\x1b[?2004l")
  mode:=os.Getenv("BP_FAKE_VIM")
- escape,paste,inPaste:="","",false
- input:=make(chan byte)
+escape,paste,inPaste:="","",false
+pasteCount:=0
+input:=make(chan byte)
  go func(){ b:=make([]byte,1); for { if _,e:=os.Stdin.Read(b); e!=nil{return}; input<-b[0] } }()
  tick:=time.NewTicker(50*time.Millisecond); defer tick.Stop()
  text,last,previous,title:="","FAKE_READY","",""
+ if os.Getenv("BP_FAKE_PASTE_REPAIR_TEST")=="1" {last="FAKE_READY\nprevious transcript fixture"}
  for {
   _,err:=os.Stat(os.Getenv("BP_FAKE_BUSY")); busy:=err==nil
   frame:=strings.ReplaceAll(last,"\n","\r\n")+"\r\n\r\n"
@@ -97,17 +105,37 @@ func main() {
   case c:=<-input:
    if c==27 || escape!="" {
     escape+=string([]byte{c})
-    if escape=="\x1b[200~" {inPaste=true; paste=""; escape=""} else if escape=="\x1b[201~" {text+=strings.ReplaceAll(strings.ReplaceAll(paste,"\r\n","\n"),"\r","\n"); paste=""; inPaste=false; escape=""} else if len(escape)>=6 {escape=""}
+    if escape=="\x1b[200~" {
+     inPaste=true; paste=""; escape=""; pasteCount++
+     if path:=os.Getenv("BP_FAKE_PASTES");path!="" {f,e:=os.OpenFile(path,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e!=nil{panic(e)};_,_=fmt.Fprintln(f,pasteCount);_=f.Close()}
+    } else if escape=="\x1b[201~" {
+     inserted:=strings.ReplaceAll(strings.ReplaceAll(paste,"\r\n","\n"),"\r","\n")
+     if pasteCount==1 && os.Getenv("BP_FAKE_TEAR_FIRST_PASTE")=="1" && len([]rune(inserted))>1 {r:=[]rune(inserted);mid:=len(r)/2;for mid<len(r)-1 && (r[mid]==' ' || r[mid]=='\n' || r[mid]=='\t') {mid++};inserted=string(append(r[:mid],r[mid+1:]...))}
+     if path:=os.Getenv("BP_FAKE_PASTE_TEXTS");path!="" {f,e:=os.OpenFile(path,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e!=nil{panic(e)};_=json.NewEncoder(f).Encode(inserted);_=f.Close()}
+     text+=inserted; paste=""; inPaste=false; escape=""
+    } else if len(escape)>=6 {escape=""}
     continue
    }
    if inPaste {paste+=string([]byte{c}); continue}
    if mode=="normal" && c!=3 && c!='\r' && c!='\n' {if c=='i' {mode="insert"}; continue}
    switch c {
    case 3:return
-   case 21:text=""
+   case 21:
+    if filepath.Base(os.Args[0])=="codex" {
+     text="" // Codex CLI 0.157 clears its entire multi-row pasted buffer with one C-u.
+    } else if os.Getenv("BP_FAKE_CTRL_U_ROW")=="1" {
+     stty:=exec.Command("stty","size");stty.Stdin=os.Stdin;size,_:=stty.Output();cols:=76
+     if fields:=strings.Fields(string(size));len(fields)==2 {if n,e:=fmt.Sscanf(fields[1],"%d",&cols);e!=nil||n!=1||cols<4 {cols=76}}
+     runes:=[]rune(text);first:=cols-2;remove:=len(runes)
+     if len(runes)>first {rest:=len(runes)-first;remove=rest%cols;if remove==0 {remove=cols}}
+     if remove>len(runes) {remove=len(runes)}
+     text=string(runes[:len(runes)-remove])
+    } else {text=""}
+    if path:=os.Getenv("BP_FAKE_KEYS");path!="" {f,e:=os.OpenFile(path,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e!=nil{panic(e)};_,_=fmt.Fprintln(f,"C-u");_,_=fmt.Fprintf(f,"clear-remaining=%d\n",len([]rune(text)));_=f.Close()}
    case '\r','\n':
     if text=="quit" {return}
     if text!="" && os.Getenv("BP_FAKE_IGNORE_FIRST_ENTER")=="1" {os.Unsetenv("BP_FAKE_IGNORE_FIRST_ENTER");continue}
+    if path:=os.Getenv("BP_FAKE_KEYS");path!="" && text!="" {f,e:=os.OpenFile(path,os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600);if e!=nil{panic(e)};_,_=fmt.Fprintln(f,"submit");_=f.Close()}
     if strings.HasPrefix(text,"__bp_whoami") {
      c:=exec.Command("bp","whoami");c.Env=os.Environ()
      if fields:=strings.Fields(text);len(fields)>1 {c.Env=append(c.Env,"CODEX_THREAD_ID="+fields[1])}
@@ -1445,7 +1473,7 @@ class LocalCLITest(unittest.TestCase):
                 while not done.exists() and time.monotonic() < deadline: time.sleep(.1)
                 self.assertTrue(done.exists(), "confirmed delivery still waits for a busy composer")
                 record = json.loads(done.read_text())
-                self.assertTrue(record["status"].startswith("delivered"), record)
+                self.assertTrue(is_verified_delivery(record["status"]), record)
                 self.assertFalse(record.get("cleanup"), record)
                 self.assertFalse(record.get("reason"), record)
                 # The next idle pass must not run a deferred cleanup on this draft.
@@ -1489,6 +1517,104 @@ class LocalCLITest(unittest.TestCase):
         os.write(fd, b"\x03")
         self.wait_closed("wrapped-test")
 
+    def test_long_torn_paste_is_cleared_replayed_and_submitted_once(self):
+        message = (REPO / "testdata" / "delivery-truth-message.txt").read_text()
+        self.assertEqual(len(message), 666)
+        for cli in ["claude", "codex"]:
+            with self.subTest(cli=cli):
+                shutil.copyfile(self.fake_tui, self.bin / cli)
+                received = self.root / (cli + "-torn-received.jsonl")
+                keys = self.root / (cli + "-torn-keys.txt")
+                pastes = self.root / (cli + "-torn-pastes.txt")
+                paste_texts = self.root / (cli + "-torn-paste-texts.jsonl")
+                name = cli + "-torn"
+                self.env.update(BP_FAKE_VIM="insert", BP_FAKE_HARNESS=cli,
+                                BP_FAKE_BUSY=str(self.root / "absent-busy"),
+                                BP_FAKE_RECEIVED=str(received), BP_FAKE_KEYS=str(keys),
+                                BP_FAKE_PASTES=str(pastes), BP_FAKE_PASTE_TEXTS=str(paste_texts),
+                                BP_FAKE_TEAR_FIRST_PASTE="1",
+                                BP_FAKE_CTRL_U_ROW="1", BP_FAKE_PASTE_REPAIR_TEST="1")
+                if cli == "claude":
+                    subprocess.run([self.tmux, "-S", self.socket, "-f", str(self.root / "tmux.conf"),
+                                    "new-session", "-d", "-s", "test-env"], env=self.env,
+                                   check=True, capture_output=True)
+                for key in ["BP_FAKE_RECEIVED", "BP_FAKE_KEYS", "BP_FAKE_PASTES",
+                            "BP_FAKE_PASTE_TEXTS", "BP_FAKE_TEAR_FIRST_PASTE", "BP_FAKE_CTRL_U_ROW",
+                            "BP_FAKE_PASTE_REPAIR_TEST"]:
+                    subprocess.run([self.tmux, "-S", self.socket, "set-environment", "-g", key, self.env[key]],
+                                   check=True, capture_output=True)
+                fd = self.start(cli, name)
+                try:
+                    subprocess.run([self.tmux, "-S", self.socket, "resize-window", "-t", "=" + name,
+                                    "-x", "76", "-y", "28"], check=True, capture_output=True)
+                    deadline = time.monotonic() + 8
+                    activity = {}
+                    while time.monotonic() < deadline:
+                        status = json.loads(subprocess.check_output([self.binary, "status", "--json"], env=self.env))
+                        row = next(agent for agent in status["agents"] if agent["name"] == name)
+                        activity = row.get("activity", {})
+                        if activity.get("binding") == "local-launch-observer" and activity.get("state") == "idle":
+                            break
+                        time.sleep(.1)
+                    self.assertEqual(activity.get("binding"), "local-launch-observer", activity)
+                    self.assertEqual(activity.get("state"), "idle", activity)
+                    time.sleep(2.1)  # Wait for the isolated-pane idle guard.
+                    result = subprocess.run([self.binary, "msg", name, message], env=self.env,
+                                            capture_output=True, text=True, timeout=30)
+                    channel = re.search(r"CHANNEL=(q[0-9]+)", result.stdout)
+                    self.assertIsNotNone(channel, result.stdout + result.stderr)
+                    deadline = time.monotonic() + 20
+                    while not received.exists() and time.monotonic() < deadline:
+                        time.sleep(.1)
+                    if not received.exists():
+                        screen = subprocess.run([self.tmux, "-S", self.socket, "capture-pane", "-ep",
+                                                 "-t", "=" + name + ":"], capture_output=True, text=True).stdout
+                        queue = subprocess.run([self.binary, "qstat", channel.group(1)], env=self.env,
+                                               capture_output=True, text=True).stdout
+                        self.fail(f"{result.stdout}{result.stderr}\nreceived={str(received)!r} nearby={list(self.root.glob('*received*'))!r} keys={keys.read_text() if keys.exists() else '<absent>'!r} pastes={pastes.read_text() if pastes.exists() else '<absent>'!r}\nscreen={screen!r}\nqstat={queue!r}")
+                    delivered = [json.loads(line) for line in received.read_text().splitlines()]
+                    self.assertEqual(len(delivered), 1, delivered)
+                    actual, expected = delivered[0].rstrip("\n"), message.rstrip("\n")
+                    paste_payloads = [json.loads(line) for line in paste_texts.read_text().splitlines()]
+                    self.assertEqual(len(paste_payloads), 2, paste_payloads)
+                    expected_paste = paste_payloads[1].rstrip("\n")
+                    self.assertTrue(expected_paste.endswith(expected),
+                                    f"second paste length={len(expected_paste)} expected={len(expected)}")
+                    first_paste = paste_payloads[0].rstrip("\n")
+                    self.assertEqual(len(first_paste), len(expected_paste) - 1,
+                                     "first paste was not torn by exactly one visible character")
+                    missing = next((i for i, (got, want) in enumerate(zip(first_paste, expected_paste)) if got != want),
+                                   len(first_paste))
+                    self.assertEqual(first_paste, expected_paste[:missing] + expected_paste[missing + 1:],
+                                     "first paste damage was not a single deleted character")
+                    mismatch = next((i for i, (got, want) in enumerate(zip(actual, expected_paste)) if got != want),
+                                    min(len(actual), len(expected_paste)))
+                    self.assertEqual(actual, expected_paste,
+                                     f"received text differs from re-paste at {mismatch}: "
+                                     f"received={actual[max(0, mismatch - 8):mismatch + 16]!r} "
+                                     f"pasted={expected_paste[max(0, mismatch - 8):mismatch + 16]!r}; "
+                                     f"lengths={len(actual)}/{len(expected_paste)}")
+                    self.assertEqual(pastes.read_text().splitlines(), ["1", "2"], "mangled paste was not repaired by one full re-paste")
+                    events = keys.read_text().splitlines()
+                    clear_presses = len([key for key in events if key == "C-u"])
+                    if cli == "claude":
+                        self.assertGreater(clear_presses, 8, events)
+                    else:
+                        self.assertEqual(clear_presses, 1, events)
+                    self.assertIn("clear-remaining=0", events)
+                    self.assertEqual(events.count("submit"), 1, events)
+                    deadline = time.monotonic() + 8
+                    status = {}
+                    while time.monotonic() < deadline:
+                        status = json.loads(subprocess.check_output([self.binary, "qstat", channel.group(1), "--json"], env=self.env))
+                        if is_verified_delivery(status.get("status", "")):
+                            break
+                        time.sleep(.1)
+                    self.assertEqual(status.get("status"), "delivered", status)
+                finally:
+                    os.write(fd, b"\x03")
+                self.wait_closed(name)
+
     def test_immediate_delivery_has_durable_channel_and_binding(self):
         shutil.copyfile(self.fake_tui, self.bin / "claude")
         received = self.root / "channel-received.jsonl"
@@ -1502,7 +1628,7 @@ class LocalCLITest(unittest.TestCase):
         record = {}
         while time.monotonic() < deadline:
             record = json.loads(subprocess.check_output([self.binary, "qstat", channel.group(1), "--json"], env=self.env))
-            if record.get("status", "").startswith("delivered"): break
+            if is_verified_delivery(record.get("status", "")): break
             time.sleep(.1)
         self.assertEqual(record["status"], "delivered", record)
         self.assertTrue(record.get("attempt_binding", "").startswith("claude:"), record)
@@ -1632,8 +1758,7 @@ class LocalCLITest(unittest.TestCase):
     def assert_verified_delivery(self, record):
         # Sender confidence is separate from delivery confidence. Never grep
         # the whole receipt for "unverified" (sender_evidence can contain it).
-        self.assertTrue(record.get("status", "").startswith("delivered"), record)
-        self.assertNotEqual(record["status"], "delivered (unverified)", record)
+        self.assertTrue(is_verified_delivery(record.get("status", "")), record)
 
     def test_vim_bracketed_delivery_in_real_tmux(self):
         for cli in ["codex", "claude"]:

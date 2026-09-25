@@ -1147,13 +1147,11 @@ const (
 	// composerClearWindow is the pause between a clearing keypress and the capture
 	// that checks what it did.
 	composerClearWindow = 250 * time.Millisecond
-	// composerClearAttempts bounds the C-u presses of one clearing pass. The
-	// operator measured a single C-u clearing only ONE line: multi-line content
-	// needs it repeated 6-8 times. The loop stops as soon as the composer reads
-	// empty, so the bound is only reached when the presses are not working — and
-	// then the caller is told (ErrTyping) rather than left believing the composer
-	// is clean.
-	composerClearAttempts = 8
+	// composerClearMargin covers prompt/footer reflow while a key is applied.
+	composerClearMargin = 4
+	// composerClearAttemptsMax is a hard ceiling, not the ordinary budget. The
+	// ordinary budget is the complete visible composer row count plus the margin.
+	composerClearAttemptsMax = 64
 )
 
 // ClearComposer prepares a pane for a SLASH COMMAND bp is about to type into it
@@ -1184,10 +1182,10 @@ const (
 //     otherwise the final row — is left EXACTLY as it is and reported with
 //     ErrTyping: destroying a human's half-written line is a worse outcome than
 //     any command bp wanted to send. Dim ghost text is not input (StripDim).
-//  3. C-u, repeated while anything remains visible and bounded by
-//     composerClearAttempts, each press followed by a fresh capture. A single
-//     C-u clears one line only; the operator measured 6-8 presses for multi-line
-//     content.
+//  3. C-u, repeated only for our own complete composer view. Claude and Codex
+//     remove one visible wrapped row per press, so the budget is derived from
+//     that row count with a small margin. Every press is followed by a fresh
+//     capture; a foreign, busy, or unreadable state stops the loop immediately.
 //  4. The last capture is the caller's guarantee: it hands off to Send with a
 //     composer that has been OBSERVED empty rather than assumed empty.
 func (c *Client) ClearComposer(ctx context.Context, session string) error {
@@ -1254,6 +1252,9 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 	if Busy(pane) {
 		return false, ErrBusy
 	}
+	if _, complete := composerJudgeText(pane); !complete {
+		return false, nil
+	}
 	if verdict, _ := classifyPaste(pane, texts); verdict != pasteExact {
 		return false, nil
 	}
@@ -1269,13 +1270,10 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 	if paneDialog(after) {
 		return false, ErrUnverified
 	}
-	// Cleared composer OR a pane that has started working: both mean the text
-	// left the box. Anything else and we report failure rather than guess — a
-	// second Enter is the caller's decision, not ours.
-	if verdict, _ := classifyPaste(after, texts); verdict == pasteExact {
-		return false, nil
-	}
-	return true, nil
+	// Only an observed empty composer is evidence that this Enter finished the
+	// hanging message. A changed or unreadable box could be someone else's text,
+	// so leave it for the queue's transcript witness rather than guessing.
+	return ComposerEmpty(after), nil
 }
 
 // ClearDelivered is the legacy name of the guarded torn-paste eraser.
@@ -1332,48 +1330,155 @@ func composerFilled(pane string) bool {
 // At least one press always happens, because that invisible state is the whole
 // reason ClearComposer exists — a composer that reads empty can still refuse the
 // next paste.
-// On a HERMES pane the bound is raised to fit what is actually on screen. C-u
-// kills one line there too (measured 2026-08-22 in blueprint-hermes-test), but
-// Hermes has no paste chip: a pasted message is rendered as raw continuation rows,
-// so an N-row paste genuinely needs N presses and the fixed bound of 8 would leave
-// the tail of anything longer sitting in the composer — blocking that agent's
-// queue behind text bp itself put there. The budget is recomputed from each fresh
-// capture (rows + hermesClearMargin, capped by hermesClearAttemptsMax) and only
-// ever GROWS the loop, never shrinks it below composerClearAttempts.
+// Claude Code and Codex render wrapped message rows in their composer box. On
+// Claude each C-u removes one visible wrapped row, so a 10-row paste needs at
+// least 10 presses, not the old fixed 8. Codex CLI 0.157.0 was measured in an
+// isolated 76x20 pane on 2026-09-25: a 666-character paste rendered as 10 rows,
+// and one C-u emptied the entire composer. The row-based budget remains safe
+// there because the loop stops immediately on the observed empty box. Hermes
+// needs two C-u presses per rendered row (measured 2026-08-22) and keeps its
+// pane-specific budget.
 func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []string) error {
 	if err := messagetext.Validate(mine...); err != nil {
 		return err
 	}
 	target := "=" + session + ":"
-	budget := composerClearAttempts
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return err
+	}
+	if paneDialog(pane) {
+		return clearStopped(ErrDialog, pane)
+	}
+	if Busy(pane) {
+		return clearStopped(ErrBusy, pane)
+	}
+	budget := 1 // ClearComposer uses this only for a visually empty, stuck editor state.
+	if len(mine) == 0 {
+		if composerFilled(pane) {
+			return clearStopped(ErrTyping, pane)
+		}
+	} else {
+		if _, ours := StuckPaste(pane, mine); !ours {
+			return clearStopped(ErrTyping, pane)
+		}
+		rows, complete := completeComposerRows(pane)
+		if !complete {
+			return clearStopped(ErrTyping, pane)
+		}
+		budget, err = composerClearBudget(pane, rows)
+		if err != nil {
+			return clearStopped(ErrTyping, pane)
+		}
+	}
+	lastRows, _ := completeComposerRows(pane)
+	previousText := ""
+	trackTextTail := len(mine) > 0
+	if trackTextTail {
+		previousText, _ = composerBoxText(pane)
+	}
 	for attempt := 0; attempt < budget; attempt++ {
+		activity, err := c.clientActivity(ctx, session)
+		if err != nil {
+			return clearStopped(err, pane)
+		}
+		if !activity.IsZero() && c.Now().Sub(activity) < clientIdleWindow {
+			return clearStopped(ErrTyping, pane)
+		}
 		if _, err := c.run(ctx, nil, "send-keys", "-t", target, "C-u"); err != nil {
-			return err
+			return clearStopped(err, pane)
 		}
 		c.Sleep(composerClearWindow)
 		pane, err := c.CaptureAnsi(ctx, session)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: clear stopped after %d C-u press(es); composer could not be captured", ErrTyping, attempt+1)
 		}
 		if paneDialog(pane) {
-			return ErrDialog
+			return clearStopped(ErrDialog, pane)
 		}
 		if Busy(pane) {
-			// The pane started working under us: stop pressing keys immediately.
-			return ErrBusy
+			return clearStopped(ErrBusy, pane)
 		}
-		if !composerFilled(pane) {
+		if ComposerEmpty(pane) {
 			return nil
 		}
+		if !composerFilled(pane) {
+			if len(mine) == 0 {
+				// The slash-command settle press: nothing visible before or after,
+				// on a pane whose composer is not drawn as a readable box.
+				return nil
+			}
+			return clearStopped(ErrTyping, pane)
+		}
 		if _, ok := StuckPaste(pane, mine); !ok {
-			// What is left is not ours to erase.
-			return ErrTyping
+			return clearStopped(ErrTyping, pane)
 		}
-		if need := hermesClearBudget(pane); need > budget {
-			budget = need
+		if trackTextTail {
+			currentText, readable := composerBoxText(pane)
+			if !readable || !strings.HasPrefix(previousText, currentText) {
+				return clearStopped(ErrTyping, pane)
+			}
+			previousText = currentText
 		}
+		rows, complete := completeComposerRows(pane)
+		if !complete {
+			return clearStopped(ErrTyping, pane)
+		}
+		if rows > lastRows {
+			need, budgetErr := composerClearBudget(pane, rows)
+			if budgetErr != nil || attempt+1+need > composerClearAttemptsMax {
+				return clearStopped(ErrTyping, pane)
+			}
+			if attempt+1+need > budget {
+				budget = attempt + 1 + need
+			}
+		}
+		lastRows = rows
 	}
-	return ErrTyping
+	return clearStopped(ErrTyping, pane)
+}
+
+// completeComposerRows returns the row count only when the box is readable and
+// not showing a scrolling window. Clearing a tail-only view could erase part of
+// an intact long message, so an incomplete view is never a clearing target.
+func completeComposerRows(pane string) (int, bool) {
+	box, top, ok := composerBoxAt(pane)
+	if !ok || composerBoxScrolled(pane, box, top) || composerBoxTextEmpty(box) {
+		return 0, false
+	}
+	return composerBoxRows(box), true
+}
+
+func composerBoxTextEmpty(box string) bool {
+	return stripSpace(box) == ""
+}
+
+// composerClearBudget sizes one clear pass from the current, complete view.
+// Hermes has different measured key behavior; Claude removes one visible row
+// per C-u, while Codex 0.157.0 clears the whole buffer in one press.
+func composerClearBudget(pane string, rows int) (int, error) {
+	if need := hermesClearBudget(pane); need > 0 {
+		if need > composerClearAttemptsMax {
+			return 0, fmt.Errorf("composer needs %d C-u presses, above the hard cap of %d", need, composerClearAttemptsMax)
+		}
+		return need, nil
+	}
+	need := rows + composerClearMargin
+	if need > composerClearAttemptsMax {
+		return 0, fmt.Errorf("composer needs %d C-u presses, above the hard cap of %d", need, composerClearAttemptsMax)
+	}
+	return need, nil
+}
+
+// clearStopped always records the exact visible remainder when a clear cannot
+// finish. This is intentionally a loud refusal: it prevents a partial prefix
+// from being mistaken for a clean composer or a delivered message.
+func clearStopped(cause error, pane string) error {
+	remaining, ok := composerBoxText(pane)
+	if !ok {
+		remaining = pane
+	}
+	return fmt.Errorf("%w: composer clear stopped; remaining visible composer text=%q", cause, remaining)
 }
 
 var bufferSequence uint64
@@ -1533,7 +1638,10 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		// nobody could tell which cause it was).
 		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedClientActive)
 	}
-	pane, ok := c.checkPaste(ctx, target, session, message, pane)
+	pane, ok, repairErr := c.checkPaste(ctx, target, session, message, pane)
+	if repairErr != nil {
+		return finished, fmt.Errorf("mangled-paste repair stopped: %w", repairErr)
+	}
 	if !ok {
 		return finished, c.provenFailure(ctx, session, pane, composerBrokenReason)
 	}
@@ -1780,7 +1888,7 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 // accepted but drew differently are all invisible here — the box is evidence
 // about the screen, not about the composer's internal buffer. The final witness
 // for a delivery is still the agent's own transcript (see msgq reconciliation).
-func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string) (string, bool) {
+func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string) (string, bool, error) {
 	verdict := c.pasteIntegrity(pane, message)
 	// A paste still landing is given time before anything is decided about it.
 	// The wait is bounded and it presses no keys: either the composer completes,
@@ -1789,13 +1897,13 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		c.Sleep(composerSettleWindow)
 		next, ok := c.composerStable(ctx, session)
 		if !ok {
-			return pane, false
+			return pane, false, nil
 		}
 		pane = next
 		verdict = c.pasteIntegrity(next, message)
 	}
 	if verdict == pasteIncomplete {
-		return pane, false
+		return pane, false, nil
 	}
 	if verdict == pasteMangled {
 		// LOOK TWICE before acting on bad news. A TUI may render a long paste in
@@ -1819,30 +1927,30 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 	}
 	switch verdict {
 	case pasteIntact:
-		return pane, true
+		return pane, true, nil
 	case pasteMangled:
 		// Repair exactly once: clear our own broken text, paste it again, and
 		// re-verify. Re-pasting is not a second DELIVERY — no Enter has been
 		// pressed, and the composer was observed empty in between.
 		if err := c.clearWithCtrlU(ctx, session, []string{message}); err != nil {
-			return pane, false
+			return pane, false, err
 		}
 		if err := c.inject(ctx, target, message); err != nil {
-			return pane, false
+			return pane, false, err
 		}
 		c.Sleep(composerSettleWindow)
 		next, ok := c.composerStable(ctx, session)
 		if !ok {
-			return pane, false
+			return pane, false, nil
 		}
-		if verdict := c.pasteIntegrity(next, message); verdict == pasteBroken || verdict == pasteMangled {
-			return next, false
+		if verdict := c.pasteIntegrity(next, message); verdict != pasteIntact {
+			return next, false, nil
 		}
-		return next, true
+		return next, true, nil
 	case pasteBroken:
-		return pane, false
+		return pane, false, nil
 	default:
-		return pane, true
+		return pane, true, nil
 	}
 }
 

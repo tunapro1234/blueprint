@@ -64,7 +64,7 @@ func TestRenameSameNameRepairsClaudeUsingStoredTranscriptPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	tmux, _ := renameTmux(t, "canonical-name", transcript, folder, renameOptions{
-		live: true, pane: `printf '❯ \n──────────\n'`, retitle: "canonical-name", threadID: threadID,
+		live: true, pane: renameEmptyPane, retitle: "canonical-name", threadID: threadID,
 	})
 	stateDir := t.TempDir()
 	a := &app{
@@ -95,6 +95,8 @@ type renameFixture struct {
 	transcript string
 	folder     string
 }
+
+const renameEmptyPane = `printf '  earlier output\n──────────────────────── target ──\n❯ \n──────────────────────────────────────\n  -- INSERT -- ⏵⏵ bypass permissions on (shift+tab to cycle)\n'`
 
 type renameOptions struct {
 	live     bool   // the session exists
@@ -227,7 +229,7 @@ func readFixtureFile(t *testing.T, path string) string {
 // The whole point of the reorder: the pane goes first and everything else is
 // downstream of a transcript that actually carries the new title.
 func TestRenameSendsToThePaneBeforeAnythingElse(t *testing.T) {
-	fix := newRenameFixture(t, renameOptions{live: true, pane: `printf '❯ \n──────────\n'`, retitle: "worktrack"})
+	fix := newRenameFixture(t, renameOptions{live: true, pane: renameEmptyPane, retitle: "worktrack"})
 	if err := fix.app.rename([]string{"worktrack-main", "worktrack"}); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +333,7 @@ func TestRenameAbortsWhenThePaneRefusesTheCommand(t *testing.T) {
 // composer cleared. The transcript is the only witness that counts, and here it
 // never picks up the new title.
 func TestRenameAbortsWhenTheTranscriptTitleNeverChanges(t *testing.T) {
-	fix := newRenameFixture(t, renameOptions{live: true, pane: `printf '❯ \n──────────\n'`})
+	fix := newRenameFixture(t, renameOptions{live: true, pane: renameEmptyPane})
 	book := readFixtureFile(t, fix.book)
 
 	err := fix.app.rename([]string{"worktrack-main", "worktrack"})
@@ -419,7 +421,7 @@ func TestRenameSkipsThePaneStepForANonAgentPane(t *testing.T) {
 // opened the session in is the cwd Claude munged into its projects path, so the
 // transcript is still found and the rename still verifies.
 func TestRenameFindsTheTranscriptThroughTheSessionDirectory(t *testing.T) {
-	fix := newRenameFixture(t, renameOptions{live: true, bookless: true, pane: `printf '❯ \n──────────\n'`, retitle: "worktrack"})
+	fix := newRenameFixture(t, renameOptions{live: true, bookless: true, pane: renameEmptyPane, retitle: "worktrack"})
 	if err := fix.app.rename([]string{"worktrack-main", "worktrack"}); err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +435,7 @@ func TestRenameFindsTheTranscriptThroughTheSessionDirectory(t *testing.T) {
 
 // The dry run describes the new order and touches nothing.
 func TestRenameDryRunDescribesTheNewOrder(t *testing.T) {
-	fix := newRenameFixture(t, renameOptions{live: true, pane: `printf '❯ \n──────────\n'`})
+	fix := newRenameFixture(t, renameOptions{live: true, pane: renameEmptyPane})
 	book, usage := readFixtureFile(t, fix.book), readFixtureFile(t, fix.usage)
 
 	if err := fix.app.rename([]string{"worktrack-main", "worktrack", "--dry-run"}); err != nil {

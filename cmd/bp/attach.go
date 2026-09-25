@@ -30,7 +30,7 @@ func validateRemoteAgentName(name string) error {
 func resolveAttachRecord(records []book.Record, requested string, live func(string) bool) (book.Record, bool, error) {
 	var canonical, titled []attachMatch
 	for _, record := range records {
-		match := attachMatch{record: record, live: live(record.Agent.Name)}
+		match := attachMatch{record: record}
 		if record.Agent.Name == requested {
 			canonical = append(canonical, match)
 		} else if record.Agent.NativeTitle != nil && record.Agent.NativeTitle.Text == requested {
@@ -43,6 +43,9 @@ func resolveAttachRecord(records []book.Record, requested string, live func(stri
 	}
 	if len(matches) == 0 {
 		return book.Record{}, false, fmt.Errorf("unknown agent: %q", requested)
+	}
+	for index := range matches {
+		matches[index].live = live(matches[index].record.Agent.Name)
 	}
 	var preferred []attachMatch
 	for _, match := range matches {
@@ -131,6 +134,9 @@ func (a *app) attach(args []string) error {
 		return a.tmux.HasSession(a.ctx, name)
 	})
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "unknown agent:") {
+			a.writeP2PLookupTips(args[0])
+		}
 		return err
 	}
 	name := record.Agent.Name

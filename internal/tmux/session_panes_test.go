@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -169,4 +170,34 @@ func totalCalls(calls map[string]int) int {
 		total += count
 	}
 	return total
+}
+
+// A plain capture memoized first must not be served to an ANSI caller: Typing
+// reads the escapes to tell placeholder text from typed input.
+func TestStatusSnapshotKeepsPlainAndAnsiCapturesApart(t *testing.T) {
+	live := &Client{exec: func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "list-panes":
+			return []byte("alpha\t1\t$1\t1\t1\tclaude\t101\n"), nil
+		case "capture-pane":
+			for _, arg := range args {
+				if arg == "-e" {
+					return []byte("\x1b[2mghost\x1b[0m\n"), nil
+				}
+			}
+			return []byte("ghost\n"), nil
+		}
+		return nil, fmt.Errorf("unexpected tmux command %q", args[0])
+	}}
+	ctx := context.Background()
+	snapshot, err := live.StatusSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, _ := snapshot.Capture(ctx, "alpha"); plain != "ghost\n" {
+		t.Fatalf("plain capture=%q", plain)
+	}
+	if ansi, _ := snapshot.CaptureAnsi(ctx, "alpha"); !strings.Contains(ansi, "\x1b[2m") {
+		t.Fatalf("ANSI caller got the memoized plain capture %q", ansi)
+	}
 }

@@ -1210,6 +1210,27 @@ func (c *Client) ClearComposer(ctx context.Context, session string) error {
 	return c.clearWithCtrlU(ctx, session, nil)
 }
 
+// Size of a freshly created, still detached agent window.
+const detachedWindowWidth, detachedWindowHeight = 200, 50
+
+// sizeDetachedWindow gives a new session a usable size. With window-size
+// "latest", tmux sizes a window no client shows yet from the SMALLEST attached
+// client on the whole server, and new-session -x/-y does not override that.
+// Measured 2026-09-25: small tiled clients made every new agent 38x14, the
+// onboarding prompt did not fit the composer, its paste was judged mangled, and
+// the half-erased leftover blocked the first queued message. resize-window pins
+// the size (it sets window-size manual on the window); unsetting the window
+// option right away hands sizing back to the global setting, and the size stays
+// until a client attaches and takes it over. Best effort: a failure leaves the
+// window exactly as tmux made it.
+func (c *Client) sizeDetachedWindow(ctx context.Context, session string) {
+	target := "=" + session + ":"
+	if _, err := c.run(ctx, nil, "resize-window", "-t", target, "-x", strconv.Itoa(detachedWindowWidth), "-y", strconv.Itoa(detachedWindowHeight)); err != nil {
+		return
+	}
+	_, _ = c.run(ctx, nil, "set-option", "-wu", "-t", target, "window-size")
+}
+
 // sendStartupCommand types one of bp open's own slash commands and makes sure it
 // did not stay in the composer. A fresh Claude pane can swallow the Enter (the
 // slash-command menu is still drawing), which left "/remote-control" sitting
@@ -2747,6 +2768,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 			return err
 		}
 		created = true
+		c.sizeDetachedWindow(ctx, session)
 	}
 	// Prefix the remote-control session name to match the tmux name, so the
 	// claude.ai/code list shows the agent name instead of the hostname.

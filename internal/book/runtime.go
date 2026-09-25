@@ -259,6 +259,16 @@ func launchThread(agent Agent, codex bool) string {
 // RuntimeFor separates stale registrations from live conversation conflicts.
 // A conflict blocks delivery, but does not erase the known thread's display data.
 func RuntimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name string) cache.State {
+	return runtimeFor(ctx, client, fleet, name, nil, false)
+}
+
+// RuntimeForWithSessions reuses a caller's session snapshot instead of issuing
+// another list-sessions request for each agent in a batch render.
+func RuntimeForWithSessions(ctx context.Context, client *bptmux.Client, fleet Fleet, name string, sessions []string) cache.State {
+	return runtimeFor(ctx, client, fleet, name, sessions, true)
+}
+
+func runtimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name string, sessions []string, sessionsProvided bool) cache.State {
 	agent, exists := fleet.Agents[name]
 	if !exists {
 		return cache.State{LastHumanAge: -1, Activity: &cache.Activity{State: "unknown", Source: "agentbook", Reason: "agent not registered", ObservedAt: time.Now().UTC(), DeliveryBlocked: true}}
@@ -266,7 +276,10 @@ func RuntimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name st
 	agent.Name = name
 	state, _ := RuntimeState(ctx, client, agent)
 	if a := state.Activity; a != nil && a.ThreadID != "" {
-		sessions, sessionsErr := client.Sessions(ctx)
+		var sessionsErr error
+		if !sessionsProvided {
+			sessions, sessionsErr = client.Sessions(ctx)
+		}
 		present := map[string]bool{}
 		for _, session := range sessions {
 			present[session] = true

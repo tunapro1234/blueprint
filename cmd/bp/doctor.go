@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"blueprint/internal/book"
+	"blueprint/internal/buildinfo"
 	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/release"
@@ -312,6 +313,8 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 		return []doctorCheck{{Name: "tmux_access", Agent: selected, Detail: err.Error(),
 			Next: "Run bp doctor from the outer terminal and compare access. A Codex sandbox can deny the tmux socket even while the agent is alive. Do not remove writer locks or disable the whole sandbox to repair observations; raw tmux socket access also permits host command execution."}}
 	}
+	_, daemonVerification := buildinfo.Recorded(filepath.Join(cfg.StateDir, "daemon-runtime.json"))
+	daemonRunning := daemonVerification == "verified executable"
 	for _, name := range fleet.SortedNames() {
 		if selected != "" && name != selected {
 			continue
@@ -348,6 +351,11 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 			}
 			continue
 		}
+		if value, err := client.Option(ctx, name, "@bp-bar"); err == nil {
+			if stale := doctorStaleBarOption(name, value, daemonRunning); stale != nil {
+				checks = append(checks, *stale)
+			}
+		}
 		probe := &app{ctx: ctx, config: cfg, tmux: client}
 		if probe.ownsLocalSession(name, entry) {
 			currentID := probe.resumeTmuxID(name)
@@ -369,8 +377,10 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 					sub = "bar"
 				}
 				text := string(data)
-				if err == nil && strings.Contains(text, " "+sub+" ") && !strings.Contains(text, " "+sub+" "+quoteShell(name)) && !strings.Contains(text, "#{session_name}") {
-					checks = append(checks, doctorCheck{Name: "bar_name/" + name + "/" + option, Agent: name, Detail: option + " still calls bp with another session name", Next: "bp setup refreshes BP-owned local bars without restarting the native CLI."})
+				if err == nil {
+					if check, wrong := doctorBarTargetCheck(name, option, sub, text); wrong {
+						checks = append(checks, check)
+					}
 				}
 			}
 		}
@@ -405,6 +415,33 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 		}
 	}
 	return checks
+}
+
+func doctorBarTargetCheck(agent, option, command, format string) (doctorCheck, bool) {
+	if !strings.Contains(format, " "+command+" ") ||
+		strings.Contains(format, " "+command+" "+quoteShell(agent)) ||
+		strings.Contains(format, "#{session_name}") {
+		return doctorCheck{}, false
+	}
+	return doctorCheck{
+		Name:   "bar_name/" + agent + "/" + option,
+		Agent:  agent,
+		Detail: option + " still calls bp with another session name",
+		Next:   "bp setup refreshes BP-owned local bars without restarting the native CLI.",
+	}, true
+}
+
+func doctorStaleBarOption(agent, value string, daemonRunning bool) *doctorCheck {
+	if strings.TrimSpace(value) == "" || daemonRunning {
+		return nil
+	}
+	return &doctorCheck{
+		Name:    "bar_stale/" + agent,
+		Agent:   agent,
+		Warning: true,
+		Detail:  agent + ": @bp-bar is set, but blueprint.service is not verified running; the displayed text may be stale",
+		Next:    "Start blueprint.service to resume bar rendering, or unset @bp-bar to use the command fallback.",
+	}
 }
 
 func doctorNativeTitleMismatch(agent book.Agent, state *cache.State, agentbooks []string) (doctorCheck, bool) {

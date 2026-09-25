@@ -637,6 +637,12 @@ func (c *Client) SetOption(ctx context.Context, session, name, value string) err
 	return err
 }
 
+// UnsetOption removes one session option.
+func (c *Client) UnsetOption(ctx context.Context, session, name string) error {
+	_, err := c.run(ctx, nil, "set-option", "-u", "-t", exactWindowTarget(session), name)
+	return err
+}
+
 func exactWindowTarget(session string) string {
 	if strings.HasPrefix(session, "=") {
 		return session
@@ -681,6 +687,39 @@ func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 		if line = strings.TrimSpace(line); line != "" {
 			sessions = append(sessions, line)
 		}
+	}
+	return sessions, nil
+}
+
+// SessionAttachment records whether a session has at least one attached client.
+type SessionAttachment struct {
+	Name     string
+	Attached int
+}
+
+// SessionsWithAttachments lists session names and attached-client counts in a
+// single tmux request. Callers that render per-session state can reuse the
+// complete session list when resolving runtime bindings.
+func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachment, error) {
+	out, err := c.run(ctx, nil, "list-sessions", "-F", "#{session_name}\t#{session_attached}")
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var sessions []SessionAttachment
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "\t", 2)
+		if len(fields) != 2 || fields[0] == "" {
+			continue
+		}
+		attached, parseErr := strconv.Atoi(fields[1])
+		if parseErr != nil || attached < 0 {
+			continue
+		}
+		sessions = append(sessions, SessionAttachment{Name: fields[0], Attached: attached})
 	}
 	return sessions, nil
 }

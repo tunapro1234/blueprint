@@ -3849,8 +3849,16 @@ func (a *app) daemon(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	service := daemon.New(log.New(a.err, "blueprint: ", log.LstdFlags), a.config)
+	logger := log.New(a.err, "blueprint: ", log.LstdFlags)
+	service := daemon.New(logger, a.config)
+	renderer := newBarRenderer(a, logger)
+	rendererDone := make(chan struct{})
+	go func() {
+		defer close(rendererDone)
+		renderer.run(ctx)
+	}()
 	service.Run(ctx)
+	<-rendererDone
 	return nil
 }
 

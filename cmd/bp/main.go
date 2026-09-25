@@ -103,7 +103,7 @@ bp tokens collect | bp tokens gc
 bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>
 bp service
-bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>
+bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent> [--timeout <dur>] [--json]
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
@@ -251,6 +251,13 @@ func main() {
 		args = []string{"status"}
 	}
 	if err := a.run(args); err != nil {
+		var exitErr *commandExitError
+		if errors.As(err, &exitErr) {
+			if exitErr.message != "" {
+				fmt.Fprintln(os.Stderr, "ERROR:", exitErr.message)
+			}
+			os.Exit(exitErr.code)
+		}
 		if !errors.Is(err, errReported) {
 			retainSessionLaunchFailure(args, err)
 			fmt.Fprintln(os.Stderr, "ERROR:", err)
@@ -266,6 +273,13 @@ func main() {
 // errReported marks a failure whose explanation the command already printed
 // itself: bp still exits non-zero, but main adds no second, duplicate line.
 var errReported = errors.New("reported above")
+
+type commandExitError struct {
+	code    int
+	message string
+}
+
+func (e *commandExitError) Error() string { return e.message }
 
 // deliveryReason unwraps a delivery sentinel so a user-visible line names the
 // cause ("pane session ended …") instead of repeating the plumbing prefix.

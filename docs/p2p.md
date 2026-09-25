@@ -36,6 +36,7 @@ bp config check
 bp p2p start
 bp p2p status --json
 bp p2p ping laptop
+bp p2p lookup work
 bp msg main@laptop 'Please review the change'
 bp qstat pCHANNEL_ID --json
 bp p2p channels
@@ -47,6 +48,9 @@ receiving, start it at login or run `bp p2p serve` under a service manager.
 `bp p2p stop` stops only this worker. After changing P2P settings, stop/start it;
 agent sessions and channel files remain intact. All machines must run a version
 that supports the `/bp/*/1.0.0` protocols.
+Lookup checks connected configured peers in parallel and returns only a canonical
+agent name and whether it is live, closed or archived. An older peer without the
+lookup protocol is skipped in text output and marked as an error in JSON.
 
 For a reachable LAN peer, `addresses: [/ip4/192.168.1.20/tcp/PORT]` under its peer
 entry avoids the rendezvous service. `mdns: true` discovers configured identities

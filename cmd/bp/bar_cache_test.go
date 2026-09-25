@@ -15,6 +15,7 @@ import (
 )
 
 func TestBarOutputCacheHitsAvoidRuntimeReads(t *testing.T) {
+	asStatusJob(t, true)
 	stateDir := t.TempDir()
 	callLog := filepath.Join(t.TempDir(), "tmux.log")
 	t.Setenv("BAR_TEST_TMUX_LOG", callLog)
@@ -67,6 +68,7 @@ func TestBarOutputCacheHitsAvoidRuntimeReads(t *testing.T) {
 }
 
 func TestBarOutputCacheExpiryRecomputes(t *testing.T) {
+	asStatusJob(t, true)
 	for _, suffix := range []string{".txt", ".name"} {
 		t.Run(suffix, func(t *testing.T) {
 			stateDir := t.TempDir()
@@ -94,6 +96,7 @@ func TestBarOutputCacheExpiryRecomputes(t *testing.T) {
 }
 
 func TestBarOutputCacheHeldLockUsesStaleOrComputes(t *testing.T) {
+	asStatusJob(t, true)
 	for _, suffix := range []string{".txt", ".name"} {
 		for _, stale := range []bool{true, false} {
 			name := "cold lock computes"
@@ -155,6 +158,7 @@ func TestBarOutputCacheHeldLockUsesStaleOrComputes(t *testing.T) {
 }
 
 func TestBarNameMissReadsRuntimeStateOnce(t *testing.T) {
+	asStatusJob(t, true)
 	dir := t.TempDir()
 	bookPath := filepath.Join(dir, "agentbook.json")
 	writeBarTestFile(t, bookPath, `{"agents":[{"name":"agent","folder":"/missing-agent-folder"}]}`)
@@ -205,4 +209,39 @@ esac
 		t.Fatal(err)
 	}
 	return &bptmux.Client{Bin: path, Sleep: func(time.Duration) {}, Now: time.Now}
+}
+
+func asStatusJob(t *testing.T, job bool) {
+	t.Helper()
+	previous := barStatusJob
+	barStatusJob = func() bool { return job }
+	t.Cleanup(func() { barStatusJob = previous })
+}
+
+// A direct `bp name` must never serve a cached plate: a native rename has to be
+// visible at once (test_codex_native_name_index_updates_bar_and_alias).
+func TestBarOutputDirectCallIgnoresFreshCache(t *testing.T) {
+	asStatusJob(t, false)
+	stateDir := t.TempDir()
+	a := &app{config: bpconfig.Config{StateDir: stateDir}}
+	writeBarTestFile(t, filepath.Join(stateDir, "bar", "agent.name"), "stale name\n")
+	if got := a.cachedBarOutput("agent", ".name", func() string { return "fresh name" }); got != "fresh name" {
+		t.Fatalf("direct call returned %q, want the fresh plate", got)
+	}
+	if line, _, ok := readBarCache(filepath.Join(stateDir, "bar", "agent.name")); !ok || line != "fresh name" {
+		t.Fatalf("fresh plate was not stored for the next status job: %q", line)
+	}
+	if _, ok := a.barCached("agent"); ok {
+		t.Fatal("direct bp bar read the cache")
+	}
+}
+
+// The detector itself: this test binary's parent is `go test`, not a tmux job.
+func TestDetectBarStatusJobIsFalseOutsideTmuxJobs(t *testing.T) {
+	if _, err := os.Stat("/proc/self/comm"); err != nil {
+		t.Skip("no /proc")
+	}
+	if detectBarStatusJob() {
+		t.Fatal("a test process was classified as a tmux status job")
+	}
 }

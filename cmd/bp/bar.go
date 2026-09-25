@@ -43,9 +43,12 @@ const (
 	barWarn  = "colour136" // amber: worth knowing
 	barAlert = "colour131" // red: act before the next long task
 
-	// tmux 3.4 reruns #() jobs on any status redraw, not only status-interval;
-	// a ten-second cache breaks the redraw feedback loop without freezing the bar.
-	barCacheTTL = 10 * time.Second
+	// tmux 3.4 reruns #() jobs on any status redraw, not only status-interval.
+	// The daemon renders attached bars itself (@bp-bar/@bp-name), so this cache
+	// only guards the #() fallback and direct CLI calls. Matching the daemon's
+	// two-second scan bounds a fallback's compute rate to what the daemon pays,
+	// while a native /rename or new usage still shows up within seconds.
+	barCacheTTL = 2 * time.Second
 
 	// barDefaultAccent is Claude Code's own default plate colour, so an agent
 	// that never ran /color is left unrecorded rather than pinned to the default.
@@ -692,7 +695,7 @@ func (a *app) barCachePath(agent, suffix string) string {
 }
 
 func (a *app) barCached(agent string) (string, bool) {
-	if a.config.StateDir == "" {
+	if a.config.StateDir == "" || !barStatusJob() {
 		return "", false
 	}
 	line, modified, ok := readBarCache(a.barCachePath(agent, ".txt"))
@@ -704,6 +707,12 @@ func (a *app) cachedBarOutput(agent, suffix string, compute func() string) strin
 		return compute()
 	}
 	path := a.barCachePath(agent, suffix)
+	if !barStatusJob() {
+		// A direct call is always fresh; storing it still helps the next job.
+		line := compute()
+		a.barStorePath(path, line)
+		return line
+	}
 	if line, modified, ok := readBarCache(path); ok && time.Since(modified) <= barCacheTTL {
 		return line
 	}

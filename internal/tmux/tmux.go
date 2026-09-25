@@ -2878,13 +2878,15 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 					break
 				}
 			} else if opts.Codex {
-				if !trusted && strings.Contains(lower, "trust") && strings.Contains(lower, "directory") {
+				if !trusted && (codexTrustModal(pane, dir) || strings.Contains(lower, "trust") && strings.Contains(lower, "directory")) {
 					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
 					trusted = true
 					c.Sleep(2 * time.Second)
 					continue
 				}
-				if strings.Contains(pane, "›") {
+				// A trust screen's option list uses the composer's "›"; an
+				// unanswered one is never an open agent.
+				if strings.Contains(pane, "›") && !codexTrustScreen(pane) {
 					ready = true
 					break
 				}

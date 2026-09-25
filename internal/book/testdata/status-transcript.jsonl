@@ -1,0 +1,4 @@
+{"type":"assistant","isSidechain":false,"message":{"model":"claude-sonnet-5","role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]},"timestamp":"2026-09-24T12:00:01Z"}
+{"type":"system","subtype":"turn_duration","timestamp":"2026-09-24T12:00:02Z"}
+{"type":"queue-operation","operation":"enqueue","content":"quoted row: {\"type\":\"assistant\"}","timestamp":"2026-09-24T12:00:03Z"}
+{"type":"user","isSidechain":false,"isMeta":false,"message":{"role":"user","content":"continue with the next step"},"timestamp":"2026-09-24T12:00:04Z"}

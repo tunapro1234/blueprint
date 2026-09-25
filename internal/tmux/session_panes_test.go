@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,10 @@ func TestSessionsWithAttachmentsMatchesPaneProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshotClient, err := client.StatusSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(sessions) != 2 {
 		t.Fatalf("sessions=%+v, want alpha and beta", sessions)
 	}
@@ -84,5 +89,84 @@ func TestSessionsWithAttachmentsMatchesPaneProcess(t *testing.T) {
 		if session.Process != want || session.ID == "" || session.Attached != 0 {
 			t.Fatalf("%s: listing=%+v, PaneProcess=%+v", session.Name, session, want)
 		}
+		fromSnapshot, err := snapshotClient.PaneProcess(ctx, session.Name)
+		if err != nil || fromSnapshot != want {
+			t.Fatalf("%s: snapshot process=%+v, live=%+v, err=%v", session.Name, fromSnapshot, want, err)
+		}
 	}
+}
+
+func TestStatusSnapshotServesMultiSessionLookupsAndCapturesOnce(t *testing.T) {
+	calls := map[string]int{}
+	listing := "alpha\t1\t$1\t1\t1\tcodex\t101\n" +
+		"beta\t0\t$2\t1\t0\tbash\t202\n" +
+		"beta\t0\t$2\t1\t1\tclaude\t203\n"
+	live := &Client{exec: func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+		calls[args[0]]++
+		switch args[0] {
+		case "list-panes":
+			if len(args) > 1 && args[1] == "-a" {
+				return []byte(listing), nil
+			}
+			return []byte("1\tcodex\t101\n"), nil
+		case "list-sessions":
+			return []byte("alpha\nbeta\n"), nil
+		case "has-session":
+			return []byte(""), nil
+		case "capture-pane":
+			return []byte("screen\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected tmux command %q", args[0])
+		}
+	}}
+	ctx := context.Background()
+	snapshot, err := live.StatusSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := snapshot.Sessions(ctx)
+	if err != nil || !reflect.DeepEqual(sessions, []string{"alpha", "beta"}) {
+		t.Fatalf("sessions=%v err=%v", sessions, err)
+	}
+	if !snapshot.HasSession(ctx, "alpha") || snapshot.HasSession(ctx, "missing") {
+		t.Fatal("snapshot HasSession returned a wrong result")
+	}
+	for _, name := range sessions {
+		if _, err := snapshot.PaneProcess(ctx, name); err != nil {
+			t.Fatalf("PaneProcess(%s): %v", name, err)
+		}
+		if _, err := snapshot.PaneProcess(ctx, name); err != nil {
+			t.Fatalf("second PaneProcess(%s): %v", name, err)
+		}
+		if _, err := snapshot.CaptureAnsi(ctx, name); err != nil {
+			t.Fatalf("CaptureAnsi(%s): %v", name, err)
+		}
+		if _, err := snapshot.CaptureAnsi(ctx, name); err != nil {
+			t.Fatalf("second CaptureAnsi(%s): %v", name, err)
+		}
+	}
+	if got := calls["list-panes"]; got != 1 {
+		t.Fatalf("list-panes execs=%d want one list-panes -a snapshot", got)
+	}
+	if got := calls["list-sessions"] + calls["has-session"]; got != 0 {
+		t.Fatalf("snapshot read live session commands %d times", got)
+	}
+	if got := calls["capture-pane"]; got != len(sessions) {
+		t.Fatalf("capture-pane execs=%d want one per session", got)
+	}
+	if got := totalCalls(calls); got != 1+len(sessions) {
+		t.Fatalf("total tmux execs=%d want 1 snapshot + %d captures", got, len(sessions))
+	}
+	// The original client remains live; only the snapshot clone serves memoized data.
+	if !live.HasSession(ctx, "alpha") || calls["has-session"] != 1 {
+		t.Fatal("the original client unexpectedly observed the per-call snapshot")
+	}
+}
+
+func totalCalls(calls map[string]int) int {
+	total := 0
+	for _, count := range calls {
+		total += count
+	}
+	return total
 }

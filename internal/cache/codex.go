@@ -102,26 +102,16 @@ func (f *codexFields) stop() int64 {
 
 // visit applies one row, newest first. It reports whether the scan must go on.
 func (f *codexFields) visit(at int64, line []byte) bool {
-	var r struct {
-		Type      string    `json:"type"`
-		Timestamp time.Time `json:"timestamp"`
-		Payload   struct {
-			ID          string          `json:"id"`
-			Type        string          `json:"type"`
-			Role        string          `json:"role"`
-			Model       string          `json:"model"`
-			Effort      string          `json:"effort"`
-			ServiceTier string          `json:"service_tier"`
-			Content     json.RawMessage `json:"content"`
-			Info        *struct {
-				Last *struct {
-					Total int `json:"total_tokens"`
-				} `json:"last_token_usage"`
-				Window int `json:"model_context_window"`
-			} `json:"info"`
-		} `json:"payload"`
+	if DefinitelyOtherCompactRecordType(line, "session_meta", "turn_context", "compacted", "event_msg", "response_item") {
+		return !f.complete()
 	}
-	if json.Unmarshal(line, &r) != nil {
+	if len(line) > 4*1024 && !HasCompactRecordTypePrefix(line, "session_meta", "turn_context", "compacted", "event_msg", "response_item") {
+		if !MayHaveRecordType(line, "session_meta", "turn_context", "compacted", "event_msg", "response_item") {
+			return !f.complete()
+		}
+	}
+	r, ok := DecodeCodexRecord(line)
+	if !ok {
 		return true
 	}
 	if r.Type == "session_meta" {
@@ -537,13 +527,7 @@ var rolloutIndexes = struct {
 type rolloutIndex struct {
 	dirs   map[string]time.Time
 	newest time.Time
-	byID   map[string]rolloutEntry
-}
-
-// rolloutEntry is one remembered answer and when its computation began.
-type rolloutEntry struct {
-	paths []string
-	at    time.Time
+	byID   map[string][]string
 }
 
 // rolloutRacyWindow guards the mtime rule against coarse timestamps: a file
@@ -565,37 +549,97 @@ func newestDirTime(dirs map[string]time.Time) time.Time {
 // RolloutPathsByID returns the rollout files named for thread id under home.
 func RolloutPathsByID(home, id string) []string {
 	sessions := filepath.Join(home, "sessions")
-	started := time.Now()
-	dirs, ok := rolloutDayDirs(sessions)
-	if ok {
-		rolloutIndexes.Lock()
-		index := rolloutIndexes.byHome[home]
-		if index != nil && sameDirTimes(index.dirs, dirs) {
-			if entry, hit := index.byID[id]; hit && index.newest.Before(entry.at.Add(-rolloutRacyWindow)) {
-				rolloutIndexes.Unlock()
-				return append([]string(nil), entry.paths...)
+	rolloutIndexes.Lock()
+	defer rolloutIndexes.Unlock()
+	index := rolloutIndexes.byHome[home]
+	if index != nil {
+		dirs, ok := rolloutDayDirs(sessions)
+		if ok && sameDirTimes(index.dirs, dirs) && index.newest.Before(time.Now().Add(-rolloutRacyWindow)) {
+			if !strings.ContainsAny(id, "*?[\\/") {
+				return append([]string(nil), index.byID[id]...)
 			}
+			// Keep filepath.Glob's pattern semantics for non-UUID callers too.
+			return globRolloutPaths(sessions, id)
 		}
-		rolloutIndexes.Unlock()
 	}
+
+	index, ok := scanRolloutIndex(sessions)
+	if !ok {
+		paths, err := filepath.Glob(filepath.Join(sessions, "*", "*", "*", "*-"+id+".jsonl"))
+		if err != nil {
+			return nil
+		}
+		return paths
+	}
+	if len(rolloutIndexes.byHome) > 16 {
+		rolloutIndexes.byHome = map[string]*rolloutIndex{}
+	}
+	rolloutIndexes.byHome[home] = index
+	if strings.ContainsAny(id, "*?[\\/") {
+		return globRolloutPaths(sessions, id)
+	}
+	return append([]string(nil), index.byID[id]...)
+}
+
+func globRolloutPaths(sessions, id string) []string {
 	paths, err := filepath.Glob(filepath.Join(sessions, "*", "*", "*", "*-"+id+".jsonl"))
 	if err != nil {
 		return nil
 	}
-	if ok {
-		rolloutIndexes.Lock()
-		index := rolloutIndexes.byHome[home]
-		if index == nil || !sameDirTimes(index.dirs, dirs) || len(index.byID) > 1024 {
-			if len(rolloutIndexes.byHome) > 16 {
-				rolloutIndexes.byHome = map[string]*rolloutIndex{}
-			}
-			index = &rolloutIndex{dirs: dirs, newest: newestDirTime(dirs), byID: map[string]rolloutEntry{}}
-			rolloutIndexes.byHome[home] = index
-		}
-		index.byID[id] = rolloutEntry{paths: append([]string(nil), paths...), at: started}
-		rolloutIndexes.Unlock()
-	}
 	return paths
+}
+
+// scanRolloutIndex walks sessions/YYYY/MM/DD once, recording directory mtimes
+// for the daemon's existing invalidation rule and each entry name for id lookup.
+// It never opens rollout files; directory entries named like rollout files are
+// retained because filepath.Glob returns them too.
+func scanRolloutIndex(sessions string) (*rolloutIndex, bool) {
+	dirs := map[string]time.Time{}
+	byID := map[string][]string{}
+	var walk func(string, int) bool
+	walk = func(dir string, depth int) bool {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+		dirs[dir] = info.ModTime()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return false
+		}
+		if depth < 3 {
+			for _, entry := range entries {
+				if entry.IsDir() && !walk(filepath.Join(dir, entry.Name()), depth+1) {
+					return false
+				}
+			}
+			return true
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".jsonl") {
+				continue
+			}
+			stem := strings.TrimSuffix(name, ".jsonl")
+			for at := strings.IndexByte(stem, '-'); at >= 0; {
+				id := stem[at+1:]
+				byID[id] = append(byID[id], filepath.Join(dir, name))
+				next := strings.IndexByte(stem[at+1:], '-')
+				if next < 0 {
+					break
+				}
+				at += next + 1
+			}
+		}
+		return true
+	}
+	if !walk(sessions, 0) {
+		return nil, false
+	}
+	for id := range byID {
+		sort.Strings(byID[id])
+	}
+	return &rolloutIndex{dirs: dirs, newest: newestDirTime(dirs), byID: byID}, true
 }
 
 // rolloutDayDirs returns the mtime of sessions/ and of every directory below

@@ -463,6 +463,30 @@ func TestEngineResumeSentWaitsForNewStart(t *testing.T) {
 	}
 }
 
+func TestEngineResumeSentRecordsNewStart(t *testing.T) {
+	clock := newFakeClock()
+	store, run := makeRun(t, clock, baseYAML(""), `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+	_ = store.AppendEvent(run.ID, Event{Key: "one", Unit: "one", Agent: "agent-a", State: "sending", Round: 1})
+	_ = store.AppendEvent(run.ID, Event{Key: "one", Unit: "one", Agent: "agent-a", State: "sent", Round: 1, DeliveryID: "queue-1", DeliveredAt: timePointer(clock.Now())})
+	driver := newFakeDriver(clock)
+	driver.observations["agent-a"] = []AgentState{Idle, Working, Idle, Idle}
+	engine := NewEngine(store, driver)
+	engine.Now, engine.Sleep, engine.Poll = clock.Now, clock.Sleep, time.Second
+	engine.Validator = func(context.Context, string, []string, time.Duration) (int, string, string, error) {
+		return 0, "", "", nil
+	}
+	if err := engine.Run(context.Background(), run.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(store.RunPath(run.ID), "times.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"started_at"`) {
+		t.Fatalf("resumed unit lost its start time: %s", data)
+	}
+}
+
 func TestEngineEveryUnitsCountsPerAgent(t *testing.T) {
 	clock := newFakeClock()
 	yamlText := baseYAML("compact:\n  every_units: 2\n")

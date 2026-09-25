@@ -161,6 +161,8 @@ type Queue struct {
 	TurnOpen     func(to string) bool
 	// PaneLock lets an in-process caller share its reentrant lock bookkeeping
 	// with queue dispatch. Standalone daemon queues leave it unset and use flock.
+	// Reentrancy is per process, so a caller that types from several goroutines
+	// must serialize those call chains itself.
 	PaneLock    func(session string) (func(), error)
 	paneLockMu  sync.RWMutex
 	prepareOnce sync.Once

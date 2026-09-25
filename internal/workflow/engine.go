@@ -436,7 +436,9 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		if previous.DeliveredAt != nil {
 			deliveredAt = *previous.DeliveredAt
 		}
-		startedAt, observation, startErr := e.waitForStart(ctx, agent, deliveredAt, d.Timeouts.Start)
+		var observation Observation
+		var startErr error
+		startedAt, observation, startErr = e.waitForStart(ctx, agent, deliveredAt, d.Timeouts.Start)
 		if startErr != nil {
 			return startErr
 		}
@@ -444,9 +446,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		if startedAt.IsZero() {
 			return e.finishUnit(run, task.unit, agent, metrics, "failed", "never started after verified delivery (last observation: "+observationSummary(observation)+")", max(1, previous.Round), nil, completed, lastFinished)
 		}
-		metrics.startedAt = startedAt
-	}
-	if previous.State != "sent" {
+	} else {
 		startedAt, err = e.firstWorking(task.unit.Key, run.ID)
 		if err != nil {
 			return err

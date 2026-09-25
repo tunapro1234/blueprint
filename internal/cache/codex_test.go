@@ -126,7 +126,7 @@ func TestReadCodexWidensTailPastRecordLargerThanWindow(t *testing.T) {
 	row := map[string]any{
 		"timestamp": now.Add(-time.Minute).UTC().Format(time.RFC3339Nano),
 		"type":      "response_item",
-		"payload":   map[string]any{"type": "function_call_output", "output": strings.Repeat("z", tailSize*2)},
+		"payload":   map[string]any{"type": "function_call_output", "output": strings.Repeat("z", int(tailSize*2))},
 	}
 	if err := json.NewEncoder(file).Encode(row); err != nil {
 		t.Fatal(err)
@@ -205,5 +205,45 @@ func TestReverseRolloutSkipsGiantRecordWithoutLosingEarlierRows(t *testing.T) {
 	})
 	if strings.Join(rows, ",") != "last,first" {
 		t.Fatalf("wrong rows after giant record: count=%d", len(rows))
+	}
+}
+
+// The scan cache must never freeze what the file or the clock says: an
+// appended event is seen, and ages keep counting on a cached scan.
+func TestReadCodexPathCacheFollowsAppendsAndClock(t *testing.T) {
+	now := time.Now()
+	path := filepath.Join(t.TempDir(), "sessions", "2026", "09", "25", "rollout-cache.jsonl")
+	writeRollout(t, path, "/srv/cache", now.Add(-10*time.Minute), 1_000, 200_000)
+
+	first := ReadCodexPath(path)
+	if !first.Known || first.CtxTokens != 1_000 {
+		t.Fatalf("first=%+v", first)
+	}
+	time.Sleep(20 * time.Millisecond)
+	again := ReadCodexPath(path)
+	if again.CtxTokens != 1_000 || again.Age <= first.Age {
+		t.Fatalf("cached age did not advance: first %v, again %v", first.Age, again.Age)
+	}
+
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := map[string]any{
+		"timestamp": now.UTC().Format(time.RFC3339Nano),
+		"type":      "event_msg",
+		"payload": map[string]any{
+			"type": "token_count",
+			"info": map[string]any{"last_token_usage": map[string]any{"total_tokens": 2_000}, "model_context_window": 200_000},
+		},
+	}
+	if err := json.NewEncoder(file).Encode(row); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if after := ReadCodexPath(path); after.CtxTokens != 2_000 {
+		t.Fatalf("appended token_count not seen: %+v", after)
 	}
 }

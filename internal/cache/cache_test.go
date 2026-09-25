@@ -120,7 +120,7 @@ func TestReadWidensTailPastRecordLargerThanWindow(t *testing.T) {
 		user(now.Add(-2*time.Hour), "real user message"),
 		usage(now.Add(-30*time.Minute), 150_000, 70_000),
 		// One record twice the tail window, as a big tool result or paste makes.
-		user(now.Add(-10*time.Minute), "[tool_result] "+strings.Repeat("z", tailSize*2)),
+		user(now.Add(-10*time.Minute), "[tool_result] "+strings.Repeat("z", int(tailSize*2))),
 	}
 	writeJSONL(t, filepath.Join(dir, "session.jsonl"), lines)
 

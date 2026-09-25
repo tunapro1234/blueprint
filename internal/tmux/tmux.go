@@ -1330,6 +1330,11 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 			return nil
 		}
 		if !composerFilled(pane) {
+			if len(mine) == 0 {
+				// The slash-command settle press: nothing visible before or after,
+				// on a pane whose composer is not drawn as a readable box.
+				return nil
+			}
 			return clearStopped(ErrTyping, pane)
 		}
 		if _, ok := StuckPaste(pane, mine); !ok {

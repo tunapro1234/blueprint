@@ -50,8 +50,14 @@ func claudePreTurn(path, id, cwd string) bool {
 			return false
 		}
 		switch row.Type {
-		case "custom-title", "agent-name", "ai-title", "mode", "permission-mode", "bridge-session", "file-history-snapshot":
+		case "custom-title", "agent-name", "agent-color", "atis-latch", "ai-title", "mode", "permission-mode", "bridge-session", "file-history-snapshot":
 		case "system":
+			// Startup notices carry no turn: "informational" is the instructions
+			// file banner and "bridge_status" is the reply to /remote-control, which
+			// bp open sends itself before any message can arrive.
+			if row.Subtype == "informational" || row.Subtype == "bridge_status" {
+				continue
+			}
 			if row.Subtype != "local_command" || !claudeInitialCommand(row.Content) {
 				return false
 			}
@@ -101,7 +107,7 @@ func claudeInitialCommand(content string) bool {
 		return false
 	}
 	switch command {
-	case "/rename", "/model", "/effort", "/color":
+	case "/rename", "/model", "/effort", "/color", "/remote-control":
 		return true
 	}
 	return false

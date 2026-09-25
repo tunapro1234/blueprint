@@ -36,6 +36,10 @@ func claudeTrustModal(pane, dir string) bool {
 		refuse == accept+1 && footer > refuse && footer == len(lines)-1
 }
 
+// codexTrustMaxEnters bounds how often Open presses Enter on a Codex
+// folder-trust modal that is still showing after an earlier press.
+const codexTrustMaxEnters = 5
+
 // codexTrustModal recognizes Codex's first-run folder trust screen for the
 // explicitly requested directory with "Trust and continue" selected. Its
 // selection marker is the same "›" as the Codex composer, so readiness must

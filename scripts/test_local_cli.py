@@ -281,7 +281,16 @@ class LocalCLITest(unittest.TestCase):
             except ProcessLookupError:
                 pass
             os.waitpid(pid, 0)
-        self.temp.cleanup()
+        # A status-bar job tmux started just before kill-server can still land
+        # its cache file while the tree is being removed; retry briefly.
+        for attempt in range(20):
+            try:
+                self.temp.cleanup()
+                break
+            except OSError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.1)
 
     def start(self, cli, name=None):
         pid, fd = pty.fork()

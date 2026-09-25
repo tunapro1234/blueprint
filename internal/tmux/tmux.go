@@ -525,8 +525,15 @@ type Client struct {
 type statusSnapshot struct {
 	sessions []SessionAttachment
 	byName   map[string]SessionAttachment
-	captures map[string]statusCapture
+	captures map[statusCaptureKey]statusCapture
 	mu       sync.Mutex
+}
+
+// statusCaptureKey keeps plain and ANSI captures apart: Typing needs the
+// escapes to tell dim placeholder text from typed input.
+type statusCaptureKey struct {
+	session string
+	ansi    bool
 }
 
 type statusCapture struct {
@@ -605,7 +612,8 @@ func (c *Client) captureStatusPane(ctx context.Context, session string, ansi boo
 	snapshot := c.statusSnapshot
 	snapshot.mu.Lock()
 	defer snapshot.mu.Unlock()
-	if capture, ok := snapshot.captures[session]; ok && capture.ready {
+	key := statusCaptureKey{session: session, ansi: ansi}
+	if capture, ok := snapshot.captures[key]; ok && capture.ready {
 		return capture.pane, capture.err
 	}
 	args := []string{"capture-pane", "-t", "=" + session + ":"}
@@ -615,7 +623,7 @@ func (c *Client) captureStatusPane(ctx context.Context, session string, ansi boo
 	args = append(args, "-p")
 	out, err := c.run(ctx, nil, args...)
 	capture := statusCapture{pane: string(out), err: err, ready: true}
-	snapshot.captures[session] = capture
+	snapshot.captures[key] = capture
 	return capture.pane, capture.err
 }
 
@@ -786,7 +794,7 @@ func (c *Client) StatusSnapshot(ctx context.Context) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	snapshot := &statusSnapshot{sessions: sessions, byName: make(map[string]SessionAttachment, len(sessions)), captures: map[string]statusCapture{}}
+	snapshot := &statusSnapshot{sessions: sessions, byName: make(map[string]SessionAttachment, len(sessions)), captures: map[statusCaptureKey]statusCapture{}}
 	for _, session := range sessions {
 		snapshot.byName[session.Name] = session
 	}

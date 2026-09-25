@@ -86,3 +86,46 @@ func TestCodexOpenAnswersRequestedFolderTrust(t *testing.T) {
 		t.Fatalf("trust screen answered %d times, want 1", enters)
 	}
 }
+
+func TestCodexOpenRepeatsSwallowedTrustEnter(t *testing.T) {
+	h := &launchHarness{capture: codexTrustPane}
+	client := h.client()
+	exec := client.exec
+	enters := 0
+	client.exec = func(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "send-keys -t =agent: Enter" {
+			enters++
+			// Codex drew the modal before reading keys: the first press is lost.
+			if enters == 2 {
+				h.capture = "╭────────────╮\n│ >_ OpenAI Codex │\n╰────────────╯\n\n› \n\n  gpt-6-luna max · /work/new\n"
+			}
+		}
+		return exec(ctx, stdin, args...)
+	}
+	if err := client.Open(context.Background(), "agent", "/work/new", OpenOptions{Codex: true, NoPrompt: true}, nil); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if enters != 2 {
+		t.Fatalf("trust screen answered %d times, want 2", enters)
+	}
+}
+
+func TestCodexOpenBoundsTrustEnters(t *testing.T) {
+	h := &launchHarness{capture: codexTrustPane}
+	client := h.client()
+	exec := client.exec
+	enters := 0
+	client.exec = func(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "send-keys -t =agent: Enter" {
+			enters++
+		}
+		return exec(ctx, stdin, args...)
+	}
+	err := client.Open(context.Background(), "agent", "/work/new", OpenOptions{Codex: true, NoPrompt: true}, nil)
+	if err == nil || !strings.Contains(err.Error(), "trust prompt") {
+		t.Fatalf("open error = %v, want trust prompt failure", err)
+	}
+	if enters != codexTrustMaxEnters {
+		t.Fatalf("trust screen answered %d times, want %d", enters, codexTrustMaxEnters)
+	}
+}

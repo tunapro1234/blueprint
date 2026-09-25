@@ -2931,6 +2931,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	progress("harness started in tmux session " + session)
 
 	ready, picked, trusted := false, false, false
+	codexTrustEnters := 0
 	waiting := ""
 	for i := 0; i < 45; i++ {
 		if err := ctx.Err(); err != nil {
@@ -2961,7 +2962,18 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 					break
 				}
 			} else if opts.Codex {
-				if !trusted && (codexTrustModal(pane, dir) || strings.Contains(lower, "trust") && strings.Contains(lower, "directory")) {
+				// Codex paints the folder-trust modal before it reads keys, so
+				// an Enter sent on first sight can be swallowed (measured with
+				// Codex 0.157). Repeat it while the strict modal for this very
+				// folder is still up; the loose legacy prompt is answered once.
+				if codexTrustModal(pane, dir) && codexTrustEnters < codexTrustMaxEnters {
+					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
+					codexTrustEnters++
+					trusted = true
+					c.Sleep(3 * time.Second)
+					continue
+				}
+				if !trusted && strings.Contains(lower, "trust") && strings.Contains(lower, "directory") {
 					_, _ = c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter")
 					trusted = true
 					c.Sleep(2 * time.Second)

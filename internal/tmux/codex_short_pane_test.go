@@ -77,7 +77,7 @@ func TestCodexShortPaneTailWithTranscriptAboveIsRefused(t *testing.T) {
 		command: "codex",
 		captures: []string{
 			empty, empty,
-			paneTail, paneTail,
+			paneTail, paneTail, paneTail,
 			empty,
 			paneTail, paneTail, paneTail,
 		},

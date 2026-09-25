@@ -219,6 +219,8 @@ type sendHarness struct {
 	captures   []string
 	activities []string
 	mutations  []string
+	clearPane  string
+	clearRow   func(string) string
 	// payloads records the exact stdin bytes handed to each load-buffer call, so
 	// a test can assert the paste is ATOMIC: one buffer, carrying the whole
 	// message, however large (the WhatsApp bridge measured single messages of
@@ -239,10 +241,16 @@ func (h *sendHarness) run(_ context.Context, stdin []byte, args ...string) ([]by
 		}
 		return []byte(cmd + "\n"), nil
 	case "capture-pane":
+		if h.clearRow != nil {
+			return []byte(h.clearPane), nil
+		}
 		value := h.captures[0]
 		h.captures = h.captures[1:]
 		return []byte(value), nil
 	case "list-clients":
+		if len(h.activities) == 0 {
+			return []byte{}, nil
+		}
 		value := h.activities[0]
 		h.activities = h.activities[1:]
 		return []byte(value), nil
@@ -251,6 +259,9 @@ func (h *sendHarness) run(_ context.Context, stdin []byte, args ...string) ([]by
 			h.payloads = append(h.payloads, append([]byte(nil), stdin...))
 		}
 		h.mutations = append(h.mutations, strings.Join(args, " "))
+		if args[0] == "send-keys" && len(args) > 0 && args[len(args)-1] == "C-u" && h.clearRow != nil {
+			h.clearPane = h.clearRow(h.clearPane)
+		}
 		return nil, nil
 	default:
 		return nil, errors.New("unexpected command: " + strings.Join(args, " "))

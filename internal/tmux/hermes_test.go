@@ -506,7 +506,7 @@ func TestClearComposerAcceptsAHermesPane(t *testing.T) {
 	// ClearComposer's own guard must see through the "python" command too, and it
 	// must press C-u — never Escape — on the way.
 	idle := hermesPane(hermesIdleRowAnsi)
-	h := hermesSendHarness([]string{idle, idle, idle}, nil)
+	h := hermesSendHarness([]string{idle, idle, idle, idle}, nil)
 	if err := testClient(h).ClearComposer(context.Background(), "target"); err != nil {
 		t.Fatalf("err=%v", err)
 	}

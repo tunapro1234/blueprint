@@ -26,8 +26,12 @@ func TestRecoveryMustHonorUnknownRuntime(t *testing.T) {
 		t.Fatal("recovery bypassed unknown runtime")
 	}
 	rec, err := q.Record(id)
-	if err != nil || !strings.Contains(rec.Reason, "conflicting thread") {
+	if err != nil || rec.Status != StatusHangingComposer || !rec.Notified || !strings.Contains(rec.Reason, "conflicting thread") {
 		t.Fatal(rec, err)
+	}
+	notices, err := q.List()
+	if err != nil || len(notices) != 1 || notices[0].To != "sender" || !strings.Contains(notices[0].Msg, "ownership is unverified") {
+		t.Fatalf("unknown ownership was not reported to the sender: notices=%+v err=%v", notices, err)
 	}
 }
 

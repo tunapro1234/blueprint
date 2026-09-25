@@ -515,6 +515,25 @@ func StuckPaste(pane string, texts []string) (string, bool) {
 	return text, verdict != pasteForeign
 }
 
+// ExactPaste reports whether a complete, non-scrolled composer view holds one
+// of texts exactly (including a lossy wide-rune render that the classifier
+// recognises as the same message). Recovery may submit only this state.
+func ExactPaste(pane string, texts []string) bool {
+	if _, ok := composerJudgeText(pane); !ok {
+		return false
+	}
+	verdict, _ := classifyPaste(pane, texts)
+	return verdict == pasteExact
+}
+
+// ComposerEmpty reports true only when the pane has a readable composer box
+// whose content is empty. An unrecognised or unreadable pane is not evidence
+// that a submitted message left the composer.
+func ComposerEmpty(pane string) bool {
+	box, ok := composerBoxText(pane)
+	return ok && box == "" && !pasteChip(pane)
+}
+
 // DamagedPaste reports whether the composer holds a MUTILATED copy of one of
 // texts — our own message with characters missing — as opposed to the whole
 // thing.

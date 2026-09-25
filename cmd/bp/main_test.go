@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2079,7 +2080,8 @@ func queuedMessages(t *testing.T, root string) []string {
 
 // TestMessageDeliveryOutcomes pins the three user-visible outcomes of bp msg and
 // the queueing rule behind each: a proven failure is queued (retried, traceable),
-// an unverified send is NOT (it may have landed; a retry would duplicate it).
+// while an unverified original message is never queued for another send. A
+// separate notice to the sender may still be queued.
 func TestMessageDeliveryOutcomes(t *testing.T) {
 	t.Setenv("AGENT", "ada")
 	t.Setenv("TMUX", "")
@@ -2150,7 +2152,8 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 
 	t.Run("unverified is reported and never queued", func(t *testing.T) {
 		// Composer empty both before and after the paste: nothing confirms the
-		// message landed, nothing contradicts it either.
+		// message landed, nothing contradicts it either. Its notice may be queued,
+		// but the original message must be closed as unconfirmed, never retried.
 		stateDir := t.TempDir()
 		msgqRoot := filepath.Join(stateDir, "msgq")
 		out := testOutput(t)
@@ -2164,7 +2167,7 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		tmuxClient, calls := fakeTmux(t, `printf '❯  \n──────────\n'`)
 		a.tmux = tmuxClient
 		trustedSenderFixture(a)
-		err := a.message([]string{"alp", "the whole brief"})
+		err := a.message([]string{"alp", "ok"})
 		if !strings.Contains(calls(), "paste-buffer") {
 			t.Fatalf("the unverified case must be a real paste:\n%s", calls())
 		}
@@ -2174,8 +2177,27 @@ func TestMessageDeliveryOutcomes(t *testing.T) {
 		if got := readTestOutput(t, out); !strings.Contains(got, "RESULT=unverified CHANNEL=q") {
 			t.Fatalf("uncertain send lost its channel: %q", got)
 		}
-		if records := queuedMessages(t, msgqRoot); len(records) != 0 {
-			t.Fatalf("unverified send was queued (would duplicate): %v", records)
+		output := readTestOutput(t, out)
+		match := regexp.MustCompile(`RESULT=unverified CHANNEL=(q[0-9]+)`).FindStringSubmatch(output)
+		if len(match) != 2 {
+			t.Fatalf("unverified send lost its queue channel: %q", output)
+		}
+		status, done := a.queue.Finished(match[1])
+		if !done || status != msgq.StatusUnconfirmed {
+			t.Fatalf("short unverified message status=%q done=%v; want closed as %q", status, done, msgq.StatusUnconfirmed)
+		}
+		for _, path := range queuedMessages(t, msgqRoot) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pending msgq.Message
+			if err := json.Unmarshal(data, &pending); err != nil {
+				t.Fatal(err)
+			}
+			if pending.To == "alp" {
+				t.Fatalf("uncertain original message may be pasted again: %+v", pending)
+			}
 		}
 	})
 
@@ -2324,6 +2346,33 @@ func deliverApp(t *testing.T, client *bptmux.Client) *app {
 		queue:  msgq.New(t.TempDir()),
 		out:    testOutput(t),
 		err:    testOutput(t),
+	}
+}
+
+func TestQstatJSONNormalizesHistoricalUnverifiedStatus(t *testing.T) {
+	queue := msgq.New(t.TempDir())
+	id, err := queue.Enqueue("worker", "server-main", "historical receipt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := queue.CloseDelivered("worker", "historical receipt", "delivered (unverified)"); !ok {
+		t.Fatal("could not create a legacy terminal receipt")
+	}
+	output := testOutput(t)
+	a := &app{queue: queue, out: output}
+	if err := a.queueStatus([]string{id, "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var receipt msgq.Message
+	if err := json.Unmarshal([]byte(readTestOutput(t, output)), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != msgq.StatusUnconfirmed || msgq.IsVerifiedDelivery(receipt.Status) {
+		t.Fatalf("qstat exposed success-looking receipt: %+v", receipt)
+	}
+	stored, err := os.ReadFile(filepath.Join(queue.Root, "done", id+".json"))
+	if err != nil || !bytes.Contains(stored, []byte(`"status":"delivered (unverified)"`)) {
+		t.Fatalf("legacy receipt was rewritten: %s err=%v", stored, err)
 	}
 }
 

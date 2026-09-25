@@ -2398,13 +2398,18 @@ func (a *app) forceMessage(name, sender, message string, entries []pending.Entry
 	// the record then delivers within the daemon's next tick. "queued" therefore
 	// means "in flight", never "failed".
 	if status, done := a.queue.Finished(channelID); done {
-		if status == "delivered (unverified)" {
+		if msgq.IsUnverifiedDelivery(status) {
 			a.resultLine("unverified", channelID)
 			return errReported
 		}
-		if strings.HasPrefix(status, "delivered") {
+		if msgq.IsVerifiedDelivery(status) {
 			a.resultLine("delivered", channelID)
 			return nil
+		}
+		if strings.HasPrefix(status, "not delivered") {
+			fmt.Fprintf(a.out, "FORCE NOT DELIVERED: %s — %s. Status: bp qstat %s\n", name, status, channelID)
+			a.resultLine("unverified", channelID)
+			return errReported
 		}
 	}
 	a.resultLine("queued", channelID)
@@ -2433,6 +2438,9 @@ func (a *app) dispatchNow() {
 func (a *app) prepareDispatch() {
 	if a.queue == nil || a.tmux == nil {
 		return
+	}
+	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil && fleet.Root != "" {
+		a.queue.NoticeOwner = fleet.Root
 	}
 	a.queue.CanWitness = book.CanWitness
 	if len(a.config.Agentbooks) > 0 {
@@ -2566,11 +2574,14 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	if readErr != nil {
 		return true, channelID, readErr
 	}
-	if record.Status == "delivered (unverified)" || (record.Status == "" && record.NoRepaste) {
+	if msgq.IsUnverifiedDelivery(record.Status) || (record.Status == "" && record.NoRepaste) {
 		return true, channelID, bptmux.ErrUnverified
 	}
-	if strings.HasPrefix(record.Status, "delivered") {
+	if msgq.IsVerifiedDelivery(record.Status) {
 		return false, channelID, nil
+	}
+	if strings.HasPrefix(record.Status, "not delivered") {
+		return false, channelID, fmt.Errorf("message was not delivered: %s (channel %s)", record.Status, channelID)
 	}
 	if record.Attempts > 0 {
 		return true, channelID, fmt.Errorf("%w: %s", bptmux.ErrNotReady, record.Reason)

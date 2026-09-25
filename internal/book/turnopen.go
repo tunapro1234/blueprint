@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"blueprint/internal/cache"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -255,36 +256,45 @@ func scanTurnPhase(path string) (int, time.Time, error) {
 	var manualCompactAt time.Time
 	compactSummary := false
 	for scanner.Scan() {
-		var row turnRecord
-		if json.Unmarshal(scanner.Bytes(), &row) == nil && !row.IsSidechain {
-			ts, _ := time.Parse(time.RFC3339Nano, row.Timestamp)
-			if row.Type == "system" && row.Subtype == "compact_boundary" {
-				manualCompactAt, compactSummary = time.Time{}, false
-				if row.CompactMetadata.Trigger == "manual" {
-					manualCompactAt = ts
-				}
-			} else if !manualCompactAt.IsZero() {
-				if row.Type == "user" && row.IsCompactSummary {
-					compactSummary = true
-				}
-				if compactSummary && row.Type == "user" && !row.IsMeta && !ts.Before(manualCompactAt) && compactCommandCompleted(row.Message.Content) {
-					verdict, stamp = turnClosedVerdict, ts
-					manualCompactAt = time.Time{}
-					continue
-				}
-				// A new actual turn invalidates the pending compact completion.
-				// Compaction can replay older records; those are not new work.
-				if v, _ := classifyTurnRecord(scanner.Bytes()); v != turnNone && ts.After(manualCompactAt) {
-					manualCompactAt = time.Time{}
-				}
-			}
+		line := scanner.Bytes()
+		if cache.DefinitelyOtherCompactRecordType(line, "system", "user", "assistant") {
+			continue
 		}
-		if v, ts := classifyTurnRecord(scanner.Bytes()); v != turnNone {
-			verdict = v
-			stamp, _ = time.Parse(time.RFC3339Nano, ts)
-			var row turnRecord
-			if json.Unmarshal(scanner.Bytes(), &row) == nil && row.Type == "assistant" && v == turnOpenVerdict && row.Message.StopReason != "tool_use" {
-				verdict = turnUncertainVerdict
+		rowDecoded := len(line) <= 4*1024 || cache.HasCompactRecordTypePrefix(line, "system", "user", "assistant") || cache.MayHaveRecordType(line, "system", "user", "assistant")
+		if rowDecoded && bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("{")) {
+			row, ok := decodeTurnRecord(line)
+			rowDecoded = ok
+			if rowDecoded {
+				if !row.IsSidechain {
+					ts, _ := time.Parse(time.RFC3339Nano, row.Timestamp)
+					if row.Type == "system" && row.Subtype == "compact_boundary" {
+						manualCompactAt, compactSummary = time.Time{}, false
+						if row.CompactMetadata.Trigger == "manual" {
+							manualCompactAt = ts
+						}
+					} else if !manualCompactAt.IsZero() {
+						if row.Type == "user" && row.IsCompactSummary {
+							compactSummary = true
+						}
+						if compactSummary && row.Type == "user" && !row.IsMeta && !ts.Before(manualCompactAt) && compactCommandCompleted(row.Message.Content) {
+							verdict, stamp = turnClosedVerdict, ts
+							manualCompactAt = time.Time{}
+							continue
+						}
+						// A new actual turn invalidates the pending compact completion.
+						// Compaction can replay older records; those are not new work.
+						if v, _ := classifyTurnRecordValue(row); v != turnNone && ts.After(manualCompactAt) {
+							manualCompactAt = time.Time{}
+						}
+					}
+				}
+				if v, ts := classifyTurnRecordValue(row); v != turnNone {
+					verdict = v
+					stamp, _ = time.Parse(time.RFC3339Nano, ts)
+					if row.Type == "assistant" && v == turnOpenVerdict && row.Message.StopReason != "tool_use" {
+						verdict = turnUncertainVerdict
+					}
+				}
 			}
 		}
 	}
@@ -351,10 +361,14 @@ func classifyTurnRecord(line []byte) (int, string) {
 	if !bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("{")) {
 		return turnNone, ""
 	}
-	var record turnRecord
-	if json.Unmarshal(line, &record) != nil {
+	record, ok := decodeTurnRecord(line)
+	if !ok {
 		return turnNone, ""
 	}
+	return classifyTurnRecordValue(record)
+}
+
+func classifyTurnRecordValue(record turnRecord) (int, string) {
 	if record.IsSidechain {
 		return turnNone, ""
 	}

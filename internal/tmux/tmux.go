@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -514,10 +515,24 @@ func Busy(pane string) bool {
 }
 
 type Client struct {
-	Bin   string
-	Sleep func(time.Duration)
-	Now   func() time.Time
-	exec  func(context.Context, []byte, ...string) ([]byte, error)
+	Bin            string
+	Sleep          func(time.Duration)
+	Now            func() time.Time
+	exec           func(context.Context, []byte, ...string) ([]byte, error)
+	statusSnapshot *statusSnapshot
+}
+
+type statusSnapshot struct {
+	sessions []SessionAttachment
+	byName   map[string]SessionAttachment
+	captures map[string]statusCapture
+	mu       sync.Mutex
+}
+
+type statusCapture struct {
+	pane  string
+	err   error
+	ready bool
 }
 
 // Location records both the current pane directory and the directory in which
@@ -571,13 +586,37 @@ func StripDim(s string) string {
 // CaptureAnsi returns the pane content with escape sequences preserved (-e), which lets
 // Typing distinguish real typed text from dim placeholder/ghost text.
 func (c *Client) CaptureAnsi(ctx context.Context, session string) (string, error) {
+	if c.statusSnapshot != nil {
+		return c.captureStatusPane(ctx, session, true)
+	}
 	out, err := c.run(ctx, nil, "capture-pane", "-t", "="+session+":", "-e", "-p")
 	return string(out), err
 }
 
 func (c *Client) Capture(ctx context.Context, session string) (string, error) {
+	if c.statusSnapshot != nil {
+		return c.captureStatusPane(ctx, session, false)
+	}
 	out, err := c.run(ctx, nil, "capture-pane", "-t", "="+session+":", "-p")
 	return string(out), err
+}
+
+func (c *Client) captureStatusPane(ctx context.Context, session string, ansi bool) (string, error) {
+	snapshot := c.statusSnapshot
+	snapshot.mu.Lock()
+	defer snapshot.mu.Unlock()
+	if capture, ok := snapshot.captures[session]; ok && capture.ready {
+		return capture.pane, capture.err
+	}
+	args := []string{"capture-pane", "-t", "=" + session + ":"}
+	if ansi {
+		args = append(args, "-e")
+	}
+	args = append(args, "-p")
+	out, err := c.run(ctx, nil, args...)
+	capture := statusCapture{pane: string(out), err: err, ready: true}
+	snapshot.captures[session] = capture
+	return capture.pane, capture.err
 }
 
 // PaneCommand returns the foreground command (#{pane_current_command}) of the
@@ -594,6 +633,13 @@ func (c *Client) PaneCommand(ctx context.Context, session string) (string, error
 
 // PaneProcess returns the command and PID of the active pane in a session.
 func (c *Client) PaneProcess(ctx context.Context, session string) (PaneProcess, error) {
+	if c.statusSnapshot != nil {
+		entry, ok := c.statusSnapshot.byName[session]
+		if !ok || entry.Process.PID == 0 {
+			return PaneProcess{}, fmt.Errorf("tmux pane process not found for %s", session)
+		}
+		return entry.Process, nil
+	}
 	out, err := c.run(ctx, nil, "list-panes", "-t", "="+session+":", "-F", "#{pane_active}\t#{pane_current_command}\t#{pane_pid}")
 	if err != nil {
 		return PaneProcess{}, err
@@ -651,6 +697,10 @@ func exactWindowTarget(session string) string {
 }
 
 func (c *Client) HasSession(ctx context.Context, session string) bool {
+	if c.statusSnapshot != nil {
+		_, ok := c.statusSnapshot.byName[session]
+		return ok
+	}
 	_, err := c.run(ctx, nil, "has-session", "-t", "="+session)
 	return err == nil
 }
@@ -674,6 +724,13 @@ func (c *Client) PaneDead(ctx context.Context, session string) (bool, error) {
 }
 
 func (c *Client) Sessions(ctx context.Context) ([]string, error) {
+	if c.statusSnapshot != nil {
+		sessions := make([]string, 0, len(c.statusSnapshot.sessions))
+		for _, session := range c.statusSnapshot.sessions {
+			sessions = append(sessions, session.Name)
+		}
+		return sessions, nil
+	}
 	out, err := c.run(ctx, nil, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "no server running") ||
@@ -707,6 +764,9 @@ type SessionAttachment struct {
 // id and active-window pane process in a single tmux request, so a caller that
 // renders per-session state pays one exec per scan instead of one per session.
 func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachment, error) {
+	if c.statusSnapshot != nil {
+		return append([]SessionAttachment(nil), c.statusSnapshot.sessions...), nil
+	}
 	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{session_attached}\t#{session_id}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}")
 	if err != nil {
 		lower := strings.ToLower(err.Error())
@@ -716,6 +776,21 @@ func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachme
 		return nil, err
 	}
 	return parseSessionPanes(string(out)), nil
+}
+
+// StatusSnapshot returns a client clone bound to one list-panes -a result.
+// Only callers that keep this clone inside one status invocation can observe
+// the snapshot; the original client and its send/delivery paths stay live.
+func (c *Client) StatusSnapshot(ctx context.Context) (*Client, error) {
+	sessions, err := c.SessionsWithAttachments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &statusSnapshot{sessions: sessions, byName: make(map[string]SessionAttachment, len(sessions)), captures: map[string]statusCapture{}}
+	for _, session := range sessions {
+		snapshot.byName[session.Name] = session
+	}
+	return &Client{Bin: c.Bin, Sleep: c.Sleep, Now: c.Now, exec: c.exec, statusSnapshot: snapshot}, nil
 }
 
 // parseSessionPanes folds list-panes -a rows into one entry per session, in

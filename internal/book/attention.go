@@ -27,11 +27,17 @@ func awaitingClaude(path string) (bool, time.Time) {
 	awaiting, latestKnown := false, false
 	var repliedAt time.Time
 	cache.ScanCodexReverse(path, func(line []byte) bool {
+		if cache.DefinitelyOtherCompactRecordType(line, "assistant", "user") {
+			return true
+		}
 		if !bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("{")) {
 			return true
 		}
-		var record turnRecord
-		if json.Unmarshal(line, &record) != nil || record.IsSidechain {
+		if len(line) > 4*1024 && !cache.HasCompactRecordTypePrefix(line, "assistant", "user") && !cache.MayHaveRecordType(line, "assistant", "user") {
+			return true
+		}
+		record, ok := decodeTurnRecord(line)
+		if !ok || record.IsSidechain {
 			return true
 		}
 		ts, _ := time.Parse(time.RFC3339Nano, record.Timestamp)
@@ -78,16 +84,14 @@ func awaitingCodex(path string) (bool, time.Time) {
 	awaiting, latestKnown := false, false
 	var repliedAt time.Time
 	cache.ScanCodexReverse(path, func(line []byte) bool {
-		var record struct {
-			Type      string    `json:"type"`
-			Timestamp time.Time `json:"timestamp"`
-			Payload   struct {
-				Type    string          `json:"type"`
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"payload"`
+		if cache.DefinitelyOtherCompactRecordType(line, "event_msg", "response_item") {
+			return true
 		}
-		if json.Unmarshal(line, &record) != nil {
+		if len(line) > 4*1024 && !cache.HasCompactRecordTypePrefix(line, "event_msg", "response_item") && !cache.MayHaveRecordType(line, "event_msg", "response_item") {
+			return true
+		}
+		record, ok := cache.DecodeCodexRecord(line)
+		if !ok {
 			return true
 		}
 		if record.Type == "event_msg" {

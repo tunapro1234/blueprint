@@ -176,3 +176,64 @@ func TestCachedCodexScanMatchesWholeFileScan(t *testing.T) {
 	}
 	t.Logf("%d scans reused a cached prefix", incremental)
 }
+
+func TestCodexDecoderMatchesLegacyFixturesAndLargeRow(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "status-rollout.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := fmt.Sprintf(`{"type":"file_history_snapshot","payload":{"base_instructions":%q}}`, strings.Repeat("x", 128*1024)) + "\n"
+	cases := map[string][]byte{
+		"rollout fixture":     fixture,
+		"large unrelated row": append(append([]byte(nil), fixture...), []byte(large)...),
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rollout-fixture.jsonl")
+			if err := os.WriteFile(path, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, want := cachedCodexScan(path), referenceCodexScan(path)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("new decoder=%+v legacy decoder=%+v", got, want)
+			}
+		})
+	}
+}
+
+func TestCodexRecordDecodeIsSharedAcrossScanners(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "status-rollout.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(path, fixture, 0600); err != nil {
+		t.Fatal(err)
+	}
+	codexRecordDecodes.Lock()
+	codexRecordDecodes.entries = map[uint64][]codexRecordDecodeEntry{}
+	codexRecordDecodes.bytes = 0
+	codexRecordDecodes.Unlock()
+	originalUnmarshal := unmarshalCodexRecord
+	decodeCount := 0
+	unmarshalCodexRecord = func(data []byte, target any) error {
+		decodeCount++
+		return json.Unmarshal(data, target)
+	}
+	t.Cleanup(func() { unmarshalCodexRecord = originalUnmarshal })
+
+	_ = cachedCodexScan(path)
+	afterStateScan := decodeCount
+	ScanCodexReverse(path, func(line []byte) bool {
+		DecodeCodexRecord(line)
+		return true
+	})
+	afterAttentionScan := decodeCount
+	ScanCodexReverse(path, func(line []byte) bool {
+		DecodeCodexRecord(line)
+		return true
+	})
+	if decodeCount != afterAttentionScan || afterAttentionScan-afterStateScan != 1 {
+		t.Fatalf("decodes: state=%d after attention=%d after repeat=%d; only the unvisited header should decode", afterStateScan, afterAttentionScan, decodeCount)
+	}
+}

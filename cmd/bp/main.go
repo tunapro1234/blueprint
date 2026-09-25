@@ -809,18 +809,28 @@ func (a *app) status(args []string) error {
 		asJSON = asJSON || arg == "--json"
 		all = all || arg == "--all"
 	}
-	if err := a.reconcileDeadAgents(); err != nil {
+	statusApp := a
+	if a.tmux != nil && a.loadFleet == nil {
+		snapshot, err := a.tmux.StatusSnapshot(a.ctx)
+		if err != nil {
+			return err
+		}
+		clone := *a
+		clone.tmux = snapshot
+		statusApp = &clone
+	}
+	if err := statusApp.reconcileDeadAgents(); err != nil {
 		return err
 	}
-	fleet, states, err := a.listingFleet(all)
+	fleet, states, err := statusApp.listingFleet(all)
 	if err != nil {
 		return err
 	}
-	cacheStates := a.cacheStates(fleet, states)
+	cacheStates := statusApp.cacheStates(fleet, states)
 	if asJSON {
-		return a.statusJSON(fleet, states, cacheStates, all)
+		return statusApp.statusJSON(fleet, states, cacheStates, all)
 	}
-	fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK")
+	fmt.Fprintf(statusApp.out, "%-24s %-10s %-20s %-10s %s\n", "AGENT", "TMUX", "CACHE", "LAST-TALK", "AGENTBOOK")
 	for _, name := range fleet.SortedNames() {
 		if !all && hiddenClosedEphemeral(fleet.Agents[name], states) {
 			continue
@@ -842,16 +852,16 @@ func (a *app) status(args []string) error {
 				talkText = shortAge(state.LastHumanAge)
 			}
 		}
-		label := a.nativeName(fleet.Agents[name], state.Runtime)
+		label := statusApp.nativeName(fleet.Agents[name], state.Runtime)
 		if label != name {
 			label += " (" + name + ")"
 		}
-		fmt.Fprintf(a.out, "%-24s %-10s %-20s %-10s %-10s%s\n", label, tmuxState, cacheText, talkText, bookState, mark)
+		fmt.Fprintf(statusApp.out, "%-24s %-10s %-20s %-10s %-10s%s\n", label, tmuxState, cacheText, talkText, bookState, mark)
 		if state.Runtime != nil && state.Runtime.Activity != nil && state.Runtime.Activity.RecoveryHint != "" {
-			fmt.Fprintf(a.out, "  recovery: %s\n", state.Runtime.Activity.RecoveryHint)
+			fmt.Fprintf(statusApp.out, "  recovery: %s\n", state.Runtime.Activity.RecoveryHint)
 		}
 	}
-	a.renderCodexStatus(a.codexThreads())
+	statusApp.renderCodexStatus(statusApp.codexThreads())
 	return nil
 }
 
@@ -938,7 +948,18 @@ type statusThread struct {
 
 func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheStates map[string]bpcache.State, showAll ...bool) error {
 	all := len(showAll) > 0 && showAll[0]
-	report := statusReport{SchemaVersion: 3, ObservedAt: time.Now().UTC(), Producer: currentProducer(), Agents: make([]statusAgent, 0, len(fleet.Agents))}
+	var producer runtimeProducer
+	if a.config.StateDir != "" {
+		producer = currentProducer(filepath.Join(a.config.StateDir, "status-executable-hash.json"))
+	} else {
+		producer = currentProducer()
+	}
+	report := statusReport{
+		SchemaVersion: 3,
+		ObservedAt:    time.Now().UTC(),
+		Producer:      producer,
+		Agents:        make([]statusAgent, 0, len(fleet.Agents)),
+	}
 	report.Daemon, report.DaemonVerification = buildinfo.Recorded(filepath.Join(a.config.StateDir, "daemon-runtime.json"))
 	attention := a.attention(states)
 	for _, name := range fleet.SortedNames() {

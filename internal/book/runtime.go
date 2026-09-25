@@ -26,6 +26,19 @@ func RuntimeState(ctx context.Context, client *bptmux.Client, agent Agent) (cach
 		return state, false
 	}
 	pane, err := client.CaptureAnsi(ctx, agent.Name)
+	return observedRuntimeState(ctx, agent, state, process, pane, err)
+}
+
+// ObservedRuntimeState classifies a pane the caller has already read, so a
+// renderer that also needs the process and screen pays for them once.
+func ObservedRuntimeState(ctx context.Context, agent Agent, process bptmux.PaneProcess, pane string, paneErr error) (cache.State, bool) {
+	state := cache.State{LastHumanAge: -1, Busy: true}
+	state.Activity = &cache.Activity{State: "unknown", Source: "none", ObservedAt: time.Now().UTC(), DeliveryBlocked: true}
+	return observedRuntimeState(ctx, agent, state, process, pane, paneErr)
+}
+
+func observedRuntimeState(ctx context.Context, agent Agent, state cache.State, process bptmux.PaneProcess, pane string, err error) (cache.State, bool) {
+	a := state.Activity
 	if err != nil {
 		a.Reason = "pane unreadable"
 		return state, bptmux.IsAgentCommand(process.Command)
@@ -259,14 +272,43 @@ func launchThread(agent Agent, codex bool) string {
 // RuntimeFor separates stale registrations from live conversation conflicts.
 // A conflict blocks delivery, but does not erase the known thread's display data.
 func RuntimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name string) cache.State {
+	return runtimeFor(ctx, client, fleet, name, nil, false)
+}
+
+// RuntimeForWithSessions reuses a caller's session snapshot instead of issuing
+// another list-sessions request for each agent in a batch render.
+func RuntimeForWithSessions(ctx context.Context, client *bptmux.Client, fleet Fleet, name string, sessions []string) cache.State {
+	return runtimeFor(ctx, client, fleet, name, sessions, true)
+}
+
+// RuntimeForObserved is RuntimeForWithSessions for a pane the caller has
+// already read; only binding-conflict checks touch tmux again.
+func RuntimeForObserved(ctx context.Context, client *bptmux.Client, fleet Fleet, name string, sessions []string, process bptmux.PaneProcess, pane string, paneErr error) cache.State {
+	return runtimeForWith(ctx, client, fleet, name, sessions, true, func(agent Agent) cache.State {
+		state, _ := ObservedRuntimeState(ctx, agent, process, pane, paneErr)
+		return state
+	})
+}
+
+func runtimeFor(ctx context.Context, client *bptmux.Client, fleet Fleet, name string, sessions []string, sessionsProvided bool) cache.State {
+	return runtimeForWith(ctx, client, fleet, name, sessions, sessionsProvided, func(agent Agent) cache.State {
+		state, _ := RuntimeState(ctx, client, agent)
+		return state
+	})
+}
+
+func runtimeForWith(ctx context.Context, client *bptmux.Client, fleet Fleet, name string, sessions []string, sessionsProvided bool, observe func(Agent) cache.State) cache.State {
 	agent, exists := fleet.Agents[name]
 	if !exists {
 		return cache.State{LastHumanAge: -1, Activity: &cache.Activity{State: "unknown", Source: "agentbook", Reason: "agent not registered", ObservedAt: time.Now().UTC(), DeliveryBlocked: true}}
 	}
 	agent.Name = name
-	state, _ := RuntimeState(ctx, client, agent)
+	state := observe(agent)
 	if a := state.Activity; a != nil && a.ThreadID != "" {
-		sessions, sessionsErr := client.Sessions(ctx)
+		var sessionsErr error
+		if !sessionsProvided {
+			sessions, sessionsErr = client.Sessions(ctx)
+		}
 		present := map[string]bool{}
 		for _, session := range sessions {
 			present[session] = true

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	bptmux "blueprint/internal/tmux"
@@ -187,6 +188,43 @@ func tailTurnPhase(path string, now time.Time) (open, decisive bool) {
 // readTurnPhase returns event time separately from file mtime. A truncated or
 // unreadable tail cannot provide an idle verdict to unattended callers.
 func readTurnPhase(path string) (int, time.Time, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return turnNone, time.Time{}, err
+	}
+	turnPhases.Lock()
+	entry, ok := turnPhases.entries[path]
+	turnPhases.Unlock()
+	if ok && entry.size == info.Size() && entry.modified.Equal(info.ModTime()) {
+		return entry.verdict, entry.stamp, entry.err
+	}
+	verdict, stamp, err := scanTurnPhase(path)
+	turnPhases.Lock()
+	if len(turnPhases.entries) > 256 {
+		turnPhases.entries = map[string]turnPhaseEntry{}
+	}
+	turnPhases.entries[path] = turnPhaseEntry{size: info.Size(), modified: info.ModTime(), verdict: verdict, stamp: stamp, err: err}
+	turnPhases.Unlock()
+	return verdict, stamp, err
+}
+
+// turnPhases caches readTurnPhase by path, size and modification time: the
+// verdict is a pure function of the transcript bytes, transcripts only grow,
+// and the daemon asks for every attached agent every few seconds.
+var turnPhases = struct {
+	sync.Mutex
+	entries map[string]turnPhaseEntry
+}{entries: map[string]turnPhaseEntry{}}
+
+type turnPhaseEntry struct {
+	size     int64
+	modified time.Time
+	verdict  int
+	stamp    time.Time
+	err      error
+}
+
+func scanTurnPhase(path string) (int, time.Time, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return turnNone, time.Time{}, err

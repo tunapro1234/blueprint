@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,78 +30,293 @@ func ReadCodexSession(home, folder, id string) State {
 // can separate token_count and turn_context by megabytes; a fixed tail loses
 // valid measurements every time that happens. No model call or database write.
 func ReadCodexPath(path string) State {
-	result := State{LastHumanAge: -1, Path: path, ThreadID: CodexID(path)}
-	var usageTime, humanTime, turnTime time.Time
-	modelSeen, humanSeen, turnSeen, usageSeen := false, false, false, false
-	ScanCodexReverse(path, func(line []byte) bool {
-		var r struct {
-			Type      string    `json:"type"`
-			Timestamp time.Time `json:"timestamp"`
-			Payload   struct {
-				ID          string          `json:"id"`
-				Type        string          `json:"type"`
-				Role        string          `json:"role"`
-				Model       string          `json:"model"`
-				Effort      string          `json:"effort"`
-				ServiceTier string          `json:"service_tier"`
-				Content     json.RawMessage `json:"content"`
-				Info        *struct {
-					Last *struct {
-						Total int `json:"total_tokens"`
-					} `json:"last_token_usage"`
-					Window int `json:"model_context_window"`
-				} `json:"info"`
-			} `json:"payload"`
-		}
-		if json.Unmarshal(line, &r) != nil {
-			return true
-		}
-		if r.Type == "session_meta" {
-			result.ThreadID = r.Payload.ID
-		}
-		if r.Type == "turn_context" && !modelSeen {
-			result.Model, result.Effort, result.ServiceTier = r.Payload.Model, r.Payload.Effort, r.Payload.ServiceTier
-			modelSeen = true
-		}
-		// Compaction invalidates the pre-compact context measurement. Wait for
-		// a new token_count rather than showing the old full context or a guess.
-		if r.Type == "compacted" || (r.Type == "event_msg" && r.Payload.Type == "context_compacted") {
-			usageSeen = true
-		}
-		if r.Type == "event_msg" {
-			if r.Payload.Type == "token_count" && !usageSeen && r.Payload.Info != nil && r.Payload.Info.Last != nil {
-				result.Known = true
-				usageSeen = true
-				result.CtxTokens, result.Window = r.Payload.Info.Last.Total, r.Payload.Info.Window
-				usageTime = r.Timestamp
-			}
-			if !turnSeen {
-				switch r.Payload.Type {
-				case "task_started":
-					result.Busy, turnSeen, turnTime = true, true, r.Timestamp
-				case "task_complete", "turn_aborted":
-					result.Busy, turnSeen, turnTime = false, true, r.Timestamp
-				}
-			}
-		}
-		if !humanSeen && r.Type == "response_item" && r.Payload.Type == "message" && r.Payload.Role == "user" && !automatic(contentText(r.Payload.Content)) {
-			humanTime, humanSeen = r.Timestamp, true
-		}
-		return !(usageSeen && modelSeen && humanSeen && turnSeen)
-	})
+	scan := cachedCodexScan(path)
+	result := scan.state
 	now := time.Now()
-	result.UsageAt, result.TurnAt, result.TurnKnown = usageTime, turnTime, turnSeen
 	if result.Known {
-		result.Age = age(now, usageTime)
+		result.Age = age(now, result.UsageAt)
 	}
-	if !humanTime.IsZero() {
-		result.LastHumanAge = age(now, humanTime)
+	if !scan.human.IsZero() {
+		result.LastHumanAge = age(now, scan.human)
 	}
 	// A crashed session must not keep a new pane busy indefinitely.
-	if result.Busy && age(now, turnTime) > 24*time.Hour {
+	if result.Busy && age(now, result.TurnAt) > 24*time.Hour {
 		result.Busy = false
 	}
 	return result
+}
+
+// codexScan is everything ReadCodexPath learns from the file; ages are derived
+// from it at call time so a cached scan never serves a stale age.
+type codexScan struct {
+	state State
+	human time.Time
+}
+
+// codexFields is one reverse scan's findings. Each metric is decided by the
+// newest row that carries it, independently of the others, so a scan of the
+// rows appended since the last scan, merged field by field with the previous
+// findings, equals a fresh scan of the whole file. at is the byte offset of
+// the deciding row; -1 means no row decided it.
+type codexFields struct {
+	modelAt, usageAt, turnAt, humanAt int64
+
+	model, effort, tier string
+	known               bool
+	ctx, window         int
+	usageTime, turnTime time.Time
+	busy                bool
+	humanTime           time.Time
+	metas               []codexMeta
+}
+
+// codexMeta is a session_meta row the scan passed. Only metas newer than the
+// row that completed the scan count, and the oldest of those names the thread.
+type codexMeta struct {
+	at int64
+	id string
+}
+
+func newCodexFields() codexFields {
+	return codexFields{modelAt: -1, usageAt: -1, turnAt: -1, humanAt: -1}
+}
+
+func (f *codexFields) complete() bool {
+	return f.modelAt >= 0 && f.usageAt >= 0 && f.turnAt >= 0 && f.humanAt >= 0
+}
+
+// stop is the offset of the oldest row the scan had to read: the row that
+// decided its last metric, or 0 when some metric was never found.
+func (f *codexFields) stop() int64 {
+	if !f.complete() {
+		return 0
+	}
+	stop := f.modelAt
+	for _, at := range []int64{f.usageAt, f.turnAt, f.humanAt} {
+		if at < stop {
+			stop = at
+		}
+	}
+	return stop
+}
+
+// visit applies one row, newest first. It reports whether the scan must go on.
+func (f *codexFields) visit(at int64, line []byte) bool {
+	var r struct {
+		Type      string    `json:"type"`
+		Timestamp time.Time `json:"timestamp"`
+		Payload   struct {
+			ID          string          `json:"id"`
+			Type        string          `json:"type"`
+			Role        string          `json:"role"`
+			Model       string          `json:"model"`
+			Effort      string          `json:"effort"`
+			ServiceTier string          `json:"service_tier"`
+			Content     json.RawMessage `json:"content"`
+			Info        *struct {
+				Last *struct {
+					Total int `json:"total_tokens"`
+				} `json:"last_token_usage"`
+				Window int `json:"model_context_window"`
+			} `json:"info"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(line, &r) != nil {
+		return true
+	}
+	if r.Type == "session_meta" {
+		f.metas = append(f.metas, codexMeta{at: at, id: r.Payload.ID})
+	}
+	if r.Type == "turn_context" && f.modelAt < 0 {
+		f.model, f.effort, f.tier = r.Payload.Model, r.Payload.Effort, r.Payload.ServiceTier
+		f.modelAt = at
+	}
+	// Compaction invalidates the pre-compact context measurement. Wait for
+	// a new token_count rather than showing the old full context or a guess.
+	if f.usageAt < 0 && (r.Type == "compacted" || (r.Type == "event_msg" && r.Payload.Type == "context_compacted")) {
+		f.usageAt = at
+	}
+	if r.Type == "event_msg" {
+		if r.Payload.Type == "token_count" && f.usageAt < 0 && r.Payload.Info != nil && r.Payload.Info.Last != nil {
+			f.known = true
+			f.usageAt = at
+			f.ctx, f.window = r.Payload.Info.Last.Total, r.Payload.Info.Window
+			f.usageTime = r.Timestamp
+		}
+		if f.turnAt < 0 {
+			switch r.Payload.Type {
+			case "task_started":
+				f.busy, f.turnAt, f.turnTime = true, at, r.Timestamp
+			case "task_complete", "turn_aborted":
+				f.busy, f.turnAt, f.turnTime = false, at, r.Timestamp
+			}
+		}
+	}
+	if f.humanAt < 0 && r.Type == "response_item" && r.Payload.Type == "message" && r.Payload.Role == "user" && !automatic(contentText(r.Payload.Content)) {
+		f.humanTime, f.humanAt = r.Timestamp, at
+	}
+	return !f.complete()
+}
+
+// merge completes the findings of a scan over newer rows with an earlier scan
+// of the rows before them.
+func (f codexFields) merge(older codexFields) codexFields {
+	if f.modelAt < 0 {
+		f.modelAt, f.model, f.effort, f.tier = older.modelAt, older.model, older.effort, older.tier
+	}
+	if f.usageAt < 0 {
+		f.usageAt, f.known, f.ctx, f.window, f.usageTime = older.usageAt, older.known, older.ctx, older.window, older.usageTime
+	}
+	if f.turnAt < 0 {
+		f.turnAt, f.busy, f.turnTime = older.turnAt, older.busy, older.turnTime
+	}
+	if f.humanAt < 0 {
+		f.humanAt, f.humanTime = older.humanAt, older.humanTime
+	}
+	stop := f.stop()
+	metas := make([]codexMeta, 0, len(f.metas)+len(older.metas))
+	for _, meta := range append(append([]codexMeta{}, f.metas...), older.metas...) {
+		if meta.at >= stop {
+			metas = append(metas, meta)
+		}
+	}
+	f.metas = metas
+	return f
+}
+
+func (f codexFields) scan(path string) codexScan {
+	result := State{LastHumanAge: -1, Path: path, ThreadID: CodexID(path)}
+	// A full scan meets session_meta rows newest first and keeps the last
+	// one it passes, which is the oldest.
+	oldest, stop := int64(-1), f.stop()
+	for _, meta := range f.metas {
+		if meta.at >= stop && (oldest < 0 || meta.at < oldest) {
+			oldest, result.ThreadID = meta.at, meta.id
+		}
+	}
+	if f.modelAt >= 0 {
+		result.Model, result.Effort, result.ServiceTier = f.model, f.effort, f.tier
+	}
+	result.Known, result.CtxTokens, result.Window = f.known, f.ctx, f.window
+	result.Busy = f.busy
+	result.UsageAt, result.TurnAt, result.TurnKnown = f.usageTime, f.turnTime, f.turnAt >= 0
+	return codexScan{state: result, human: f.humanTime}
+}
+
+// codexScans caches scans by path. The daemon's bar renderer reads every
+// attached agent's rollout every scan; an idle rollout does not change, and a
+// working one only grows, so only the appended rows are read again.
+var codexScans = struct {
+	sync.Mutex
+	entries map[string]codexScanEntry
+}{entries: map[string]codexScanEntry{}}
+
+type codexScanEntry struct {
+	size     int64
+	modified time.Time
+	// rows is the length of the newline-terminated prefix the fields cover;
+	// seam holds its last bytes, so a rewritten file is not mistaken for
+	// the one that was scanned.
+	rows   int64
+	seam   []byte
+	fields codexFields
+}
+
+const codexSeamSize = 256
+
+func cachedCodexScan(path string) codexScan {
+	file, err := os.Open(path)
+	if err != nil {
+		return codexScan{state: State{LastHumanAge: -1, Path: path, ThreadID: CodexID(path)}}
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return codexScan{state: State{LastHumanAge: -1, Path: path, ThreadID: CodexID(path)}}
+	}
+	size := info.Size()
+	codexScans.Lock()
+	entry, ok := codexScans.entries[path]
+	codexScans.Unlock()
+	if ok && entry.size == size && entry.modified.Equal(info.ModTime()) {
+		return entry.fields.scan(path)
+	}
+	fields, floor := newCodexFields(), int64(0)
+	if ok && entry.rows <= size && entry.fields.stop() < entry.rows && sameSeam(file, entry.rows, entry.seam) {
+		floor = entry.rows
+	}
+	scanRowsReverse(file, floor, size, fields.visit)
+	if floor > 0 {
+		fields = fields.merge(entry.fields)
+	}
+	rows := lastRowEnd(file, size)
+	codexScans.Lock()
+	if len(codexScans.entries) > 256 {
+		codexScans.entries = map[string]codexScanEntry{}
+	}
+	if fields.stop() < rows && decidedBefore(fields, rows) {
+		codexScans.entries[path] = codexScanEntry{size: size, modified: info.ModTime(), rows: rows, seam: readSeam(file, rows), fields: fields}
+	} else {
+		delete(codexScans.entries, path)
+	}
+	codexScans.Unlock()
+	return fields.scan(path)
+}
+
+// decidedBefore reports that no metric came from an unterminated final row,
+// which the writer may still extend into a different record.
+func decidedBefore(f codexFields, rows int64) bool {
+	for _, at := range []int64{f.modelAt, f.usageAt, f.turnAt, f.humanAt} {
+		if at >= rows {
+			return false
+		}
+	}
+	for _, meta := range f.metas {
+		if meta.at >= rows {
+			return false
+		}
+	}
+	return true
+}
+
+// lastRowEnd is the offset just past the last newline before size.
+func lastRowEnd(file *os.File, size int64) int64 {
+	block := make([]byte, 64*1024)
+	for end := size; end > 0; {
+		start := end - int64(len(block))
+		if start < 0 {
+			start = 0
+		}
+		n, err := file.ReadAt(block[:end-start], start)
+		if err != nil && n < int(end-start) {
+			return 0
+		}
+		if i := bytes.LastIndexByte(block[:end-start], '\n'); i >= 0 {
+			return start + int64(i) + 1
+		}
+		end = start
+	}
+	return 0
+}
+
+func readSeam(file *os.File, end int64) []byte {
+	start := end - codexSeamSize
+	if start < 0 {
+		start = 0
+	}
+	seam := make([]byte, end-start)
+	if n, err := file.ReadAt(seam, start); err != nil && n < len(seam) {
+		return nil
+	}
+	return seam
+}
+
+func sameSeam(file *os.File, end int64, seam []byte) bool {
+	if seam == nil {
+		return false
+	}
+	current := readSeam(file, end)
+	return current != nil && bytes.Equal(current, seam)
 }
 
 // ScanCodexReverse visits complete JSONL rows, newest first. A partial final row
@@ -116,28 +332,34 @@ func ScanCodexReverse(path string, visit func([]byte) bool) {
 	if err != nil {
 		return
 	}
-	offset := info.Size()
+	scanRowsReverse(f, 0, info.Size(), func(_ int64, row []byte) bool { return visit(row) })
+}
+
+// scanRowsReverse visits the rows between floor, which must be a row start,
+// and size, newest first, with each row's starting offset.
+func scanRowsReverse(f *os.File, floor, size int64, visit func(int64, []byte) bool) {
+	offset := size
 	var fragments [][]byte
-	size := 0
+	fragmentSize := 0
 	discard := false
-	emit := func(prefix []byte) bool {
+	emit := func(at int64, prefix []byte) bool {
 		if discard {
 			return true
 		}
-		if size == 0 {
-			return len(prefix) == 0 || visit(prefix)
+		if fragmentSize == 0 {
+			return len(prefix) == 0 || visit(at, prefix)
 		}
-		row := make([]byte, 0, len(prefix)+size)
+		row := make([]byte, 0, len(prefix)+fragmentSize)
 		row = append(row, prefix...)
 		for i := len(fragments) - 1; i >= 0; i-- {
 			row = append(row, fragments[i]...)
 		}
-		return visit(row)
+		return visit(at, row)
 	}
-	for offset > 0 {
+	for offset > floor {
 		n := int64(64 * 1024)
-		if offset < n {
-			n = offset
+		if offset-floor < n {
+			n = offset - floor
 		}
 		offset -= n
 		block := make([]byte, n)
@@ -150,21 +372,21 @@ func ScanCodexReverse(path string, visit func([]byte) bool) {
 			if block[i] != '\n' {
 				continue
 			}
-			if !emit(block[i+1 : end]) {
+			if !emit(offset+int64(i)+1, block[i+1:end]) {
 				return
 			}
-			fragments, size, discard = nil, 0, false
+			fragments, fragmentSize, discard = nil, 0, false
 			end = i
 		}
 		if !discard && end > 0 {
 			fragments = append(fragments, block[:end])
-			size += end
-			if size > maxTailSize {
-				fragments, size, discard = nil, 0, true
+			fragmentSize += end
+			if fragmentSize > maxTailSize {
+				fragments, fragmentSize, discard = nil, 0, true
 			}
 		}
 	}
-	emit(nil)
+	emit(floor, nil)
 }
 
 // newestRollout finds the most recently WRITTEN rollout whose session started
@@ -292,13 +514,128 @@ func CodexPath(codexHome, folder, id string) (string, bool) {
 		return "", false
 	}
 	if id != "" {
-		paths, err := filepath.Glob(filepath.Join(codexHome, "sessions", "*", "*", "*", "*-"+id+".jsonl"))
-		if err != nil || len(paths) != 1 || CodexID(paths[0]) != id || rolloutCwd(paths[0]) != folder {
+		paths := RolloutPathsByID(codexHome, id)
+		if len(paths) != 1 || CodexID(paths[0]) != id || rolloutCwd(paths[0]) != folder {
 			return "", false
 		}
 		return paths[0], true
 	}
 	return newestRollout(filepath.Join(codexHome, "sessions"), folder, id)
+}
+
+// rolloutIndexes remembers, per Codex home, which rollout files each thread id
+// matched. Globbing every date directory reads thousands of entries per call;
+// the answer can only change when a file is created, removed or renamed in a
+// date directory, which changes that directory's mtime (appends do not). So
+// a remembered answer — one path, none, or a duplicate — is reused while every
+// date directory still has the mtime it had when the answer was computed.
+var rolloutIndexes = struct {
+	sync.Mutex
+	byHome map[string]*rolloutIndex
+}{byHome: map[string]*rolloutIndex{}}
+
+type rolloutIndex struct {
+	dirs   map[string]time.Time
+	newest time.Time
+	byID   map[string]rolloutEntry
+}
+
+// rolloutEntry is one remembered answer and when its computation began.
+type rolloutEntry struct {
+	paths []string
+	at    time.Time
+}
+
+// rolloutRacyWindow guards the mtime rule against coarse timestamps: a file
+// created in the same clock tick as an earlier one leaves its directory's
+// mtime unchanged. An answer computed while some date directory was modified
+// within this window of it is not reused, so such a file is seen next call.
+const rolloutRacyWindow = time.Second
+
+func newestDirTime(dirs map[string]time.Time) time.Time {
+	var newest time.Time
+	for _, at := range dirs {
+		if at.After(newest) {
+			newest = at
+		}
+	}
+	return newest
+}
+
+// RolloutPathsByID returns the rollout files named for thread id under home.
+func RolloutPathsByID(home, id string) []string {
+	sessions := filepath.Join(home, "sessions")
+	started := time.Now()
+	dirs, ok := rolloutDayDirs(sessions)
+	if ok {
+		rolloutIndexes.Lock()
+		index := rolloutIndexes.byHome[home]
+		if index != nil && sameDirTimes(index.dirs, dirs) {
+			if entry, hit := index.byID[id]; hit && index.newest.Before(entry.at.Add(-rolloutRacyWindow)) {
+				rolloutIndexes.Unlock()
+				return append([]string(nil), entry.paths...)
+			}
+		}
+		rolloutIndexes.Unlock()
+	}
+	paths, err := filepath.Glob(filepath.Join(sessions, "*", "*", "*", "*-"+id+".jsonl"))
+	if err != nil {
+		return nil
+	}
+	if ok {
+		rolloutIndexes.Lock()
+		index := rolloutIndexes.byHome[home]
+		if index == nil || !sameDirTimes(index.dirs, dirs) || len(index.byID) > 1024 {
+			if len(rolloutIndexes.byHome) > 16 {
+				rolloutIndexes.byHome = map[string]*rolloutIndex{}
+			}
+			index = &rolloutIndex{dirs: dirs, newest: newestDirTime(dirs), byID: map[string]rolloutEntry{}}
+			rolloutIndexes.byHome[home] = index
+		}
+		index.byID[id] = rolloutEntry{paths: append([]string(nil), paths...), at: started}
+		rolloutIndexes.Unlock()
+	}
+	return paths
+}
+
+// rolloutDayDirs returns the mtime of sessions/ and of every directory below
+// it down to the date directories. Any read error disables the cache.
+func rolloutDayDirs(sessions string) (map[string]time.Time, bool) {
+	dirs := map[string]time.Time{}
+	var walk func(dir string, depth int) bool
+	walk = func(dir string, depth int) bool {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+		dirs[dir] = info.ModTime()
+		if depth == 3 {
+			return true
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return false
+		}
+		for _, entry := range entries {
+			if entry.IsDir() && !walk(filepath.Join(dir, entry.Name()), depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	return dirs, walk(sessions, 0)
+}
+
+func sameDirTimes(a, b map[string]time.Time) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for dir, at := range a {
+		if other, ok := b[dir]; !ok || !other.Equal(at) {
+			return false
+		}
+	}
+	return true
 }
 
 // CodexID reads the identity, never instructions or credentials.

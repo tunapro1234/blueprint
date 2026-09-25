@@ -701,9 +701,9 @@ func (a *app) barStorePath(path, line string) {
 	if _, err := io.WriteString(file, line+"\n"); err != nil {
 		return
 	}
-	if file.Sync() != nil {
-		return
-	}
+	// No fsync: this is a disposable cache rewritten every few seconds, and
+	// rename alone already keeps readers from seeing a partial line. A flush per
+	// status redraw would put disk latency back on the path this cache removes.
 	if file.Close() != nil {
 		return
 	}

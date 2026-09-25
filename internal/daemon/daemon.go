@@ -27,6 +27,7 @@ import (
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/tokens"
+	"blueprint/internal/workflow"
 )
 
 type Service struct {
@@ -72,6 +73,22 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 func (s *Service) Run(ctx context.Context) {
 	if err := buildinfo.Record(filepath.Join(s.config.StateDir, "daemon-runtime.json")); err != nil {
 		s.log.Printf("record daemon identity: %v", err)
+	}
+	if executable, err := os.Executable(); err == nil {
+		if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
+			executable = resolved
+		}
+		supervisor := workflow.NewSupervisor(workflow.NewStore(s.config.StateDir), s.config.StateDir,
+			workflow.CommandLauncher(executable, s.config.StateDir), s.log)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			if err := supervisor.Serve(ctx); err != nil && ctx.Err() == nil {
+				s.log.Printf("workflow supervisor: %v", err)
+			}
+		}()
+	} else {
+		s.log.Printf("workflow supervisor disabled: resolve executable: %v", err)
 	}
 	s.startFederation(ctx)
 	s.startLoop(ctx, "msgq", 5*time.Second, 30*time.Second, func(run context.Context, interval time.Duration) {

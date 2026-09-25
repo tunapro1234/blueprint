@@ -1,0 +1,25 @@
+name: sample-scoring
+version: 1
+description: Score one fictional catalog record per prompt
+units:
+  file: records.json
+  key: slug
+prompt:
+  template: prompts/score.md
+  followup: prompts/fix.md
+output:
+  path: "results/{{.Unit.slug}}.json"
+  format: json
+  require_fresh: true
+validate:
+  command: ["python3", "check.py", "{{.Output}}"]
+  timeout: 2m
+  rounds: 3
+  weak_after: 2
+compact:
+  ctx_above: 150000
+  every_units: 0
+timeouts:
+  start: 3m
+  unit: 40m
+notify: none

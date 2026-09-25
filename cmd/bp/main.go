@@ -103,6 +103,11 @@ bp tokens collect | bp tokens gc
 bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>
 bp service
+bp workflow add <dir> [--replace] | list | show <name> | check <dir|name> [--workdir <dir>]
+bp workflow start <name> --workdir <dir> --agent <a> [--agent <b> ...] [--limit N] [--dry-run]
+bp workflow status [<run-id>] [--json] | stop <run-id> | resume <run-id> [--retry-failed]
+bp workflow times <run-id|name> [--json]
+bp wait <agent> --until idle|working [--confirm N] [--timeout D] [--json]
 bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent> [--timeout <dur>] [--json]
 bp con [agent-name]
 bp img [recv]
@@ -141,10 +146,11 @@ type app struct {
 	releaseReplace  updateReplacer
 	releaseCommand  updateCommandRunner
 
-	detectCompositor func() (compositor.Adapter, error)
-	processLister    windowmap.ProcessLister
-	listTmuxClients  func(context.Context) ([]bptmux.AttachedClient, error)
-	windowPoll       time.Duration
+	detectCompositor        func() (compositor.Adapter, error)
+	processLister           windowmap.ProcessLister
+	listTmuxClients         func(context.Context) ([]bptmux.AttachedClient, error)
+	windowPoll              time.Duration
+	workflowObserveMeasured func(time.Duration)
 
 	// paneLocks counts the pane locks this process is holding, per session. It
 	// exists because the lock is an flock and flock is NOT reentrant even within one
@@ -359,6 +365,8 @@ func (a *app) run(args []string) error {
 		return a.managedSession(args[1:])
 	case "_local-worker":
 		return a.localWorker(args[1:])
+	case "_workflow-run":
+		return a.workflowRun(args[1:])
 	case "whoami":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp whoami")
@@ -416,6 +424,10 @@ func (a *app) run(args []string) error {
 		return a.announce(args[1:])
 	case "compact":
 		return a.compact(args[1:])
+	case "workflow":
+		return a.workflow(args[1:])
+	case "wait":
+		return a.workflowWait(args[1:])
 	case "remote":
 		return a.remote(args[1:])
 	case "shell":

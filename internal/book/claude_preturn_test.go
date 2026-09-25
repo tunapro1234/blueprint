@@ -17,6 +17,14 @@ func TestClaudePreTurnRequiresWholeBoundMetadataOnlyTranscript(t *testing.T) {
 	}{
 		{"model only", "", true},
 		{"completed command", `{"type":"user","message":{"content":"<local-command-stdout>Set model</local-command-stdout>"}}` + "\n", true},
+		{"bp open startup rows", `{"type":"system","subtype":"informational","content":"agents-md: no CLAUDE.md found; AGENTS.md loaded: /srv/AGENTS.md"}` + "\n" +
+			`{"type":"system","subtype":"local_command","content":"<command-name>/remote-control</command-name>\n<command-message>remote-control</command-message>"}` + "\n" +
+			`{"type":"system","subtype":"local_command","content":"<local-command-stdout></local-command-stdout>"}` + "\n" +
+			`{"type":"bridge-session","sessionId":"` + id + `"}` + "\n" +
+			`{"type":"system","subtype":"bridge_status","content":"/remote-control is active"}` + "\n" +
+			`{"type":"agent-color","sessionId":"` + id + `"}` + "\n" +
+			`{"type":"atis-latch","atis":"x","sessionId":"` + id + `"}` + "\n", true},
+		{"unknown system subtype", `{"type":"system","subtype":"turn_duration"}` + "\n", false},
 		{"actual user", `{"type":"user","message":{"content":"do work"}}` + "\n", false},
 		{"assistant unknown stop", `{"type":"assistant","message":{"stop_reason":null}}` + "\n", false},
 		{"manual compact", `{"type":"system","subtype":"compact_boundary"}` + "\n", false},

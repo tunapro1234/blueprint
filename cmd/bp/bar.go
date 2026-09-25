@@ -74,15 +74,23 @@ func (a *app) barName(agent string) string {
 		label := a.liveName(agent)
 		accent := a.barAccentWithLabel(agent, label)
 		a.barApplyStyle(agent, accent)
-		return "#[bg=" + barGap + ",fg=colour" + accent + ",bold] " + label + " #[default]"
+		return barNamePlate(label, accent)
 	})
+}
+
+func barNamePlate(label, accent string) string {
+	return "#[bg=" + barGap + ",fg=colour" + accent + ",bold] " + label + " #[default]"
+}
+
+func barStatusStyle(accent string) string {
+	return "bg=colour" + accent + ",fg=" + readableOn(accent)
 }
 
 // barApplyStyle keeps the session's status-style in step with the accent. It
 // writes only on a real change: tmux redraws the bar when an option is set, and
 // a redraw re-runs this command.
 func (a *app) barApplyStyle(agent, accent string) {
-	want := "bg=colour" + accent + ",fg=" + readableOn(accent)
+	want := barStatusStyle(accent)
 	if current, err := a.tmux.Option(a.ctx, agent, "status-style"); err == nil && current == want {
 		return
 	}
@@ -105,8 +113,24 @@ func (a *app) barAccent(agent string) string {
 }
 
 func (a *app) barAccentWithLabel(agent, label string) string {
+	return a.barAccentWithFleet(agent, label, nil)
+}
+
+func (a *app) barAccentWithFleet(agent, label string, fleet *book.Fleet) string {
+	return a.barAccentFrom(agent, label, fleet, func() (string, error) { return a.tmux.CaptureAnsi(a.ctx, agent) })
+}
+
+// barAccentFrom takes the pane from the caller so a renderer that already
+// captured it does not capture it again.
+func (a *app) barAccentFrom(agent, label string, fleet *book.Fleet, capture func() (string, error)) string {
 	stored := ""
-	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil {
+	if fleet == nil {
+		loaded, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+		if err == nil {
+			fleet = &loaded
+		}
+	}
+	if fleet != nil {
 		if entry, ok := fleet.Agents[agent]; ok {
 			if entry.ColorOverride != "" {
 				return entry.ColorOverride
@@ -119,7 +143,7 @@ func (a *app) barAccentWithLabel(agent, label string) string {
 			return index
 		}
 	}
-	live, ok := a.paneAccent(agent, label)
+	live, ok := a.paneAccentIn(capture, agent, label)
 	if !ok {
 		if stored != "" {
 			return stored
@@ -135,7 +159,11 @@ func (a *app) barAccentWithLabel(agent, label string) string {
 }
 
 func (a *app) paneAccent(agent, label string) (string, bool) {
-	pane, err := a.tmux.CaptureAnsi(a.ctx, agent)
+	return a.paneAccentIn(func() (string, error) { return a.tmux.CaptureAnsi(a.ctx, agent) }, agent, label)
+}
+
+func (a *app) paneAccentIn(capture func() (string, error), agent, label string) (string, bool) {
+	pane, err := capture()
 	if err != nil {
 		return "", false
 	}
@@ -155,8 +183,6 @@ func (a *app) paneAccent(agent, label string) (string, bool) {
 }
 
 func (a *app) barLine(agent string) string {
-	var segments []string
-
 	var folder string
 	folderRead := false
 	readFolder := func() string {
@@ -188,6 +214,15 @@ func (a *app) barLine(agent string) string {
 		}
 		return state
 	}
+	return a.barLineWith(agent, readFolder, readProcess, readState, nil)
+}
+
+func (a *app) barLineForScan(agent, folder string, process bptmux.PaneProcess, state cache.State, models *barModelCache) string {
+	return a.barLineWith(agent, func() string { return folder }, func() bptmux.PaneProcess { return process }, func() cache.State { return state }, models)
+}
+
+func (a *app) barLineWith(agent string, readFolder func() string, readProcess func() bptmux.PaneProcess, readState func() cache.State, models *barModelCache) string {
+	var segments []string
 	if a.tmux != nil || a.loadCache != nil {
 		if activity := readState().Activity; activity != nil {
 			symbol, colour := "?", barWarn
@@ -270,7 +305,13 @@ func (a *app) barLine(agent string) string {
 				segments = append(segments, style(barCalm, "queue "+strconv.Itoa(status.Items)))
 			}
 		case "model":
-			if model := a.barModel(agent, readProcess(), readFolder(), readState); model != "" {
+			var model string
+			if models == nil {
+				model = a.barModel(agent, readProcess(), readFolder(), readState)
+			} else {
+				model = a.barModelWithCache(agent, readProcess(), readFolder(), readState, models)
+			}
+			if model != "" {
 				segments = append(segments, style(barQuiet, model))
 			}
 		case "quota":
@@ -290,11 +331,19 @@ func (a *app) barLine(agent string) string {
 }
 
 func (a *app) barModel(agent string, process bptmux.PaneProcess, folder string, state func() cache.State) string {
+	return a.barModelWithCache(agent, process, folder, state, nil)
+}
+
+func (a *app) barModelWithCache(agent string, process bptmux.PaneProcess, folder string, state func() cache.State, models *barModelCache) string {
 	if live := state(); live.Activity != nil {
-		if live.Model == "" {
+		model, effort := live.Model, live.Effort
+		if models != nil && live.Activity.TranscriptPath != "" && strings.HasPrefix(live.Runtime, "codex") {
+			model, effort = models.remember(live.Activity.TranscriptPath, model, effort)
+		}
+		if model == "" {
 			return ""
 		}
-		return modelLabel(live.Model, live.Effort)
+		return modelLabel(model, effort)
 	}
 	home, _ := os.UserHomeDir()
 	var model, effort string
@@ -310,8 +359,20 @@ func (a *app) barModel(agent string, process bptmux.PaneProcess, folder string, 
 		if root == "" {
 			return ""
 		}
-		model, effort = readCodexModel(filepath.Join(root, "config.toml"))
-		if pinModel, pinEffort := readCodexModel(filepath.Join(folder, ".codex", "config.toml")); pinModel != "" || pinEffort != "" {
+		configPath := filepath.Join(root, "config.toml")
+		if models == nil {
+			model, effort = readCodexModel(configPath)
+		} else {
+			model, effort = models.read(configPath, readCodexModel)
+		}
+		pinPath := filepath.Join(folder, ".codex", "config.toml")
+		var pinModel, pinEffort string
+		if models == nil {
+			pinModel, pinEffort = readCodexModel(pinPath)
+		} else {
+			pinModel, pinEffort = models.read(pinPath, readCodexModel)
+		}
+		if pinModel != "" || pinEffort != "" {
 			if pinModel != "" {
 				model = pinModel
 			}
@@ -337,7 +398,11 @@ func (a *app) barModel(agent string, process bptmux.PaneProcess, folder string, 
 	}
 	switch process.Command {
 	case "claude":
-		model, effort = readClaudeModel(folder, home)
+		if models == nil {
+			model, effort = readClaudeModel(folder, home)
+		} else {
+			model, effort = models.readClaude(folder, home)
+		}
 		// The session record beats every settings file: /model switches a live
 		// agent without touching its pin, and writes the GLOBAL default, so the
 		// settings answer can be wrong in both directions at once.
@@ -561,6 +626,17 @@ func (a *app) barFolder(agent string) string {
 			return book.FirstPath(entry.Folder)
 		}
 	}
+	return a.barFolderFromLocations(agent)
+}
+
+func (a *app) barFolderWithFleet(agent string, fleet book.Fleet) string {
+	if entry, ok := fleet.Agents[agent]; ok && entry.Folder != "" {
+		return book.FirstPath(entry.Folder)
+	}
+	return a.barFolderFromLocations(agent)
+}
+
+func (a *app) barFolderFromLocations(agent string) string {
 	locations, err := a.tmux.Locations(a.ctx)
 	if err != nil {
 		return ""

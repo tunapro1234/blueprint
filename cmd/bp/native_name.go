@@ -20,15 +20,33 @@ func (a *app) nativeName(agent book.Agent, state *cache.State) string {
 	if err != nil {
 		return agent.Name
 	}
+	return a.nativeNameWithValue(agent, value, nil)
+}
+
+func (a *app) nativeNameWithFleet(agent book.Agent, state *cache.State, fleet book.Fleet) string {
+	if state == nil || state.Activity == nil || state.Activity.ThreadID == "" || state.Activity.TranscriptPath == "" {
+		return agent.Name
+	}
+	value, _, err := observedNativeTitle(agent, state)
+	if err != nil {
+		return agent.Name
+	}
+	return a.nativeNameWithValue(agent, value, &fleet)
+}
+
+func (a *app) nativeNameWithValue(agent book.Agent, value book.NativeTitle, fleet *book.Fleet) string {
 	if agent.NativeTitle == nil || agent.NativeTitle.ThreadID != value.ThreadID || agent.NativeTitle.Path != value.Path || agent.NativeTitle.Text != value.Text || value.Offset < agent.NativeTitle.Offset || value.Offset-agent.NativeTitle.Offset >= 512*1024 {
 		_ = book.SetNativeTitle(a.config.Agentbooks, agent.Name, value)
 	}
 	if !validAgentName(value.Text) {
 		return agent.Name
 	}
-	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
-	if err != nil {
-		return agent.Name
+	if fleet == nil {
+		loaded, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+		if err != nil {
+			return agent.Name
+		}
+		fleet = &loaded
 	}
 	if value.Text != agent.Name {
 		if _, taken := fleet.Agents[value.Text]; taken || value.Text == fleet.Root || value.Text == "server-main" {
@@ -82,18 +100,33 @@ func (a *app) liveName(name string) string {
 	if !ok {
 		return name
 	}
+	process, err := a.tmux.PaneProcess(a.ctx, name)
+	if err != nil {
+		return name
+	}
 	if agent.Local != nil {
 		if agent.Local.Harness != "claude" && agent.Local.Harness != "codex" {
 			return name
 		}
-	} else {
-		process, err := a.tmux.PaneProcess(a.ctx, name)
-		if err != nil || (process.Command != "claude" && !bptmux.IsCodexCommand(process.Command)) {
-			return name
-		}
+	} else if process.Command != "claude" && !bptmux.IsCodexCommand(process.Command) {
+		return name
 	}
 	state, _ := book.RuntimeState(a.ctx, a.tmux, agent)
-	return a.nativeName(agent, &state)
+	return a.liveNameWithState(agent, &state, fleet, process)
+}
+
+func (a *app) liveNameWithState(agent book.Agent, state *cache.State, fleet book.Fleet, process bptmux.PaneProcess) string {
+	if a.tmux == nil {
+		return agent.Name
+	}
+	if agent.Local != nil {
+		if agent.Local.Harness != "claude" && agent.Local.Harness != "codex" {
+			return agent.Name
+		}
+	} else if process.Command != "claude" && !bptmux.IsCodexCommand(process.Command) {
+		return agent.Name
+	}
+	return a.nativeNameWithFleet(agent, state, fleet)
 }
 
 // Canonical names always win. A unique live title is a convenience address;

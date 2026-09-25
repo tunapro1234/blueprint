@@ -12,11 +12,12 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
+// tailSize is the window bp normally reads from the end of a session file:
+// enough for the recent records, cheap enough to run for every agent on
+// every status refresh. A variable only so tests can shrink it.
+var tailSize int64 = 500 * 1024
+
 const (
-	// tailSize is the window bp normally reads from the end of a session file:
-	// enough for the recent records, cheap enough to run for every agent on
-	// every status refresh.
-	tailSize = 500 * 1024
 	// maxTailSize bounds the retry for the case tailSize cannot cover: ONE
 	// record longer than the window. Claude transcript lines reach 3.5 MB and
 	// codex rollout lines 7.1 MB in this fleet, both well past tailSize, and a
@@ -144,128 +145,178 @@ func ReadClaudePath(path string) State {
 	if err != nil {
 		return State{LastHumanAge: -1}
 	}
-	data, ok := readTail(file, info.Size())
+	metrics, ok := cachedClaudeTail(file, info)
 	if !ok {
 		return State{LastHumanAge: -1}
 	}
+	return metrics.state(path, time.Now())
+}
 
-	var usageTime, humanTime, compactTime time.Time
-	var cacheTime time.Time
-	var cacheTTL time.Duration
-	messageStarts := make(map[string]time.Time)
-	ctxTokens := 0
-	model, effort := "", ""
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
+// claudeRow is one transcript record reduced to what the metrics use. Decoding
+// is the costly part of a read, so the cache keeps rows instead of bytes.
+type claudeRow struct {
+	// ignored rows (unparsable or sidechain) still count as content.
+	ignored  bool
+	boundary bool
+	// postTokens is the compact boundary's reported size, -1 when absent.
+	postTokens int
+	stamp      time.Time
+	stamped    bool
+	id         string
+	model      string
+	effort     string
+	usage      bool
+	ctx        int
+	ttl        time.Duration
+	human      bool
+}
+
+func decodeClaudeRow(line []byte) claudeRow {
+	row := claudeRow{postTokens: -1}
+	var record struct {
+		Type             string `json:"type"`
+		Subtype          string `json:"subtype"`
+		IsCompactSummary bool   `json:"isCompactSummary"`
+		IsSidechain      bool   `json:"isSidechain"`
+		CompactMetadata  *struct {
+			PostTokens *int `json:"postTokens"`
+		} `json:"compactMetadata"`
+		Timestamp string          `json:"timestamp"`
+		Message   json.RawMessage `json:"message"`
+		Role      string          `json:"role"`
+		Content   json.RawMessage `json:"content"`
+		Effort    json.RawMessage `json:"effort"`
+	}
+	if json.Unmarshal(line, &record) != nil || record.IsSidechain {
+		row.ignored = true
+		return row
+	}
+	row.stamp, row.stamped = parseTime(record.Timestamp)
+	if record.Type == "system" && record.Subtype == "compact_boundary" {
+		row.boundary = true
+		if record.CompactMetadata != nil && record.CompactMetadata.PostTokens != nil && *record.CompactMetadata.PostTokens >= 0 {
+			row.postTokens = *record.CompactMetadata.PostTokens
 		}
-		var record struct {
-			Type             string `json:"type"`
-			Subtype          string `json:"subtype"`
-			IsCompactSummary bool   `json:"isCompactSummary"`
-			IsSidechain      bool   `json:"isSidechain"`
-			CompactMetadata  *struct {
-				PostTokens *int `json:"postTokens"`
-			} `json:"compactMetadata"`
-			Timestamp string          `json:"timestamp"`
-			Message   json.RawMessage `json:"message"`
-			Role      string          `json:"role"`
-			Content   json.RawMessage `json:"content"`
-			Effort    json.RawMessage `json:"effort"`
-		}
-		if json.Unmarshal(line, &record) != nil {
-			continue
-		}
-		if record.IsSidechain {
-			continue
-		}
-		if record.Type == "system" && record.Subtype == "compact_boundary" {
-			compactTime, _ = parseTime(record.Timestamp)
-			usageTime, ctxTokens = time.Time{}, 0
-			cacheTime, cacheTTL = time.Time{}, 0
-			if record.CompactMetadata != nil && record.CompactMetadata.PostTokens != nil && *record.CompactMetadata.PostTokens >= 0 {
-				usageTime, ctxTokens = compactTime, *record.CompactMetadata.PostTokens
-			}
-			continue
-		}
-		var message struct {
-			ID      string          `json:"id"`
-			Role    string          `json:"role"`
-			Model   string          `json:"model"`
-			Content json.RawMessage `json:"content"`
-			Usage   *struct {
-				Input         int `json:"input_tokens"`
-				CacheRead     int `json:"cache_read_input_tokens"`
-				CacheCreation int `json:"cache_creation_input_tokens"`
-				Creation      struct {
-					Hour int `json:"ephemeral_1h_input_tokens"`
-					Five int `json:"ephemeral_5m_input_tokens"`
-				} `json:"cache_creation"`
-			} `json:"usage"`
-		}
-		_ = json.Unmarshal(record.Message, &message)
-		if stamp, ok := parseTime(record.Timestamp); ok && message.ID != "" {
-			if previous, exists := messageStarts[message.ID]; !exists || stamp.Before(previous) {
-				messageStarts[message.ID] = stamp
-			}
-		}
-		// "<synthetic>" marks interrupt/error placeholders, not a real turn.
-		if message.Model != "" && message.Model != "<synthetic>" {
-			model = message.Model
-			// Claude stores effort on the outer assistant record. Keep it paired
-			// with this model/turn; an older turn or another agent's global
-			// default cannot fill an absent value. Unknown shapes don't discard
-			// otherwise valid token usage in the record.
-			effort = ""
-			if record.Type == "assistant" || message.Role == "assistant" {
-				_ = json.Unmarshal(record.Effort, &effort)
-			}
-		}
-		if message.Usage != nil {
-			if timestamp, ok := parseTime(record.Timestamp); ok && (compactTime.IsZero() || timestamp.After(compactTime)) {
-				usageTime = timestamp
-				ctxTokens = message.Usage.Input + message.Usage.CacheRead + message.Usage.CacheCreation
-				cacheTTL, cacheTime = 0, timestamp
-				if start, ok := messageStarts[message.ID]; ok {
-					cacheTime = start
-				}
-				// Mixed/absent TTLs and read-only hits do not establish the
-				// lifetime of the current prefix. Do not infer it from auth/model.
-				c := message.Usage.Creation
-				if c.Hour > 0 && c.Five == 0 && c.Hour == message.Usage.CacheCreation {
-					cacheTTL = time.Hour
-				} else if c.Five > 0 && c.Hour == 0 && c.Five == message.Usage.CacheCreation {
-					cacheTTL = 5 * time.Minute
-				}
-			}
-		}
-		if record.Type != "user" && record.Role != "user" && message.Role != "user" {
-			continue
-		}
-		content := message.Content
-		if len(content) == 0 {
-			content = record.Content
-		}
-		text := contentText(content)
-		if record.IsCompactSummary || strings.TrimSpace(text) == "" || automatic(text) {
-			continue
-		}
-		if timestamp, ok := parseTime(record.Timestamp); ok {
-			humanTime = timestamp
+		return row
+	}
+	var message struct {
+		ID      string          `json:"id"`
+		Role    string          `json:"role"`
+		Model   string          `json:"model"`
+		Content json.RawMessage `json:"content"`
+		Usage   *struct {
+			Input         int `json:"input_tokens"`
+			CacheRead     int `json:"cache_read_input_tokens"`
+			CacheCreation int `json:"cache_creation_input_tokens"`
+			Creation      struct {
+				Hour int `json:"ephemeral_1h_input_tokens"`
+				Five int `json:"ephemeral_5m_input_tokens"`
+			} `json:"cache_creation"`
+		} `json:"usage"`
+	}
+	_ = json.Unmarshal(record.Message, &message)
+	row.id = message.ID
+	// "<synthetic>" marks interrupt/error placeholders, not a real turn.
+	if message.Model != "" && message.Model != "<synthetic>" {
+		row.model = message.Model
+		// Claude stores effort on the outer assistant record. Keep it paired
+		// with this model/turn; an older turn or another agent's global
+		// default cannot fill an absent value. Unknown shapes don't discard
+		// otherwise valid token usage in the record.
+		if record.Type == "assistant" || message.Role == "assistant" {
+			_ = json.Unmarshal(record.Effort, &row.effort)
 		}
 	}
-
-	result := State{CtxTokens: ctxTokens, LastHumanAge: -1, Model: model, Effort: effort, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: usageTime}
-	now := time.Now()
-	if cacheTTL > 0 {
-		result.CacheTTL, result.CacheAge = cacheTTL, age(now, cacheTime)
+	if message.Usage != nil {
+		row.usage = true
+		row.ctx = message.Usage.Input + message.Usage.CacheRead + message.Usage.CacheCreation
+		// Mixed/absent TTLs and read-only hits do not establish the
+		// lifetime of the current prefix. Do not infer it from auth/model.
+		c := message.Usage.Creation
+		if c.Hour > 0 && c.Five == 0 && c.Hour == message.Usage.CacheCreation {
+			row.ttl = time.Hour
+		} else if c.Five > 0 && c.Hour == 0 && c.Five == message.Usage.CacheCreation {
+			row.ttl = 5 * time.Minute
+		}
 	}
-	if !usageTime.IsZero() {
+	if record.Type != "user" && record.Role != "user" && message.Role != "user" {
+		return row
+	}
+	content := message.Content
+	if len(content) == 0 {
+		content = record.Content
+	}
+	text := contentText(content)
+	row.human = !record.IsCompactSummary && strings.TrimSpace(text) != "" && !automatic(text) && row.stamped
+	return row
+}
+
+// claudeMetrics is a folded window. Ages are left to the caller, so a cached
+// fold stays valid as time passes.
+type claudeMetrics struct {
+	usageTime, humanTime, cacheTime time.Time
+	cacheTTL                        time.Duration
+	ctxTokens                       int
+	model, effort                   string
+}
+
+type claudeFold struct {
+	claudeMetrics
+	compactTime   time.Time
+	messageStarts map[string]time.Time
+}
+
+func newClaudeFold() *claudeFold {
+	return &claudeFold{messageStarts: make(map[string]time.Time)}
+}
+
+func (f *claudeFold) add(row claudeRow) {
+	if row.ignored {
+		return
+	}
+	if row.boundary {
+		f.compactTime = row.stamp
+		f.usageTime, f.ctxTokens = time.Time{}, 0
+		f.cacheTime, f.cacheTTL = time.Time{}, 0
+		if row.postTokens >= 0 {
+			f.usageTime, f.ctxTokens = f.compactTime, row.postTokens
+		}
+		return
+	}
+	if row.stamped && row.id != "" {
+		if previous, exists := f.messageStarts[row.id]; !exists || row.stamp.Before(previous) {
+			f.messageStarts[row.id] = row.stamp
+		}
+	}
+	if row.model != "" {
+		f.model, f.effort = row.model, row.effort
+	}
+	if row.usage && row.stamped && (f.compactTime.IsZero() || row.stamp.After(f.compactTime)) {
+		f.usageTime = row.stamp
+		f.ctxTokens = row.ctx
+		f.cacheTTL, f.cacheTime = row.ttl, row.stamp
+		if start, ok := f.messageStarts[row.id]; ok {
+			f.cacheTime = start
+		}
+	}
+	if row.human {
+		f.humanTime = row.stamp
+	}
+}
+
+func (f *claudeFold) metrics() claudeMetrics { return f.claudeMetrics }
+
+func (m claudeMetrics) state(path string, now time.Time) State {
+	result := State{CtxTokens: m.ctxTokens, LastHumanAge: -1, Model: m.model, Effort: m.effort, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: m.usageTime}
+	if m.cacheTTL > 0 {
+		result.CacheTTL, result.CacheAge = m.cacheTTL, age(now, m.cacheTime)
+	}
+	if !m.usageTime.IsZero() {
 		result.Known = true
-		result.Age = age(now, usageTime)
+		result.Age = age(now, m.usageTime)
 	}
-	if !humanTime.IsZero() {
-		result.LastHumanAge = age(now, humanTime)
+	if !m.humanTime.IsZero() {
+		result.LastHumanAge = age(now, m.humanTime)
 	}
 	return result
 }

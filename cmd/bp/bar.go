@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"blueprint/internal/book"
@@ -41,7 +43,9 @@ const (
 	barWarn  = "colour136" // amber: worth knowing
 	barAlert = "colour131" // red: act before the next long task
 
-	barCacheTTL = 2 * time.Second
+	// tmux 3.4 reruns #() jobs on any status redraw, not only status-interval;
+	// a ten-second cache breaks the redraw feedback loop without freezing the bar.
+	barCacheTTL = 10 * time.Second
 
 	// barDefaultAccent is Claude Code's own default plate colour, so an agent
 	// that never ran /color is left unrecorded rather than pinned to the default.
@@ -57,8 +61,7 @@ func (a *app) bar(args []string) error {
 		fmt.Fprintln(a.out, line)
 		return nil
 	}
-	line := a.barLine(agent)
-	a.barStore(agent, line)
+	line := a.cachedBarOutput(agent, ".txt", func() string { return a.barLine(agent) })
 	fmt.Fprintln(a.out, line)
 	return nil
 }
@@ -67,9 +70,12 @@ func (a *app) bar(args []string) error {
 // agent's Claude Code accent colour so the tmux bar and the pane above it read
 // as one surface. The metrics panel keeps its own grey slab on top of it.
 func (a *app) barName(agent string) string {
-	accent := a.barAccent(agent)
-	a.barApplyStyle(agent, accent)
-	return "#[bg=" + barGap + ",fg=colour" + accent + ",bold] " + a.liveName(agent) + " #[default]"
+	return a.cachedBarOutput(agent, ".name", func() string {
+		label := a.liveName(agent)
+		accent := a.barAccentWithLabel(agent, label)
+		a.barApplyStyle(agent, accent)
+		return "#[bg=" + barGap + ",fg=colour" + accent + ",bold] " + label + " #[default]"
+	})
 }
 
 // barApplyStyle keeps the session's status-style in step with the accent. It
@@ -95,6 +101,10 @@ var agentChip = regexp.MustCompile(`48;5;(\d+)m ([A-Za-z0-9._-]+) `)
 // answer is mirrored into the agentbook. The book is what a CLOSED agent falls
 // back to, since there is no pane left to read.
 func (a *app) barAccent(agent string) string {
+	return a.barAccentWithLabel(agent, "")
+}
+
+func (a *app) barAccentWithLabel(agent, label string) string {
 	stored := ""
 	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil {
 		if entry, ok := fleet.Agents[agent]; ok {
@@ -109,7 +119,7 @@ func (a *app) barAccent(agent string) string {
 			return index
 		}
 	}
-	live, ok := a.paneAccent(agent)
+	live, ok := a.paneAccent(agent, label)
 	if !ok {
 		if stored != "" {
 			return stored
@@ -124,7 +134,7 @@ func (a *app) barAccent(agent string) string {
 	return live
 }
 
-func (a *app) paneAccent(agent string) (string, bool) {
+func (a *app) paneAccent(agent, label string) (string, bool) {
 	pane, err := a.tmux.CaptureAnsi(a.ctx, agent)
 	if err != nil {
 		return "", false
@@ -133,7 +143,9 @@ func (a *app) paneAccent(agent string) (string, bool) {
 	if len(matches) == 0 {
 		return "", false
 	}
-	label := a.liveName(agent)
+	if label == "" {
+		label = a.liveName(agent)
+	}
 	for _, match := range matches {
 		if match[2] == agent || match[2] == label {
 			return match[1], true
@@ -599,29 +611,103 @@ func readableOn(index string) string {
 	return "colour231"
 }
 
-func (a *app) barCachePath(agent string) string {
-	return filepath.Join(a.config.StateDir, "bar", agent+".txt")
+func (a *app) barCachePath(agent, suffix string) string {
+	return filepath.Join(a.config.StateDir, "bar", agent+suffix)
 }
 
 func (a *app) barCached(agent string) (string, bool) {
-	path := a.barCachePath(agent)
-	info, err := os.Stat(path)
-	if err != nil || time.Since(info.ModTime()) > barCacheTTL {
+	if a.config.StateDir == "" {
 		return "", false
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	return strings.TrimRight(string(data), "\n"), true
+	line, modified, ok := readBarCache(a.barCachePath(agent, ".txt"))
+	return line, ok && time.Since(modified) <= barCacheTTL
 }
 
-func (a *app) barStore(agent, line string) {
-	path := a.barCachePath(agent)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func (a *app) cachedBarOutput(agent, suffix string, compute func() string) string {
+	if a.config.StateDir == "" {
+		return compute()
+	}
+	path := a.barCachePath(agent, suffix)
+	if line, modified, ok := readBarCache(path); ok && time.Since(modified) <= barCacheTTL {
+		return line
+	}
+
+	var lock *os.File
+	locked := false
+	if os.MkdirAll(filepath.Dir(path), 0o755) == nil {
+		if file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o644); err == nil {
+			lock = file
+			locked = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+		}
+	}
+	if locked {
+		defer lock.Close()
+		defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+		if line, modified, ok := readBarCache(path); ok && time.Since(modified) <= barCacheTTL {
+			return line
+		}
+	} else {
+		if lock != nil {
+			_ = lock.Close()
+		}
+		// While another caller recomputes, prefer any complete previous line,
+		// even when it is stale. A cold miss still computes so first use works.
+		if line, _, ok := readBarCache(path); ok {
+			return line
+		}
+	}
+
+	line := compute()
+	a.barStorePath(path, line)
+	return line
+}
+
+func readBarCache(path string) (string, time.Time, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	line := strings.TrimRight(string(data), "\r\n")
+	if line == "" {
+		return "", time.Time{}, false
+	}
+	return line, info.ModTime(), true
+}
+
+func (a *app) barStorePath(path, line string) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	_ = os.WriteFile(path, []byte(line+"\n"), 0o644)
+	file, err := os.CreateTemp(dir, ".bar-cache-")
+	if err != nil {
+		return
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	defer file.Close()
+	if file.Chmod(0o644) != nil {
+		return
+	}
+	if _, err := io.WriteString(file, line+"\n"); err != nil {
+		return
+	}
+	if file.Sync() != nil {
+		return
+	}
+	if file.Close() != nil {
+		return
+	}
+	_ = os.Rename(name, path)
 }
 
 // codexLaunchModel reads the model and reasoning effort a codex pane was

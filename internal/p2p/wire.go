@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -19,9 +21,48 @@ const (
 	StatusProtocol    protocol.ID = "/bp/qstat/1.0.0"
 	DiscoveryProtocol protocol.ID = "/bp/discovery/1.0.0"
 	PingProtocol      protocol.ID = "/bp/ping/1.0.0"
+	LookupProtocol    protocol.ID = "/bp/lookup/1.0.0"
 	maxFrame                      = 128 * 1024
 	rpcTimeout                    = 12 * time.Second
 )
+
+const MaxLookupQueryBytes = 256
+
+type LookupRequest struct {
+	Find string `json:"find"`
+}
+
+// LookupResponse deliberately contains no machine or conversation metadata.
+type LookupResponse struct {
+	Found bool   `json:"found"`
+	Name  string `json:"name,omitempty"`
+	State string `json:"state,omitempty"`
+}
+
+type LookupPeerResult struct {
+	Peer  string `json:"peer"`
+	Found bool   `json:"found"`
+	Name  string `json:"name,omitempty"`
+	State string `json:"state,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+type LookupReport struct {
+	Query string             `json:"query"`
+	Peers []LookupPeerResult `json:"peers"`
+}
+
+func ValidLookupQuery(query string) bool {
+	if strings.TrimSpace(query) == "" || len(query) > MaxLookupQueryBytes {
+		return false
+	}
+	for _, r := range query {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
 
 type request struct {
 	ID        string      `json:"id,omitempty"`
@@ -99,6 +140,31 @@ func (n *Node) call(ctx context.Context, id peer.ID, p protocol.ID, req request)
 	if err := readFrame(s, &result); err != nil {
 		_ = s.Reset()
 		return response{}, err
+	}
+	return result, nil
+}
+
+func (n *Node) callLookup(ctx context.Context, id peer.ID, query string) (LookupResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
+	defer cancel()
+	ctx = network.WithAllowLimitedConn(ctx, "bp agent lookup")
+	s, err := n.Host.NewStream(ctx, id, LookupProtocol)
+	if err != nil {
+		return LookupResponse{}, err
+	}
+	defer s.Close()
+	stop := context.AfterFunc(ctx, func() { _ = s.Reset() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	_ = s.SetDeadline(deadline)
+	if err := writeFrame(s, LookupRequest{Find: query}); err != nil {
+		_ = s.Reset()
+		return LookupResponse{}, err
+	}
+	var result LookupResponse
+	if err := readFrame(s, &result); err != nil {
+		_ = s.Reset()
+		return LookupResponse{}, err
 	}
 	return result, nil
 }

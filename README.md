@@ -51,6 +51,7 @@ bp attach work                    # attach if live, otherwise revive its recorde
 title. It never creates an unregistered or empty tmux session. A closed agent is
 resumed with its recorded folder, harness, conversation, permission mode, model,
 effort, search flags and parent; `--no-revive` limits the command to live sessions.
+For an unknown local name, a running P2P service can show which connected peer has it.
 Inside tmux it switches the current client, while an outer terminal attaches a
 new client without detaching any other client.
 

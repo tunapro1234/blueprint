@@ -68,7 +68,7 @@ func (*noSessionError) Error() string { return "can't find session" }
 // Issue #6: a first-run trust prompt made open time out with the bare
 // "agent did not become ready" and kept the blocked harness alive forever.
 func TestIssue06_TrustPromptTimeoutNamesCauseAndRemovesOrphan(t *testing.T) {
-	h := &launchHarness{capture: "Accessing workspace:\n/work/new\nQuick safety check: Is this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel\n"}
+	h := &launchHarness{capture: "Accessing workspace:\n/work/elsewhere\nQuick safety check: Is this a project you created or one you trust?\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel\n"}
 	err := h.client().Open(context.Background(), "agent", "/work/new", OpenOptions{NoPrompt: true}, nil)
 	if err == nil {
 		t.Fatal("open unexpectedly succeeded")
@@ -81,7 +81,7 @@ func TestIssue06_TrustPromptTimeoutNamesCauseAndRemovesOrphan(t *testing.T) {
 		t.Fatalf("session created by this open was left blocked on the prompt: %v", h.calls)
 	}
 	for _, call := range h.calls {
-		if strings.HasPrefix(call, "send-keys") && strings.HasSuffix(call, " Enter") && !strings.Contains(call, "claude") {
+		if strings.HasPrefix(call, "send-keys") && (strings.HasSuffix(call, " Enter") || strings.HasSuffix(call, " Down")) && !strings.Contains(call, "claude") {
 			t.Fatalf("bp answered the user's trust prompt: %q", call)
 		}
 	}

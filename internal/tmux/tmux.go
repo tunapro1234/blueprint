@@ -2931,7 +2931,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	progress("harness started in tmux session " + session)
 
 	ready, picked, trusted := false, false, false
-	codexTrustEnters := 0
+	codexTrustEnters, claudeTrustKeys := 0, 0
 	waiting := ""
 	for i := 0; i < 45; i++ {
 		if err := ctx.Err(); err != nil {
@@ -2986,12 +2986,18 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 					break
 				}
 			} else {
-				if !trusted && claudeTrustModal(pane, dir) {
-					if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", "Enter"); err != nil {
+				// One key per reading of the screen: a Down that lands after
+				// the selection already moved would wrap it back to "No, exit".
+				if action := claudeTrustModal(pane, dir); action != claudeTrustNone && claudeTrustKeys < claudeTrustMaxKeys {
+					key, wait := "Enter", 2*time.Second
+					if action == claudeTrustSelect {
+						key, wait = "Down", time.Second
+					}
+					if _, err := c.run(ctx, nil, "send-keys", "-t", "="+session+":", key); err != nil {
 						return err
 					}
-					trusted = true
-					c.Sleep(2 * time.Second)
+					claudeTrustKeys++
+					c.Sleep(wait)
 					continue
 				}
 				if RemoteControlMenu(pane) {

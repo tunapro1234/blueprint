@@ -10,7 +10,7 @@ import (
 func TestIssue22_OpenReportsStepsAndWhatItWaitsOn(t *testing.T) {
 	dir := t.TempDir()
 	bookPath := openTestBook(t, dir, "closed")
-	client, _ := launchLogTmux(t, false, "Accessing workspace:\\n"+dir+"\\nQuick safety check: Is this a project you created or one you trust?\\n❯ No, exit\\n  Yes, I trust this folder\\nEnter to confirm · Esc to cancel")
+	client, _ := launchLogTmux(t, false, "Accessing workspace:\\n"+dir+"-elsewhere\\nQuick safety check: Is this a project you created or one you trust?\\n❯ No, exit\\n  Yes, I trust this folder\\nEnter to confirm · Esc to cancel")
 	a := openTestApp(t, bookPath, client)
 	err := a.open([]string{"ghost", dir, "--claude", "--no-prompt"})
 	if err == nil {

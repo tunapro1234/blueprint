@@ -108,7 +108,7 @@ func TestCodexCurrentFooterAndLongRunningTurn(t *testing.T) {
 // This fake terminal consumes the actual buffer and submit calls. It generates
 // screens from its input state instead of scripting the implementation's reads.
 type codexTerminal struct {
-	harness, mode, search                                  string
+	harness, mode, search, hint                            string
 	chip, expandFirst, expanded, searchAfterPaste          bool
 	draft, buffer                                          string
 	submitted                                              []string
@@ -170,6 +170,9 @@ func (h *codexTerminal) client() *Client {
 			}
 			if h.menu {
 				pane += codexNavigationFixture
+			}
+			if h.hint != "" {
+				pane += h.hint + "\n"
 			}
 			return []byte(pane), nil
 		case "load-buffer":

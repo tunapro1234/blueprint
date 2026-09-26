@@ -118,3 +118,30 @@ func TestCodexVimSearchDoesNotReceiveMessages(t *testing.T) {
 		t.Fatalf("submitted a Vim search: %+v", h)
 	}
 }
+
+// Codex in embedded mode (-c overrides) puts a warning hint to the right of
+// "? for shortcuts" (probot-outreach-w3, 2026-09-26). The row still starts with
+// "?", but it is the shortcut hint, not a backward search.
+func TestCodexShortcutHintWithWarningIsNotSearch(t *testing.T) {
+	for _, hint := range []string{
+		"  ? for shortcuts",
+		"  ? for shortcuts                                        ⚠ 1 warning · f2 to view",
+		"  ? for shortcuts  \x1b[38;5;179m⚠ 1 warning\x1b[39m · \x1b[1mf2\x1b[0m to view",
+	} {
+		if pane := modernCodexPane("Ask Codex to do anything") + hint + "\n"; codexSearchActive(pane) || paneDialog(pane) {
+			t.Fatalf("shortcut hint read as a dialog: %q", hint)
+		}
+		h := &codexTerminal{hint: hint}
+		if err := h.client().Send(context.Background(), "agent", "[bp] message"); err != nil {
+			t.Fatalf("hint %q: %v", hint, err)
+		}
+		if len(h.submitted) != 1 {
+			t.Fatalf("hint %q: not delivered: %+v", hint, h)
+		}
+	}
+	for _, search := range []string{"?", "?for", "?previous  "} {
+		if pane := modernCodexPane("draft") + "  " + search + "\n"; !codexSearchActive(pane) {
+			t.Fatalf("search %q not detected", search)
+		}
+	}
+}

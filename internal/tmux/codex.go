@@ -3,6 +3,7 @@ package tmux
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Codex panes report their command in three different ways, and the third one
@@ -256,5 +257,13 @@ func codexSearchActive(pane string) bool {
 		return false
 	}
 	last := strings.TrimSpace(lines[len(lines)-1])
-	return strings.HasPrefix(last, "/") || strings.HasPrefix(last, "?") && last != "? for shortcuts"
+	return strings.HasPrefix(last, "/") || strings.HasPrefix(last, "?") && !codexShortcutHint(last)
+}
+
+// codexShortcutHint is the idle footer's "? for shortcuts". Embedded Codex
+// (started with -c overrides) draws a right-aligned "⚠ 1 warning · f2 to view"
+// on the same row, so only the hint itself is compared, up to a space.
+func codexShortcutHint(row string) bool {
+	rest, ok := strings.CutPrefix(row, "? for shortcuts")
+	return ok && (rest == "" || unicode.IsSpace([]rune(rest)[0]))
 }

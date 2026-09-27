@@ -221,15 +221,34 @@ func claudeComposerBoxAt(pane string) (string, int, bool) {
 			}
 		}
 	}
-	// Walk up from the status line: blank rows may separate it from the border.
-	i := status - 1
-	for i >= 0 && stripSpace(StripDim(lines[i])) == "" {
-		i--
-	}
-	if i < 0 || !isComposerBoxBorder(lines[i]) {
+	// Claude may insert usage-limit notices between the composer border and its
+	// normal status row. Keep accepting only that known footer shape; arbitrary
+	// output between the box and status remains an unreadable composer.
+	bottom := -1
+	warningRows := false
+	usageNotice := false
+	for i := status - 1; i >= 0; i-- {
+		clean := stripSpace(StripDim(lines[i]))
+		if clean == "" {
+			continue
+		}
+		if isComposerBoxBorder(lines[i]) {
+			bottom = i
+			break
+		}
+		if isClaudeWarningNoticeLine(lines[i]) {
+			warningRows = true
+			if isClaudeUsageLimitNoticeLine(lines[i]) {
+				usageNotice = true
+			}
+			continue
+		}
 		return "", -1, false
 	}
-	bottom, top := i, -1
+	if bottom < 0 || warningRows && !usageNotice {
+		return "", -1, false
+	}
+	top := -1
 	for j := bottom - 1; j >= 0 && bottom-j <= composerBoxMaxRows; j-- {
 		if isComposerBoxBorder(lines[j]) {
 			top = j
@@ -255,6 +274,16 @@ func claudeComposerBoxAt(pane string) (string, int, bool) {
 		out = append(out, strings.TrimRight(clean, " \t\u00a0"))
 	}
 	return strings.Join(out, "\n"), top, true
+}
+
+func isClaudeUsageLimitNoticeLine(line string) bool {
+	clean := strings.TrimSpace(ansiSeq.ReplaceAllString(line, ""))
+	return usageLimitNotice.MatchString(clean)
+}
+
+func isClaudeWarningNoticeLine(line string) bool {
+	clean := strings.TrimSpace(ansiSeq.ReplaceAllString(line, ""))
+	return strings.HasPrefix(clean, "⚠")
 }
 
 // claudeComposerTailMatches recognizes the visible tail of our message in a

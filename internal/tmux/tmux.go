@@ -949,6 +949,11 @@ var ErrNotAgent = errors.New("target pane is not an agent CLI")
 // leaves a record, exactly as ErrTyping already does.
 var ErrNotReady = errors.New("message was not delivered")
 
+// ErrUsageLimited is a WAIT outcome, not a proven delivery failure. Callers
+// keep the message pending without charging a retry attempt while Claude's
+// usage-limit notice is visible.
+var ErrUsageLimited = errors.New("target usage limit reached")
+
 // ErrUnverified reports the third outcome: the message was injected and Enter
 // was pressed, but the delivery could not be confirmed either way (a capture
 // failed, a client started typing, or the composer was never observed holding
@@ -974,6 +979,9 @@ const (
 // empty, stable composer — but it does not consume input, which is how a
 // 600-character brief was reported "sent" and never arrived.
 var authExpiredMarkers = []string{"login expired", "run /login"}
+
+var usageLimitNotice = regexp.MustCompile(`(?i)^⚠(?:️)?\s+usage\s+limit\s+reached(?:\b|$)`)
+var usageLimitReset = regexp.MustCompile(`(?i)\blimit\s+resets?\s+([^·…]+)`)
 
 // authStatusBullet is the marker Claude Code prefixes its status banners with.
 // Requiring it keeps prose that merely mentions the words from matching.
@@ -1024,6 +1032,37 @@ func AuthExpired(pane string) bool {
 		}
 	}
 	return false
+}
+
+// UsageLimitReason returns a readable reason only when a Claude composer is
+// present and its live footer contains the anchored usage-limit notice. The
+// transcript above the composer is deliberately excluded.
+func UsageLimitReason(pane string) string {
+	if _, _, ok := claudeComposerBoxAt(pane); !ok {
+		return ""
+	}
+	for _, line := range statusFooter(pane) {
+		clean := ansiSeq.ReplaceAllString(line, "")
+		if !usageLimitNotice.MatchString(strings.TrimSpace(clean)) {
+			continue
+		}
+		if match := usageLimitReset.FindStringSubmatch(clean); len(match) == 2 {
+			reset := strings.TrimSpace(match[1])
+			if reset != "" {
+				return ErrUsageLimited.Error() + " (limit resets " + reset + ")"
+			}
+		}
+		return ErrUsageLimited.Error()
+	}
+	return ""
+}
+
+func usageLimitError(pane string) error {
+	reason := UsageLimitReason(pane)
+	if reason == "" || reason == ErrUsageLimited.Error() {
+		return ErrUsageLimited
+	}
+	return fmt.Errorf("%w%s", ErrUsageLimited, strings.TrimPrefix(reason, ErrUsageLimited.Error()))
 }
 
 // statusFooter returns the rendered rows BELOW the live composer — where a TUI
@@ -1226,6 +1265,9 @@ func (c *Client) readyToSend(ctx context.Context, session, firstPane string, for
 	if AuthExpired(firstPane) {
 		return false, fmt.Errorf("%w: %s", ErrNotReady, authExpiredReason)
 	}
+	if UsageLimitReason(firstPane) != "" {
+		return false, usageLimitError(firstPane)
+	}
 	firstActivity, err := c.clientActivity(ctx, session)
 	if err != nil {
 		return false, err
@@ -1243,6 +1285,9 @@ func (c *Client) readyToSend(ctx context.Context, session, firstPane string, for
 	}
 	if AuthExpired(secondPane) {
 		return false, fmt.Errorf("%w: %s", ErrNotReady, authExpiredReason)
+	}
+	if UsageLimitReason(secondPane) != "" {
+		return false, usageLimitError(secondPane)
 	}
 	secondActivity, err := c.clientActivity(ctx, session)
 	if err != nil {
@@ -1856,6 +1901,12 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 	switch c.submit(ctx, target, session, message, &pane) {
 	case sendVerified:
 		return finished, nil
+	case sendUsageLimited:
+		limitedPane, captureErr := c.CaptureAnsi(ctx, session)
+		if captureErr == nil {
+			return finished, usageLimitError(limitedPane)
+		}
+		return finished, ErrUsageLimited
 	case sendMismatch:
 		return finished, c.provenFailure(ctx, session, pane, composerOtherReason)
 	case sendUnowned:
@@ -2043,7 +2094,7 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 	verdict, text := classifyPaste(pane, texts)
 	switch verdict {
 	case pasteExact:
-		if c.submit(ctx, target, session, text, &pane) != sendVerified {
+		if c.submitWithUsageLimit(ctx, target, session, text, &pane, false) != sendVerified {
 			// Enter did not clear it. Nothing was re-injected and nothing was
 			// destroyed; the message goes to the queue like any busy pane.
 			return nil, "", stuckUnresolved, nil
@@ -2246,6 +2297,9 @@ const (
 	// sendVerified: the composer was seen holding our message and later seen
 	// empty (or, on a busy Codex, moved into its native queue).
 	sendVerified
+	// sendUsageLimited means Enter left our exact text in Claude's composer while
+	// its usage-limit notice was visible, and the owned clear succeeded.
+	sendUsageLimited
 	// sendMismatch: the composer holds content unrelated to our message, which
 	// proves the paste never landed.
 	sendMismatch
@@ -2286,6 +2340,10 @@ const (
 // the integrity check in Send/resolveStuckPaste has just looked at the composer,
 // and a second capture would only widen the window between looking and pressing.
 func (c *Client) submit(ctx context.Context, target, session, message string, first *string) sendResult {
+	return c.submitWithUsageLimit(ctx, target, session, message, first, true)
+}
+
+func (c *Client) submitWithUsageLimit(ctx context.Context, target, session, message string, first *string, detectUsageLimit bool) sendResult {
 	want := stripSpace(message)
 	held := false
 	for attempt := 0; attempt <= submitRetries; attempt++ {
@@ -2307,6 +2365,14 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		paneWidth := 0
 		if _, _, isClaude := claudeComposerBoxAt(pane); isClaude {
 			paneWidth, _ = c.paneWidth(ctx, session)
+		}
+		if detectUsageLimit && attempt > 0 && UsageLimitReason(pane) != "" {
+			if box, readable := composerBoxText(pane); readable && box == want {
+				if err := c.clearWithCtrlU(ctx, session, []string{message}); err == nil {
+					return sendUsageLimited
+				}
+				return sendUnverified
+			}
 		}
 		verdict := classifyComposerAtWidth(pane, message, paneWidth)
 		owned := composerHoldsMessageAtWidth(pane, message, paneWidth)

@@ -16,11 +16,21 @@ type claudeViewportTerminal struct {
 	keys               []string
 	pastes             int
 	clears             int
+	usageLimited       bool
+	limitAfterEnter    bool
 }
 
 func (tt *claudeViewportTerminal) pane() string {
 	if tt.composer == "" {
-		return claudePane(emptyRow)
+		pane := claudePane(emptyRow)
+		if tt.usageLimited {
+			return claudePaneWithUsageLimit(pane,
+				"  ⚠ Usage limit reached · limit resets 5:40pm · clau.de/wrap-up · /upgrade to keep using …",
+				"  ⚠ While you wait, start a new cloud session by claiming a $250 credit",
+				"  ⚠ /low-priority to continue now at lower priority · uses your weekly limit",
+			)
+		}
+		return pane
 	}
 	rows := wordWrap(tt.composer, tt.width-2)
 	if len(rows) > tt.visibleRows {
@@ -36,7 +46,15 @@ func (tt *claudeViewportTerminal) pane() string {
 			composerRows[i] = "  " + row
 		}
 	}
-	return claudePane(composerRows...)
+	pane := claudePane(composerRows...)
+	if !tt.usageLimited {
+		return pane
+	}
+	return claudePaneWithUsageLimit(pane,
+		"  ⚠ Usage limit reached · limit resets 5:40pm · clau.de/wrap-up · /upgrade to keep using …",
+		"  ⚠ While you wait, start a new cloud session by claiming a $250 credit",
+		"  ⚠ /low-priority to continue now at lower priority · uses your weekly limit",
+	)
 }
 
 // wordWrap breaks rows after the last space that fits, as Claude does, and
@@ -101,8 +119,12 @@ func (tt *claudeViewportTerminal) client() *Client {
 				tt.clears++
 				tt.clearWrappedRow()
 			case "Enter":
-				tt.submitted = append(tt.submitted, tt.composer)
-				tt.composer = ""
+				if tt.limitAfterEnter {
+					tt.usageLimited = true
+				} else {
+					tt.submitted = append(tt.submitted, tt.composer)
+					tt.composer = ""
+				}
 			}
 		case "delete-buffer":
 		default:

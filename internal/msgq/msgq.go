@@ -971,6 +971,27 @@ func (q *Queue) retryLater(path string, message Message, cause error, report fun
 	}
 }
 
+const usageLimitRetryCadence = time.Minute
+
+func (q *Queue) waitForUsageLimit(path string, message Message, reason string, report func(string)) {
+	now := q.Now()
+	changed := message.Reason != reason
+	due := message.NextTry == 0 || !now.Before(time.Unix(0, int64(message.NextTry*1e9)))
+	if !changed && !due {
+		return
+	}
+	message.Reason = reason
+	message.NextTry = float64(now.Add(usageLimitRetryCadence).UnixNano()) / 1e9
+	q.update(path, message, report)
+	if changed && report != nil {
+		report(fmt.Sprintf("msgq: %s -> %s waiting: %s; retrying in %s", message.ID, message.To, reason, usageLimitRetryCadence))
+	}
+}
+
+func isUsageLimitWait(reason string) bool {
+	return strings.HasPrefix(reason, bptmux.ErrUsageLimited.Error())
+}
+
 const (
 	composerClearRetryBase  = 30 * time.Second
 	composerClearRetryMax   = 10 * time.Minute
@@ -1844,6 +1865,20 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		line.block(rec.ID)
 		return
 	}
+	if reason := bptmux.UsageLimitReason(paneAnsi); reason != "" {
+		q.waitForUsageLimit(rec.path, rec.Message, reason, report)
+		line.block(rec.ID)
+		return
+	}
+	if isUsageLimitWait(rec.Reason) {
+		resumed := rec.Message
+		resumed.Reason, resumed.NextTry = "", 0
+		q.update(rec.path, resumed, report)
+		if report != nil {
+			report(fmt.Sprintf("msgq: %s -> %s usage limit cleared; retrying delivery", rec.ID, rec.To))
+		}
+		rec.Message = resumed
+	}
 	// Backing off after a proven failure. The witness above already ran, so a
 	// message that did arrive still closes on time; only the PASTE waits.
 	if rec.NextTry > 0 && q.Now().Before(time.Unix(0, int64(rec.NextTry*1e9))) {
@@ -1923,6 +1958,10 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				reason = err.Error()
 			}
 			q.remember(rec.path, message, reason, report)
+			return
+		}
+		if errors.Is(err, bptmux.ErrUsageLimited) {
+			q.waitForUsageLimit(rec.path, message, err.Error(), report)
 			return
 		}
 		if errors.Is(err, bptmux.ErrNotReady) {

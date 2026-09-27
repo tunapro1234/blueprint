@@ -229,6 +229,99 @@ func TestDispatchWaitsForTypingThenDelivers(t *testing.T) {
 	}
 }
 
+func usageLimitedComposerPane() string {
+	lines := strings.Split(composerPane(""), "\n")
+	for i, line := range lines {
+		if line == "──────────────────────────────────────" {
+			withNotices := append([]string(nil), lines[:i+1]...)
+			withNotices = append(withNotices,
+				"  ⚠ Usage limit reached · limit resets 5:40pm · clau.de/wrap-up · /upgrade to keep using …",
+				"  ⚠ While you wait, start a new cloud session by claiming a $250 credit",
+				"  ⚠ /low-priority to continue now at lower priority · uses your weekly limit",
+			)
+			withNotices = append(withNotices, lines[i+1:]...)
+			return strings.Join(withNotices, "\n")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestUsageLimitedClaudeWaitsWithoutChargingAttempts(t *testing.T) {
+	q := newBoundTestQueue(t.TempDir())
+	current := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	q.Now = func() time.Time { return current }
+	id, err := q.Enqueue("target", "sender", "queued message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: usageLimitedComposerPane()}
+	var reports []string
+	for i := 0; i < 10; i++ {
+		if err := q.Dispatch(context.Background(), target, func(line string) { reports = append(reports, line) }); err != nil {
+			t.Fatal(err)
+		}
+		current = current.Add(10 * time.Second)
+	}
+	if target.calls != 0 || len(target.sent) != 0 {
+		t.Fatalf("usage-limited target received a send: calls=%d sent=%v", target.calls, target.sent)
+	}
+	message, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Attempts != 0 || message.NoRepaste {
+		t.Fatalf("usage-limit wait changed failure state: Attempts=%d NoRepaste=%v", message.Attempts, message.NoRepaste)
+	}
+	if !strings.Contains(message.Reason, "limit resets 5:40pm") {
+		t.Fatalf("reason %q omitted the reset text", message.Reason)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("got %d wait reports after ten cycles, want one state-change report: %v", len(reports), reports)
+	}
+	if status, err := q.Status(id); err != nil || !strings.HasPrefix(status, "PENDING:") || !strings.Contains(status, "limit resets 5:40pm") {
+		t.Fatalf("status=%q err=%v, want a readable PENDING usage-limit wait", status, err)
+	}
+
+	target.pane = composerPane("")
+	current = current.Add(time.Second)
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(target.sent) != 1 || target.sent[0] != "target:queued message" {
+		t.Fatalf("delivery after limit cleared = %v, want the queued message on the first pass", target.sent)
+	}
+	if _, err := os.Stat(filepath.Join(q.done(), id+".json")); err != nil {
+		t.Fatalf("record did not finish after delivery resumed: %v", err)
+	}
+}
+
+func TestUsageLimitedSendErrorLeavesMessagePending(t *testing.T) {
+	q := newBoundTestQueue(t.TempDir())
+	q.Now = time.Now
+	id, err := q.Enqueue("target", "sender", "queued message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{
+		alive:   true,
+		pane:    composerPane(""),
+		sendErr: fmt.Errorf("%w (limit resets 5:40pm)", bptmux.ErrUsageLimited),
+	}
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	message, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Attempts != 0 || message.NoRepaste || !strings.Contains(message.Reason, "limit resets 5:40pm") {
+		t.Fatalf("usage-limit send outcome recorded as a failure: %+v", message)
+	}
+	if len(target.sent) != 0 {
+		t.Fatalf("failed usage-limited send was recorded delivered: %v", target.sent)
+	}
+}
+
 func TestDispatchLeavesNonAgentTargetPending(t *testing.T) {
 	// The target session exists and its composer is empty, but it dropped to a
 	// shell: Send returns ErrNotAgent. The message must stay PENDING (never lost,

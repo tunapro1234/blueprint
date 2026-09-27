@@ -1068,6 +1068,84 @@ func TestProvenFailureBacksOffAndStopsAtThreeAttempts(t *testing.T) {
 	}
 }
 
+func TestOwnedComposerRepairFailureBacksOffWhileStayingPending(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.Local)
+	q := heldQueue(t, &now)
+	id, err := q.Enqueue("target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearError := func(remaining string) error {
+		stopped := fmt.Errorf("%w: composer clear stopped; remaining visible composer text=%q", bptmux.ErrTyping, remaining)
+		return fmt.Errorf("mangled-paste repair stopped: %w", stopped)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: clearError("same tail")}
+	wantDelays := []time.Duration{
+		30 * time.Second,
+		60 * time.Second,
+		2 * time.Minute, // A shifted remainder is the same stuck repair.
+		4 * time.Minute,
+		8 * time.Minute,
+		10 * time.Minute,
+		10 * time.Minute,
+	}
+	var retryAt time.Time
+	for i, delay := range wantDelays {
+		if i > 0 {
+			now = retryAt.Add(time.Second)
+		}
+		if i == 2 {
+			target.sendErr = clearError("different visible tail")
+		}
+		if err := q.Dispatch(context.Background(), target, nil); err != nil {
+			t.Fatal(err)
+		}
+		record, err := read(filepath.Join(q.pending(), id+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		retryAt = time.Unix(0, int64(record.NextTry*1e9))
+		if got := retryAt.Sub(now); got < delay-time.Second || got > delay+time.Second {
+			t.Fatalf("attempt %d delay=%s, want %s (record=%+v)", i+1, got, delay, record)
+		}
+		if record.ComposerClearFailures == 0 || record.ComposerClearSignature == "" {
+			t.Fatalf("attempt %d did not persist the repair backoff: %+v", i+1, record)
+		}
+		if record.Status != "" || record.NoRepaste || record.Attempts != 0 || record.ForceBusy || record.ForcedAt != 0 || record.TornClears != 0 || record.Notified {
+			t.Fatalf("repair backoff changed delivery state: %+v", record)
+		}
+		status, err := q.Status(id)
+		if err != nil || !strings.Contains(status, "PENDING:") {
+			t.Fatalf("status=%q err=%v, want a pending record", status, err)
+		}
+		if i == 0 {
+			now = now.Add(15 * time.Second)
+			if err := q.Dispatch(context.Background(), target, nil); err != nil {
+				t.Fatal(err)
+			}
+			if target.calls != 1 {
+				t.Fatalf("backoff allowed an early paste: calls=%d", target.calls)
+			}
+		}
+	}
+	if target.calls != len(wantDelays) {
+		t.Fatalf("send attempts=%d, want %d", target.calls, len(wantDelays))
+	}
+	// A new runtime in the target pane is a new situation: the schedule restarts.
+	q.Binding = func(string) string { return "claude:replacement-thread:200" }
+	now = retryAt.Add(time.Second)
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	record, err := read(filepath.Join(q.pending(), id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Unix(0, int64(record.NextTry*1e9)).Sub(now); got < 29*time.Second || got > 31*time.Second {
+		t.Fatalf("delay after a runtime change=%s, want 30s", got)
+	}
+}
+
 func TestReadKeepsWorkingForRecordsWithoutTheNewFields(t *testing.T) {
 	// Back-compat: records written before attempts/noRepaste/notified/nextTry
 	// existed must keep loading, and must behave like a fresh, retryable record.

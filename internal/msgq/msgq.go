@@ -3,6 +3,8 @@ package msgq
 import (
 	"blueprint/internal/messagetext"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +72,12 @@ type Message struct {
 	// (exponential backoff after a proven failure). The transcript witness still
 	// runs on every pass — waiting to retry is not waiting to notice.
 	NextTry float64 `json:"nextTry,omitempty"`
+	// ComposerClearFailures and ComposerClearSignature throttle repeated failures
+	// while repairing this record's own paste in the same target pane. They do not
+	// change delivery evidence, record status, or the existing proven-failure
+	// attempt budget.
+	ComposerClearFailures  int    `json:"composerClearFailures,omitempty"`
+	ComposerClearSignature string `json:"composerClearSignature,omitempty"`
 	// Cleanup is legacy proof that the transcript already confirmed delivery.
 	// Such pending records are finalized without touching any current composer.
 	Cleanup bool `json:"cleanup,omitempty"`
@@ -963,6 +971,54 @@ func (q *Queue) retryLater(path string, message Message, cause error, report fun
 	}
 }
 
+const (
+	composerClearRetryBase  = 30 * time.Second
+	composerClearRetryMax   = 10 * time.Minute
+	composerClearRetrySteps = 6
+)
+
+func (q *Queue) retryComposerClear(path string, message Message, cause error, report func(string)) {
+	signature := composerClearFailureSignature(message)
+	if signature != message.ComposerClearSignature || message.ComposerClearFailures < 1 {
+		message.ComposerClearFailures = 1
+	} else if message.ComposerClearFailures < composerClearRetrySteps {
+		message.ComposerClearFailures++
+	}
+	message.ComposerClearSignature = signature
+	message.Reason = cause.Error()
+	delay := composerClearRetryBase
+	for step := 1; step < message.ComposerClearFailures && delay < composerClearRetryMax; step++ {
+		delay *= 2
+		if delay > composerClearRetryMax {
+			delay = composerClearRetryMax
+		}
+	}
+	message.NextTry = float64(q.Now().Add(delay).UnixNano()) / 1e9
+	q.update(path, message, report)
+	if report != nil {
+		report(fmt.Sprintf("msgq: %s -> %s composer repair stopped (%v); still pending, retry in %s",
+			message.ID, message.To, cause, delay))
+	}
+}
+
+// composerClearFailureSignature identifies the record's target pane runtime.
+// The cause text is left out on purpose: it carries the visible remainder,
+// which shifts with every partial clear, and the stuck loop this throttles
+// (q696812417) alternated between two such remainders.
+func composerClearFailureSignature(message Message) string {
+	identity := message.To + "\x00" + message.AttemptBinding
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])
+}
+
+func isOwnedComposerRepairStop(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return strings.Contains(text, "mangled-paste repair stopped") && strings.Contains(text, "composer clear stopped")
+}
+
 // whyNotDelivered strips the sentinel off a wrapped delivery error so the queue
 // record carries the CAUSE in the operator's own words ("the composer contains
 // other text...") rather than the sentinel in front of it.
@@ -1835,6 +1891,10 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	if err != nil {
 		line.block(rec.ID)
 		message.AttemptBinding = intent.AttemptBinding
+		if isOwnedComposerRepairStop(err) {
+			q.retryComposerClear(rec.path, message, err, report)
+			return
+		}
 		if errors.Is(err, bptmux.ErrNotAgent) || errors.Is(err, bptmux.ErrTyping) || errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrDialog) {
 			message.Reason = err.Error()
 			q.update(rec.path, message, report)

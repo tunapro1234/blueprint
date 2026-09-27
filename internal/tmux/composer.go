@@ -257,6 +257,35 @@ func claudeComposerBoxAt(pane string) (string, int, bool) {
 	return strings.Join(out, "\n"), top, true
 }
 
+// claudeComposerTailMatches recognizes the visible tail of our message in a
+// Claude composer viewport. Claude keeps the cursor at the end after a paste,
+// so a clipped box can show a contiguous suffix while hiding the opening rows.
+//
+// A tail is also what a paste that lost its head looks like (see DamagedPaste),
+// so the match needs positive evidence of clipping at the measured pane width:
+// the message must wrap to more rows than the box shows, and the hidden part
+// must be at least half a row. A few eaten leading characters, or a middle-only
+// fragment, never authorizes submission. Without a width there is no match.
+func claudeComposerTailMatches(pane, want string, paneWidth int) bool {
+	if paneWidth <= 0 {
+		return false
+	}
+	box, _, ok := claudeComposerBoxAt(pane)
+	if !ok {
+		return false
+	}
+	got, stripped := stripSpace(box), stripSpace(want)
+	if len([]rune(got)) < pasteRelatedMin || strings.HasPrefix(stripped, got) || !strings.HasSuffix(stripped, got) {
+		return false
+	}
+	expectedRows, err := wrappedMessageRows(want, paneWidth)
+	if err != nil || expectedRows <= composerBoxRows(box) {
+		return false
+	}
+	hidden := len([]rune(stripped)) - len([]rune(got))
+	return hidden*2 >= paneWidth-composerIndent
+}
+
 // composerBoxText returns the whitespace-stripped full box content. Whitespace
 // is removed rather than collapsed, exactly as everywhere else in this package,
 // so a legitimate WRAP (the same text rendered across several rows, with the

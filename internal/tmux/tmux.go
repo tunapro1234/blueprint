@@ -198,7 +198,14 @@ func codexBusyQueue(pane string) bool {
 // message hanging. The box compares the whole content, which is exactly the
 // evidence needed to press Enter on our own multi-row paste.
 func composerHoldsMessage(pane, want string) bool {
+	return composerHoldsMessageAtWidth(pane, want, 0)
+}
+
+func composerHoldsMessageAtWidth(pane, want string, paneWidth int) bool {
 	if box, ok := composerBoxText(pane); ok && box == want {
+		return true
+	}
+	if claudeComposerTailMatches(pane, want, paneWidth) {
 		return true
 	}
 	if codexComposerTailMatches(pane, want) {
@@ -238,7 +245,14 @@ const (
 // match instead of a prefix, and text that is genuinely unrelated is recognised
 // as such even when its first row happens to start like ours.
 func classifyComposer(pane, want string) composerVerdict {
+	return classifyComposerAtWidth(pane, want, 0)
+}
+
+func classifyComposerAtWidth(pane, want string, paneWidth int) composerVerdict {
 	if pasteChip(pane) {
+		return composerMine
+	}
+	if claudeComposerTailMatches(pane, want, paneWidth) {
 		return composerMine
 	}
 	if codexComposerTailMatches(pane, want) {
@@ -637,6 +651,18 @@ func (c *Client) PaneCommand(ctx context.Context, session string) (string, error
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func (c *Client) paneWidth(ctx context.Context, session string) (int, error) {
+	out, err := c.run(ctx, nil, "display-message", "-p", "-t", "="+session+":", "#{pane_width}")
+	if err != nil {
+		return 0, err
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || width < 3 {
+		return 0, fmt.Errorf("invalid pane width %q", strings.TrimSpace(string(out)))
+	}
+	return width, nil
 }
 
 // PaneProcess returns the command and PID of the active pane in a session.
@@ -1233,8 +1259,11 @@ const (
 	// composerClearMargin covers prompt/footer reflow while a key is applied.
 	composerClearMargin = 4
 	// composerClearAttemptsMax is a hard ceiling, not the ordinary budget. The
-	// ordinary budget is the complete visible composer row count plus the margin.
+	// ordinary budget is the message's wrapped row count plus the margin.
 	composerClearAttemptsMax = 64
+	// composerClearStallMax consecutive presses without a visible change stop
+	// the clear: C-u is not acting on this composer.
+	composerClearStallMax = 2
 )
 
 // ClearComposer prepares a pane for a SLASH COMMAND bp is about to type into it
@@ -1484,25 +1513,39 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 		return clearStopped(ErrBusy, pane)
 	}
 	budget := 1 // ClearComposer uses this only for a visually empty, stuck editor state.
+	ownedText := ""
 	if len(mine) == 0 {
 		if composerFilled(pane) {
 			return clearStopped(ErrTyping, pane)
 		}
 	} else {
-		if _, ours := StuckPaste(pane, mine); !ours {
+		owned, ours := StuckPaste(pane, mine)
+		if !ours {
 			return clearStopped(ErrTyping, pane)
 		}
-		rows, complete := completeComposerRows(pane)
-		if !complete {
+		if _, _, readable := composerBoxAt(pane); !readable {
 			return clearStopped(ErrTyping, pane)
 		}
-		budget, err = composerClearBudget(pane, rows)
+		ownedText = stripSpace(owned)
+		visibleText, readable := composerBoxText(pane)
+		// An intact clipped prefix/suffix is a substring. A torn rendering may
+		// omit interior characters, so keep the existing related-paste recovery
+		// for that case, but reject extra text appended around our whole message.
+		if !readable || visibleText == "" ||
+			(!strings.Contains(ownedText, visibleText) &&
+				(strings.Contains(visibleText, ownedText) || !relatedPaste(visibleText, ownedText))) {
+			return clearStopped(ErrTyping, pane)
+		}
+		width, widthErr := c.paneWidth(ctx, session)
+		if widthErr != nil {
+			return clearStopped(fmt.Errorf("%w: pane width unavailable: %v", ErrTyping, widthErr), pane)
+		}
+		budget, err = composerClearBudget(pane, owned, width)
 		if err != nil {
 			return clearStopped(ErrTyping, pane)
 		}
 	}
-	lastRows, _ := completeComposerRows(pane)
-	previousText := ""
+	previousText, stalled := "", 0
 	trackTextTail := len(mine) > 0
 	if trackTextTail {
 		previousText, _ = composerBoxText(pane)
@@ -1540,64 +1583,93 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 			}
 			return clearStopped(ErrTyping, pane)
 		}
-		if _, ok := StuckPaste(pane, mine); !ok {
-			return clearStopped(ErrTyping, pane)
-		}
 		if trackTextTail {
 			currentText, readable := composerBoxText(pane)
-			if !readable || !strings.HasPrefix(previousText, currentText) {
+			// What remains must still be ours: either a part of our message (a
+			// clipped view scrolls earlier rows in) or a prefix of what was there
+			// (a torn render shrinking from the end).
+			if !readable || !(strings.Contains(ownedText, currentText) || strings.HasPrefix(previousText, currentText)) {
 				return clearStopped(ErrTyping, pane)
 			}
+			if currentText == previousText {
+				// One press may land before the redraw; two in a row means C-u is
+				// not doing anything here, and pressing on is blind.
+				if stalled++; stalled >= composerClearStallMax {
+					return clearStopped(ErrTyping, pane)
+				}
+				continue
+			}
+			stalled = 0
 			previousText = currentText
 		}
-		rows, complete := completeComposerRows(pane)
-		if !complete {
-			return clearStopped(ErrTyping, pane)
-		}
-		if rows > lastRows {
-			need, budgetErr := composerClearBudget(pane, rows)
-			if budgetErr != nil || attempt+1+need > composerClearAttemptsMax {
-				return clearStopped(ErrTyping, pane)
-			}
-			if attempt+1+need > budget {
-				budget = attempt + 1 + need
-			}
-		}
-		lastRows = rows
 	}
 	return clearStopped(ErrTyping, pane)
 }
 
-// completeComposerRows returns the row count only when the box is readable and
-// not showing a scrolling window. Clearing a tail-only view could erase part of
-// an intact long message, so an incomplete view is never a clearing target.
-func completeComposerRows(pane string) (int, bool) {
-	box, top, ok := composerBoxAt(pane)
-	if !ok || composerBoxScrolled(pane, box, top) || composerBoxTextEmpty(box) {
-		return 0, false
+// composerClearBudget sizes one clear pass from the full message rather than
+// the visible viewport. Claude can show only the cursor-side rows of a taller
+// composer, so the visible row count alone can leave a hidden prefix behind.
+func composerClearBudget(pane, message string, width int) (int, error) {
+	rows, err := wrappedMessageRows(message, width)
+	if err != nil {
+		return 0, err
 	}
-	return composerBoxRows(box), true
+	pressesPerRow, margin, limit := 1, composerClearMargin, composerClearAttemptsMax
+	if hermesClearBudget(pane) > 0 {
+		pressesPerRow, margin, limit = hermesClearPressesPerRow, hermesClearMargin, hermesClearAttemptsMax
+	}
+	// A message taller than the cap is still ours: clearing part of it is safe,
+	// and the next pass sees the remainder. Refusing would leave it all in place.
+	return min(rows*pressesPerRow+margin, limit), nil
 }
 
-func composerBoxTextEmpty(box string) bool {
-	return stripSpace(box) == ""
-}
+// composerIndent is the prompt marker column that precedes every composer row.
+const composerIndent = 2
 
-// composerClearBudget sizes one clear pass from the current, complete view.
-// Hermes has different measured key behavior; Claude removes one visible row
-// per C-u, while Codex 0.157.0 clears the whole buffer in one press.
-func composerClearBudget(pane string, rows int) (int, error) {
-	if need := hermesClearBudget(pane); need > 0 {
-		if need > composerClearAttemptsMax {
-			return 0, fmt.Errorf("composer needs %d C-u presses, above the hard cap of %d", need, composerClearAttemptsMax)
+// wrappedMessageRows counts rows at character wrap. Claude wraps at words, which
+// only adds rows, so this is a lower bound: clipping evidence stays conservative
+// and the clear budget's margin absorbs the difference.
+func wrappedMessageRows(message string, paneWidth int) (int, error) {
+	contentWidth := paneWidth - composerIndent
+	if contentWidth < 1 {
+		return 0, fmt.Errorf("invalid pane width %d", paneWidth)
+	}
+	rows := 0
+	for _, line := range strings.Split(message, "\n") {
+		lineRows, column := 1, 0
+		for _, r := range line {
+			cells := composerRuneWidth(r)
+			if cells == 0 {
+				continue
+			}
+			if column > 0 && column+cells > contentWidth {
+				lineRows++
+				column = 0
+			}
+			column += cells
 		}
-		return need, nil
+		rows += lineRows
 	}
-	need := rows + composerClearMargin
-	if need > composerClearAttemptsMax {
-		return 0, fmt.Errorf("composer needs %d C-u presses, above the hard cap of %d", need, composerClearAttemptsMax)
+	return rows, nil
+}
+
+func composerRuneWidth(r rune) int {
+	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || r == 0x200d {
+		return 0
 	}
-	return need, nil
+	switch {
+	case r >= 0x1100 && r <= 0x11ff,
+		r >= 0x2e80 && r <= 0xa4cf,
+		r >= 0xac00 && r <= 0xd7a3,
+		r >= 0xf900 && r <= 0xfaff,
+		r >= 0xfe10 && r <= 0xfe6f,
+		r >= 0xff01 && r <= 0xff60,
+		r >= 0xffe0 && r <= 0xffe6,
+		r >= 0x1f300 && r <= 0x1faff:
+		return 2
+	default:
+		return 1
+	}
 }
 
 // clearStopped always records the exact visible remainder when a clear cannot
@@ -2019,7 +2091,11 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 // about the screen, not about the composer's internal buffer. The final witness
 // for a delivery is still the agent's own transcript (see msgq reconciliation).
 func (c *Client) checkPaste(ctx context.Context, target, session, message, pane string) (string, bool, error) {
-	verdict := c.pasteIntegrity(pane, message)
+	paneWidth := 0
+	if _, _, isClaude := claudeComposerBoxAt(pane); isClaude {
+		paneWidth, _ = c.paneWidth(ctx, session)
+	}
+	verdict := c.pasteIntegrity(pane, message, paneWidth)
 	// A paste still landing is given time before anything is decided about it.
 	// The wait is bounded and it presses no keys: either the composer completes,
 	// or the message is queued with nothing partial delivered.
@@ -2030,7 +2106,7 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 			return pane, false, nil
 		}
 		pane = next
-		verdict = c.pasteIntegrity(next, message)
+		verdict = c.pasteIntegrity(next, message, paneWidth)
 	}
 	if verdict == pasteIncomplete {
 		return pane, false, nil
@@ -2052,7 +2128,7 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		c.Sleep(composerSettleWindow)
 		if next, ok := c.composerStable(ctx, session); ok {
 			pane = next
-			verdict = c.pasteIntegrity(next, message)
+			verdict = c.pasteIntegrity(next, message, paneWidth)
 		}
 	}
 	switch verdict {
@@ -2073,7 +2149,7 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		if !ok {
 			return pane, false, nil
 		}
-		if verdict := c.pasteIntegrity(next, message); verdict != pasteIntact {
+		if verdict := c.pasteIntegrity(next, message, paneWidth); verdict != pasteIntact {
 			return next, false, nil
 		}
 		return next, true, nil
@@ -2102,7 +2178,7 @@ const (
 	pasteIncomplete
 )
 
-func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
+func (c *Client) pasteIntegrity(pane, message string, paneWidths ...int) pasteVerification {
 	if pasteChip(pane) {
 		return pasteUnreadable
 	}
@@ -2138,6 +2214,11 @@ func (c *Client) pasteIntegrity(pane, message string) pasteVerification {
 		// so bytes are genuinely lost rather than merely late. bp cannot stop it;
 		// it can refuse to turn it into a delivery.
 		return pasteIncomplete
+	case len(paneWidths) > 0 && claudeComposerTailMatches(pane, message, paneWidths[0]):
+		// Claude's cursor-anchored viewport can show a contiguous suffix while
+		// hiding the opening rows. The tail match proves this is our full paste,
+		// so submission can continue without treating the clipped view as damage.
+		return pasteIntact
 	case codexComposerViewportFillsPane(pane, top):
 		// A short Codex pane showing a later part of the composer. Checked only
 		// after the prefix rule, so a paste still arriving is never submitted.
@@ -2217,8 +2298,12 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		if paneDialog(pane) {
 			return sendUnverified
 		}
-		verdict := classifyComposer(pane, want)
-		owned := composerHoldsMessage(pane, want)
+		paneWidth := 0
+		if _, _, isClaude := claudeComposerBoxAt(pane); isClaude {
+			paneWidth, _ = c.paneWidth(ctx, session)
+		}
+		verdict := classifyComposerAtWidth(pane, want, paneWidth)
+		owned := composerHoldsMessageAtWidth(pane, want, paneWidth)
 		// Classification accepts prefixes to avoid repasting ambiguous text.
 		// That is not permission to submit a user's suffix or a partial frame.
 		// Claude's collapsed chip supports the first Enter only.
@@ -2268,7 +2353,7 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		}
 		held = true
 		if attempt > 0 {
-			if !composerHoldsMessage(pane, want) {
+			if !composerHoldsMessageAtWidth(pane, want, paneWidth) {
 				// Ours, but not in a form another Enter may be pressed on: a
 				// partial/wrapped render, or our text with a user's keystrokes
 				// appended. Stop pressing keys; the outcome is unknown.

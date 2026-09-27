@@ -170,6 +170,18 @@ func TestComposerBoxSingleRowMatchesTodaysReading(t *testing.T) {
 	}
 }
 
+func TestClaudeComposerNBSPPromptIsEmpty(t *testing.T) {
+	for _, row := range []string{"❯\u00a0", "❯ \u00a0\u00a0"} {
+		pane := claudePane(row)
+		if !ComposerEmpty(pane) {
+			t.Errorf("ComposerEmpty(%q) = false, want true", row)
+		}
+		if Typing(pane) {
+			t.Errorf("Typing(%q) = true, want false", row)
+		}
+	}
+}
+
 func TestComposerBoxRefusesUnfamiliarStructures(t *testing.T) {
 	cases := []struct {
 		name string
@@ -923,7 +935,7 @@ func TestSubmitStuckRefusesAnIncompleteScrollingView(t *testing.T) {
 	}
 }
 
-func TestClearWithCtrlUIsBounded(t *testing.T) {
+func TestClearWithCtrlUStopsWhenPressesMakeNoProgress(t *testing.T) {
 	long := strings.Repeat("a line from our own message ", 6)
 	captures := make([]string, composerClearMargin+2)
 	for i := range captures {
@@ -931,10 +943,31 @@ func TestClearWithCtrlUIsBounded(t *testing.T) {
 	}
 	h := &sendHarness{captures: captures}
 	if err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{long}); !errors.Is(err, ErrTyping) {
+		t.Fatalf("err=%v, want ErrTyping after stalled presses", err)
+	}
+	if got := countKey(h.mutations, "C-u"); got != composerClearStallMax {
+		t.Fatalf("expected %d C-u presses before giving up on a stalled box, got %d", composerClearStallMax, got)
+	}
+}
+
+func TestClearWithCtrlUIsBounded(t *testing.T) {
+	// Every press makes progress but the box never empties: the message-sized
+	// budget still ends the pass.
+	long := strings.Repeat("a line from our own message ", 6)
+	budget, err := composerClearBudget(claudePane("❯ "+long), long, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captures := make([]string, budget+2)
+	for i := range captures {
+		captures[i] = claudePane("❯ " + long[:len(long)-i])
+	}
+	h := &sendHarness{captures: captures}
+	if err := testClient(h).clearWithCtrlU(context.Background(), "target", []string{long}); !errors.Is(err, ErrTyping) {
 		t.Fatalf("err=%v, want ErrTyping at the bound", err)
 	}
-	if got := countKey(h.mutations, "C-u"); got != composerClearMargin+1 {
-		t.Fatalf("expected %d C-u presses at the bound, got %d", composerClearMargin+1, got)
+	if got := countKey(h.mutations, "C-u"); got != budget {
+		t.Fatalf("expected %d C-u presses at the bound, got %d", budget, got)
 	}
 }
 
@@ -953,7 +986,7 @@ func TestClearWithCtrlUUsesEveryWrappedRowBeyondEight(t *testing.T) {
 	}
 	start := claudePane(composerRows...)
 	calls := 0
-	h := &sendHarness{clearPane: start}
+	h := &sendHarness{clearPane: start, width: rowChars + 2}
 	h.clearRow = func(pane string) string {
 		before, _, ok := composerBoxAt(pane)
 		if !ok {

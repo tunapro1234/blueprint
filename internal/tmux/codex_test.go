@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,7 @@ func TestCodexCurrentFooterAndLongRunningTurn(t *testing.T) {
 // screens from its input state instead of scripting the implementation's reads.
 type codexTerminal struct {
 	harness, mode, search, hint                            string
+	width                                                  int
 	chip, expandFirst, expanded, searchAfterPaste          bool
 	draft, buffer                                          string
 	submitted                                              []string
@@ -125,6 +127,13 @@ func (h *codexTerminal) client() *Client {
 	c.exec = func(_ context.Context, data []byte, args ...string) ([]byte, error) {
 		switch args[0] {
 		case "display-message":
+			if strings.Contains(strings.Join(args, " "), "#{pane_width}") {
+				width := h.width
+				if width == 0 {
+					width = 73
+				}
+				return []byte(strconv.Itoa(width) + "\n"), nil
+			}
 			if h.harness != "" {
 				return []byte(h.harness), nil
 			}

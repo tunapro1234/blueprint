@@ -22,7 +22,7 @@ func (tt *claudeViewportTerminal) pane() string {
 	if tt.composer == "" {
 		return claudePane(emptyRow)
 	}
-	rows := wrapText(tt.composer, tt.width-2)
+	rows := wordWrap(tt.composer, tt.width-2)
 	if len(rows) > tt.visibleRows {
 		// Claude anchors the cursor at the end after a paste. Once the buffer
 		// shrinks to fit, displaying all rows naturally anchors the view at top.
@@ -39,8 +39,28 @@ func (tt *claudeViewportTerminal) pane() string {
 	return claudePane(composerRows...)
 }
 
+// wordWrap breaks rows after the last space that fits, as Claude does, and
+// falls back to a hard break inside a long word. The space stays on the row it
+// ends, so joining the rows restores the text.
+func wordWrap(text string, width int) []string {
+	var rows []string
+	runes := []rune(text)
+	for len(runes) > width {
+		cut := width
+		for i := width; i > 0; i-- {
+			if runes[i] == ' ' {
+				cut = i + 1
+				break
+			}
+		}
+		rows = append(rows, string(runes[:cut]))
+		runes = runes[cut:]
+	}
+	return append(rows, string(runes))
+}
+
 func (tt *claudeViewportTerminal) clearWrappedRow() {
-	rows := wrapText(tt.composer, tt.width-2)
+	rows := wordWrap(tt.composer, tt.width-2)
 	if len(rows) <= 1 {
 		tt.composer = ""
 		return
@@ -136,6 +156,31 @@ func TestClaudeClippedComposerDeliversOnce(t *testing.T) {
 	}
 	if countClaudeEnter(terminal.keys) != 1 {
 		t.Fatalf("Enter count = %d, want 1 (%v)", countClaudeEnter(terminal.keys), terminal.keys)
+	}
+	if len(terminal.submitted) != 1 || terminal.submitted[0] != message {
+		t.Fatalf("submitted = %q, want one complete message", terminal.submitted)
+	}
+}
+
+// q382452178 (2026-09-27, probot-egitim-writer at 59x23): a 346-character
+// message with ordinary spaces. Stripped of its spaces it would fit the six
+// visible rows, so judging the viewport from the stripped text called our own
+// clipped paste foreign text and queued it as never entered.
+func TestClaudeClippedSpacedMessageDeliversOnce(t *testing.T) {
+	message := "[probot-egitim] Starter Bot 1.7, 1.8, 1.9 yazimi. Brief: " +
+		"/srv/probot/egitim/mufredat/araclar/starter-bot-1-7-1-9-brief-2026-09-27.md " +
+		"(once onu, sonra oradaki Once oku listesini oku). 1.4-1.6 entegre edildi ve " +
+		"dev yayinda, koordinator duzeltmeleri brief icinde. Sira 1.7, 1.8, 1.9. Her " +
+		"derste teslim hazir mesaji, sonunda damitma ve skill-yedekle."
+	terminal := &claudeViewportTerminal{width: 59, visibleRows: 6}
+	if rows := len(wordWrap(message, 57)); rows <= terminal.visibleRows {
+		t.Fatalf("fixture wraps to %d rows, want a clipped viewport", rows)
+	}
+	if err := terminal.client().Send(context.Background(), "target", message); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if terminal.pastes != 1 || countClaudeEnter(terminal.keys) != 1 {
+		t.Fatalf("pastes=%d Enter=%d keys=%v, want one paste and one Enter", terminal.pastes, countClaudeEnter(terminal.keys), terminal.keys)
 	}
 	if len(terminal.submitted) != 1 || terminal.submitted[0] != message {
 		t.Fatalf("submitted = %q, want one complete message", terminal.submitted)

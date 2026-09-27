@@ -201,11 +201,14 @@ func composerHoldsMessage(pane, want string) bool {
 	return composerHoldsMessageAtWidth(pane, want, 0)
 }
 
-func composerHoldsMessageAtWidth(pane, want string, paneWidth int) bool {
+// composerHoldsMessageAtWidth takes the message as injected, not stripped: a
+// Claude viewport is judged by how the real text wraps at paneWidth.
+func composerHoldsMessageAtWidth(pane, message string, paneWidth int) bool {
+	want := stripSpace(message)
 	if box, ok := composerBoxText(pane); ok && box == want {
 		return true
 	}
-	if claudeComposerTailMatches(pane, want, paneWidth) {
+	if claudeComposerTailMatches(pane, message, paneWidth) {
 		return true
 	}
 	if codexComposerTailMatches(pane, want) {
@@ -248,11 +251,14 @@ func classifyComposer(pane, want string) composerVerdict {
 	return classifyComposerAtWidth(pane, want, 0)
 }
 
-func classifyComposerAtWidth(pane, want string, paneWidth int) composerVerdict {
+// classifyComposerAtWidth takes the message as injected; see
+// composerHoldsMessageAtWidth.
+func classifyComposerAtWidth(pane, message string, paneWidth int) composerVerdict {
+	want := stripSpace(message)
 	if pasteChip(pane) {
 		return composerMine
 	}
-	if claudeComposerTailMatches(pane, want, paneWidth) {
+	if claudeComposerTailMatches(pane, message, paneWidth) {
 		return composerMine
 	}
 	if codexComposerTailMatches(pane, want) {
@@ -2302,8 +2308,8 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		if _, _, isClaude := claudeComposerBoxAt(pane); isClaude {
 			paneWidth, _ = c.paneWidth(ctx, session)
 		}
-		verdict := classifyComposerAtWidth(pane, want, paneWidth)
-		owned := composerHoldsMessageAtWidth(pane, want, paneWidth)
+		verdict := classifyComposerAtWidth(pane, message, paneWidth)
+		owned := composerHoldsMessageAtWidth(pane, message, paneWidth)
 		// Classification accepts prefixes to avoid repasting ambiguous text.
 		// That is not permission to submit a user's suffix or a partial frame.
 		// Claude's collapsed chip supports the first Enter only.
@@ -2353,7 +2359,7 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 		}
 		held = true
 		if attempt > 0 {
-			if !composerHoldsMessageAtWidth(pane, want, paneWidth) {
+			if !composerHoldsMessageAtWidth(pane, message, paneWidth) {
 				// Ours, but not in a form another Enter may be pressed on: a
 				// partial/wrapped render, or our text with a user's keystrokes
 				// appended. Stop pressing keys; the outcome is unknown.

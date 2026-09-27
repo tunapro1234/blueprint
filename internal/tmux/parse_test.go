@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -230,11 +231,19 @@ type sendHarness struct {
 	// defaults to "claude" so existing agent-path tests need not set it; set it
 	// to a shell name (e.g. "zsh") to exercise the non-agent guard.
 	command string
+	width   int
 }
 
 func (h *sendHarness) run(_ context.Context, stdin []byte, args ...string) ([]byte, error) {
 	switch args[0] {
 	case "display-message":
+		if strings.Contains(strings.Join(args, " "), "#{pane_width}") {
+			width := h.width
+			if width == 0 {
+				width = 80
+			}
+			return []byte(strconv.Itoa(width) + "\n"), nil
+		}
 		cmd := h.command
 		if cmd == "" {
 			cmd = "claude"

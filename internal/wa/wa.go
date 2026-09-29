@@ -9,15 +9,25 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"blueprint/internal/identity"
 )
 
 type Outgoing struct {
-	Agent   string  `json:"agent"`
-	To      *string `json:"to"`
-	ReplyTo *string `json:"replyTo"`
-	Text    string  `json:"text"`
+	Agent      string   `json:"agent"`
+	To         *string  `json:"to"`
+	ReplyTo    *string  `json:"replyTo"`
+	Text       string   `json:"text"`
+	Mentions   []string `json:"mentions,omitempty"`
+	MentionAll bool     `json:"mentionAll,omitempty"`
+}
+
+type SendOptions struct {
+	To         string
+	Reply      string
+	Mentions   []string
+	MentionAll bool
 }
 
 // Agent resolves the label a WhatsApp message will be signed with. It is the
@@ -37,21 +47,24 @@ func Agent(ctx context.Context, client identity.Sessioner, opts identity.Options
 	return identity.Resolve(ctx, client, opts)
 }
 
-func Send(outbox, agent, to, reply, text string) error {
+func Send(outbox, agent, text string, opts SendOptions) error {
 	text = Format(agent, text)
 	if err := os.MkdirAll(outbox, 0755); err != nil {
 		return err
 	}
 	var toPtr, replyPtr *string
-	if to != "" {
-		toCopy := to
+	if opts.To != "" {
+		toCopy := opts.To
 		toPtr = &toCopy
 	}
-	if reply != "" {
-		replyCopy := reply
+	if opts.Reply != "" {
+		replyCopy := opts.Reply
 		replyPtr = &replyCopy
 	}
-	record := Outgoing{Agent: agent, To: toPtr, ReplyTo: replyPtr, Text: text}
+	record := Outgoing{
+		Agent: agent, To: toPtr, ReplyTo: replyPtr, Text: text,
+		Mentions: opts.Mentions, MentionAll: opts.MentionAll,
+	}
 	// The bridge consumes visible *.json files. Keep the producer's temporary
 	// file outside that namespace so fs.watch can never claim it mid-rename.
 	tmp, err := os.CreateTemp(outbox, ".outbox-*")
@@ -72,6 +85,90 @@ func Send(outbox, agent, to, reply, text string) error {
 	}
 	target := filepath.Join(outbox, fmt.Sprintf("%d.json", time.Now().UnixNano()))
 	return os.Rename(name, target)
+}
+
+func NormalizeMention(value string) (string, error) {
+	input := value
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", invalidMention(input)
+	}
+	if strings.HasPrefix(value, "@") && strings.Count(value, "@") == 1 {
+		value = value[1:]
+	}
+	if strings.Contains(value, "@") {
+		if strings.Count(value, "@") != 1 {
+			return "", invalidMention(input)
+		}
+		user, domain, _ := strings.Cut(value, "@")
+		if deviceMention(user) {
+			return "", fmt.Errorf("invalid mention %q: device suffixes are not supported", input)
+		}
+		if !validMentionDigits(user) {
+			return "", invalidMention(input)
+		}
+		domain = strings.ToLower(domain)
+		switch domain {
+		case "s.whatsapp.net", "lid":
+			return user + "@" + domain, nil
+		case "c.us":
+			return user + "@s.whatsapp.net", nil
+		default:
+			return "", invalidMention(input)
+		}
+	}
+
+	var digits strings.Builder
+	plusSeen := false
+	for _, char := range value {
+		switch {
+		case char >= '0' && char <= '9':
+			digits.WriteRune(char)
+		case char == '+' && !plusSeen && digits.Len() == 0:
+			plusSeen = true
+		case unicode.IsSpace(char) || char == '-' || char == '(' || char == ')':
+			continue
+		default:
+			return "", invalidMention(input)
+		}
+	}
+	number := digits.String()
+	if !validMentionDigits(number) {
+		return "", invalidMention(input)
+	}
+	return number + "@s.whatsapp.net", nil
+}
+
+func validMentionDigits(value string) bool {
+	if len(value) < 7 || len(value) > 20 {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func deviceMention(user string) bool {
+	if strings.Count(user, ":") != 1 {
+		return false
+	}
+	number, suffix, _ := strings.Cut(user, ":")
+	if number == "" || suffix == "" {
+		return false
+	}
+	for _, char := range number + suffix {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func invalidMention(value string) error {
+	return fmt.Errorf("invalid mention %q: expected a phone number or supported WhatsApp JID", value)
 }
 
 func Format(agent, text string) string {

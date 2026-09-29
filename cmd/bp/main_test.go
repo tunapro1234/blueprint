@@ -1671,6 +1671,150 @@ func TestWhatsAppSendFrom(t *testing.T) {
 	})
 }
 
+func TestWhatsAppSendMentions(t *testing.T) {
+	clearEnv := func(t *testing.T) {
+		t.Helper()
+		for _, key := range []string{"TMUX", "AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
+			t.Setenv(key, "")
+		}
+		t.Setenv("AGENT", "agent")
+	}
+	newApp := func(t *testing.T, outbox string, ntfyConfig *ntfy.Config) (*app, *os.File, *os.File) {
+		t.Helper()
+		output, errOutput := testOutput(t), testOutput(t)
+		return &app{
+			ctx:         context.Background(),
+			originProbe: func(context.Context) identity.Origin { return identity.Origin{} },
+			config:      bpconfig.Config{WAOutbox: outbox, Ntfy: ntfyConfig},
+			tmux:        bptmux.New(),
+			out:         output,
+			err:         errOutput,
+		}, output, errOutput
+	}
+	queued := func(t *testing.T, outbox string) wa.Outgoing {
+		t.Helper()
+		entries, err := os.ReadDir(outbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("outbox entries=%v, want exactly one", entries)
+		}
+		data, err := os.ReadFile(filepath.Join(outbox, entries[0].Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record wa.Outgoing
+		if err := json.Unmarshal(data, &record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+
+	t.Run("normalizes mentions and accepts mixed flag order", func(t *testing.T) {
+		clearEnv(t)
+		outbox := t.TempDir()
+		a, output, errOutput := newApp(t, outbox, nil)
+		text := "hello @905551234567"
+		if err := a.whatsapp([]string{
+			"send", "--mention", "905551234567", "--reply", "source-1",
+			"--mention", "123456789012345@lid", "--mention-all", "--to", "team",
+			"hello", "@905551234567",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		record := queued(t, outbox)
+		wantMentions := []string{"905551234567@s.whatsapp.net", "123456789012345@lid"}
+		if !reflect.DeepEqual(record.Mentions, wantMentions) || !record.MentionAll {
+			t.Fatalf("mentions=%v mentionAll=%v", record.Mentions, record.MentionAll)
+		}
+		if record.To == nil || *record.To != "team" || record.ReplyTo == nil || *record.ReplyTo != "source-1" {
+			t.Fatalf("destination/reply fields = %+v", record)
+		}
+		if record.Text != wa.Format(record.Agent, text) {
+			t.Fatalf("text=%q, want unchanged body %q with the existing sender envelope", record.Text, wa.Format(record.Agent, text))
+		}
+		stderr := readTestOutput(t, errOutput)
+		if strings.Contains(stderr, "note: text has no @905551234567 token") {
+			t.Fatalf("note emitted despite visible mention token: %q", stderr)
+		}
+		if strings.Count(stderr, "note: text has no @123456789012345 token") != 1 {
+			t.Fatalf("missing-token note count was not one: %q", stderr)
+		}
+		stdout := readTestOutput(t, output)
+		if !strings.Contains(stdout, " (reply: source-1) (mentions: 2) (mention all)\n") {
+			t.Fatalf("confirmation suffix missing or out of order: %q", stdout)
+		}
+	})
+
+	t.Run("deduplicates canonical mentions and warns once", func(t *testing.T) {
+		clearEnv(t)
+		outbox := t.TempDir()
+		a, _, errOutput := newApp(t, outbox, nil)
+		if err := a.whatsapp([]string{
+			"send", "--mention", "+90 555 123 45 67", "--mention", "905551234567",
+			"--mention", "905551234567@s.whatsapp.net", "no token here",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		record := queued(t, outbox)
+		if !reflect.DeepEqual(record.Mentions, []string{"905551234567@s.whatsapp.net"}) {
+			t.Fatalf("mentions=%v, want one first-seen canonical value", record.Mentions)
+		}
+		if notes := strings.Count(readTestOutput(t, errOutput), "note: text has no @905551234567 token"); notes != 1 {
+			t.Fatalf("missing-token notes=%d, want one after deduplication", notes)
+		}
+	})
+
+	t.Run("invalid mention creates no outbox record and sends no ntfy", func(t *testing.T) {
+		clearEnv(t)
+		requests := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			requests++
+			writer.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+		outbox := t.TempDir()
+		a, _, _ := newApp(t, outbox, &ntfy.Config{URL: server.URL, Topic: "alerts"})
+		err := a.whatsapp([]string{"send", "--mention", "person@g.us", "hello"})
+		if err == nil || !strings.Contains(err.Error(), "person@g.us") {
+			t.Fatalf("invalid mention error=%v", err)
+		}
+		if entries, readErr := os.ReadDir(outbox); readErr != nil || len(entries) != 0 {
+			t.Fatalf("invalid mention created outbox entries=%v err=%v", entries, readErr)
+		}
+		if requests != 0 {
+			t.Fatalf("invalid mention sent %d ntfy request(s)", requests)
+		}
+	})
+
+	t.Run("missing mention value is rejected", func(t *testing.T) {
+		clearEnv(t)
+		outbox := t.TempDir()
+		a, _, _ := newApp(t, outbox, nil)
+		err := a.whatsapp([]string{"send", "--mention"})
+		if err == nil || !strings.Contains(err.Error(), "--mention requires") {
+			t.Fatalf("missing value error=%v", err)
+		}
+		if entries, _ := os.ReadDir(outbox); len(entries) != 0 {
+			t.Fatalf("missing value still queued %v", entries)
+		}
+	})
+
+	t.Run("no mention suffix without mention flags", func(t *testing.T) {
+		clearEnv(t)
+		outbox := t.TempDir()
+		a, output, _ := newApp(t, outbox, nil)
+		if err := a.whatsapp([]string{"send", "hello"}); err != nil {
+			t.Fatal(err)
+		}
+		stdout := readTestOutput(t, output)
+		if strings.Contains(stdout, "mentions:") || strings.Contains(stdout, "mention all") {
+			t.Fatalf("unexpected mention suffix: %q", stdout)
+		}
+	})
+}
+
 func TestRemoteAttachCommandUsesMoshByDefault(t *testing.T) {
 	binDir := t.TempDir()
 	writeTestExecutable(t, binDir, "mosh")

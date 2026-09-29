@@ -94,7 +94,7 @@ bp remote [<agent>...]       # existing /remote-control action; list/add/rm are 
 bp shell <server> [agent]    # interactive remote shell, or remote bp attach
 bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>
 bp peek <name> [n]
-bp wa send [--to <target>] [--reply <msgId>] [--from <label>] <message...>
+bp wa send [--to <target>] [--reply <msgId>] [--from <label>] [--mention <jid|number>]... [--mention-all] <message...>
                              # --from states the sender outside tmux (cron, scripts);
                              # inside a pane the session name is the sender
 bp wa read <target> [n] | bp wa chats
@@ -3541,6 +3541,8 @@ func (a *app) whatsapp(args []string) error {
 	switch args[0] {
 	case "send":
 		to, reply, from, index := "", "", "", 1
+		var rawMentions []string
+		mentionAll := false
 		for index < len(args) {
 			switch args[index] {
 			case "--to":
@@ -3561,6 +3563,15 @@ func (a *app) whatsapp(args []string) error {
 				}
 				from = args[index+1]
 				index += 2
+			case "--mention":
+				if index+1 >= len(args) || args[index+1] == "" || strings.HasPrefix(args[index+1], "--") {
+					return fmt.Errorf("--mention requires a JID or number")
+				}
+				rawMentions = append(rawMentions, args[index+1])
+				index += 2
+			case "--mention-all":
+				mentionAll = true
+				index++
 			default:
 				goto message
 			}
@@ -3568,7 +3579,20 @@ func (a *app) whatsapp(args []string) error {
 	message:
 		text := strings.Join(args[index:], " ")
 		if text == "" {
-			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] [--from <label>] <message...>")
+			return fmt.Errorf("usage: bp wa send [--to <target>] [--reply <msgId>] [--from <label>] [--mention <jid|number>]... [--mention-all] <message...>")
+		}
+		mentions := make([]string, 0, len(rawMentions))
+		seenMentions := make(map[string]struct{}, len(rawMentions))
+		for _, raw := range rawMentions {
+			mention, err := wa.NormalizeMention(raw)
+			if err != nil {
+				return err
+			}
+			if _, seen := seenMentions[mention]; seen {
+				continue
+			}
+			seenMentions[mention] = struct{}{}
+			mentions = append(mentions, mention)
 		}
 		if from != "" {
 			// Inside a pane the tmux session is the sender and it wins, so a
@@ -3590,7 +3614,16 @@ func (a *app) whatsapp(args []string) error {
 			// rather than let a guess pass for a signature.
 			fmt.Fprintf(a.err, "WARNING: sender not established (%s); sending as [%s]. Use --from <label> to state who is sending.\n", who.Source, agent)
 		}
-		waErr := wa.Send(a.config.WAOutbox, agent, to, reply, text)
+		for _, mention := range mentions {
+			user, _, _ := strings.Cut(mention, "@")
+			token := "@" + user
+			if !strings.Contains(text, token) {
+				fmt.Fprintf(a.err, "note: text has no %s token; the mention may not be highlighted\n", token)
+			}
+		}
+		waErr := wa.Send(a.config.WAOutbox, agent, text, wa.SendOptions{
+			To: to, Reply: reply, Mentions: mentions, MentionAll: mentionAll,
+		})
 		if err := ntfy.Send(a.ctx, a.config.Ntfy, wa.Format(agent, text)); err != nil {
 			fmt.Fprintf(a.err, "WARNING: ntfy notification failed: %v\n", err)
 		}
@@ -3604,6 +3637,12 @@ func (a *app) whatsapp(args []string) error {
 		suffix := ""
 		if reply != "" {
 			suffix = " (reply: " + reply + ")"
+		}
+		if len(mentions) > 0 {
+			suffix += fmt.Sprintf(" (mentions: %d)", len(mentions))
+		}
+		if mentionAll {
+			suffix += " (mention all)"
 		}
 		// The label is echoed because it is what the recipient will read.
 		fmt.Fprintf(a.out, "queued -> %s as [%s]%s\n", destination, agent, suffix)

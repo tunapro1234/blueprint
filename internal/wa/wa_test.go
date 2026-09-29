@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 
 func TestSendPublishesOnlyCompleteVisibleJSON(t *testing.T) {
 	outbox := t.TempDir()
-	if err := Send(outbox, "agent", "target", "", "hello"); err != nil {
+	if err := Send(outbox, "agent", "hello", SendOptions{To: "target"}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(outbox)
@@ -33,6 +34,95 @@ func TestSendPublishesOnlyCompleteVisibleJSON(t *testing.T) {
 	}
 	if record.Agent != "agent" || record.Text != "[agent] hello" || record.To == nil || *record.To != "target" {
 		t.Fatalf("record=%+v", record)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["mentions"]; ok {
+		t.Fatal("empty mentions key was serialized")
+	}
+	if _, ok := raw["mentionAll"]; ok {
+		t.Fatal("false mentionAll key was serialized")
+	}
+}
+
+func TestSendPublishesMentions(t *testing.T) {
+	outbox := t.TempDir()
+	wantMentions := []string{"905551234567@s.whatsapp.net", "123456789012345@lid"}
+	if err := Send(outbox, "agent", "hello", SendOptions{Mentions: wantMentions, MentionAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(outbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(outbox, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	var mentions []string
+	if err := json.Unmarshal(raw["mentions"], &mentions); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(mentions, wantMentions) {
+		t.Fatalf("mentions=%v, want %v", mentions, wantMentions)
+	}
+	var mentionAll bool
+	if err := json.Unmarshal(raw["mentionAll"], &mentionAll); err != nil {
+		t.Fatal(err)
+	}
+	if !mentionAll {
+		t.Fatal("mentionAll key was not serialized as true")
+	}
+}
+
+func TestNormalizeMention(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr string
+	}{
+		{"formatted phone", "+90 555 123 45 67", "905551234567@s.whatsapp.net", ""},
+		{"bare phone", "905551234567", "905551234567@s.whatsapp.net", ""},
+		{"compact international phone", "+905551234567", "905551234567@s.whatsapp.net", ""},
+		{"formatted punctuation", "+1 (234) 567-8901", "12345678901@s.whatsapp.net", ""},
+		{"phone JID", "905551234567@s.whatsapp.net", "905551234567@s.whatsapp.net", ""},
+		{"upper-case phone JID domain", "905551234567@S.WHATSAPP.NET", "905551234567@s.whatsapp.net", ""},
+		{"LID", "123456789012345@lid", "123456789012345@lid", ""},
+		{"upper-case LID domain", "123456789012345@LID", "123456789012345@lid", ""},
+		{"legacy c.us JID", "905551234567@c.us", "905551234567@s.whatsapp.net", ""},
+		{"leading at number", "@905551234567", "905551234567@s.whatsapp.net", ""},
+		{"minimum digit count", "1234567", "1234567@s.whatsapp.net", ""},
+		{"maximum digit count", "12345678901234567890", "12345678901234567890@s.whatsapp.net", ""},
+		{"empty", "", "", "invalid mention \"\""},
+		{"name", "Alice", "", "invalid mention \"Alice\""},
+		{"letters in number", "90555abc4567", "", "invalid mention \"90555abc4567\""},
+		{"group JID", "123456789012345@g.us", "", "invalid mention \"123456789012345@g.us\""},
+		{"unsupported domain", "123456789012345@example.net", "", "invalid mention \"123456789012345@example.net\""},
+		{"too few digits", "123456", "", "invalid mention \"123456\""},
+		{"too many digits", "123456789012345678901", "", "invalid mention \"123456789012345678901\""},
+		{"device suffix", "905551234567:4@s.whatsapp.net", "", "device suffixes are not supported"},
+		{"malformed JID", "123456789012345@@lid", "", "invalid mention \"123456789012345@@lid\""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := NormalizeMention(tc.input)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("NormalizeMention(%q) error=%v, want error containing %q", tc.input, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("NormalizeMention(%q) = %q, %v; want %q", tc.input, got, err, tc.want)
+			}
+		})
 	}
 }
 

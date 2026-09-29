@@ -515,10 +515,14 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 			claudePane("❯ " + mangled), // clear budget capture
 			claudePane(emptyRow),       // after C-u
 			claudePane("❯ " + mangled), // the re-paste is damaged too
-			claudePane("❯ " + mangled), // and still damaged on the second look
-			claudePane("❯ " + mangled), // still-frame check: same calm screen -> the verdict is proof
+			claudePane("❯ " + mangled), // clear budget capture: our own text goes back out
+			claudePane(emptyRow),       // after C-u
+			claudePane(emptyRow),       // the composer is observed empty again
+			claudePane(emptyRow),       // still-frame check
+			claudePane(emptyRow),
+			claudePane(emptyRow),
 		},
-		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
 	}
 	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
 	if !errors.Is(err, ErrNotReady) {
@@ -529,6 +533,18 @@ func TestSendQueuesWhenItsOwnPasteLandsMangledTwice(t *testing.T) {
 	}
 	if countInjections(h.mutations) != 2 {
 		t.Fatalf("expected the one repair re-paste, got: %v", h.mutations)
+	}
+	// q319700699 (2026-09-29): the second damaged paste used to stay in the
+	// composer, so every later attempt saw foreign text and the target stayed
+	// blocked until a human pressed Enter on it.
+	clears := 0
+	for _, m := range h.mutations {
+		if strings.Contains(m, "C-u") {
+			clears++
+		}
+	}
+	if clears != 2 {
+		t.Fatalf("C-u count=%d, want one clear before the repair and one after it: %v", clears, h.mutations)
 	}
 	assertNoEscape(t, h.mutations)
 }

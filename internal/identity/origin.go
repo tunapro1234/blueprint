@@ -16,13 +16,14 @@ type Origin struct {
 	ThreadID      string
 	Verified      bool
 	CodexDetected bool
+	ServerThread  bool
 }
 
-// CodexOrigin cross-checks CODEX_THREAD_ID against the original environment of
-// the per-execution Codex sandbox helper. An env assignment on the bp command
-// alone cannot establish a different thread. Inaccessible evidence fails closed.
+// CodexOrigin verifies the per-execution Codex sandbox helper and recognizes
+// a thread-bound child of a shared app-server. An env assignment on bp alone
+// cannot establish a different thread. Inaccessible evidence fails closed.
 func CodexOrigin(ctx context.Context) Origin {
-	result := codexOrigin(os.Getenv("CODEX_THREAD_ID"), os.Getppid(), "/proc")
+	result := codexOriginChain(os.Getenv("CODEX_THREAD_ID"), os.Getpid(), os.Getppid(), "/proc")
 	if !result.CodexDetected {
 		result.CodexDetected = codexAncestryPS(ctx, os.Getppid(), inspectPSProcess)
 	}
@@ -30,7 +31,12 @@ func CodexOrigin(ctx context.Context) Origin {
 }
 
 func codexOrigin(hint string, pid int, procRoot string) Origin {
+	return codexOriginChain(hint, 0, pid, procRoot)
+}
+
+func codexOriginChain(hint string, self, pid int, procRoot string) Origin {
 	result := Origin{ThreadID: hint}
+	previous := self
 	seen := map[int]bool{}
 	for hops := 0; pid > 0 && hops < 64 && !seen[pid]; hops++ {
 		seen[pid] = true
@@ -55,23 +61,23 @@ func codexOrigin(hint string, pid int, procRoot string) Origin {
 			if hint == "" {
 				return result
 			}
-			env, err := os.ReadFile(filepath.Join(base, "environ"))
-			if err != nil {
-				return result
-			}
-			for _, entry := range strings.Split(string(env), "\x00") {
-				if value, ok := strings.CutPrefix(entry, "CODEX_THREAD_ID="); ok {
-					result.Verified = value == hint
-					return result
-				}
-			}
+			result.Verified = processHasThreadHint(procRoot, pid, hint)
 			return result
 		}
 		if isCodex {
+			appServer, execServer := false, false
 			for _, arg := range args[1:] {
-				if arg == "app-server" || arg == "exec-server" {
-					return result
+				appServer = appServer || arg == "app-server"
+				execServer = execServer || arg == "exec-server"
+			}
+			if execServer {
+				return result
+			}
+			if appServer {
+				if previous > 0 && processHasThreadHint(procRoot, previous, hint) {
+					result.ServerThread = true
 				}
+				return result
 			}
 			// A naked Codex CLI is shared by its root thread and CLI subagents.
 			// Its environment and writer locks cannot select the caller, so merely
@@ -89,9 +95,26 @@ func codexOrigin(hint string, pid int, procRoot string) Origin {
 				break
 			}
 		}
+		previous = pid
 		pid = parent
 	}
 	return result
+}
+
+func processHasThreadHint(procRoot string, pid int, hint string) bool {
+	if hint == "" || pid <= 0 {
+		return false
+	}
+	env, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "environ"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range strings.Split(string(env), "\x00") {
+		if value, ok := strings.CutPrefix(entry, "CODEX_THREAD_ID="); ok {
+			return value == hint
+		}
+	}
+	return false
 }
 
 type psProcess func(context.Context, int) (parent int, command string, ok bool)

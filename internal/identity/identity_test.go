@@ -219,11 +219,22 @@ func TestResolvePinnedCodexPaneLabel(t *testing.T) {
 	}{
 		{
 			name:                 "pinned thread and same pane produce a clean label",
-			origin:               Origin{ThreadID: threadID},
+			origin:               Origin{ThreadID: threadID, ServerThread: true},
 			thread:               pinned,
 			paneName:             "probot-equity",
 			paneConfigured:       true,
 			want:                 Identity{Label: "probot-equity", ThreadID: threadID, Certain: true, Source: "codex-pane"},
+			wantPaneCalls:        1,
+			wantThreadCalls:      1,
+			wantNonAuthoritative: true,
+		},
+		{
+			name:                 "server thread supplies a clean label after pane mismatch",
+			origin:               Origin{ThreadID: threadID, ServerThread: true},
+			thread:               pinned,
+			paneName:             "another-agent",
+			paneConfigured:       true,
+			want:                 Identity{Label: "probot-equity", ThreadID: threadID, Certain: true, Source: "codex-app-server"},
 			wantPaneCalls:        1,
 			wantThreadCalls:      1,
 			wantNonAuthoritative: true,
@@ -250,7 +261,7 @@ func TestResolvePinnedCodexPaneLabel(t *testing.T) {
 		},
 		{
 			name:            "subagent stays unverified without checking pane",
-			origin:          Origin{ThreadID: threadID},
+			origin:          Origin{ThreadID: threadID, ServerThread: true},
 			thread:          Identity{Label: "probot-equity", ThreadID: threadID, Parent: "server-main", Certain: true, Source: "codex-subagent"},
 			paneName:        "probot-equity",
 			paneConfigured:  true,
@@ -268,7 +279,7 @@ func TestResolvePinnedCodexPaneLabel(t *testing.T) {
 		},
 		{
 			name:            "unpinned thread keeps its UUID hint",
-			origin:          Origin{ThreadID: threadID},
+			origin:          Origin{ThreadID: threadID, ServerThread: true},
 			want:            Identity{Label: "codex?:" + threadID, ThreadID: threadID, Source: "codex-unverified"},
 			wantThreadCalls: 1,
 		},
@@ -304,7 +315,7 @@ func TestResolvePinnedCodexPaneLabel(t *testing.T) {
 				t.Fatalf("pane calls=%d, thread calls=%d; want %d and %d", paneCalls, threadCalls, test.wantPaneCalls, test.wantThreadCalls)
 			}
 			if test.wantNonAuthoritative && got.Authoritative() {
-				t.Fatal("codex-pane label unexpectedly became authoritative")
+				t.Fatalf("%s label unexpectedly became authoritative", got.Source)
 			}
 		})
 	}

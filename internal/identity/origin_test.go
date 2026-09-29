@@ -5,8 +5,61 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func writeProcEnvironment(t *testing.T, procRoot string, pid int, entries ...string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(procRoot, fmt.Sprint(pid), "environ"), []byte(strings.Join(entries, "\x00")+"\x00"), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodexOriginAppServerThreadHint(t *testing.T) {
+	const threadID = "thread-T"
+	tests := []struct {
+		name         string
+		hint         string
+		serverArgs   []string
+		shellEnv     []string
+		selfEnv      []string
+		directParent bool
+		wantServer   bool
+	}{
+		{name: "matching shell environment", hint: threadID, serverArgs: []string{"codex", "app-server", "--managed-daemon"}, shellEnv: []string{"CODEX_THREAD_ID=" + threadID}, wantServer: true},
+		{name: "different shell environment", hint: threadID, serverArgs: []string{"codex", "app-server"}, shellEnv: []string{"CODEX_THREAD_ID=other-thread"}},
+		{name: "missing shell environment", hint: threadID, serverArgs: []string{"codex", "app-server"}},
+		{name: "app-server is direct parent", hint: threadID, serverArgs: []string{"codex", "app-server"}, selfEnv: []string{"CODEX_THREAD_ID=" + threadID}, directParent: true, wantServer: true},
+		{name: "exec-server", hint: threadID, serverArgs: []string{"codex", "exec-server"}, shellEnv: []string{"CODEX_THREAD_ID=" + threadID}},
+		{name: "naked codex", hint: threadID, serverArgs: []string{"codex", "--yolo"}, shellEnv: []string{"CODEX_THREAD_ID=" + threadID}},
+		{name: "empty hint", serverArgs: []string{"codex", "app-server"}, shellEnv: []string{"CODEX_THREAD_ID=" + threadID}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			procRoot := t.TempDir()
+			const selfPID, shellPID, serverPID = 100, 200, 300
+			parentPID := shellPID
+			if test.directParent {
+				parentPID = serverPID
+				writeFakeProcess(t, procRoot, selfPID, serverPID, "", "bp", "msg")
+				writeProcEnvironment(t, procRoot, selfPID, test.selfEnv...)
+			} else {
+				writeFakeProcess(t, procRoot, selfPID, shellPID, "", "bp", "msg")
+				writeFakeProcess(t, procRoot, shellPID, serverPID, "", "zsh", "-l")
+				if len(test.shellEnv) > 0 {
+					writeProcEnvironment(t, procRoot, shellPID, test.shellEnv...)
+				}
+			}
+			writeFakeProcess(t, procRoot, serverPID, 1, "/opt/codex/codex", test.serverArgs...)
+
+			got := codexOriginChain(test.hint, selfPID, parentPID, procRoot)
+			if got.ServerThread != test.wantServer || got.Verified || !got.CodexDetected || got.ThreadID != test.hint {
+				t.Fatalf("origin=%+v, want ServerThread=%v, Verified=false, CodexDetected=true", got, test.wantServer)
+			}
+		})
+	}
+}
 
 func TestCodexOriginDoesNotTrustSharedDaemonOrCommandEnvironment(t *testing.T) {
 	const realID = "11111111-1111-1111-1111-111111111111"

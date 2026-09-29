@@ -3194,15 +3194,16 @@ func trustedSenderFixture(a *app) {
 
 func TestLocalOpenParentDoesNotComeFromSharedFolder(t *testing.T) {
 	for _, tc := range []struct {
-		name, sender, explicit string
-		certain, existing      bool
-		want                   string
+		name, sender, explicit, source string
+		certain, existing              bool
+		want                           string
 	}{
-		{"coordinator", "main", "", true, false, "main"},
-		{"verified child caller", "owner", "", true, false, "owner"},
-		{"unverified claim", "owner", "", false, false, "main"},
-		{"explicit parent", "main", "owner", true, false, "owner"},
-		{"existing parent", "main", "", true, true, "owner"},
+		{name: "coordinator", sender: "main", certain: true, source: "tmux", want: "main"},
+		{name: "verified child caller", sender: "owner", certain: true, source: "tmux", want: "owner"},
+		{name: "unverified claim", sender: "owner", source: "tmux", want: "main"},
+		{name: "app-server label cannot select parent", sender: "owner", certain: true, source: "codex-app-server", want: "main"},
+		{name: "explicit parent", sender: "main", explicit: "owner", certain: true, source: "tmux", want: "owner"},
+		{name: "existing parent", sender: "main", certain: true, existing: true, source: "tmux", want: "owner"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -3223,7 +3224,7 @@ func TestLocalOpenParentDoesNotComeFromSharedFolder(t *testing.T) {
 			client, _, snapshot := openTestTmux(t, path, "  ›  ", false)
 			a := openTestApp(t, path, client)
 			a.resolveSender = func() identity.Identity {
-				return identity.Identity{Label: tc.sender, Certain: tc.certain, Source: "tmux"}
+				return identity.Identity{Label: tc.sender, Certain: tc.certain, Source: tc.source}
 			}
 			args := []string{"new-agent", dir, "--codex"}
 			if tc.explicit != "" {

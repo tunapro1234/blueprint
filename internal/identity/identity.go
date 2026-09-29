@@ -156,6 +156,9 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 							return Identity{Label: who.Label, ThreadID: origin.ThreadID, Certain: true, Source: "codex-pane"}
 						}
 					}
+					if origin.ServerThread {
+						return Identity{Label: who.Label, ThreadID: origin.ThreadID, Certain: true, Source: "codex-app-server"}
+					}
 					who.Label += "?"
 					who.ThreadID, who.Certain, who.Source = origin.ThreadID, false, "codex-unverified"
 					return who

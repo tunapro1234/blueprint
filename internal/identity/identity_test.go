@@ -202,6 +202,114 @@ func TestResolvePrecedence(t *testing.T) {
 	}
 }
 
+func TestResolvePinnedCodexPaneLabel(t *testing.T) {
+	const threadID = "01234567-89ab-cdef-0123-456789abcdef"
+	pinned := Identity{Label: "probot-equity", ThreadID: threadID, Certain: true, Source: "codex-thread"}
+	tests := []struct {
+		name                 string
+		origin               Origin
+		thread               Identity
+		paneName             string
+		paneErr              error
+		paneConfigured       bool
+		want                 Identity
+		wantPaneCalls        int
+		wantThreadCalls      int
+		wantNonAuthoritative bool
+	}{
+		{
+			name:                 "pinned thread and same pane produce a clean label",
+			origin:               Origin{ThreadID: threadID},
+			thread:               pinned,
+			paneName:             "probot-equity",
+			paneConfigured:       true,
+			want:                 Identity{Label: "probot-equity", ThreadID: threadID, Certain: true, Source: "codex-pane"},
+			wantPaneCalls:        1,
+			wantThreadCalls:      1,
+			wantNonAuthoritative: true,
+		},
+		{
+			name:            "pinned thread in a different pane remains unverified",
+			origin:          Origin{ThreadID: threadID},
+			thread:          pinned,
+			paneName:        "another-agent",
+			paneConfigured:  true,
+			want:            Identity{Label: "probot-equity?", ThreadID: threadID, Source: "codex-unverified"},
+			wantPaneCalls:   1,
+			wantThreadCalls: 1,
+		},
+		{
+			name:            "pane error remains unverified",
+			origin:          Origin{ThreadID: threadID},
+			thread:          pinned,
+			paneErr:         errors.New("pane ancestry unavailable"),
+			paneConfigured:  true,
+			want:            Identity{Label: "probot-equity?", ThreadID: threadID, Source: "codex-unverified"},
+			wantPaneCalls:   1,
+			wantThreadCalls: 1,
+		},
+		{
+			name:            "subagent stays unverified without checking pane",
+			origin:          Origin{ThreadID: threadID},
+			thread:          Identity{Label: "probot-equity", ThreadID: threadID, Parent: "server-main", Certain: true, Source: "codex-subagent"},
+			paneName:        "probot-equity",
+			paneConfigured:  true,
+			want:            Identity{Label: "probot-equity?", ThreadID: threadID, Parent: "server-main", Source: "codex-unverified"},
+			wantThreadCalls: 1,
+		},
+		{
+			name:            "verified origin is returned unchanged without pane lookup",
+			origin:          Origin{ThreadID: threadID, Verified: true},
+			thread:          pinned,
+			paneName:        "another-agent",
+			paneConfigured:  true,
+			want:            pinned,
+			wantThreadCalls: 1,
+		},
+		{
+			name:            "unpinned thread keeps its UUID hint",
+			origin:          Origin{ThreadID: threadID},
+			want:            Identity{Label: "codex?:" + threadID, ThreadID: threadID, Source: "codex-unverified"},
+			wantThreadCalls: 1,
+		},
+		{
+			name:   "Codex without a thread remains unknown",
+			origin: Origin{CodexDetected: true},
+			want:   Identity{Label: Unknown, Source: "codex-unverified", Reason: "Codex caller has no thread evidence"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setEnv(t, map[string]string{"TMUX": ""})
+			paneCalls, threadCalls := 0, 0
+			opts := Options{
+				Origin: func(context.Context) Origin { return test.origin },
+				Thread: func(context.Context, string) Identity {
+					threadCalls++
+					return test.thread
+				},
+			}
+			if test.paneConfigured {
+				opts.Pane = func(context.Context) (string, error) {
+					paneCalls++
+					return test.paneName, test.paneErr
+				}
+			}
+			got := Resolve(context.Background(), nil, opts)
+			if got != test.want {
+				t.Fatalf("Resolve()=%+v, want %+v", got, test.want)
+			}
+			if paneCalls != test.wantPaneCalls || threadCalls != test.wantThreadCalls {
+				t.Fatalf("pane calls=%d, thread calls=%d; want %d and %d", paneCalls, threadCalls, test.wantPaneCalls, test.wantThreadCalls)
+			}
+			if test.wantNonAuthoritative && got.Authoritative() {
+				t.Fatal("codex-pane label unexpectedly became authoritative")
+			}
+		})
+	}
+}
+
 // TestResolveNeverConsultsTmuxOutsidePane pins the one fact behind the incident:
 // with no TMUX in the environment, `tmux display-message -p '#S'` answers for
 // whichever client is attached — a spectator. It must not even be asked.

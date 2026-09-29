@@ -148,7 +148,18 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 					// one whose visible label does not confess that uncertainty.
 				} else if origin.Verified {
 					return who
-				} else if who.Certain && (who.Source == "codex-thread" || who.Source == "codex-subagent") {
+				} else if who.Certain && who.Source == "codex-thread" {
+					if opts.Pane != nil {
+						if name, err := opts.Pane(ctx); err == nil && name == who.Label {
+							// The pin and pane agree on a label; codex-pane remains
+							// excluded from Authoritative's power checks.
+							return Identity{Label: who.Label, ThreadID: origin.ThreadID, Certain: true, Source: "codex-pane"}
+						}
+					}
+					who.Label += "?"
+					who.ThreadID, who.Certain, who.Source = origin.ThreadID, false, "codex-unverified"
+					return who
+				} else if who.Certain && who.Source == "codex-subagent" {
 					// A registry match can provide a readable hint without proving
 					// this caller owns the thread. Keep the UUID in diagnostics and
 					// never turn this display label into hierarchy/force authority.

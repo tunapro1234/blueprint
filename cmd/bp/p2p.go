@@ -299,7 +299,7 @@ func (a *app) ensureP2P() error {
 	if e = cmd.Start(); e != nil {
 		return e
 	}
-	_ = cmd.Process.Release()
+	go func() { _ = cmd.Wait() }()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {

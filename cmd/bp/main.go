@@ -21,6 +21,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
@@ -304,21 +306,34 @@ func deliveryReason(err error, sentinel error) string {
 }
 
 // helpRequested reports whether -h/--help appears among a subcommand's own
-// flags. Commands that carry free-form text (msg, announce, wa) only honour it
-// before the first non-flag argument, so "bp msg agent --help" still delivers
-// the literal word instead of printing usage at the sender.
+// flags. Free-form message commands only honour help before the message starts,
+// so "bp msg agent --help" still delivers the literal word. wa send scans its
+// option region in the command handler because flag values can be positional.
 func helpRequested(args []string) bool {
 	rest := args[1:]
 	switch args[0] {
 	case "run", "_session", "_local-worker":
 		return false // remaining flags belong to the wrapped CLI
-	case "msg", "announce", "wa":
+	case "msg", "announce":
 		for index, arg := range rest {
 			if !strings.HasPrefix(arg, "-") {
 				rest = rest[:index]
 				break
 			}
 		}
+	case "wa":
+		if len(rest) > 0 && (rest[0] == "send" || rest[0] == "read" || rest[0] == "chats") {
+			rest = rest[1:]
+		}
+		for _, arg := range rest {
+			if arg == "--" || !strings.HasPrefix(arg, "-") {
+				return false
+			}
+			if arg == "-h" || arg == "--help" {
+				return true
+			}
+		}
+		return false
 	}
 	for _, arg := range rest {
 		if arg == "-h" || arg == "--help" {
@@ -342,8 +357,8 @@ func (a *app) run(args []string) error {
 	if len(args) == 0 {
 		args = []string{"status"}
 	}
-	// Help is answered before any command logic so no subcommand can mistake
-	// -h/--help for one of its own arguments.
+	// Help is answered before command logic where possible; wa send handles help
+	// alongside its flags so a flag value does not hide it.
 	if helpRequested(args) {
 		fmt.Fprintln(a.out, usage)
 		return nil
@@ -3545,6 +3560,12 @@ func (a *app) whatsapp(args []string) error {
 		mentionAll := false
 		for index < len(args) {
 			switch args[index] {
+			case "-h", "--help":
+				fmt.Fprintln(a.out, usage)
+				return nil
+			case "--":
+				index++
+				goto message
 			case "--to":
 				if index+1 >= len(args) {
 					return fmt.Errorf("--to requires a target")
@@ -3573,6 +3594,9 @@ func (a *app) whatsapp(args []string) error {
 				mentionAll = true
 				index++
 			default:
+				if looksLikeOption(args[index]) {
+					return fmt.Errorf("unknown wa send option: %s (put -- before a message that starts with -)", args[index])
+				}
 				goto message
 			}
 		}
@@ -3648,6 +3672,10 @@ func (a *app) whatsapp(args []string) error {
 		fmt.Fprintf(a.out, "queued -> %s as [%s]%s\n", destination, agent, suffix)
 		return nil
 	case "read":
+		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Fprintln(a.out, usage)
+			return nil
+		}
 		if len(args) < 2 || len(args) > 3 {
 			return fmt.Errorf("usage: bp wa read <group/person> [n]")
 		}
@@ -3672,6 +3700,10 @@ func (a *app) whatsapp(args []string) error {
 		}
 		return nil
 	case "chats":
+		if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Fprintln(a.out, usage)
+			return nil
+		}
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp wa chats")
 		}
@@ -3690,6 +3722,18 @@ func (a *app) whatsapp(args []string) error {
 	default:
 		return fmt.Errorf("usage: bp wa send|read|chats ...")
 	}
+}
+
+func looksLikeOption(arg string) bool {
+	if !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	name := strings.TrimLeft(arg, "-")
+	if name == "" {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(name)
+	return unicode.IsLetter(first)
 }
 
 func (a *app) usage() error {

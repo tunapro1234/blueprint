@@ -1260,10 +1260,13 @@ func TestHelpIsAnsweredBeforeCommandLogic(t *testing.T) {
 		{"status", "--help"}, {"status", "-h"}, {"tree", "--help"}, {"compact", "--help"},
 		{"peek", "-h"}, {"close", "--help"}, {"open", "--help"}, {"msg", "--help"},
 		{"compact", "--apply", "--help"}, {"fed", "--help"},
+		{"wa", "send", "--help"}, {"wa", "send", "-h"}, {"wa", "send", "--to", "x", "--help"},
+		{"wa", "--help"}, {"wa", "read", "--help"}, {"wa", "chats", "-h"},
 	} {
 		out := testOutput(t)
 		a := &app{
-			out: out,
+			config: bpconfig.Config{WAOutbox: t.TempDir(), WAStore: filepath.Join(t.TempDir(), "missing-store.jsonl")},
+			out:    out,
 			loadFleet: func() (book.Fleet, map[string]book.State, error) {
 				t.Fatalf("%v reached command logic", args)
 				return book.Fleet{}, nil, nil
@@ -1811,6 +1814,140 @@ func TestWhatsAppSendMentions(t *testing.T) {
 		stdout := readTestOutput(t, output)
 		if strings.Contains(stdout, "mentions:") || strings.Contains(stdout, "mention all") {
 			t.Fatalf("unexpected mention suffix: %q", stdout)
+		}
+	})
+}
+
+func TestWhatsAppSendHelpAndDashParsing(t *testing.T) {
+	for _, key := range []string{"TMUX", "AGENT", "SUDO_USER", "USER", "LOGNAME", "AGENTBOOK"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("AGENT", "agent")
+
+	newApp := func(t *testing.T) (*app, string) {
+		t.Helper()
+		outbox := t.TempDir()
+		return &app{
+			ctx:         context.Background(),
+			originProbe: func(context.Context) identity.Origin { return identity.Origin{} },
+			config:      bpconfig.Config{WAOutbox: outbox, WAStore: filepath.Join(t.TempDir(), "missing-store.jsonl")},
+			tmux:        bptmux.New(),
+			out:         testOutput(t),
+			err:         testOutput(t),
+		}, outbox
+	}
+	assertNoOutboxFiles := func(t *testing.T, outbox string) {
+		t.Helper()
+		entries, err := os.ReadDir(outbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("outbox entries=%v, want none", entries)
+		}
+	}
+	assertQueuedBody := func(t *testing.T, outbox, body string) {
+		t.Helper()
+		entries, err := os.ReadDir(outbox)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("outbox entries=%v, want exactly one", entries)
+		}
+		data, err := os.ReadFile(filepath.Join(outbox, entries[0].Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record wa.Outgoing
+		if err := json.Unmarshal(data, &record); err != nil {
+			t.Fatal(err)
+		}
+		want := wa.Format(record.Agent, body)
+		if record.Text != want {
+			t.Fatalf("queued text=%q, want %q", record.Text, want)
+		}
+	}
+
+	t.Run("send help after a flag value prints usage without queueing", func(t *testing.T) {
+		a, outbox := newApp(t)
+		if err := a.run([]string{"wa", "send", "--to", "x", "--help"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestOutput(t, a.out); got != usage+"\n" {
+			t.Fatalf("stdout=%q, want global usage", got)
+		}
+		assertNoOutboxFiles(t, outbox)
+	})
+
+	t.Run("send subcommand help prints usage without queueing", func(t *testing.T) {
+		a, outbox := newApp(t)
+		if err := a.whatsapp([]string{"send", "--help"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := readTestOutput(t, a.out); got != usage+"\n" {
+			t.Fatalf("stdout=%q, want global usage", got)
+		}
+		assertNoOutboxFiles(t, outbox)
+	})
+
+	t.Run("unknown flag-like words are rejected without queueing", func(t *testing.T) {
+		for _, option := range []string{"--bogus", "-x"} {
+			t.Run(option, func(t *testing.T) {
+				a, outbox := newApp(t)
+				err := a.whatsapp([]string{"send", option, "hi"})
+				want := "unknown wa send option: " + option + " (put -- before a message that starts with -)"
+				if err == nil || err.Error() != want {
+					t.Fatalf("error=%v, want %q", err, want)
+				}
+				assertNoOutboxFiles(t, outbox)
+			})
+		}
+	})
+
+	t.Run("double dash lets a message begin with a flag", func(t *testing.T) {
+		a, outbox := newApp(t)
+		if err := a.run([]string{"wa", "send", "--", "--help"}); err != nil {
+			t.Fatal(err)
+		}
+		assertQueuedBody(t, outbox, "--help")
+	})
+
+	t.Run("negative percentage text is not parsed as an option", func(t *testing.T) {
+		a, outbox := newApp(t)
+		if err := a.whatsapp([]string{"send", "-5%", "today"}); err != nil {
+			t.Fatal(err)
+		}
+		assertQueuedBody(t, outbox, "-5% today")
+	})
+
+	t.Run("read help prints usage without reading the store", func(t *testing.T) {
+		for _, flag := range []string{"--help", "-h"} {
+			t.Run(flag, func(t *testing.T) {
+				a, outbox := newApp(t)
+				if err := a.whatsapp([]string{"read", flag}); err != nil {
+					t.Fatalf("read help reached the missing store: %v", err)
+				}
+				if got := readTestOutput(t, a.out); got != usage+"\n" {
+					t.Fatalf("stdout=%q, want global usage", got)
+				}
+				assertNoOutboxFiles(t, outbox)
+			})
+		}
+	})
+
+	t.Run("chats help prints usage without reading the store", func(t *testing.T) {
+		for _, flag := range []string{"--help", "-h"} {
+			t.Run(flag, func(t *testing.T) {
+				a, outbox := newApp(t)
+				if err := a.whatsapp([]string{"chats", flag}); err != nil {
+					t.Fatalf("chats help reached the missing store: %v", err)
+				}
+				if got := readTestOutput(t, a.out); got != usage+"\n" {
+					t.Fatalf("stdout=%q, want global usage", got)
+				}
+				assertNoOutboxFiles(t, outbox)
+			})
 		}
 	})
 }

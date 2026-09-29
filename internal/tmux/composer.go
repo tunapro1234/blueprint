@@ -312,7 +312,7 @@ func claudeComposerTailMatches(pane, want string, paneWidth int) bool {
 		return false
 	}
 	hidden := len([]rune(stripped)) - len([]rune(got))
-	return hidden*2 >= paneWidth-composerIndent
+	return hidden*2 >= composerContentWidth(paneWidth)
 }
 
 // composerBoxText returns the whitespace-stripped full box content. Whitespace

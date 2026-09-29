@@ -1677,23 +1677,50 @@ func composerClearBudget(pane, message string, width int) (int, error) {
 // composerIndent is the prompt marker column that precedes every composer row.
 const composerIndent = 2
 
-// wrappedMessageRows counts rows at character wrap. Claude wraps at words, which
-// only adds rows, so this is a lower bound: clipping evidence stays conservative
-// and the clear budget's margin absorbs the difference.
+// composerRightMargin is the column span Claude keeps free at the right edge of
+// the composer. Measured on Claude Code 2.1.284 at 40, 59, 64 and 100 columns:
+// text wraps at pane width minus 4 (2026-09-29).
+const composerRightMargin = 2
+
+// composerContentWidth is the number of cells a composer row holds.
+func composerContentWidth(paneWidth int) int {
+	return paneWidth - composerIndent - composerRightMargin
+}
+
+// wrappedMessageRows counts the rows Claude renders the message in. Claude
+// wraps at words: a word that does not fit moves to the next row, and only a
+// word wider than a whole row is split. Counting at character wrap across the
+// full width instead undercounted a 597-character message at 64 columns (10
+// rows against the real 11), so a 10-row clipped viewport of our own paste
+// read as a damaged paste and was left in the composer (2026-09-29,
+// q319700699).
 func wrappedMessageRows(message string, paneWidth int) (int, error) {
-	contentWidth := paneWidth - composerIndent
+	contentWidth := composerContentWidth(paneWidth)
 	if contentWidth < 1 {
 		return 0, fmt.Errorf("invalid pane width %d", paneWidth)
 	}
 	rows := 0
 	for _, line := range strings.Split(message, "\n") {
 		lineRows, column := 1, 0
-		for _, r := range line {
-			cells := composerRuneWidth(r)
-			if cells == 0 {
-				continue
+		for i, word := range strings.Split(line, " ") {
+			cells := 0
+			for _, r := range word {
+				cells += composerRuneWidth(r)
 			}
-			if column > 0 && column+cells > contentWidth {
+			if i > 0 {
+				// The separating space fits, or the word starts the next row.
+				if column+1+cells <= contentWidth {
+					column += 1 + cells
+					continue
+				}
+				if cells == 0 {
+					continue
+				}
+				lineRows++
+				column = 0
+			}
+			for column+cells > contentWidth {
+				cells -= contentWidth - column
 				lineRows++
 				column = 0
 			}
@@ -2206,10 +2233,25 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		if !ok {
 			return pane, false, nil
 		}
-		if verdict := c.pasteIntegrity(next, message, paneWidth); verdict != pasteIntact {
-			return next, false, nil
+		switch c.pasteIntegrity(next, message, paneWidth) {
+		case pasteIntact:
+			return next, true, nil
+		case pasteMangled:
+			if paneWidth == 0 {
+				break
+			}
+			// Claude: still our own broken text, so take it back out. Leaving
+			// it made the next attempt read the composer as foreign and block
+			// the target until a human pressed Enter on it (2026-09-29,
+			// q319700699).
+			if err := c.clearWithCtrlU(ctx, session, []string{message}); err != nil {
+				return next, false, err
+			}
+			if cleared, ok := c.composerStable(ctx, session); ok {
+				next = cleared
+			}
 		}
-		return next, true, nil
+		return next, false, nil
 	case pasteBroken:
 		return pane, false, nil
 	default:

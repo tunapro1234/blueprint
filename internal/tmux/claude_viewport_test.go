@@ -32,7 +32,7 @@ func (tt *claudeViewportTerminal) pane() string {
 		}
 		return pane
 	}
-	rows := wordWrap(tt.composer, tt.width-2)
+	rows := wordWrap(tt.composer, composerContentWidth(tt.width))
 	if len(rows) > tt.visibleRows {
 		// Claude anchors the cursor at the end after a paste. Once the buffer
 		// shrinks to fit, displaying all rows naturally anchors the view at top.
@@ -78,7 +78,7 @@ func wordWrap(text string, width int) []string {
 }
 
 func (tt *claudeViewportTerminal) clearWrappedRow() {
-	rows := wordWrap(tt.composer, tt.width-2)
+	rows := wordWrap(tt.composer, composerContentWidth(tt.width))
 	if len(rows) <= 1 {
 		tt.composer = ""
 		return
@@ -195,7 +195,7 @@ func TestClaudeClippedSpacedMessageDeliversOnce(t *testing.T) {
 		"dev yayinda, koordinator duzeltmeleri brief icinde. Sira 1.7, 1.8, 1.9. Her " +
 		"derste teslim hazir mesaji, sonunda damitma ve skill-yedekle."
 	terminal := &claudeViewportTerminal{width: 59, visibleRows: 6}
-	if rows := len(wordWrap(message, 57)); rows <= terminal.visibleRows {
+	if rows := len(wordWrap(message, composerContentWidth(59))); rows <= terminal.visibleRows {
 		t.Fatalf("fixture wraps to %d rows, want a clipped viewport", rows)
 	}
 	if err := terminal.client().Send(context.Background(), "target", message); err != nil {
@@ -213,7 +213,7 @@ func TestClaudeClippedOwnRemnantIsClearedBeforeOneDelivery(t *testing.T) {
 	message := strings.Repeat("0123456789", 45) + "END!"
 	const width = 59
 	const visibleRows = 6
-	leftover := message[:visibleRows*(width-2)]
+	leftover := message[:visibleRows*composerContentWidth(width)]
 	terminal := &claudeViewportTerminal{width: width, visibleRows: visibleRows, composer: leftover}
 	if err := terminal.client().Send(context.Background(), "target", message); err != nil {
 		t.Fatalf("Send() error = %v", err)
@@ -253,4 +253,70 @@ func countClaudeEnter(keys []string) int {
 		}
 	}
 	return count
+}
+
+// q319700699 (2026-09-29, blueprint at 64x31, Claude 2.1.284): a 597-character
+// message that Claude wraps at 60 cells into 11 rows and shows as a 10-row
+// tail. Counted at character wrap across 62 cells it fit in 10 rows, so the clipped view of our own paste was
+// called damaged, repaired, called damaged again and left in the composer.
+const financeMessage = "[probot-finance] probot-finance (Claude, /srv/probot/finance) — " +
+	"yardım: Tuna laptopundaki para-main agentı (kimliği \"para-main@tuna-laptop\") " +
+	"bana [external:para-main@tuna-laptop] önekiyle mesaj attı ama ben ona geri " +
+	"yazamıyorum: SendMessage \"para-main@tuna-laptop\" -> \"bare teammate name olmalı\", " +
+	"\"para-main\" -> \"reachable değil\"; ListAgents ve bp status da görmüyor. Ona " +
+	"nasıl cevap gönderirim? (bp p2p / bp msg para-main@tuna-laptop / bp attach ... " +
+	"hangisi doğru, bağlantı kurulu mu?) Cevabı bp msg probot-finance ile at. " +
+	"İletilecek metin hazır: bütçe formatı + equity kuralları, veri/rakam yok."
+
+func TestWrappedMessageRowsCountsWordWrap(t *testing.T) {
+	rows, err := wrappedMessageRows(financeMessage, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := len(wordWrap(financeMessage, composerContentWidth(64))); rows != want {
+		t.Fatalf("wrappedMessageRows=%d, want the word-wrapped %d", rows, want)
+	}
+	if rows <= 10 {
+		t.Fatalf("wrappedMessageRows=%d, want more than the 10 rows Claude showed", rows)
+	}
+	cases := []struct {
+		message string
+		width   int
+		want    int
+	}{
+		{"", 14, 1},
+		{"short", 14, 1},
+		{"0123456789", 14, 1},
+		{"0123456789a", 14, 2},
+		{"aaaa bbbb cc", 14, 2},
+		{"aaaa bbb c", 14, 1},
+		{strings.Repeat("x", 25), 14, 3},
+		{"one\ntwo", 14, 2},
+	}
+	for _, tc := range cases {
+		got, err := wrappedMessageRows(tc.message, tc.width)
+		if err != nil || got != tc.want {
+			t.Errorf("wrappedMessageRows(%q, %d)=%d, %v; want %d", tc.message, tc.width, got, err, tc.want)
+		}
+	}
+	if _, err := wrappedMessageRows("x", composerIndent+composerRightMargin); err == nil {
+		t.Fatal("a pane with no content columns must be an error")
+	}
+}
+
+func TestClaudeClippedWordWrappedMessageDeliversOnce(t *testing.T) {
+	for _, visibleRows := range []int{8, 10, 11} {
+		t.Run(strconv.Itoa(visibleRows), func(t *testing.T) {
+			terminal := &claudeViewportTerminal{width: 64, visibleRows: visibleRows}
+			if err := terminal.client().Send(context.Background(), "target", financeMessage); err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+			if terminal.pastes != 1 || countClaudeEnter(terminal.keys) != 1 {
+				t.Fatalf("pastes=%d Enter=%d keys=%v, want one paste and one Enter", terminal.pastes, countClaudeEnter(terminal.keys), terminal.keys)
+			}
+			if len(terminal.submitted) != 1 || terminal.submitted[0] != financeMessage {
+				t.Fatalf("submitted = %q, want one complete message", terminal.submitted)
+			}
+		})
+	}
 }

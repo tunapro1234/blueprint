@@ -110,36 +110,66 @@ func TestWhoamiShowsCodexPaneSourceWithoutAuthority(t *testing.T) {
 	}
 }
 
-func TestCodexPaneIdentityIsRefusedByAuthorityGates(t *testing.T) {
-	who := identity.Identity{Label: "probot-equity", ThreadID: "thread-1", Certain: true, Source: "codex-pane"}
-	if who.Authoritative() {
-		t.Fatal("codex-pane unexpectedly passed Authoritative")
-	}
+func TestWhoamiShowsCodexAppServerSourceWithoutAuthority(t *testing.T) {
 	t.Setenv("AGENTBOOK", "")
-	a := forceApp(t, testOutput(t))
-	a.resolveSender = func() identity.Identity { return who }
+	out := testOutput(t)
+	a := &app{
+		out: out,
+		resolveSender: func() identity.Identity {
+			return identity.Identity{Label: "probot-equity", ThreadID: "thread-1", Certain: true, Source: "codex-app-server"}
+		},
+	}
+	if err := a.run([]string{"whoami"}); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Label     string
+		Certain   bool
+		Source    string
+		Authority bool `json:"authority"`
+	}
+	if err := json.Unmarshal([]byte(readTestOutput(t, out)), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Label != "probot-equity" || !result.Certain || result.Source != "codex-app-server" || result.Authority {
+		t.Fatalf("whoami=%+v, want codex-app-server source without authority", result)
+	}
+}
 
-	if err := a.allowForceBusy(who); err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
-		t.Fatalf("allowForceBusy(%+v)=%v, want refusal", who, err)
-	}
-	if err := a.message([]string{"--force-busy", "alp", "urgent"}); err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
-		t.Fatalf("forced msg error=%v, want refusal", err)
-	}
-	if err := a.message([]string{"alp", "/compact"}); err == nil || !strings.Contains(err.Error(), "slash command refused") {
-		t.Fatalf("slash message error=%v, want refusal", err)
-	}
-	if err := a.announce([]string{"notice"}); err == nil || !strings.Contains(err.Error(), "sender identity is not verified") {
-		t.Fatalf("announce error=%v, want refusal", err)
-	}
-	if err := a.compact(nil); err == nil || !strings.Contains(err.Error(), "sender identity is not verified") {
-		t.Fatalf("compact error=%v, want refusal", err)
-	}
+func TestUnverifiedCodexIdentitySourcesAreRefusedByAuthorityGates(t *testing.T) {
+	for _, source := range []string{"codex-pane", "codex-app-server"} {
+		t.Run(source, func(t *testing.T) {
+			who := identity.Identity{Label: "probot-equity", ThreadID: "thread-1", Certain: true, Source: source}
+			if who.Authoritative() {
+				t.Fatalf("%s unexpectedly passed Authoritative", source)
+			}
+			t.Setenv("AGENTBOOK", "")
+			a := forceApp(t, testOutput(t))
+			a.resolveSender = func() identity.Identity { return who }
 
-	a, store, workdir := workflowCLIFixture(t)
-	a.resolveSender = func() identity.Identity { return who }
-	err := a.workflowStart(store, []string{"sample", "--workdir", workdir, "--agent", "worker"})
-	if err == nil || !strings.Contains(err.Error(), "workflow start requires verified authority") {
-		t.Fatalf("workflow start error=%v, want refusal", err)
+			if err := a.allowForceBusy(who); err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
+				t.Fatalf("allowForceBusy(%+v)=%v, want refusal", who, err)
+			}
+			if err := a.message([]string{"--force-busy", "alp", "urgent"}); err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
+				t.Fatalf("forced msg error=%v, want refusal", err)
+			}
+			if err := a.message([]string{"alp", "/compact"}); err == nil || !strings.Contains(err.Error(), "slash command refused") {
+				t.Fatalf("slash message error=%v, want refusal", err)
+			}
+			if err := a.announce([]string{"notice"}); err == nil || !strings.Contains(err.Error(), "sender identity is not verified") {
+				t.Fatalf("announce error=%v, want refusal", err)
+			}
+			if err := a.compact(nil); err == nil || !strings.Contains(err.Error(), "sender identity is not verified") {
+				t.Fatalf("compact error=%v, want refusal", err)
+			}
+
+			a, store, workdir := workflowCLIFixture(t)
+			a.resolveSender = func() identity.Identity { return who }
+			err := a.workflowStart(store, []string{"sample", "--workdir", workdir, "--agent", "worker"})
+			if err == nil || !strings.Contains(err.Error(), "workflow start requires verified authority") {
+				t.Fatalf("workflow start error=%v, want refusal", err)
+			}
+		})
 	}
 }
 

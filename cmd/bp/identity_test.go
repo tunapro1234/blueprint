@@ -58,6 +58,32 @@ func identityFixture(t *testing.T) (*app, map[string]string) {
 	return a, ids
 }
 
+func TestWhoamiShowsDaemonChildSourceWithoutGeneralAuthority(t *testing.T) {
+	t.Setenv("AGENTBOOK", "")
+	out := testOutput(t)
+	a := &app{
+		out: out,
+		resolveSender: func() identity.Identity {
+			return identity.Identity{Label: "whatsapp", Certain: true, Source: "bp-daemon-child"}
+		},
+	}
+	if err := a.run([]string{"whoami"}); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Label     string
+		Certain   bool
+		Source    string
+		Authority bool `json:"authority"`
+	}
+	if err := json.Unmarshal([]byte(readTestOutput(t, out)), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Label != "whatsapp" || !result.Certain || result.Source != "bp-daemon-child" || result.Authority {
+		t.Fatalf("whoami=%+v, want daemon-child source without general authority", result)
+	}
+}
+
 func TestSharedDaemonThreadEnvelopeAndAuthority(t *testing.T) {
 	for _, name := range []string{"server-main", "astra", "luna", "unknown"} {
 		t.Run(name, func(t *testing.T) {

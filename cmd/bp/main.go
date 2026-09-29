@@ -1946,7 +1946,7 @@ func (a *app) close(args []string) error {
 func (a *app) sender() string { return a.senderIdentity().Label }
 
 func (a *app) identityOptions() identity.Options {
-	// Process ancestry supplies an explicitly uncertain script/cron label, never authority.
+	// Inferred process ancestry supplies an explicitly uncertain script/cron label.
 	return identity.Options{Infer: true, Ancestors: a.ancestors, Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
 		if a.tmux == nil {
 			return "", fmt.Errorf("tmux client unavailable")
@@ -1961,7 +1961,7 @@ func (a *app) identityOptions() identity.Options {
 			}
 		}
 		return who
-	}}
+	}, DaemonChild: identity.DaemonChild}
 }
 
 func (a *app) senderIdentity() identity.Identity {
@@ -2400,9 +2400,11 @@ func (a *app) message(args []string) error {
 
 // allowForceBusy decides who may put a message in front of a busy agent.
 //
-// It accepts only a verified main-agent identity. AGENT/--from/login labels,
-// inherited app-server panes and CLI subagents do not establish that authority.
-// Same-UID/root processes still require OS isolation for an adversarial boundary.
+// It accepts a verified main-agent identity or a child CLI directly supervised
+// by the bp daemon. The bridge earns this narrow force exception from its
+// verified process ancestry, not from AGENT=whatsapp; this does not change
+// Authoritative or grant hierarchy and slash-command authority. Same-UID/root
+// processes still require OS isolation for an adversarial boundary.
 //
 // What it protects is the property that makes the flag safe at all: forced
 // messages are RARE. The plumbing that carries Tuna's own words (the WhatsApp
@@ -2417,9 +2419,10 @@ func (a *app) allowForceBusy(who identity.Identity) error {
 	if fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks)); err == nil && fleet.Root != "" {
 		root = fleet.Root
 	}
-	if who.Authoritative() {
-		// These are the existing plumbing labels. The bridge's AGENT value
-		// alone no longer establishes one of these identities.
+	forceIdentity := who.Authoritative() || (who.Source == "bp-daemon-child" && who.Certain)
+	if forceIdentity {
+		// The daemon-child source is verified by process ancestry; the bridge's
+		// AGENT value alone no longer establishes one of these identities.
 		for _, allowed := range []string{root, "bp", "wa", "whatsapp"} {
 			if who.Label == allowed {
 				return nil

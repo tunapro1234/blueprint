@@ -73,6 +73,9 @@ type Options struct {
 	// that agent's identity: a plausible-but-wrong name is more dangerous than
 	// "unknown". Nil means "nothing is known".
 	Known func(string) bool
+	// DaemonChild verifies the exact caller -> parent -> bp daemon -> PID 1
+	// chain for pid. Nil uses the local /proc implementation.
+	DaemonChild func(int) bool
 	// Infer allows explicitly uncertain process-tree attribution for scripts.
 	// These labels never establish hierarchy, slash-command or force authority.
 	Infer bool
@@ -184,6 +187,13 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 		return Identity{Label: opts.From, Certain: true, Source: "--from"}
 	}
 	if value := os.Getenv("AGENT"); value != "" && ValidName(value) {
+		isDaemonChild := opts.DaemonChild
+		if isDaemonChild == nil {
+			isDaemonChild = DaemonChild
+		}
+		if isDaemonChild(os.Getpid()) {
+			return Identity{Label: value, Certain: true, Source: "bp-daemon-child"}
+		}
 		return Identity{Label: "agent?:" + value, Source: "AGENT"}
 	}
 	// Root login is disabled on the box, so people SSH as themselves and reach
@@ -357,7 +367,11 @@ func procCmdline(pid int) []string {
 // because a comm containing spaces or parentheses makes stat's fields
 // ambiguous.
 func procParent(pid int) (int, bool) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	return procParentAt("/proc", pid)
+}
+
+func procParentAt(procRoot string, pid int) (int, bool) {
+	data, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "status"))
 	if err != nil {
 		return 0, false
 	}
@@ -373,6 +387,40 @@ func procParent(pid int) (int, bool) {
 		return parent, true
 	}
 	return 0, false
+}
+
+// DaemonChild reports whether pid's exact parent chain is caller -> parent ->
+// bp daemon -> PID 1. The daemon executable is checked by basename because
+// the service and its CLI children may use different bp installations.
+func DaemonChild(pid int) bool { return daemonChildAt("/proc", pid) }
+
+func daemonChildAt(procRoot string, pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	bridge, ok := procParentAt(procRoot, pid)
+	if !ok || bridge <= 1 {
+		return false
+	}
+	daemon, ok := procParentAt(procRoot, bridge)
+	if !ok || daemon <= 1 {
+		return false
+	}
+	init, ok := procParentAt(procRoot, daemon)
+	if !ok || init != 1 {
+		return false
+	}
+
+	daemonPath, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(daemon), "exe"))
+	if err != nil || filepath.Base(strings.TrimSuffix(daemonPath, " (deleted)")) != "bp" {
+		return false
+	}
+	command, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(daemon), "cmdline"))
+	if err != nil {
+		return false
+	}
+	args := strings.Split(string(command), "\x00")
+	return len(args) > 1 && args[1] == "daemon"
 }
 
 // Authoritative permits existing hierarchy/force gates only for verified main

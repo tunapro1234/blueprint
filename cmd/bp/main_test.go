@@ -3003,6 +3003,45 @@ func TestForceBusyRejectsSelfDeclaredBridgeIdentity(t *testing.T) {
 	}
 }
 
+func TestForceBusyAcceptsDaemonChildWhatsAppIdentity(t *testing.T) {
+	a := forceApp(t, testOutput(t))
+	who := identity.Identity{Label: "whatsapp", Certain: true, Source: "bp-daemon-child"}
+	if who.Authoritative() {
+		t.Fatal("daemon-child identity unexpectedly gained general authority")
+	}
+	if err := a.allowForceBusy(who); err != nil {
+		t.Fatalf("allowForceBusy(%+v)=%v", who, err)
+	}
+}
+
+func TestForceBusyRejectsDisallowedDaemonChildIdentity(t *testing.T) {
+	a := forceApp(t, testOutput(t))
+	who := identity.Identity{Label: "probot-x", Certain: true, Source: "bp-daemon-child"}
+	if err := a.allowForceBusy(who); err == nil || !strings.Contains(err.Error(), "force-busy is reserved for infrastructure") {
+		t.Fatalf("allowForceBusy(%+v)=%v, want infrastructure refusal", who, err)
+	}
+}
+
+func TestForceBusyFromDaemonChildQueuesForcedRecord(t *testing.T) {
+	a := forceApp(t, testOutput(t))
+	a.resolveSender = func() identity.Identity {
+		return identity.Identity{Label: "whatsapp", Certain: true, Source: "bp-daemon-child"}
+	}
+	if err := a.message([]string{"--force-busy", "alp", "urgent", "from", "bridge"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.queue.List()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v, want one queued record", rows, err)
+	}
+	if !rows[0].ForceBusy || rows[0].To != "alp" || rows[0].Msg != "[whatsapp] urgent from bridge" {
+		t.Fatalf("record=%+v, want a forced, enveloped WhatsApp message", rows[0])
+	}
+	if rows[0].Sender == nil || rows[0].Sender.Label != "whatsapp" || rows[0].Sender.Source != "bp-daemon-child" || !rows[0].Sender.Certain || rows[0].Sender.Authority {
+		t.Fatalf("sender evidence=%+v, want certain daemon-child attribution without general authority", rows[0].Sender)
+	}
+}
+
 func TestForceBusyQueuesAForcedRecordForThePlumbing(t *testing.T) {
 	// The WhatsApp bridge's own path: the message becomes a FORCED queue record
 	// and nothing types into a pane here. That is the whole change — the bridge

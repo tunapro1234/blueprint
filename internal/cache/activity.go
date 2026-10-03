@@ -16,6 +16,7 @@ type Activity struct {
 	ThreadID           string     `json:"thread_id,omitempty"`
 	TranscriptPath     string     `json:"transcript_path,omitempty"`
 	Binding            string     `json:"binding,omitempty"`
+	LastTurnError      bool       `json:"last_turn_error,omitempty"`
 	ScreenBusy         *bool      `json:"screen_busy,omitempty"`
 	TurnBusy           *bool      `json:"turn_busy,omitempty"`
 	DeliveryBlocked    bool       `json:"delivery_blocked"`

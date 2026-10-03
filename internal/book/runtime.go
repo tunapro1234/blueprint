@@ -111,6 +111,7 @@ func needsCodexWriterBinding(info bptmux.CodexProcess, agent Agent) bool {
 }
 
 func readCodexRuntime(ctx context.Context, info bptmux.CodexProcess, agent Agent, a *cache.Activity) cache.State {
+	a.LastTurnError = false
 	state := cache.State{LastHumanAge: -1, Runtime: "codex"}
 	id, binding := "", "pane-argv"
 	// No cwd/mtime selection, inherited daemon environment, or conflicting pins.
@@ -235,6 +236,10 @@ func readCodexRuntime(ctx context.Context, info bptmux.CodexProcess, agent Agent
 		if len(thread.Status.ActiveFlags) > 0 {
 			a.State, a.Reason = "unknown", "app-server active flags: "+strings.Join(thread.Status.ActiveFlags, ",")
 		}
+	case "systemError":
+		// If quota is still exhausted, the delivered turn fails fast, stays in
+		// thread history, and the next turn sees it; holding delivery never heals.
+		a.State, a.Reason, a.LastTurnError = "idle", "", true
 	default:
 		a.State, a.Reason = "unknown", "app-server state: "+thread.Status.Type
 	}

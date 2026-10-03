@@ -1161,6 +1161,75 @@ func TestStatusHumanOutputIsUnchanged(t *testing.T) {
 	}
 }
 
+func TestStatusShowsLastTurnErrorAndJSONFlag(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		lastTurnError bool
+		wantTextState string
+	}{
+		{name: "last turn failed", lastTurnError: true, wantTextState: "idle!"},
+		{name: "plain idle", wantTextState: "idle"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fleet := book.Fleet{
+				Root:  "agent",
+				Order: []string{"agent"},
+				Agents: map[string]book.Agent{
+					"agent": {Name: "agent", Status: "open", Folder: "/work"},
+				},
+				Parents: map[string]string{"agent": ""},
+			}
+			states := map[string]book.State{
+				"agent": {
+					Alive: true,
+					Runtime: &bpcache.State{Runtime: "codex-remote", LastHumanAge: -1, Activity: &bpcache.Activity{
+						State: "idle", Source: "app-server", LastTurnError: test.lastTurnError,
+					}},
+				},
+			}
+			a := &app{
+				out: testOutput(t),
+				loadFleet: func() (book.Fleet, map[string]book.State, error) {
+					return fleet, states, nil
+				},
+				loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+			}
+			if err := a.status(nil); err != nil {
+				t.Fatal(err)
+			}
+			wantText := fmt.Sprintf("%-24s %-10s %-20s %-10s %-10s\n", "agent", test.wantTextState, "-", "-", "open")
+			if output := readTestOutput(t, a.out); !strings.Contains(output, wantText) {
+				t.Fatalf("status text missing %q:\n%s", wantText, output)
+			}
+
+			a.out = testOutput(t)
+			if err := a.status([]string{"--json"}); err != nil {
+				t.Fatal(err)
+			}
+			var report struct {
+				Agents []struct {
+					Tmux     string                     `json:"tmux"`
+					Activity map[string]json.RawMessage `json:"activity"`
+				} `json:"agents"`
+			}
+			if err := json.Unmarshal([]byte(readTestOutput(t, a.out)), &report); err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Agents) != 1 || report.Agents[0].Tmux != "idle" {
+				t.Fatalf("JSON status changed idle state: %+v", report.Agents)
+			}
+			lastTurnError, present := report.Agents[0].Activity["last_turn_error"]
+			if test.lastTurnError {
+				if !present || string(lastTurnError) != "true" {
+					t.Fatalf("activity.last_turn_error=%s present=%v", lastTurnError, present)
+				}
+			} else if present {
+				t.Fatalf("false activity.last_turn_error should be omitted: %s", lastTurnError)
+			}
+		})
+	}
+}
+
 func TestStatusShowsCodexThreadRecoveryHint(t *testing.T) {
 	hint := "no thread binding yet; run bp close 'ghost', then reopen with a prompt"
 	fleet := book.Fleet{

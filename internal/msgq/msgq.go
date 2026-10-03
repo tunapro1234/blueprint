@@ -481,26 +481,14 @@ func (q *Queue) RenameTarget(old, name string) ([]string, error) {
 	if err := os.MkdirAll(q.Root, 0755); err != nil {
 		return nil, err
 	}
-	dispatch, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, err
-	}
-	defer dispatch.Close()
 	// Wait out a running delivery pass instead of failing fast: by the time
 	// this runs the agentbook already carries the new name, so a refusal here
 	// would strand the pending channels on a name nothing resolves any more.
-	deadline := time.Now().Add(renameLockWait)
-	for {
-		err := syscall.Flock(int(dispatch.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("queue delivery pass still running after %s: %w", renameLockWait, err)
-		}
-		time.Sleep(100 * time.Millisecond)
+	release, err := q.lockDispatchForOperator(renameLockWait)
+	if err != nil {
+		return nil, err
 	}
-	defer syscall.Flock(int(dispatch.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	defer release()
 	releaseRecords, err := q.lockRecords()
 	if err != nil {
 		return nil, err
@@ -894,25 +882,110 @@ func (q *Queue) Finished(id string) (string, bool) {
 	return message.Status, true
 }
 
-// Cancel removes a pending message by channel id, archiving it as canceled.
-func (q *Queue) Cancel(id string) error {
+// cancelLockWait bounds how long Cancel waits for a running delivery pass.
+// A pass holds the dispatch lock for its whole run (pastes plus their
+// verification) and the daemon starts the next one seconds later, so a
+// fail-fast attempt almost never finds the lock free on a busy queue.
+var cancelLockWait = 3 * time.Minute
+
+// Cancel archives pending messages by channel id as canceled. It waits for a
+// running delivery pass to finish, then takes the dispatch lock once for all
+// ids, so a message is either delivered by that pass or canceled, never both.
+// It returns the ids it canceled; ids that are no longer pending are reported
+// in the joined error and do not stop the others.
+func (q *Queue) Cancel(ids ...string) ([]string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	lock, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err := os.MkdirAll(q.Root, 0755); err != nil {
+		return nil, err
+	}
+	release, err := q.lockDispatchForOperator(cancelLockWait)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("%w; nothing canceled, check bp qstat and retry", err)
 	}
-	defer lock.Close()
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return fmt.Errorf("delivery pass in progress; cancellation not applied, check bp qstat %s and retry: %w", id, err)
+	defer release()
+	var canceled []string
+	var errs error
+	for _, id := range ids {
+		path := filepath.Join(q.pending(), id+".json")
+		message, err := read(path)
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("no pending message %s: %w", id, err))
+			continue
+		}
+		if err := q.finish(path, message, "canceled (by operator)"); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("cancel %s: %w", id, err))
+			continue
+		}
+		canceled = append(canceled, id)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	path := filepath.Join(q.pending(), id+".json")
-	message, err := read(path)
+	return canceled, errs
+}
+
+// lockDispatchForOperator takes the dispatch lock for a short operator action
+// (cancel, rename). A delivery pass holds that lock for its whole run, and on a
+// busy queue the daemon starts the next pass the moment one ends, so polling
+// alone can wait forever. Holding .operator.lock while waiting asks the next
+// pass to yield (see operatorWaiting); the kernel drops it if we die.
+func (q *Queue) lockDispatchForOperator(wait time.Duration) (func(), error) {
+	operator, err := os.OpenFile(filepath.Join(q.Root, ".operator.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return fmt.Errorf("no pending message %s: %w", id, err)
+		return nil, err
 	}
-	return q.finish(path, message, "canceled (by operator)")
+	dispatch, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		operator.Close()
+		return nil, err
+	}
+	fail := func(err error) (func(), error) {
+		dispatch.Close()
+		operator.Close()
+		return nil, err
+	}
+	deadline := time.Now().Add(wait)
+	operatorHeld := false
+	for {
+		if !operatorHeld {
+			// Another operator may be waiting too; queue behind it rather than
+			// failing, the dispatch lock below is what serialises the work.
+			operatorHeld = syscall.Flock(int(operator.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+		}
+		if operatorHeld {
+			err = syscall.Flock(int(dispatch.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+				return fail(err)
+			}
+		}
+		if time.Now().After(deadline) {
+			return fail(fmt.Errorf("queue delivery pass still running after %s: %w", wait, syscall.EWOULDBLOCK))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return func() {
+		syscall.Flock(int(dispatch.Fd()), syscall.LOCK_UN) //nolint:errcheck
+		dispatch.Close()
+		syscall.Flock(int(operator.Fd()), syscall.LOCK_UN) //nolint:errcheck
+		operator.Close()
+	}, nil
+}
+
+// operatorWaiting reports whether a cancel or rename is waiting for the
+// dispatch lock. The next delivery pass then skips its turn so the operator
+// gets the lock within one pass instead of never.
+func (q *Queue) operatorWaiting() bool {
+	operator, err := os.OpenFile(filepath.Join(q.Root, ".operator.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return false
+	}
+	defer operator.Close()
+	if err := syscall.Flock(int(operator.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)
+	}
+	syscall.Flock(int(operator.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	return false
 }
 
 // remember refreshes the reason recorded on a pending message so `bp q` and
@@ -1522,6 +1595,9 @@ func (q *Queue) dispatch(ctx context.Context, target Target, selected map[string
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.Root, 0755); err != nil {
 		return err
+	}
+	if q.operatorWaiting() {
+		return nil
 	}
 	lock, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {

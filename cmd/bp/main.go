@@ -831,6 +831,14 @@ func tmuxStateLabel(state book.State, alive bool) string {
 	}
 }
 
+func statusTextStateLabel(state book.State, alive bool) string {
+	label := tmuxStateLabel(state, alive)
+	if label == "idle" && alive && state.Runtime != nil && state.Runtime.Activity != nil && state.Runtime.Activity.LastTurnError {
+		return "idle!"
+	}
+	return label
+}
+
 func (a *app) status(args []string) error {
 	asJSON, all := false, false
 	for _, arg := range args {
@@ -873,7 +881,7 @@ func (a *app) status(args []string) error {
 			continue
 		}
 		state, alive := states[name]
-		tmuxState := tmuxStateLabel(state, alive)
+		tmuxState := statusTextStateLabel(state, alive)
 		bookState := fleet.Agents[name].Status
 		if bookState == "" {
 			bookState = "?"

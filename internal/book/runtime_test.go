@@ -2,8 +2,16 @@ package book
 
 import (
 	"blueprint/internal/cache"
+	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +20,235 @@ import (
 
 	bptmux "blueprint/internal/tmux"
 )
+
+type runtimeRPCRequest struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Params struct {
+		ThreadID     string `json:"threadId"`
+		IncludeTurns bool   `json:"includeTurns"`
+	} `json:"params"`
+}
+
+func startFakeRuntimeAppServer(t *testing.T, socketPath, threadID, cwd, rolloutPath string, status any) (string, <-chan error) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		request, err := http.ReadRequest(reader)
+		if err != nil {
+			done <- err
+			return
+		}
+		key := request.Header.Get("Sec-WebSocket-Key")
+		accept := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:])); err != nil {
+			done <- err
+			return
+		}
+		for {
+			payload, opcode, err := readRuntimeClientFrame(reader)
+			if err != nil {
+				done <- err
+				return
+			}
+			if opcode != 1 {
+				done <- fmt.Errorf("unexpected client websocket opcode %d", opcode)
+				return
+			}
+			var message runtimeRPCRequest
+			if err := json.Unmarshal(payload, &message); err != nil {
+				done <- err
+				return
+			}
+			switch message.Method {
+			case "initialize":
+				err = writeRuntimeServerJSON(conn, map[string]any{"id": message.ID, "result": map[string]any{}})
+			case "initialized":
+				continue
+			case "thread/read":
+				if message.Params.ThreadID != threadID || message.Params.IncludeTurns {
+					done <- fmt.Errorf("unexpected thread/read params: %+v", message.Params)
+					return
+				}
+				result := map[string]any{"thread": map[string]any{
+					"id": threadID, "cwd": cwd, "path": rolloutPath, "model": "gpt-6-luna", "status": status,
+				}}
+				if err := writeRuntimeServerJSON(conn, map[string]any{"id": message.ID, "result": result}); err != nil {
+					done <- err
+					return
+				}
+				done <- nil
+				return
+			default:
+				done <- fmt.Errorf("unexpected app-server method %q", message.Method)
+				return
+			}
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	return "unix://" + socketPath, done
+}
+
+func readRuntimeClientFrame(reader *bufio.Reader) ([]byte, byte, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return nil, 0, err
+	}
+	length := uint64(header[1] & 0x7f)
+	switch length {
+	case 126:
+		var size [2]byte
+		if _, err := io.ReadFull(reader, size[:]); err != nil {
+			return nil, 0, err
+		}
+		length = uint64(binary.BigEndian.Uint16(size[:]))
+	case 127:
+		var size [8]byte
+		if _, err := io.ReadFull(reader, size[:]); err != nil {
+			return nil, 0, err
+		}
+		length = binary.BigEndian.Uint64(size[:])
+	}
+	if header[1]&0x80 == 0 || length > 1<<20 {
+		return nil, 0, fmt.Errorf("invalid masked client frame length %d", length)
+	}
+	var mask [4]byte
+	if _, err := io.ReadFull(reader, mask[:]); err != nil {
+		return nil, 0, err
+	}
+	payload := make([]byte, int(length))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return nil, 0, err
+	}
+	for i := range payload {
+		payload[i] ^= mask[i%len(mask)]
+	}
+	return payload, header[0] & 0x0f, nil
+}
+
+func writeRuntimeServerJSON(writer io.Writer, value any) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	header := []byte{0x81}
+	if len(payload) < 126 {
+		header = append(header, byte(len(payload)))
+	} else if len(payload) <= 65535 {
+		header = append(header, 126, byte(len(payload)>>8), byte(len(payload)))
+	} else {
+		return fmt.Errorf("fake app-server response is too large")
+	}
+	if err := writeRuntimeAll(writer, header); err != nil {
+		return err
+	}
+	return writeRuntimeAll(writer, payload)
+}
+
+func writeRuntimeAll(writer io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := writer.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+func TestReadCodexRuntimeAppServerSystemErrorDelivery(t *testing.T) {
+	const threadID = "01a0711e-1b8b-76a2-954a-76f9e1a44ceb"
+	const cwd = "/work"
+	tests := []struct {
+		name          string
+		status        any
+		remote        bool
+		wantState     string
+		wantReason    string
+		wantLastError bool
+		wantTurnBusy  *bool
+	}{
+		{name: "systemError is idle for delivery", status: map[string]any{"type": "systemError"}, remote: true, wantState: "idle", wantLastError: true, wantTurnBusy: boolPointer(false)},
+		{name: "idle stays idle", status: map[string]any{"type": "idle"}, remote: true, wantState: "idle", wantTurnBusy: boolPointer(false)},
+		{name: "active flags remain unknown", status: map[string]any{"type": "active", "activeFlags": []string{"waitingOnApproval"}}, remote: true, wantState: "unknown", wantReason: "app-server active flags: waitingOnApproval"},
+		{name: "future state remains unknown", status: map[string]any{"type": "weirdState"}, remote: true, wantState: "unknown", wantReason: "app-server state: weirdState"},
+		{name: "remote notLoaded remains unknown", status: map[string]any{"type": "notLoaded"}, remote: true, wantState: "unknown", wantReason: "app-server state: notLoaded"},
+		{name: "non-remote notLoaded keeps early return", status: map[string]any{"type": "notLoaded"}, wantState: "working", wantTurnBusy: boolPointer(true)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home, err := os.MkdirTemp("", "bp-runtime-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.RemoveAll(home) })
+			rolloutPath := writeRuntimeCodex(t, home, threadID, cwd, "task_started", time.Now())
+			remote := ""
+			socketPath := filepath.Join(home, "app-server-control", "app-server-control.sock")
+			if test.remote {
+				socketPath = filepath.Join(home, "fake-app-server.sock")
+			}
+			remote, serverDone := startFakeRuntimeAppServer(t, socketPath, threadID, cwd, rolloutPath, test.status)
+			if !test.remote {
+				remote = ""
+			}
+			agent := Agent{Name: "agent", Folder: cwd, IdentityThreadID: threadID}
+			if test.remote {
+				agent.Launch = &bptmux.OpenOptions{Codex: true, Remote: remote}
+			}
+			activity := &cache.Activity{State: "unknown", LastTurnError: true}
+			state := readCodexRuntime(context.Background(), bptmux.CodexProcess{Home: home, Remote: remote}, agent, activity)
+			state.Activity = activity
+			if activity.State != test.wantState || activity.Reason != test.wantReason || activity.LastTurnError != test.wantLastError {
+				t.Fatalf("activity=%+v; want state=%q reason=%q lastTurnError=%v", activity, test.wantState, test.wantReason, test.wantLastError)
+			}
+			if test.wantTurnBusy == nil {
+				if activity.TurnBusy != nil {
+					t.Fatalf("TurnBusy=%v, want nil", *activity.TurnBusy)
+				}
+			} else if activity.TurnBusy == nil || *activity.TurnBusy != *test.wantTurnBusy {
+				t.Fatalf("TurnBusy=%v, want %v", activity.TurnBusy, *test.wantTurnBusy)
+			}
+			if test.name == "systemError is idle for delivery" {
+				fleet := Fleet{Agents: map[string]Agent{"agent": agent}}
+				if reason := runtimeBlockReason("agent", fleet, state, false); reason != "" {
+					t.Fatalf("systemError still blocks delivery: %s", reason)
+				}
+			}
+			select {
+			case err := <-serverDone:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("fake app-server did not finish thread/read")
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestCodexWriterObservationOnlyForEmbeddedPane(t *testing.T) {
 	for _, tc := range []struct {

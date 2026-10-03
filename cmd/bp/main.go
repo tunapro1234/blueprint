@@ -94,7 +94,7 @@ bp remote add <name> --host <host> [--port N] [--user <user>] [--identity <path>
 bp remote rm <name>
 bp remote [<agent>...]       # existing /remote-control action; list/add/rm are reserved
 bp shell <server> [agent]    # interactive remote shell, or remote bp attach
-bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>
+bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>...
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] [--from <label>] [--mention <jid|number>]... [--mention-all] <message...>
                              # --from states the sender outside tmux (cron, scripts);
@@ -468,13 +468,13 @@ func (a *app) run(args []string) error {
 		return a.queueStatus(args[1:])
 	case "qcancel":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: bp qcancel <channel-id>")
+			return fmt.Errorf("usage: bp qcancel <channel-id>...")
 		}
-		if err := a.queue.Cancel(args[1]); err != nil {
-			return err
+		canceled, err := a.queue.Cancel(args[1:]...)
+		for _, id := range canceled {
+			fmt.Fprintf(a.out, "canceled: %s\n", id)
 		}
-		fmt.Fprintf(a.out, "canceled: %s\n", args[1])
-		return nil
+		return err
 	case "peek":
 		return a.peek(args[1:])
 	case "wa":

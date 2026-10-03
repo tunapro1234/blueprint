@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -61,12 +62,21 @@ func TestCancelCannotClaimSuccessDuringAnotherDispatcherSend(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("dispatcher never reached send")
 	}
-	err = other.Cancel(id)
+	cancelDone := make(chan error, 1)
+	go func() {
+		_, cancelErr := other.Cancel(id)
+		cancelDone <- cancelErr
+	}()
+	select {
+	case err = <-cancelDone:
+		t.Fatalf("cancel returned while the delivery pass held the lock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
 	close(target.proceed)
 	if dispatchErr := <-finished; dispatchErr != nil {
 		t.Fatal(dispatchErr)
 	}
-	if err == nil {
+	if err = <-cancelDone; err == nil {
 		t.Fatal("cancel falsely succeeded after the send had begun")
 	}
 	rec, err := other.Record(id)
@@ -204,5 +214,168 @@ func TestRecoveryRejectsLegacyAndChangedConversationBindings(t *testing.T) {
 				t.Fatal("changed conversation was touched")
 			}
 		})
+	}
+}
+
+func TestCancelWaitsForRunningPassAndTakesSeveralIDs(t *testing.T) {
+	root := t.TempDir()
+	q := New(root)
+	first, err := q.Enqueue("target", "sender", "first message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := q.Enqueue("target", "sender", "second message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.OpenFile(filepath.Join(root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		canceled []string
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		canceled, err := New(root).Cancel(first, "q000000000", second)
+		done <- result{canceled, err}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("cancel did not wait for the held dispatch lock: %+v", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancel never took the released lock")
+	}
+	if len(got.canceled) != 2 || got.canceled[0] != first || got.canceled[1] != second {
+		t.Fatalf("canceled = %v", got.canceled)
+	}
+	if got.err == nil || !strings.Contains(got.err.Error(), "no pending message q000000000") {
+		t.Fatalf("missing id not reported: %v", got.err)
+	}
+	for _, id := range []string{first, second} {
+		rec, err := q.Record(id)
+		if err != nil || rec.Status != "canceled (by operator)" {
+			t.Fatal(id, rec, err)
+		}
+	}
+}
+
+func TestCancelGivesUpWithoutChangesWhenPassNeverEnds(t *testing.T) {
+	old := cancelLockWait
+	cancelLockWait = 150 * time.Millisecond
+	defer func() { cancelLockWait = old }()
+	root := t.TempDir()
+	q := New(root)
+	id, err := q.Enqueue("target", "sender", "kept message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.OpenFile(filepath.Join(root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	canceled, err := q.Cancel(id)
+	if err == nil || len(canceled) != 0 || !strings.Contains(err.Error(), "delivery pass still running") {
+		t.Fatalf("canceled=%v err=%v", canceled, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "pending", id+".json")); statErr != nil {
+		t.Fatalf("pending record changed: %v", statErr)
+	}
+}
+
+func TestDispatchYieldsToWaitingOperator(t *testing.T) {
+	root := t.TempDir()
+	q := New(root)
+	id, err := q.Enqueue("target", "sender", stuckText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator, err := os.OpenFile(filepath.Join(root, ".operator.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer operator.Close()
+	if err := syscall.Flock(int(operator.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: composerPane("")}
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err := q.Record(id); err != nil || rec.Status == "delivered" {
+		t.Fatalf("pass ran while an operator was waiting: %+v %v", rec, err)
+	}
+	if err := syscall.Flock(int(operator.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err := q.Record(id); err != nil || rec.Status != "delivered" {
+		t.Fatalf("pass after the operator left: %+v %v", rec, err)
+	}
+}
+
+func TestCancelWinsAgainstBackToBackPasses(t *testing.T) {
+	root := t.TempDir()
+	q := New(root)
+	id, err := q.Enqueue("other", "sender", "cancel me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a daemon whose passes follow each other with no gap: each
+	// pass holds the dispatch lock for 100ms and re-takes it at once.
+	stop := make(chan struct{})
+	var passes sync.WaitGroup
+	passes.Add(1)
+	go func() {
+		defer passes.Done()
+		daemon := New(root)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if daemon.operatorWaiting() {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			lock, err := os.OpenFile(filepath.Join(root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+			if err != nil {
+				return
+			}
+			if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+				time.Sleep(100 * time.Millisecond)
+				syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+			}
+			lock.Close()
+		}
+	}()
+	defer func() { close(stop); passes.Wait() }()
+	time.Sleep(20 * time.Millisecond)
+	old := cancelLockWait
+	cancelLockWait = 3 * time.Second
+	defer func() { cancelLockWait = old }()
+	canceled, err := New(root).Cancel(id)
+	if err != nil || len(canceled) != 1 {
+		t.Fatalf("canceled=%v err=%v", canceled, err)
 	}
 }

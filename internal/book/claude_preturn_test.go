@@ -2,6 +2,7 @@ package book
 
 import (
 	"blueprint/internal/cache"
+	bptmux "blueprint/internal/tmux"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,15 +50,19 @@ func TestClaudePreTurnDoesNotOverrideBusyDraftModalStaleOrWeakBinding(t *testing
 	path := filepath.Join(t.TempDir(), id+".jsonl")
 	_ = os.WriteFile(path, []byte(`{"type":"custom-title","sessionId":"`+id+`"}`+"\n"), 0600)
 	pane := "──────────────────── writer ──\n❯\u00a0\n────────────────────────────────────────\n  -- INSERT -- ⏵⏵ bypass permissions on (shift+tab to cycle)"
-	for _, mode := range []string{"ready", "working", "draft", "modal", "stale", "weak", "missing-box"} {
+	for _, mode := range []string{"ready", "onboarding", "working", "draft", "foreign-onboarding", "modal", "stale", "weak", "missing-box"} {
 		t.Run(mode, func(t *testing.T) {
 			a := &cache.Activity{State: "unknown", Reason: "no readable decisive turn event", ThreadID: id, TranscriptPath: path, Binding: "claude-process-session"}
 			screen := pane
 			switch mode {
 			case "working":
 				screen = "✻ Working… (23s · esc to interrupt)\n" + pane
+			case "onboarding":
+				screen = strings.Replace(pane, "❯\u00a0", "❯ "+bptmux.OnboardingPrompt("writer"), 1)
 			case "draft":
 				screen = strings.Replace(pane, "❯\u00a0", "❯ user draft", 1)
+			case "foreign-onboarding":
+				screen = strings.Replace(pane, "❯\u00a0", "❯ "+bptmux.OnboardingPrompt("other"), 1)
 			case "modal":
 				screen = pane + "\nEsc to cancel"
 			case "stale":
@@ -67,8 +72,8 @@ func TestClaudePreTurnDoesNotOverrideBusyDraftModalStaleOrWeakBinding(t *testing
 			case "missing-box":
 				screen = "❯ "
 			}
-			applyClaudePreTurn(cache.State{Runtime: "claude"}, a, "/work", screen)
-			if (a.State == "idle") != (mode == "ready") {
+			applyClaudePreTurn(cache.State{Runtime: "claude"}, a, "writer", "/work", screen)
+			if (a.State == "idle") != (mode == "ready" || mode == "onboarding") {
 				t.Fatal(mode, a)
 			}
 		})

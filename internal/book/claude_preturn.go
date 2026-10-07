@@ -81,7 +81,7 @@ func claudePreTurn(path, id, cwd string) bool {
 	return bound
 }
 
-func applyClaudePreTurn(state cache.State, a *cache.Activity, cwd, pane string) {
+func applyClaudePreTurn(state cache.State, a *cache.Activity, name, cwd, pane string) {
 	if state.Runtime != "claude" || a.State != "unknown" || a.ThreadID == "" {
 		return
 	}
@@ -91,7 +91,10 @@ func applyClaudePreTurn(state cache.State, a *cache.Activity, cwd, pane string) 
 	if a.Binding != "claude-process-session" && a.Binding != "local-launch-observer" {
 		return
 	}
-	if !bptmux.ClaudeEmptyComposer(pane) || !claudePreTurn(a.TranscriptPath, a.ThreadID, cwd) {
+	// bp open's own onboarding prompt left unsubmitted counts as empty: it is
+	// bp's text, and the send path submits it (2026-10-08, probot-equity).
+	empty := bptmux.ClaudeEmptyComposer(pane) || bptmux.ClaudeComposerHoldsOnboarding(pane, name)
+	if !empty || !claudePreTurn(a.TranscriptPath, a.ThreadID, cwd) {
 		return
 	}
 	a.State, a.Source, a.Reason = "idle", "claude-pre-turn", ""

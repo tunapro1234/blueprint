@@ -656,3 +656,14 @@ func ClaudeEmptyComposer(pane string) bool {
 	box, _, ok := claudeComposerBoxAt(pane)
 	return ok && stripSpace(box) == "" && !Busy(pane) && !Dialog(pane)
 }
+
+// ClaudeComposerHoldsOnboarding reports a Claude composer holding nothing but
+// bp open's own onboarding prompt for session, unsubmitted. It is bp's text,
+// not a human draft, and the send path submits it before delivering.
+func ClaudeComposerHoldsOnboarding(pane, session string) bool {
+	if _, _, ok := claudeComposerBoxAt(pane); !ok || Busy(pane) || Dialog(pane) {
+		return false
+	}
+	verdict, _ := classifyPaste(pane, []string{OnboardingPrompt(session)})
+	return verdict == pasteExact
+}

@@ -69,7 +69,7 @@ func observedRuntimeState(ctx context.Context, agent Agent, state cache.State, p
 		state.Runtime = process.Command
 		a.Reason = "harness has no structured activity probe"
 	}
-	applyClaudePreTurn(state, a, FirstPath(agent.Folder), pane)
+	applyClaudePreTurn(state, a, agent.Name, FirstPath(agent.Folder), pane)
 	// Positive screen evidence must not disappear behind missing/stale metrics.
 	// An empty composer is never affirmative idle evidence.
 	if screen {

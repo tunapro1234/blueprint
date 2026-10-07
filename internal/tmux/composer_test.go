@@ -3,6 +3,7 @@ package tmux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1501,5 +1502,49 @@ func TestFinishStartupCommandSubmitsOnlyItsOwnCommand(t *testing.T) {
 				t.Fatalf("%d captures left unread", len(h.captures))
 			}
 		})
+	}
+}
+
+func TestSendSubmitsBpOnboardingPromptLeftInTheComposer(t *testing.T) {
+	// The 2026-10-08 incident: bp open's onboarding paste never got its Enter,
+	// and the queue read it as a human typing. It is bp's own text, so it is
+	// submitted; the queued message waits for the agent's first turn to end.
+	onboarding := fmt.Sprintf(portableOnboarding, "target")
+	h := &sendHarness{
+		captures: []string{
+			claudePane("❯ " + onboarding),
+			claudePane(emptyRow),
+		},
+		activities: []string{"target\t900\n", "target\t900\n"},
+	}
+	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+	if !errors.Is(err, ErrTyping) {
+		t.Fatalf("err=%v, want ErrTyping so the message is queued behind the onboarding turn", err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
+	}
+	if countInjections(h.mutations) != 0 {
+		t.Fatalf("the queued message was pasted onto the onboarding prompt: %v", h.mutations)
+	}
+	assertNoEscape(t, h.mutations)
+}
+
+func TestSendLeavesAnotherAgentsOnboardingTextAlone(t *testing.T) {
+	// Only this session's own prompt is bp's; anything else is someone's input.
+	h := &sendHarness{
+		captures: []string{
+			claudePane("❯ " + fmt.Sprintf(portableOnboarding, "other")),
+			claudePane("❯ " + fmt.Sprintf(portableOnboarding, "other")),
+			claudePane("❯ " + fmt.Sprintf(portableOnboarding, "other")),
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+	if err == nil {
+		t.Fatal("a foreign composer was treated as deliverable")
+	}
+	if got := countEnter(h.mutations); got != 0 {
+		t.Fatalf("Enter pressed on someone else's text: %v", h.mutations)
 	}
 }

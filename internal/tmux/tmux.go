@@ -2139,6 +2139,17 @@ func (c *Client) resolveStuckPaste(ctx context.Context, target, session, message
 		}
 		return nil, "", stuckAbsent, nil
 	default:
+		// bp open's own onboarding prompt is bp's text too. Measured 2026-10-08
+		// (probot-equity, load ~30): its Enter never registered, and every queued
+		// message then waited behind "someone is typing" for half an hour. Only an
+		// exact match is submitted; the agent then starts its first turn, so the
+		// message waits for the next pass like any busy pane.
+		if onboarding := OnboardingPrompt(session); message != onboarding {
+			if verdict, text := classifyPaste(pane, []string{onboarding}); verdict == pasteExact {
+				c.submitWithUsageLimit(ctx, target, session, text, &pane, false)
+				return nil, "", stuckUnresolved, nil
+			}
+		}
 		return nil, pane, stuckAbsent, nil
 	}
 }
@@ -2608,6 +2619,11 @@ func boolCount(values ...bool) int {
 const (
 	portableOnboarding = "You are the '%s' bp agent. Follow the user's instructions and the agent rules in your own working directory. Read bp help, bp config path and bp book to learn this machine's configuration and coordinator; do not assume server-specific paths or privileges. Use bp status, bp msg and bp qstat for communication; let the queue preserve busy agents and user input. Do not manually type into other panes. Briefly report readiness in the user's language."
 )
+
+// OnboardingPrompt is the first prompt bp open gives a new agent named session.
+func OnboardingPrompt(session string) string {
+	return fmt.Sprintf(portableOnboarding, session)
+}
 
 // mungeProjectPath replicates Claude Code's cwd -> project-dir encoding: every
 // byte that is not an ASCII letter or digit becomes '-' (so "/srv/probot-business"
@@ -3256,8 +3272,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 		}
 	}
 	if !opts.NoPrompt && !nativeOnboarding {
-		onboarding := portableOnboarding
-		if err := c.Send(ctx, session, fmt.Sprintf(onboarding, session)); err != nil {
+		if err := c.Send(ctx, session, OnboardingPrompt(session)); err != nil {
 			if warn != nil {
 				warn("WARNING: could not send onboarding prompt: " + err.Error())
 			}

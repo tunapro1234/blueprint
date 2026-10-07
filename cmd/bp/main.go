@@ -61,9 +61,9 @@ bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
-bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] <codex|claude|opencode|hermes> [arguments...]
+bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] [--allow-codex] <codex|claude|opencode|hermes> [arguments...]
                               # bp open also accepts --opencode for managed sessions
-bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]
 bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
 bp attach <agent>@<server>      # delegate the same command to a registered remote
 bp schema export [<project-dir>] [--lead <agent>]
@@ -105,6 +105,10 @@ bp tokens [--day YYYY-MM-DD | --since 7d] [--hours | --prompts] [--agent <name>]
 bp tokens collect | bp tokens gc
 bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>
+bp account add [--slot N] [--alias A] | list [--json] [--refresh] | status [--json]
+bp account switch [N|email|alias] [--strategy best|next-available] [--dry-run]
+bp account remove N | alias N A|--unset | disable N | enable N
+bp account auto [--once] [--dry-run] [--threshold P] [--json]
 bp service
 bp workflow add <dir> [--replace] | list | show <name> | check <dir|name> [--workdir <dir>]
 bp workflow start <name> --workdir <dir> --agent <a> [--agent <b> ...] [--limit N] [--dry-run]
@@ -487,6 +491,8 @@ func (a *app) run(args []string) error {
 		return a.monitor(args[1:])
 	case "policy":
 		return a.policy(args[1:])
+	case "account":
+		return a.account(args[1:])
 	case "service":
 		return a.service()
 	case "con":
@@ -1366,7 +1372,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1395,7 +1401,7 @@ func (a *app) open(args []string) error {
 	}
 	harness := ""
 	resumeRequested, threadExplicit, freshRequested := false, false, false
-	rebind, adopt := false, false
+	rebind, adopt, allowCodex := false, false, false
 	worktreeTopic := ""
 	reg := book.Registration{Lifetime: book.LifetimePersistent}
 	if stored.Agents[name].IsEphemeral() {
@@ -1456,6 +1462,8 @@ func (a *app) open(args []string) error {
 			rebind = true
 		case "--adopt":
 			adopt = true
+		case "--allow-codex":
+			allowCodex = true
 		case "--worktree":
 			if index+1 >= len(args) {
 				return fmt.Errorf("--worktree requires a topic")
@@ -1488,6 +1496,14 @@ func (a *app) open(args []string) error {
 	}
 	if freshRequested && (resumeRequested || threadExplicit) {
 		return fmt.Errorf("--fresh cannot be combined with --resume or --thread")
+	}
+	if a.config.CodexDisabled() {
+		if harness == "" && stored.Agents[name].Launch == nil && opts.Remote == "" && !opts.NoSandbox {
+			// Nothing asked for Codex: the built-in default follows the policy.
+			opts.Codex = false
+		} else if opts.Codex && !allowCodex {
+			return codexDisabledError(fmt.Sprintf("bp open %s", name))
+		}
 	}
 	if opts.Codex && !opts.Resume && opts.NoPrompt {
 		return fmt.Errorf("--no-prompt cannot be used for a new Codex agent: Codex creates its thread only on the first prompt, so bp could not bind it and delivery would stay blocked; omit --no-prompt (bp sends the onboarding prompt; --role adds context)")

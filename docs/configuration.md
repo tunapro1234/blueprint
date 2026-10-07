@@ -126,6 +126,54 @@ installed. Commands are executed directly; shell expansion and command
 substitution are not applied.
 
 
+## Claude accounts
+
+`bp account` stores Claude Code logins and switches between them on demand.
+Automatic switching by the daemon is opt-in:
+
+```yaml
+claudeAccounts:
+  autoSwitch: false     # run the claude-account-auto daemon job
+  threshold: 90         # switch away when the active 5h or 7d usage reaches this percent
+  cooldownMinutes: 5    # minimum time between switches, manual ones included
+  pollMinutes: 5        # how old cached usage of an account may be before it is fetched again
+```
+
+When enabled, the daemon runs one pass a minute and fetches usage for at most
+one account per pass. It switches only to an enabled account whose usage is
+below `threshold` and at least 10 points below the active account, and never
+within `cooldownMinutes` of the previous switch. Each switch writes one daemon
+log line and sends one notification through the configured `ntfy` settings (none
+when `ntfy` is unset). When every account is exhausted the daemon stays on the
+active account and logs that at most once an hour. `bp account auto --once`
+runs the same decision by hand; it exits 0 after a switch, 2 when nothing is to
+be done, 3 when no account is viable and 1 on error. The job and the command
+are not available on macOS.
+
+## Turning off new Codex sessions
+
+An installation that has moved its agents off Codex can say so once:
+
+```yaml
+codex:
+  disabled: true
+```
+
+With this set, `bp open` without a harness flag starts Claude instead of the
+built-in Codex default, and an explicit Codex launch (`--codex`, `--remote`,
+`--no-sandbox`, or reopening an agent whose recorded launch is Codex) and
+`bp run codex` are refused with a message naming the policy. `--allow-codex`
+starts Codex anyway for that one command. Agents that are already running are
+left alone, and the daemon's keepalive still relaunches a recorded Codex launch
+(stopping it could take a live agent down) but logs that it did. `bp doctor`
+reports every agent whose recorded launch is still Codex, with the commands
+that move it: `bp close <name>`, then
+`bp open <name> <directory> --claude --fresh --rebind`.
+
+The setting covers bp's own launch paths only; it does not wrap the `codex`
+binary itself. `codex.sockets` and `codex.disabled` live in the same block, so
+set both in the file that sets either.
+
 ## Window border reset
 
 `bp windows watch` uses an explicit reset color when a window no longer maps to
@@ -148,7 +196,9 @@ windows:
 | `clipboardDir` | Clipboard files |
 | `waBridge`, `waOutbox`, `waStore` | Existing WhatsApp integration |
 | `codex.sockets` | Read-only Codex app-server observation sockets |
+| `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes` | Claude account auto-switching (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

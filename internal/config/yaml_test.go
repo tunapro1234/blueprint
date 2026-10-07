@@ -89,6 +89,7 @@ bar:
   widgets: []
 codex:
   sockets: [sockets/codex.sock]
+  disabled: true
 ntfy:
   url: https://example.com
   topic: bp
@@ -106,6 +107,9 @@ ntfy:
 	}
 	if c.Codex.Sockets[0] != filepath.Join(c.Home, "sockets/codex.sock") || c.Ntfy.Topic != "bp" || c.Ntfy.Token != "test-only" {
 		t.Fatal("nested configuration lost")
+	}
+	if !c.CodexDisabled() {
+		t.Fatal("codex.disabled lost")
 	}
 }
 
@@ -203,5 +207,39 @@ func TestDefaultColorConfig(t *testing.T) {
 		if _, err := yamlConfig(t, "config.yaml", "bar:\n  defaultColor: "+value+"\n"); err == nil {
 			t.Fatal("accepted", value)
 		}
+	}
+}
+
+func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
+	c, err := yamlConfig(t, "config.yaml", "{}")
+	if err != nil || c.ClaudeAccounts != DefaultClaudeAccounts() || c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.Threshold != 90 {
+		t.Fatalf("defaults=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	if defaults("/srv/blueprint", true).ClaudeAccounts != DefaultClaudeAccounts() {
+		t.Fatal("legacy default differs")
+	}
+	c, err = yamlConfig(t, "config.yaml", "claudeAccounts:\n  autoSwitch: true\n  threshold: 80\n")
+	if err != nil || !c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.Threshold != 80 || c.ClaudeAccounts.CooldownMinutes != 5 || c.ClaudeAccounts.PollMinutes != 5 {
+		t.Fatalf("override=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	for _, bad := range []string{
+		"claudeAccounts:\n  threshold: 0\n",
+		"claudeAccounts:\n  threshold: 101\n",
+		"claudeAccounts:\n  cooldownMinutes: 0\n",
+		"claudeAccounts:\n  pollMinutes: -1\n",
+		"claudeAccounts:\n  autoswitch: true\n",
+	} {
+		if _, err := yamlConfig(t, "config.yaml", bad); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	home := t.TempDir()
+	t.Setenv("BP_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"autoSwitch":true,"pollMinutes":3}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load()
+	if err != nil || !c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.PollMinutes != 3 || c.ClaudeAccounts.Threshold != 90 {
+		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
 	}
 }

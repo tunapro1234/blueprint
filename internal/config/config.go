@@ -48,6 +48,7 @@ type Config struct {
 	Bar              BarConfig               `json:"bar" yaml:"bar"`
 	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
 	Windows          WindowsConfig           `json:"windows" yaml:"windows"`
+	ClaudeAccounts   ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
 	InvalidConfig    string                  `json:"-" yaml:"-"`
 }
 
@@ -72,6 +73,22 @@ type LifecycleConfig struct {
 	ArchiveOnClose   bool `json:"archiveOnClose" yaml:"archiveOnClose"`
 }
 
+// ClaudeAccountsConfig controls the daemon's automatic Claude account switch.
+// The switch itself is always available through `bp account switch`; the
+// daemon only acts when AutoSwitch is enabled. Threshold is a utilization
+// percentage (1-100); the minute values must be at least one.
+type ClaudeAccountsConfig struct {
+	AutoSwitch      bool `json:"autoSwitch" yaml:"autoSwitch"`
+	Threshold       int  `json:"threshold" yaml:"threshold"`
+	CooldownMinutes int  `json:"cooldownMinutes" yaml:"cooldownMinutes"`
+	PollMinutes     int  `json:"pollMinutes" yaml:"pollMinutes"`
+}
+
+// DefaultClaudeAccounts is the claudeAccounts block used when none is set.
+func DefaultClaudeAccounts() ClaudeAccountsConfig {
+	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5}
+}
+
 // BarConfig controls which metrics appear in the tmux status bar and their order.
 type BarConfig struct {
 	DefaultColor string   `json:"defaultColor" yaml:"defaultColor"`
@@ -84,9 +101,19 @@ type WindowsConfig struct {
 	ResetColor string `json:"resetColor" yaml:"resetColor"`
 }
 
-// CodexConfig enables the read-only Codex app-server backend.
+// CodexConfig enables the read-only Codex app-server backend and the
+// installation-wide Codex policy.
 type CodexConfig struct {
 	Sockets []string `json:"sockets" yaml:"sockets"`
+	// Disabled stops bp from starting new Codex sessions: bp open defaults to
+	// Claude, and an explicit Codex launch needs --allow-codex. Agents that
+	// are already running, and their recorded relaunch, are only reported.
+	Disabled bool `json:"disabled" yaml:"disabled"`
+}
+
+// CodexDisabled reports whether the Codex policy forbids new Codex sessions.
+func (c Config) CodexDisabled() bool {
+	return c.Codex != nil && c.Codex.Disabled
 }
 
 // FedConfig enables one side of blueprint federation. A nil value leaves
@@ -127,6 +154,14 @@ type overrides struct {
 	Bar              *barOverrides            `json:"bar" yaml:"bar"`
 	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
 	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
+	ClaudeAccounts   *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
+}
+
+type claudeAccountsOverrides struct {
+	AutoSwitch      *bool `json:"autoSwitch" yaml:"autoSwitch"`
+	Threshold       *int  `json:"threshold" yaml:"threshold"`
+	CooldownMinutes *int  `json:"cooldownMinutes" yaml:"cooldownMinutes"`
+	PollMinutes     *int  `json:"pollMinutes" yaml:"pollMinutes"`
 }
 
 type lifecycleOverrides struct {
@@ -251,6 +286,9 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 	if err := validateRemotes(result.Remotes); err != nil {
 		return Config{}, fmt.Errorf("parse %s: remotes: %w", path, err)
 	}
+	if err := validateClaudeAccounts(result.ClaudeAccounts); err != nil {
+		return Config{}, fmt.Errorf("parse %s: claudeAccounts: %w", path, err)
+	}
 	return result, nil
 }
 
@@ -312,6 +350,7 @@ func defaults(home string, legacy bool) Config {
 			Bar:              bar,
 			Lifecycle:        lifecycle,
 			Windows:          windows,
+			ClaudeAccounts:   DefaultClaudeAccounts(),
 			LocalObservation: true,
 			LocalMouse:       true,
 			UpdateCheck:      true,
@@ -327,6 +366,7 @@ func defaults(home string, legacy bool) Config {
 		Bar:              bar,
 		Lifecycle:        lifecycle,
 		Windows:          windows,
+		ClaudeAccounts:   DefaultClaudeAccounts(),
 		LocalObservation: true,
 		LocalMouse:       true,
 		UpdateCheck:      true,
@@ -435,12 +475,39 @@ func apply(result *Config, values overrides) {
 	if values.Bar != nil && values.Bar.Widgets != nil {
 		result.Bar.Widgets = append([]string(nil), (*values.Bar.Widgets)...)
 	}
+	if accounts := values.ClaudeAccounts; accounts != nil {
+		if accounts.AutoSwitch != nil {
+			result.ClaudeAccounts.AutoSwitch = *accounts.AutoSwitch
+		}
+		if accounts.Threshold != nil {
+			result.ClaudeAccounts.Threshold = *accounts.Threshold
+		}
+		if accounts.CooldownMinutes != nil {
+			result.ClaudeAccounts.CooldownMinutes = *accounts.CooldownMinutes
+		}
+		if accounts.PollMinutes != nil {
+			result.ClaudeAccounts.PollMinutes = *accounts.PollMinutes
+		}
+	}
 	if values.Windows != nil {
 		result.Windows = *values.Windows
 		if result.Windows.ResetColor == "" {
 			result.Windows.ResetColor = "white"
 		}
 	}
+}
+
+func validateClaudeAccounts(value ClaudeAccountsConfig) error {
+	if value.Threshold < 1 || value.Threshold > 100 {
+		return fmt.Errorf("threshold must be between 1 and 100")
+	}
+	if value.CooldownMinutes < 1 {
+		return fmt.Errorf("cooldownMinutes must be at least 1")
+	}
+	if value.PollMinutes < 1 {
+		return fmt.Errorf("pollMinutes must be at least 1")
+	}
+	return nil
 }
 
 func validateFed(value *FedConfig) error {

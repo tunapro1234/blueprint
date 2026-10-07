@@ -120,7 +120,7 @@ func (a *app) initLocalBook() error {
 
 func (a *app) localRun(args []string) error {
 	name, parent, role := "", "", ""
-	nameExplicit, adopt := false, false
+	nameExplicit, adopt, allowCodex := false, false, false
 	lifetime := book.LifetimePersistent
 	if a.config.Lifecycle.EphemeralDefault {
 		lifetime = book.LifetimeEphemeral
@@ -151,6 +151,10 @@ options:
 			adopt = true
 			args = args[1:]
 			continue
+		case "--allow-codex":
+			allowCodex = true
+			args = args[1:]
+			continue
 		case "--ephemeral":
 			lifetime, lifetimeExplicit = book.LifetimeEphemeral, true
 			args = args[1:]
@@ -165,10 +169,13 @@ options:
 		args = args[2:]
 	}
 	if len(args) == 0 || !localHarness(args[0]) {
-		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] <codex|claude|opencode|hermes> [arguments...]")
+		return fmt.Errorf("usage: bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] [--allow-codex] <codex|claude|opencode|hermes> [arguments...]")
 	}
 	if adopt && !nameExplicit {
 		return fmt.Errorf("--adopt requires --name so the thread has an explicit destination")
+	}
+	if args[0] == "codex" && a.config.CodexDisabled() && !allowCodex {
+		return codexDisabledError("bp run codex")
 	}
 	programName := args[0]
 	if programName == "custom" {
@@ -546,7 +553,11 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 	if err := a.tmux.SetOption(a.ctx, "="+name+":", "remain-on-exit", "on"); err != nil {
 		return err
 	}
-	env := append(os.Environ(), "BP_SESSION="+name, "AGENT="+name)
+	// A tmux server started from inside a Claude Code command passes that
+	// session's identity to every pane; the agent would inherit a foreign
+	// session id and run with transcript saving off.
+	env, _ := bptmux.ScrubClaudeSessionEnv(os.Environ())
+	env = append(env, "BP_SESSION="+name, "AGENT="+name)
 	return syscall.Exec(args[3], args[3:], env)
 }
 

@@ -50,6 +50,7 @@ FAKE_TUI = r'''package main
 import("os"; "os/exec"; "fmt"; "encoding/json"; "time"; "strings"; "syscall"; "path/filepath")
 func main() {
  if path:=os.Getenv("BP_FAKE_NATIVE_ARGS");path!="" {b,_:=json.Marshal(os.Args[1:]);if e:=os.WriteFile(path,b,0600);e!=nil{panic(e)}}
+ if path:=os.Getenv("BP_FAKE_NATIVE_ENV");path!="" {b,_:=json.Marshal(os.Environ());if e:=os.WriteFile(path,b,0600);e!=nil{panic(e)}}
  if thread:=os.Getenv("BP_FAKE_PICKER_THREAD");thread!="" {
   raw:=exec.Command("stty","raw","-echo");raw.Stdin=os.Stdin;if raw.Run()!=nil{os.Exit(2)}
   fmt.Print("NATIVE_RESUME_PICKER "+filepath.Base(os.Args[0])+"\r\nSearch conversations / Enter selects / Esc cancels\r\n")
@@ -506,6 +507,36 @@ class LocalCLITest(unittest.TestCase):
         self.assertEqual(restored["status"],"closed")
         self.assertEqual(transcript.read_bytes(),original)
         self.assertFalse(self.alive("archive-me"))
+
+    def test_launch_drops_inherited_claude_session_identity(self):
+        # A tmux server started from a Claude Code Bash tool keeps that session's
+        # identity in its global environment; Claude then runs as a nested child
+        # with transcript saving off.
+        shutil.copyfile(self.fake_tui, self.bin / "claude")
+        dump = self.root / "native-env.json"
+        leaked = dict(CLAUDE_CODE_CHILD_SESSION="1", CLAUDE_CODE_SESSION_ID="fixture-session",
+                      CLAUDE_CODE_MESSAGING_TOKEN="fixture-token", CLAUDECODE="1")
+        self.env.update(leaked, BP_FAKE_NATIVE_ENV=str(dump), CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION="3")
+        fd = self.start("claude", "env-scrub")
+        try:
+            env = dict(entry.split("=", 1) for entry in json.loads(dump.read_text()))
+            for key in leaked:
+                self.assertNotIn(key, env)
+            self.assertEqual(env.get("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION"), "3")
+            self.assertEqual(env.get("BP_SESSION"), "env-scrub")
+            for key, value in leaked.items():
+                subprocess.run([self.tmux, "-S", self.socket, "set-environment", "-g", key, value],
+                               check=True, capture_output=True)
+            result = subprocess.run([self.binary, "doctor", "--json"], env=self.env, capture_output=True, text=True)
+            check = next(c for c in json.loads(result.stdout)["checks"] if c["name"] == "tmux_global_env")
+            self.assertTrue(check["warning"], check)
+            self.assertIn("CLAUDE_CODE_CHILD_SESSION", check["detail"])
+            self.assertNotIn("fixture-token", result.stdout + result.stderr)
+        finally:
+            for key in leaked:
+                subprocess.run([self.tmux, "-S", self.socket, "set-environment", "-gu", key], capture_output=True)
+            os.write(fd, b"\x03")
+            self.wait_closed("env-scrub")
 
     def test_native_exit_error_survives_tmux_and_doctor_points_to_evidence(self):
         shutil.copyfile(self.fake_tui, self.bin / "codex")

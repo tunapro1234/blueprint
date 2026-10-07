@@ -83,6 +83,22 @@ CLI binary does not update an already-running daemon or local worker. Verify the
 actual executable identity separately. Shared Codex app-servers and agent processes
 have independent lifetimes and should not be restarted as part of routine bp updates.
 
+Claude account switching (`bp account`, package `claudeacct`) keeps one slot per
+stored login under `<stateDir>/claude-accounts/`: `accounts.json`, per-slot
+`credentials.json` and `oauthAccount.json`, `auto-state.json` and a `.lock`
+flock. Secret files are 0600 in 0700 directories and are written by temp file,
+fsync and rename; replaced or removed copies are moved aside, never deleted. A
+switch takes Claude Code's own locks in its order (the OAuth refresh lock, the
+config-home lock, then the global-config lock), touches them while held and
+never performs network calls under them. The live login is captured back into
+its slot first, after an identity check, so tokens Claude Code rotated are not
+lost. bp never refreshes the active account's token; Claude Code owns it. An
+inactive slot is refreshed only when it expires within five minutes and the
+rotated token is persisted before use. Only the `oauthAccount` key of the global
+config is replaced. The daemon job `claude-account-auto` is off by default; when
+enabled it polls at most one account per minute and switches with a threshold,
+a 10-point hysteresis and a cooldown.
+
 Interactive remote terminals use a separate `remotes` registry. Local bp only
 constructs the configured mosh or SSH transport; agent lookup and revival are
 delegated to `bp attach` on the destination, so remote agentbook state is never

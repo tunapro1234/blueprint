@@ -313,6 +313,14 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 		return []doctorCheck{{Name: "tmux_access", Agent: selected, Detail: err.Error(),
 			Next: "Run bp doctor from the outer terminal and compare access. A Codex sandbox can deny the tmux socket even while the agent is alive. Do not remove writer locks or disable the whole sandbox to repair observations; raw tmux socket access also permits host command execution."}}
 	}
+	if selected == "" {
+		if check, ok := doctorTmuxClaudeEnvCheck(ctx, client); ok {
+			checks = append(checks, check)
+		}
+	}
+	if check, ok := doctorCodexPolicyCheck(cfg, fleet, selected); ok {
+		checks = append(checks, check)
+	}
 	_, daemonVerification := buildinfo.Recorded(filepath.Join(cfg.StateDir, "daemon-runtime.json"))
 	daemonRunning := daemonVerification == "verified executable"
 	for _, name := range fleet.SortedNames() {
@@ -499,4 +507,17 @@ func doctorNativeTitleAdoptionHint(agentName, title string, agentbooks []string)
 		}
 	}
 	return "", fmt.Sprintf(`adopt unavailable: cannot verify whether %q is free`, title)
+}
+
+// doctorTmuxClaudeEnvCheck flags a tmux server whose global environment holds a
+// Claude Code session's identity (the server was started from inside a Claude
+// command). bp launches scrub it, but panes opened by hand still inherit it.
+func doctorTmuxClaudeEnvCheck(ctx context.Context, client *bptmux.Client) (doctorCheck, bool) {
+	found, err := client.GlobalClaudeSessionEnv(ctx)
+	if err != nil || len(found) == 0 {
+		return doctorCheck{}, false
+	}
+	return doctorCheck{Name: "tmux_global_env", Warning: true,
+		Detail: "tmux global environment holds Claude Code session variables: " + strings.Join(found, ", ") + "; a Claude Code started in a pane not launched by bp runs as a nested child with transcript saving off",
+		Next:   "tmux set-environment -gu <name> for each listed variable (running panes keep their own environment)"}, true
 }

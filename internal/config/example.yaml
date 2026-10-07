@@ -37,6 +37,7 @@ waBridge: false
 # usageHistory: ~/usage/history.jsonl
 # codex:
 #   sockets: [~/.codex/app-server-control/app-server-control.sock]
+#   disabled: false   # true: bp opens no new Codex sessions without --allow-codex
 # ntfy:
 #   url: https://ntfy.example.com
 #   topic: bp
@@ -65,6 +66,15 @@ updateCheck: true
 #     laptop:
 #       id: LAPTOP_PEER_ID
 #       expose: [main] # only these LOCAL agents may receive from laptop
+
+# Claude account rotation. Accounts are captured with bp account add; the
+# daemon switches only when autoSwitch is true. threshold is a 5h/7d
+# utilization percentage.
+# claudeAccounts:
+#   autoSwitch: false
+#   threshold: 90
+#   cooldownMinutes: 5
+#   pollMinutes: 5
 
 # Interactive remote terminals are separate from P2P message peers.
 # remotes:

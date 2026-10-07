@@ -183,6 +183,9 @@ func (s *Service) Run(ctx context.Context) {
 			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
 		})
 	})
+	// Opt-in (claudeAccounts.autoSwitch): moves Claude Code to another stored
+	// account when the active one nears its limit.
+	s.startClaudeAccountAuto(ctx)
 	// Serve the owner's dashboard on loopback so nginx can proxy monitor.tunapro.xyz to it.
 	s.wg.Add(1)
 	go func() {
@@ -522,6 +525,11 @@ func (s *Service) keepalive(ctx context.Context) error {
 	}
 	opts := *agent.Launch
 	opts.NoPrompt, opts.Legacy, opts.Resume = true, s.config.Legacy, true
+	if opts.Codex && s.config.CodexDisabled() {
+		// Refusing would leave the coordinator down; the record is the
+		// operator's to change (bp doctor lists it).
+		s.log.Printf("keepalive: %s is relaunched as Codex from its recorded launch although codex.disabled is set", name)
+	}
 	if opts.Codex {
 		if opts.ResumeID == "" {
 			return fmt.Errorf("keepalive: %s has no recorded Codex thread", name)

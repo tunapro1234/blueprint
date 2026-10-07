@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"blueprint/internal/cache"
+	"blueprint/internal/messagetext"
 	bptmux "blueprint/internal/tmux"
 )
 
@@ -134,17 +135,19 @@ func CanWitness(text string) bool {
 
 // transcriptProbes returns the needles to look for: the message's leading
 // characters in the JSON-escaped forms a transcript record can store them in.
+// It also includes the text Claude Code leaves after extracting image pieces,
+// which lets old, unneutralized queue records be witnessed without a repaste.
 // HTML escaping is disabled because Claude Code's own writer does not escape <,
 // > or & either.
 //
-// There are TWO variants, and the second one is the whole reason this witness
-// ever worked at all. A message is delivered with a tmux bracketed paste, and the
-// line breaks that arrive that way are recorded by Claude Code as CARRIAGE
-// RETURNS: the stored record reads "...yazdim.\r\rBu..." where the message held
-// "...yazdim.\n\nBu...". Measured on q163159804 (2026-08-15), where one message
-// was delivered three times because this function only ever produced the \n form
-// and therefore NO multi-line message could match its own transcript record — the
-// one check that was supposed to stop the repeats never fired.
+// Each candidate has an LF form and, for multiline text, a CR form. A message is
+// delivered with a tmux bracketed paste, and the line breaks that arrive that way
+// are recorded by Claude Code as CARRIAGE RETURNS: the stored record reads
+// "...yazdim.\r\rBu..." where the message held "...yazdim.\n\nBu...". Measured
+// on q163159804 (2026-08-15), one message was delivered three times because this
+// function only ever produced the LF form and no multiline message could match
+// its own transcript record — the check that was supposed to stop the repeats
+// never fired.
 //
 // The substitution is done AFTER escaping, on the two-byte sequence \n, which
 // inside a JSON string can only be an escaped newline (a bare 0x0A cannot appear
@@ -153,6 +156,22 @@ func CanWitness(text string) bool {
 // the variant needle useless but never wrong — the unmodified first needle is
 // always searched as well.
 func transcriptProbes(text string) ([][]byte, bool) {
+	probes, ok := transcriptTextProbes(text)
+	if !ok {
+		return nil, false
+	}
+	transformed, changed := messagetext.ClaudeImageTransform(text)
+	if changed && transformed != text {
+		if extra, ok := transcriptTextProbes(transformed); ok {
+			probes = append(probes, extra...)
+		}
+	}
+	return probes, true
+}
+
+// transcriptTextProbes applies the witness's shared minimum/maximum bounds and
+// JSON/LF-to-CR variants to one candidate text shape.
+func transcriptTextProbes(text string) ([][]byte, bool) {
 	trimmed := strings.TrimSpace(text)
 	runes := []rune(trimmed)
 	if len(runes) < transcriptProbeMin {

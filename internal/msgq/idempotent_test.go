@@ -43,6 +43,26 @@ func TestTransportReplayAcrossQueueInstances(t *testing.T) {
 	}
 }
 
+func TestTransportReplayNormalizesImagePathBeforeComparison(t *testing.T) {
+	q := New(t.TempDir())
+	original := "[external:alice@laptop] please inspect /tmp/proof.png"
+	first, err := q.EnqueueOnce("peer:channel", "agent", "external:alice@laptop", original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[external:alice@laptop] please inspect `/tmp/proof.png`"; first.Msg != want {
+		t.Fatalf("stored text=%q, want %q", first.Msg, want)
+	}
+	replay, err := q.EnqueueOnce("peer:channel", "agent", "external:alice@laptop", original)
+	if err != nil || replay.ID != first.ID || replay.Msg != first.Msg {
+		t.Fatalf("replay=%+v err=%v, first=%+v", replay, err, first)
+	}
+	replay, err = q.EnqueueOnce("peer:channel", "agent", "external:alice@laptop", first.Msg)
+	if err != nil || replay.ID != first.ID {
+		t.Fatalf("neutralized replay=%+v err=%v, want channel %s", replay, err, first.ID)
+	}
+}
+
 func TestTransportMessageUsesOrdinaryBusyAndDraftGuards(t *testing.T) {
 	q := New(t.TempDir())
 	m, e := q.EnqueueOnce("peer:channel", "agent", "external:alice@laptop", "[external:alice@laptop] hello")

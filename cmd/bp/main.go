@@ -2207,6 +2207,14 @@ func cutForceBusy(args []string) ([]string, bool) {
 	return rest, force
 }
 
+func (a *app) neutralizeImagePaths(text string) string {
+	neutralized, count := messagetext.NeutralizeImagePaths(text)
+	if count > 0 && a.err != nil {
+		fmt.Fprintf(a.err, "note: wrapped %d image path(s) in backticks so Claude Code keeps them as text\n", count)
+	}
+	return neutralized
+}
+
 func (a *app) message(args []string) error {
 	args, force := cutForceBusy(args)
 	if len(args) < 2 {
@@ -2224,6 +2232,7 @@ func (a *app) message(args []string) error {
 		return fmt.Errorf("empty message")
 	}
 	if strings.Contains(name, "@") {
+		message = a.neutralizeImagePaths(message)
 		if force {
 			// A federated target is a pane on somebody else's machine: its busy
 			// state is not visible from here and its queue is not this queue, so
@@ -2286,6 +2295,9 @@ func (a *app) message(args []string) error {
 			}
 		}
 	}
+	// Preserve the slash-command authority decision before a leading absolute
+	// image path can be wrapped and cease to look like a slash command.
+	message = a.neutralizeImagePaths(message)
 	if !a.hasSession(name) {
 		if err := pending.Append(a.config.StateDir, name, pending.Entry{TS: time.Now().Unix(), From: sender, Kind: "msg", Text: message}); err != nil {
 			if errors.Is(err, pending.ErrReadOnly) {
@@ -2759,6 +2771,9 @@ func (a *app) announce(args []string) error {
 	targets := announcementCandidates(fleet, sender)
 	cacheStates := a.cacheStates(fleet, states)
 	messageText := strings.Join(words, " ")
+	if !dryRun {
+		messageText = a.neutralizeImagePaths(messageText)
+	}
 	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, messageText)
 	var tally deliveryTally
 	deferred, coldCost, warm := 0, 0, 0

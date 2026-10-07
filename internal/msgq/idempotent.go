@@ -29,6 +29,7 @@ func (q *Queue) EnqueueOnceOrigin(key, to, from, text string, origin *Origin) (M
 	if err := messagetext.Label(from); err != nil {
 		return Message{}, err
 	}
+	text, _ = messagetext.NeutralizeImagePaths(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
@@ -50,13 +51,14 @@ func (q *Queue) EnqueueOnceOrigin(key, to, from, text string, origin *Origin) (M
 	defer releaseRecords()
 	id := fmt.Sprintf("qp%x", sha256.Sum256([]byte(key)))
 	if old, err := q.Record(id); err == nil {
-		// Peer aliases can change. The authenticated origin and original body,
+		// Peer aliases can change. The authenticated origin and normalized body,
 		// rather than today's presentation label, define replay identity.
-		same := old.To == to && old.From == from && old.Msg == text && (origin == nil) == (old.Origin == nil)
+		oldText, _ := messagetext.NeutralizeImagePaths(old.Msg)
+		same := old.To == to && old.From == from && oldText == text && (origin == nil) == (old.Origin == nil)
 		if origin != nil && old.Origin != nil {
 			a, b := *origin, *old.Origin
 			a.PeerAlias, b.PeerAlias = "", ""
-			same = a == b && old.To == to && strings.TrimPrefix(old.Msg, "["+old.From+"] ") == strings.TrimPrefix(text, "["+from+"] ")
+			same = a == b && old.To == to && strings.TrimPrefix(oldText, "["+old.From+"] ") == strings.TrimPrefix(text, "["+from+"] ")
 		}
 		if !same {
 			return Message{}, fmt.Errorf("idempotency key reused with different content")
@@ -101,6 +103,7 @@ func (q *Queue) Record(id string) (Message, error) {
 // Completed records are not deduplicated: repeating a completed instruction can
 // be intentional. Transport retries use EnqueueOnce's explicit key instead.
 func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Duration) (string, error) {
+	text, _ = messagetext.NeutralizeImagePaths(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
@@ -126,7 +129,8 @@ func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Dur
 	}
 	for _, r := range records {
 		age := q.Now().Sub(time.Unix(0, int64(r.TS*1e9)))
-		if r.To == to && r.From == from && r.Msg == text && r.ForceBusy == force && age >= -time.Minute && age <= within {
+		recorded, _ := messagetext.NeutralizeImagePaths(r.Msg)
+		if r.To == to && r.From == from && recorded == text && r.ForceBusy == force && age >= -time.Minute && age <= within {
 			return r.ID, nil
 		}
 	}

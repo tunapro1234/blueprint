@@ -98,6 +98,22 @@ func TestTranscriptDeliveredMatchesPastedCarriageReturns(t *testing.T) {
 	}
 }
 
+func TestTranscriptDeliveredMatchesClaudeImageTransform(t *testing.T) {
+	folder := "/srv/probot/egitim"
+	queued := time.Now().Add(-time.Minute)
+	message := "[probot-egitim] Kanıt dosyası: /srv/probot/lms/kanıt.png\nEk not: öğrenci ekranı tam görünüyor"
+	transformed := "[probot-egitim] Kanıt dosyası:\nEk not: öğrenci ekranı tam görünüyor"
+	if !TranscriptDelivered(writeTranscript(t, "probot-egitim", folder,
+		userRecord(queued.Add(time.Second), transformed)), folder, "probot-egitim", message, queued) {
+		t.Fatal("the Claude image-extracted text form was not witnessed")
+	}
+	withCarriageReturns := strings.ReplaceAll(transformed, "\n", "\r")
+	if !TranscriptDelivered(writeTranscript(t, "probot-egitim", folder,
+		userRecord(queued.Add(time.Second), withCarriageReturns)), folder, "probot-egitim", message, queued) {
+		t.Fatal("the Claude image-extracted text with pasted carriage returns was not witnessed")
+	}
+}
+
 func TestTranscriptDeliveredRefusesWhatItCannotProve(t *testing.T) {
 	folder := "/srv/kavram-main"
 	queued := time.Now().Add(-time.Minute)

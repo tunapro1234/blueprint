@@ -360,6 +360,7 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 	if err := messagetext.Validate(text); err != nil {
 		return "", err
 	}
+	text, _ = messagetext.NeutralizeImagePaths(text)
 	if err := messagetext.Sender(from); err != nil {
 		return "", err
 	}
@@ -798,8 +799,8 @@ func (q *Queue) PendingFor(to string) []string {
 	return texts
 }
 
-// RecentIdentical returns the newest pending record for `to` whose text is
-// byte-identical to text and which was queued within the last `within`.
+// RecentIdentical returns the newest pending record for `to` whose text matches
+// text after image-path neutralization and which was queued within `within`.
 //
 // It is the sender-side duplicate guard, and it exists because the two other
 // guards cannot see the case that produced measured duplicates: an agent whose
@@ -811,6 +812,7 @@ func (q *Queue) PendingFor(to string) []string {
 // times. Nothing downstream can undo that; only refusing to produce the second
 // copy can.
 func (q *Queue) RecentIdentical(to, text string, within time.Duration) (Message, bool) {
+	text, _ = messagetext.NeutralizeImagePaths(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	records, _, err := q.pendingRecords()
@@ -821,7 +823,8 @@ func (q *Queue) RecentIdentical(to, text string, within time.Duration) (Message,
 	var newest Message
 	found := false
 	for _, rec := range records {
-		if rec.To != to || rec.Msg != text {
+		recorded, _ := messagetext.NeutralizeImagePaths(rec.Msg)
+		if rec.To != to || recorded != text {
 			continue
 		}
 		if time.Unix(0, int64(rec.TS*1e9)).Before(cutoff) {
@@ -843,13 +846,14 @@ func (q *Queue) Reason(id string) string {
 	return message.Reason
 }
 
-// CloseDelivered closes the oldest pending record for `to` whose text is exactly
-// text, with the given status. It is how a caller reports that a queued message
-// left the composer some other way than through Dispatch — for instance because
-// the delivery step found it hanging there and pressed Enter on it. Leaving such
-// a record open is what makes the queue paste an already-delivered message a
-// second time.
+// CloseDelivered closes the oldest pending record for `to` whose text matches
+// text after image-path neutralization, with the given status. It is how a caller
+// reports that a queued message left the composer some other way than through
+// Dispatch — for instance because the delivery step found it hanging there and
+// pressed Enter on it. Leaving such a record open is what makes the queue paste
+// an already-delivered message a second time.
 func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
+	text, _ = messagetext.NeutralizeImagePaths(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	records, _, err := q.pendingRecords()
@@ -859,7 +863,8 @@ func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
 	// "Oldest" now really means oldest: the records arrive in send-time order, not
 	// in the order of a file name that carries a fraction of a second.
 	for _, rec := range records {
-		if rec.To != to || rec.Msg != text {
+		recorded, _ := messagetext.NeutralizeImagePaths(rec.Msg)
+		if rec.To != to || recorded != text {
 			continue
 		}
 		if err := q.finish(rec.path, rec.Message, status); err != nil {

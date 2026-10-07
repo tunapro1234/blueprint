@@ -172,6 +172,24 @@ func TestConcurrentLocalSendersShareOnePendingChannel(t *testing.T) {
 	}
 }
 
+func TestEnqueueStoresNeutralizedImagePathAndDeduplicates(t *testing.T) {
+	q := New(t.TempDir())
+	original := "[sender] Review this proof: /tmp/kanıt.png"
+	want := "[sender] Review this proof: `/tmp/kanıt.png`"
+	id, err := q.Enqueue("target", "sender", original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := q.Record(id)
+	if err != nil || record.Msg != want {
+		t.Fatalf("stored message=%q err=%v, want %q", record.Msg, err, want)
+	}
+	duplicate, err := q.EnqueueUnique("target", "sender", original, false, time.Minute)
+	if err != nil || duplicate != id {
+		t.Fatalf("duplicate channel=%q err=%v, want %q", duplicate, err, id)
+	}
+}
+
 func TestRecoveryRejectsLegacyAndChangedConversationBindings(t *testing.T) {
 	for _, mode := range []string{"legacy", "changed-thread", "changed-runtime", "changed-pane", "unknown", "same"} {
 		t.Run(mode, func(t *testing.T) {

@@ -227,6 +227,9 @@ func TestMatchingRegistryDoesNotAuthenticateAnUnprovenCaller(t *testing.T) {
 	if err := a.message([]string{"target", "/compact"}); err == nil {
 		t.Fatal("unproven caller got slash authority")
 	}
+	if err := a.message([]string{"target", "/tmp/proof.png"}); err == nil || !strings.Contains(err.Error(), "slash command refused") {
+		t.Fatalf("unproven caller's absolute image path bypassed slash authority: %v", err)
+	}
 	if err := a.allowForceBusy(who); err == nil {
 		t.Fatal("unproven caller got force authority")
 	}
@@ -409,5 +412,39 @@ func TestSchedulerMessagesHaveAttributionWithoutAuthority(t *testing.T) {
 	}
 	if a.message([]string{"target", "/compact"}) == nil {
 		t.Fatal("scheduler gained slash authority")
+	}
+}
+
+func TestMessageAndAnnounceNeutralizeImagePathsWithOneNote(t *testing.T) {
+	a, _ := identityFixture(t)
+	trustedSenderFixture(a)
+	stateDir := t.TempDir()
+	a.config.StateDir = stateDir
+	a.err = testOutput(t)
+	a.out = testOutput(t)
+	if err := a.message([]string{"target", "please inspect", "/tmp/proof.png"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readTestOutput(t, a.err), "note: wrapped 1 image path(s) in backticks so Claude Code keeps them as text\n"; got != want {
+		t.Fatalf("bp msg stderr=%q, want %q", got, want)
+	}
+	queued, err := pending.Load(stateDir, "target")
+	if err != nil || len(queued.Entries) != 1 || queued.Entries[0].Text != "please inspect `/tmp/proof.png`" {
+		t.Fatalf("offline message=%+v err=%v", queued.Entries, err)
+	}
+
+	announceState := t.TempDir()
+	a.config.StateDir = announceState
+	a.err = testOutput(t)
+	a.out = testOutput(t)
+	if err := a.announce([]string{"Kanit:", "/tmp/ann.png"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readTestOutput(t, a.err), "note: wrapped 1 image path(s) in backticks so Claude Code keeps them as text\n"; got != want {
+		t.Fatalf("bp announce stderr=%q, want %q", got, want)
+	}
+	queued, err = pending.Load(announceState, "target")
+	if err != nil || len(queued.Entries) != 1 || queued.Entries[0].Text != "Kanit: `/tmp/ann.png`" {
+		t.Fatalf("deferred announcement=%+v err=%v", queued.Entries, err)
 	}
 }

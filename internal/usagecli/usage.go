@@ -68,7 +68,10 @@ type Options struct {
 	Auth codexauth.State
 }
 
-func hasClaude(s Sample) bool { return s.Claude5 != nil && s.Claude7 != nil }
+// hasClaude deliberately ignores Claude7, like hasCodex ignores Codex7: Team
+// seats have no account-wide weekly window (the API returns seven_day null), so
+// requiring it would replay a stale reading from another account for 48h.
+func hasClaude(s Sample) bool { return s.Claude5 != nil }
 
 // hasCodex deliberately ignores Codex7: the secondary window only exists on
 // plans that have one, so requiring it would make the fallback below dead code
@@ -248,9 +251,9 @@ func Lines(r Resolved, opts Options) []string {
 	if r.Claude.TS != r.TS {
 		claudeNote = fmt.Sprintf(" (as of %s)", r.Claude.TS)
 	}
-	// Claude keeps its per-figure shape: hasClaude() only guarantees the two
-	// windows, so the Fable figure can be null on its own and each figure has to
-	// be able to say "absent" by itself.
+	// Claude keeps its per-figure shape: hasClaude() only guarantees the 5h
+	// window, so the 7d and Fable figures can be null on their own and each
+	// figure has to be able to say "absent" by itself.
 	claude := fmt.Sprintf("Claude: %s, %s, %s%s",
 		figure("5h", r.Claude.Claude5, r.Claude.ClaudeResets.Five),
 		figure("7d", r.Claude.Claude7, r.Claude.ClaudeResets.Week),

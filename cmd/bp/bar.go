@@ -578,10 +578,12 @@ func (a *app) barQuotaFor(codex bool) string {
 	weekly, short := sample.Claude.Claude7, sample.Claude.Claude5
 	if codex {
 		weekly, short = sample.Codex.Codex7, sample.Codex.Codex5
-		if weekly == nil {
-			weekly = short
-			short = nil
-		}
+	}
+	// A plan without a weekly window (Codex prolite, Claude Team) shows its
+	// only window as the headline figure.
+	if weekly == nil {
+		weekly = short
+		short = nil
 	}
 	week, ok := percent(weekly)
 	if !ok {

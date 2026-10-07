@@ -267,7 +267,7 @@ func TestLinesCodexAbsenceWithUnusableTimestamps(t *testing.T) {
 	}
 }
 
-// hasClaude() only vouches for the two windows, so the Fable figure can be
+// hasClaude() only vouches for the 5h window, so the Fable figure can be
 // absent on its own; and after a long collector outage every claude figure is
 // absent. Neither may print a formatted nil.
 func TestLinesClaudeFiguresStateAbsence(t *testing.T) {
@@ -295,5 +295,23 @@ func TestLinesOmitsEmptyReset(t *testing.T) {
 	r := resolve([]Sample{{TS: "2026-08-10T13:26:07Z", Codex5: 52.0}})
 	if line := Lines(r, Options{})[2]; line != "Codex:  %52" {
 		t.Fatalf("codex line = %q, want %q", line, "Codex:  %52")
+	}
+}
+
+// A Claude Team seat reports no account-wide weekly window. Its rows carry 5h
+// alone; they must count as fresh, not fall back to an older row with both.
+func TestResolveKeepsClaudeRowWithoutWeeklyWindow(t *testing.T) {
+	rows := []Sample{
+		sample("2026-10-07T10:49:51Z", 0.0, 93.0, 0.0, 0.0),
+		sample("2026-10-07T10:59:51Z", 2.0, nil, 0.0, 0.0),
+	}
+	r := resolve(rows)
+	if r.Claude.TS != "2026-10-07T10:59:51Z" || r.Claude.Claude5 != 2.0 {
+		t.Fatalf("claude fell back to %+v", r.Claude)
+	}
+	r.Claude.ClaudeResets.Week = ""
+	want := "Claude: 5h %2 (reset c5-2026-10-07T10:59:51Z), 7d no data, Fable 7d no data"
+	if line := Lines(r, Options{})[1]; line != want {
+		t.Fatalf("claude line = %q, want %q", line, want)
 	}
 }

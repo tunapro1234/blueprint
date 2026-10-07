@@ -274,3 +274,16 @@ func TestBarQuotaUsesObservedHarnessAndNeverDefaultsToClaude(t *testing.T) {
 		}
 	}
 }
+
+// A Claude Team seat has no weekly window: its 5h figure becomes the headline,
+// as for a Codex plan without a secondary window.
+func TestBarQuotaShowsClaudeFiveHourWithoutWeeklyWindow(t *testing.T) {
+	usage := filepath.Join(t.TempDir(), "usage.jsonl")
+	if err := os.WriteFile(usage, []byte(`{"ts":"2026-10-07T10:59:51Z","claude_5h":2,"claude_7d":null,"codex_5h":21,"codex_7d":42}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{config: bpconfig.Config{UsageHistory: usage}}
+	if got := a.barQuotaFor(false); !strings.Contains(got, "cc 2%") || strings.Contains(got, "/") {
+		t.Fatalf("claude quota = %q, want cc 2%% alone", got)
+	}
+}

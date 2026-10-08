@@ -42,16 +42,21 @@ func TestNativeLaunchDropsClaudeNameWithItsValue(t *testing.T) {
 	}
 }
 
-func TestClaudeNameGiven(t *testing.T) {
+func TestClaudeKeepsTitle(t *testing.T) {
 	for args, want := range map[string]bool{
 		"--model opus":       false,
 		"--name x":           true,
 		"-n x":               true,
 		"--name=x":           true,
+		"--resume":           true,
+		"-r id":              true,
+		"-c":                 true,
+		"--continue":         true,
+		"--fork-session":     true,
 		"--model opus -- -n": false,
 	} {
-		if got := claudeNameGiven(strings.Fields(args)); got != want {
-			t.Fatalf("claudeNameGiven(%q) = %v", args, got)
+		if got := claudeKeepsTitle(strings.Fields(args)); got != want {
+			t.Fatalf("claudeKeepsTitle(%q) = %v", args, got)
 		}
 	}
 }

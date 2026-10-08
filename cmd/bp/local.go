@@ -355,9 +355,9 @@ options:
 	// Only our window runs this launcher. Exiting the agent exits the pane;
 	// there is no interactive shell underneath it and no global tmux changes.
 	harnessArgs := args[1:]
-	if args[0] == "claude" && !claudeNameGiven(harnessArgs) {
-		// Title the session with the bp name before Remote Control attaches,
-		// so the Claude app does not list it under a random default title.
+	if args[0] == "claude" && !claudeKeepsTitle(harnessArgs) {
+		// Title a new session with the bp name before Remote Control
+		// attaches, so the Claude app does not list it under a random title.
 		harnessArgs = append([]string{"--name", name}, harnessArgs...)
 	}
 	cliArgs, observationPath, err := a.prepareLocalObservation(args[0], harnessArgs)
@@ -758,13 +758,16 @@ func (a *app) localWorkerName(parent int) string {
 	return ""
 }
 
-// claudeNameGiven reports whether the user already named the Claude session.
-func claudeNameGiven(args []string) bool {
+// claudeKeepsTitle reports whether bp must leave the Claude session title
+// alone: the user named the session, or continues/resumes a conversation that
+// already has its own title (the native picker included).
+func claudeKeepsTitle(args []string) bool {
 	for _, arg := range args {
 		if arg == "--" {
 			return false
 		}
-		if name, _, _ := strings.Cut(arg, "="); name == "--name" || name == "-n" {
+		switch name, _, _ := strings.Cut(arg, "="); name {
+		case "--name", "-n", "-c", "--continue", "-r", "--resume", "--fork-session", "--from-pr":
 			return true
 		}
 	}

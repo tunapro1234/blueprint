@@ -497,7 +497,8 @@ func TestDoctorWarnsAboutNativeTitleMismatchAndSkipsEphemeralExitFailure(t *test
 	}
 }
 
-// bp run claude titles the session with its bp name unless the user named it.
+// bp run claude titles a new session with its bp name unless the user named it;
+// a resumed conversation keeps its own title.
 func TestLocalRunClaudePassesBpNameAsSessionTitle(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -506,6 +507,7 @@ func TestLocalRunClaudePassesBpNameAsSessionTitle(t *testing.T) {
 	}{
 		{name: "bp name", args: []string{"--name", "worker", "claude", "--model", "opus"}, want: "worker"},
 		{name: "user title", args: []string{"--name", "worker", "claude", "-n", "custom"}, want: "custom"},
+		{name: "resume keeps title", args: []string{"--name", "worker", "claude", "--resume"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("TMUX", "")
@@ -545,6 +547,9 @@ func TestLocalRunClaudePassesBpNameAsSessionTitle(t *testing.T) {
 			}
 			command := readFixtureFile(t, calls)
 			title := regexp.MustCompile(`'(?:--name|-n)' '([^']*)'`).FindAllStringSubmatch(command, -1)
+			if test.want == "" && len(title) == 0 {
+				return
+			}
 			if len(title) != 1 || title[0][1] != test.want {
 				t.Fatalf("session titles %q, want only %q: %s", title, test.want, command)
 			}

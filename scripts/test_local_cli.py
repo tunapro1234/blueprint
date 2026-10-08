@@ -1233,8 +1233,13 @@ class LocalCLITest(unittest.TestCase):
                         os.execve(shutil.which(shell), shell_args, env)
                     self.children.append((pid, fd))
                     self.read_until(fd, b"FAKE_READY")
-                    self.assertEqual(json.loads(record.read_text()),
-                                     expected + ["extra arg", "$(touch SHOULD_NOT_EXIST)"])
+                    passed = json.loads(record.read_text())
+                    if cli == "claude":
+                        # bp titles a new Claude session with its bp name.
+                        self.assertEqual(passed[0], "--name")
+                        self.assertTrue(passed[1].startswith("claude-"), passed)
+                        passed = passed[2:]
+                    self.assertEqual(passed, expected + ["extra arg", "$(touch SHOULD_NOT_EXIST)"])
                     sessions = subprocess.check_output([self.tmux, "-S", self.socket,
                                                         "list-sessions", "-F", "#{session_name}"], text=True).splitlines()
                     own = [name for name in sessions if name.startswith(cli + "-")]

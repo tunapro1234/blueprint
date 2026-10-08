@@ -628,6 +628,13 @@ func (c *Client) Capture(ctx context.Context, session string) (string, error) {
 	return string(out), err
 }
 
+// CaptureHistory returns up to lines rows of scrollback plus the visible
+// screen, with wrapped lines joined back together.
+func (c *Client) CaptureHistory(ctx context.Context, session string, lines int) (string, error) {
+	out, err := c.run(ctx, nil, "capture-pane", "-t", "="+session+":", "-p", "-J", "-S", "-"+strconv.Itoa(lines))
+	return string(out), err
+}
+
 func (c *Client) captureStatusPane(ctx context.Context, session string, ansi bool) (string, error) {
 	snapshot := c.statusSnapshot
 	snapshot.mu.Lock()
@@ -1185,6 +1192,48 @@ func RemoteControlMenu(pane string) bool {
 		return false
 	}
 	return strings.Contains(pane, "Disconnect this session") || strings.Contains(pane, "Remote Control")
+}
+
+// RemoteControl is what a Claude pane last said about Remote Control.
+type RemoteControl int
+
+const (
+	// RemoteUnknown: the pane never showed a Remote Control status line.
+	RemoteUnknown RemoteControl = iota
+	// RemoteActive: the latest status line says the session is reachable.
+	RemoteActive
+	// RemoteDisconnected: Claude Code dropped the session after it was active,
+	// for example when the signed-in account or organization changed.
+	RemoteDisconnected
+)
+
+var (
+	remoteURLPattern    = regexp.MustCompile(`https://claude\.ai/code/\S+`)
+	remoteActiveLine    = regexp.MustCompile(`^\s*(?:⎿\s*)?/remote-control is active\b`)
+	remoteDisconnectRow = regexp.MustCompile(`^\s*●\s*Remote Control disconnected\b`)
+)
+
+// RemoteControlStatus reads Claude Code's own status lines, newest last. Only
+// lines Claude Code renders itself count, so a conversation that quotes the
+// text (indented tool output, prose) does not change the result. url is the
+// newest claude.ai/code link printed after the last disconnect; reason is the
+// disconnect line as shown (it may be cut where the pane wrapped it).
+func RemoteControlStatus(pane string) (state RemoteControl, url, reason string) {
+	for _, line := range strings.Split(pane, "\n") {
+		switch {
+		case remoteDisconnectRow.MatchString(line):
+			state, url = RemoteDisconnected, ""
+			reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "●"))
+		case remoteActiveLine.MatchString(line):
+			state, reason = RemoteActive, ""
+		}
+		if state != RemoteDisconnected {
+			if matches := remoteURLPattern.FindAllString(line, -1); len(matches) > 0 {
+				url = strings.TrimRight(matches[len(matches)-1], ".,)")
+			}
+		}
+	}
+	return state, url, reason
 }
 
 func parseClientActivity(output, session string) time.Time {

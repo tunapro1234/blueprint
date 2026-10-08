@@ -321,6 +321,7 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 	if check, ok := doctorCodexPolicyCheck(cfg, fleet, selected); ok {
 		checks = append(checks, check)
 	}
+	commands, _ := client.Commands(ctx)
 	_, daemonVerification := buildinfo.Recorded(filepath.Join(cfg.StateDir, "daemon-runtime.json"))
 	daemonRunning := daemonVerification == "verified executable"
 	for _, name := range fleet.SortedNames() {
@@ -362,6 +363,13 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 		if value, err := client.Option(ctx, name, "@bp-bar"); err == nil {
 			if stale := doctorStaleBarOption(name, value, daemonRunning); stale != nil {
 				checks = append(checks, *stale)
+			}
+		}
+		if commands[name] == "claude" {
+			if pane, err := client.CaptureHistory(ctx, name, doctorRemoteHistory); err == nil {
+				if check, ok := doctorRemoteControlCheck(name, pane, selected != ""); ok {
+					checks = append(checks, check)
+				}
 			}
 		}
 		probe := &app{ctx: ctx, config: cfg, tmux: client}
@@ -520,4 +528,37 @@ func doctorTmuxClaudeEnvCheck(ctx context.Context, client *bptmux.Client) (docto
 	return doctorCheck{Name: "tmux_global_env", Warning: true,
 		Detail: "tmux global environment holds Claude Code session variables: " + strings.Join(found, ", ") + "; a Claude Code started in a pane not launched by bp runs as a nested child with transcript saving off",
 		Next:   "tmux set-environment -gu <name> for each listed variable (running panes keep their own environment)"}, true
+}
+
+// doctorRemoteHistory is how far back doctor looks for Remote Control status
+// lines; a disconnect notice is printed once and scrolls away.
+const doctorRemoteHistory = 3000
+
+// doctorRemoteControlCheck flags a Claude session whose Remote Control dropped
+// after it was active (the phone/web link is dead until /remote-control runs
+// again). A session that never enabled it is not reported unless asked about.
+func doctorRemoteControlCheck(name, pane string, selected bool) (doctorCheck, bool) {
+	state, url, reason := bptmux.RemoteControlStatus(pane)
+	switch state {
+	case bptmux.RemoteDisconnected:
+		detail := name + ": Remote Control disconnected"
+		if reason != "" {
+			detail += " (" + reason + ")"
+		}
+		return doctorCheck{Name: "remote_control/" + name, Agent: name, Warning: true, Detail: detail,
+			Next: "bp remote " + name + " (if the account changed on purpose; otherwise /login back to the previous account first)"}, true
+	case bptmux.RemoteActive:
+		if !selected {
+			return doctorCheck{}, false
+		}
+		detail := name + ": Remote Control active"
+		if url != "" {
+			detail += " at " + url
+		}
+		return doctorCheck{Name: "remote_control/" + name, Agent: name, OK: true, Detail: detail}, true
+	}
+	if !selected {
+		return doctorCheck{}, false
+	}
+	return doctorCheck{Name: "remote_control/" + name, Agent: name, OK: true, Detail: name + ": Remote Control not enabled in recent pane history"}, true
 }

@@ -4084,8 +4084,6 @@ func (a *app) daemon(args []string) error {
 	return nil
 }
 
-var remoteURLPattern = regexp.MustCompile(`https://claude\.ai/code/\S+`)
-
 // remote sends /remote-control to Claude sessions so each one gets (or re-prints)
 // its claude.ai/code URL. Idempotent: an already-connected session just reports
 // "is active" with the same URL. Codex sessions are skipped (no such command).
@@ -4113,9 +4111,16 @@ func (a *app) remote(args []string) error {
 	if err != nil {
 		return err
 	}
-	type pending struct{ name string }
-	var sent []pending
-	queuedCount, skipped, unverified := 0, 0, 0
+	type pending struct {
+		name       string
+		unverified bool
+	}
+	// watch holds sent and unverified targets alike: an unverified send may
+	// still have landed, and in a session where remote control was already
+	// active it opens the Continue menu, which blocks the composer until it is
+	// dismissed.
+	var watch []pending
+	queuedCount, skipped := 0, 0
 	for _, name := range targets {
 		if !a.tmux.HasSession(a.ctx, name) {
 			fmt.Fprintf(a.out, "  skip   %-28s no session\n", name)
@@ -4138,9 +4143,8 @@ func (a *app) remote(args []string) error {
 		queued, channelID, err := a.deliver(name, sender, "/remote-control")
 		if errors.Is(err, bptmux.ErrUnverified) {
 			// Keystrokes went in, nothing confirmed them: not a send, not a
-			// failure. It is never counted as sent.
-			fmt.Fprintf(a.out, "  ??     %-28s sent but UNVERIFIED (bp peek %s)\n", name, name)
-			unverified++
+			// failure. It is never counted as sent, but it is watched.
+			watch = append(watch, pending{name: name, unverified: true})
 			continue
 		}
 		if errors.Is(err, bptmux.ErrNotReady) && queued {
@@ -4158,14 +4162,15 @@ func (a *app) remote(args []string) error {
 			queuedCount++
 			continue
 		}
-		sent = append(sent, pending{name})
+		watch = append(watch, pending{name: name})
 	}
-	if len(sent) > 0 {
+	sentCount, active, unverified := 0, 0, 0
+	if len(watch) > 0 {
 		urls := map[string]string{}
 		deadline := time.Now().Add(25 * time.Second) // establishing the connection can be slow
-		for time.Now().Before(deadline) && len(urls) < len(sent) {
+		for time.Now().Before(deadline) && len(urls) < len(watch) {
 			time.Sleep(4 * time.Second)
-			for _, p := range sent {
+			for _, p := range watch {
 				if urls[p.name] != "" {
 					continue
 				}
@@ -4173,8 +4178,8 @@ func (a *app) remote(args []string) error {
 				if err != nil {
 					continue
 				}
-				if matches := remoteURLPattern.FindAllString(pane, -1); len(matches) > 0 {
-					urls[p.name] = strings.TrimRight(matches[len(matches)-1], ".,)")
+				if _, url, _ := bptmux.RemoteControlStatus(pane); url != "" {
+					urls[p.name] = url
 				}
 			}
 		}
@@ -4183,11 +4188,12 @@ func (a *app) remote(args []string) error {
 		// The menu can render later than the URL, so dismissal is a separate sweep:
 		// press Enter for every visible menu, then check again. A second consecutive
 		// submit can also open the menu late, so sweep until two clean passes (at
-		// most about 24 seconds).
+		// most about 24 seconds). Enter is pressed only while the menu is on
+		// screen, so an unverified target whose command never landed is left alone.
 		clean := 0
 		for tries := 0; tries < 12 && clean < 2; tries++ {
 			dismissed := false
-			for _, p := range sent {
+			for _, p := range watch {
 				pane, err := a.tmux.Capture(a.ctx, p.name)
 				if err != nil {
 					continue
@@ -4204,15 +4210,27 @@ func (a *app) remote(args []string) error {
 			}
 			time.Sleep(2 * time.Second)
 		}
-		for _, p := range sent {
-			if url := urls[p.name]; url != "" {
+		for _, p := range watch {
+			url := urls[p.name]
+			switch {
+			case url != "":
+				// A link printed after the last disconnect means the session is
+				// reachable, whatever the delivery check said.
 				fmt.Fprintf(a.out, "  active %-28s %s\n", p.name, url)
-			} else {
+				active++
+				if !p.unverified {
+					sentCount++
+				}
+			case p.unverified:
+				fmt.Fprintf(a.out, "  ??     %-28s sent but UNVERIFIED (bp peek %s)\n", p.name, p.name)
+				unverified++
+			default:
 				fmt.Fprintf(a.out, "  send   %-28s URL not visible (inspect with bp peek %s)\n", p.name, p.name)
+				sentCount++
 			}
 		}
 	}
-	fmt.Fprintf(a.out, "remote: %d sent, %d queued, %d skipped\n", len(sent), queuedCount, skipped)
+	fmt.Fprintf(a.out, "remote: %d active, %d sent, %d queued, %d skipped\n", active, sentCount, queuedCount, skipped)
 	if unverified > 0 {
 		fmt.Fprintf(a.out, "        %d unverified (inspect with bp peek)\n", unverified)
 	}

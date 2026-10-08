@@ -217,6 +217,11 @@ SSH uses a PTY; mosh can use a configured SSH port, identity path and UDP port
 range. Remote records contain no credential values beyond the identity-file path.
 The existing `bp remote [<agent>...]` Claude remote-control action remains
 available, except that `list`, `add`, and `rm` are reserved subcommand words.
+It dismisses the Continue menu an already-connected session opens, including on
+sessions where delivery could not be verified, and reports any session showing
+a fresh claude.ai/code link as active. `bp doctor` warns about Claude sessions
+whose Remote Control dropped after it was active (for example after the signed-in
+account or organization changed); `bp remote <agent>` reconnects them.
 Optional `lush` and `rush` wrappers call `bp attach` and `bp shell`; setup does
 not replace an existing alias or function with either name.
 

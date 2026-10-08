@@ -35,7 +35,7 @@ func TestOpenPassesRecordedArgsAfterBinaryWithoutDuplicates(t *testing.T) {
 			launch = call
 		}
 	}
-	if strings.Count(launch, "--dangerously-skip-permissions") != 1 || !strings.Contains(launch, "PREFIX=claude-main command claude '--model' 'opus' --dangerously-skip-permissions") {
+	if strings.Count(launch, "--dangerously-skip-permissions") != 1 || !strings.Contains(launch, "PREFIX=claude-main command claude '--model' 'opus' --dangerously-skip-permissions --name 'claude-main'") {
 		t.Fatalf("claude launch=%q", launch)
 	}
 }
@@ -206,7 +206,7 @@ func TestDirectLaunchBypassesInteractiveShellAliases(t *testing.T) {
 			t.Fatalf("%s did not call the fake harness: %v", test.name, err)
 		}
 		got := strings.Split(strings.TrimSpace(string(data)), "\n")
-		want := []string{"--model", "opus", "--dangerously-skip-permissions"}
+		want := []string{"--model", "opus", "--dangerously-skip-permissions", "--name", "agent"}
 		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 			t.Fatalf("%s alias/function changed argv: got %q want %q", test.name, got, want)
 		}
@@ -246,5 +246,33 @@ func TestClaudeResumeDoesNotRepeatRecordedPermissionFlag(t *testing.T) {
 	}
 	if strings.Count(launch, "--dangerously-skip-permissions") != 1 || !strings.Contains(launch, "--resume '"+id+"'") || !strings.Contains(launch, "'--model' 'opus'") {
 		t.Fatalf("resumed Claude launch=%q", launch)
+	}
+}
+
+// The Claude app lists a session under its Remote Control bridge title. /rename
+// updates the bridge only while it is attached, and a resumed session's
+// reattached bridge ignores --name, so the rename must follow /remote-control.
+func TestClaudeOpenRenamesAfterRemoteControl(t *testing.T) {
+	h := &launchHarness{capture: "bypass permissions\n"}
+	client := h.client()
+	inner := client.exec
+	var sent []string
+	client.exec = func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ") + " " + string(input)
+		for _, cmd := range []string{"/remote-control", "/rename claude-main"} {
+			if strings.Contains(joined, cmd) && (len(sent) == 0 || sent[len(sent)-1] != cmd) {
+				sent = append(sent, cmd)
+			}
+		}
+		if strings.Contains(joined, "#{pane_current_command}") {
+			return []byte("claude\n"), nil
+		}
+		return inner(ctx, input, args...)
+	}
+	if err := client.Open(context.Background(), "claude-main", "/work", OpenOptions{NoPrompt: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(sent, ",") != "/remote-control,/rename claude-main" {
+		t.Fatalf("startup commands sent in order %q; calls %q", sent, h.calls)
 	}
 }

@@ -27,9 +27,14 @@ var launchValueFlags = map[string]map[string]bool{
 // Flags that bp owns or that select a conversation rather than a mode. They
 // are dropped from the recorded mode; the conversation lives in ResumeID.
 var launchDropped = map[string]map[string]bool{
-	"codex":  {"--remote": true, "--last": true, "--all": true},
-	"claude": {"--settings": true, "--session-id": true, "-c": true, "--continue": true, "--fork-session": true},
+	"codex": {"--remote": true, "--last": true, "--all": true},
+	"claude": {"--settings": true, "--session-id": true, "-c": true, "--continue": true, "--fork-session": true,
+		"--name": true, "-n": true},
 }
+
+// Dropped flags that take a value, which is dropped with them.
+var launchDroppedValue = map[string]bool{"--remote": true, "--settings": true, "--session-id": true,
+	"--name": true, "-n": true}
 
 // nativeLaunch records how `bp run <harness> <args…>` started the agent so that
 // a later bp open --resume reproduces it (#25): the conversation id, and every
@@ -57,7 +62,7 @@ func nativeLaunch(harness string, args []string) *bptmux.OpenOptions {
 				opts.ResumeID = id
 			}
 		case dropped[name]:
-			if !inline && (name == "--remote" || name == "--settings" || name == "--session-id") && i+1 < len(args) {
+			if !inline && launchDroppedValue[name] && i+1 < len(args) {
 				i++
 			}
 		case strings.HasPrefix(arg, "-"):

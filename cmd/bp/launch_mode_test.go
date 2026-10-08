@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -24,5 +25,33 @@ func TestNativeLaunchRecordsModeNotConversationOrPrompt(t *testing.T) {
 	if opencode == nil || !opencode.OpenCode || opencode.Codex || opencode.Resume ||
 		!reflect.DeepEqual(opencode.Args, []string{"--model", "example/model"}) {
 		t.Fatalf("opencode launch: %+v", opencode)
+	}
+}
+
+// bp owns the Claude session title: a recorded --name (with its value) would
+// replay a stale title, or the value would turn into a bare argument.
+func TestNativeLaunchDropsClaudeNameWithItsValue(t *testing.T) {
+	for _, args := range [][]string{
+		{"--name", "worker-a", "--model", "opus"},
+		{"-n", "worker-a", "--model", "opus"},
+		{"--name=worker-a", "--model", "opus"},
+	} {
+		if got := nativeLaunch("claude", args); !reflect.DeepEqual(got.Args, []string{"--model", "opus"}) {
+			t.Fatalf("%q recorded %q", args, got.Args)
+		}
+	}
+}
+
+func TestClaudeNameGiven(t *testing.T) {
+	for args, want := range map[string]bool{
+		"--model opus":       false,
+		"--name x":           true,
+		"-n x":               true,
+		"--name=x":           true,
+		"--model opus -- -n": false,
+	} {
+		if got := claudeNameGiven(strings.Fields(args)); got != want {
+			t.Fatalf("claudeNameGiven(%q) = %v", args, got)
+		}
 	}
 }

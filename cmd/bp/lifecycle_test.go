@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -491,6 +492,61 @@ func TestDoctorWarnsAboutNativeTitleMismatchAndSkipsEphemeralExitFailure(t *test
 			}
 			if foundNativeExit != test.wantNativeExit {
 				t.Fatalf("native_exit present=%t, checks=%+v", foundNativeExit, checks)
+			}
+		})
+	}
+}
+
+// bp run claude titles the session with its bp name unless the user named it.
+func TestLocalRunClaudePassesBpNameAsSessionTitle(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "bp name", args: []string{"--name", "worker", "claude", "--model", "opus"}, want: "worker"},
+		{name: "user title", args: []string{"--name", "worker", "claude", "-n", "custom"}, want: "custom"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("TMUX", "")
+			t.Setenv("TMUX_PANE", "")
+			t.Setenv("AGENTBOOK", "")
+			root := t.TempDir()
+			binDir := filepath.Join(root, "bin")
+			if err := os.MkdirAll(binDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir)
+			bookPath := filepath.Join(root, "agentbook.json")
+			if err := os.WriteFile(bookPath, []byte("{\"agents\":[]}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			calls := filepath.Join(root, "tmux-args")
+			tmuxPath := filepath.Join(binDir, "tmux")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > " + quoteShell(calls) + "\n"
+			if err := os.WriteFile(tmuxPath, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stateDir := filepath.Join(root, "state")
+			a := &app{
+				ctx: context.Background(),
+				config: config.Config{
+					Home: root, Agentbooks: []string{bookPath}, StateDir: stateDir,
+					UsageHistory: filepath.Join(stateDir, "history.json"), UpdateCheck: false,
+				},
+				tmux: &bptmux.Client{Bin: tmuxPath}, out: testOutput(t), err: testOutput(t),
+				interactive: func() bool { return true },
+			}
+			if err := a.localRun(test.args); err != nil {
+				t.Fatal(err)
+			}
+			command := readFixtureFile(t, calls)
+			title := regexp.MustCompile(`'(?:--name|-n)' '([^']*)'`).FindAllStringSubmatch(command, -1)
+			if len(title) != 1 || title[0][1] != test.want {
+				t.Fatalf("session titles %q, want only %q: %s", title, test.want, command)
 			}
 		})
 	}

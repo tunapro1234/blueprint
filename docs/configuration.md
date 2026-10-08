@@ -370,6 +370,15 @@ session ID, telemetry is read independently of the old launch pin. This
 observation does not change the `identityThreadId` authority pin. Remote Codex
 mapping and pin checks are preserved.
 
+## Claude session title
+
+`bp open` and `bp run claude` start Claude with `--name <bp name>`, so the
+session title (and the Claude app's Remote Control listing) shows the agent
+name instead of a random default. A `--name`/`-n` given to `bp run claude` wins
+and is not recorded for later resumes. A resumed session's Remote Control
+bridge reattaches without adopting the title, so `bp open` also sends
+`/rename <bp name>` after `/remote-control`, while the bridge is attached.
+
 ## Local Claude continue/resume ownership
 
 `claude -c` / `--continue` resolves the latest local conversation UUID once and

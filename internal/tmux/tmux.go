@@ -3125,7 +3125,10 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	// Prefix the remote-control session name to match the tmux name, so the
 	// claude.ai/code list shows the agent name instead of the hostname.
-	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions"
+	// --name sets the session title at startup, before Remote Control attaches,
+	// so the bridge never shows its random default title. A recorded --name is
+	// dropped by nativeLaunch, so the bp name always wins.
+	command := "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=" + session + " claude --dangerously-skip-permissions --name " + shellQuote(session)
 	if opts.Resume && !opts.Codex && !opts.Hermes && !opts.OpenCode {
 		// Resume THIS agent's own conversation by id, not `claude -c` (which
 		// continues whichever conversation in the cwd is most recent and so
@@ -3300,8 +3303,6 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	progress("harness ready")
 	c.Sleep(time.Second)
 	if !opts.Codex && !opts.Hermes && !opts.OpenCode {
-		c.sendStartupCommand(ctx, session, "/rename "+session)
-		c.Sleep(time.Second)
 		c.sendStartupCommand(ctx, session, "/remote-control")
 		// When RC is already active (a resumed session reconnects on its own)
 		// the command opens the Continue/Disconnect menu instead of just
@@ -3318,6 +3319,11 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 			}
 			clean++
 		}
+		// Rename only once Remote Control is attached: /rename pushes the
+		// title to the bridge only while a bridge handle exists, and a resumed
+		// session's reattached bridge never adopts the title from --name.
+		c.sendStartupCommand(ctx, session, "/rename "+session)
+		c.Sleep(time.Second)
 	}
 	// The check that tells the operator whether --no-sandbox actually took. If
 	// the pane still reports "bwrap", our wrapper wrapped it anyway — the session

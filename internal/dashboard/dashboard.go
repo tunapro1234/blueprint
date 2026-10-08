@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"blueprint/internal/lowprio"
 )
 
 const (
@@ -114,10 +116,10 @@ func (r *refreshOnDemand) maybeRefresh() {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	if r.usagePulse != "" {
-		pulse := exec.CommandContext(ctx, r.usagePulse)
+		pulse := lowprio.CommandContext(ctx, r.usagePulse)
 		_ = pulse.Run()
 	}
-	gen := exec.CommandContext(ctx, "/usr/bin/python3", filepath.Join(r.sitePath, "gen.py"))
+	gen := lowprio.CommandContext(ctx, "/usr/bin/python3", filepath.Join(r.sitePath, "gen.py"))
 	gen.Dir = r.sitePath
 	_ = gen.Run()
 }

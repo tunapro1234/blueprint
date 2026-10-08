@@ -23,6 +23,7 @@ import (
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
 	"blueprint/internal/fed"
+	"blueprint/internal/lowprio"
 	"blueprint/internal/msgq"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
@@ -497,7 +498,8 @@ func commandDirEnv(ctx context.Context, dir string, extraEnv []string, args ...s
 	if len(args) == 0 {
 		return fmt.Errorf("empty command")
 	}
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	// Periodic jobs yield the CPU to agents and interactive work.
+	cmd := lowprio.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

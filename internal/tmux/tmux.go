@@ -1274,6 +1274,9 @@ const (
 	submitVerifyWindow = 300 * time.Millisecond
 	// submitRetries bounds the extra Enter keypresses after the first one.
 	submitRetries = 2
+	// submitSettleWindow is how long a still-held composer is watched, without
+	// keys, after the last Enter before the submit is called unverified.
+	submitSettleWindow = 3 * time.Second
 	// submitBackspaceDelay separates the BSpace presses of a multiline recovery.
 	submitBackspaceDelay = 150 * time.Millisecond
 	// submitBackspaceMax caps how many trailing newlines a recovery will delete;
@@ -2448,6 +2451,8 @@ func (c *Client) submit(ctx context.Context, target, session, message string, fi
 func (c *Client) submitWithUsageLimit(ctx context.Context, target, session, message string, first *string, detectUsageLimit bool) sendResult {
 	want := stripSpace(message)
 	held := false
+	// entered: the last key was Enter, so a late repaint can still confirm it.
+	entered := false
 	for attempt := 0; attempt <= submitRetries; attempt++ {
 		var pane string
 		var ok bool
@@ -2494,7 +2499,7 @@ func (c *Client) submitWithUsageLimit(ctx context.Context, target, session, mess
 			// with Tab. This branch takes precedence over the Enter/BSpace paths
 			// so Enter is never sent while the affordance is present.
 			_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Tab")
-			held = true // the affordance renders under OUR paste chip
+			held, entered = true, false // the affordance renders under OUR paste chip
 			c.Sleep(submitVerifyWindow)
 			next, ok := c.composerStable(ctx, session)
 			if !ok || paneDialog(next) {
@@ -2561,12 +2566,35 @@ func (c *Client) submitWithUsageLimit(ctx context.Context, target, session, mess
 			}
 		}
 		_, _ = c.run(ctx, nil, "send-keys", "-t", target, "Enter")
+		entered = true
 		if attempt < submitRetries {
 			c.Sleep(submitVerifyWindow)
 		}
 	}
-	// The bound was reached with the composer still holding our message: every
-	// Enter was ignored, and we cannot tell whether the first one landed.
+	// The bound was reached with the composer still holding our message. A
+	// loaded TUI repaints late (load 31-36 on 2026-10-08: the transcript had
+	// the message while three reads in 600ms still showed it), so watch a
+	// little longer WITHOUT pressing keys: a clear after we saw it held is
+	// the submit we were waiting for.
+	for waited := time.Duration(0); held && entered && waited < submitSettleWindow; waited += submitVerifyWindow {
+		c.Sleep(submitVerifyWindow)
+		pane, ok := c.composerStable(ctx, session)
+		if !ok || paneDialog(pane) {
+			return sendUnverified
+		}
+		paneWidth := 0
+		if _, _, isClaude := claudeComposerBoxAt(pane); isClaude {
+			paneWidth, _ = c.paneWidth(ctx, session)
+		}
+		switch classifyComposerAtWidth(pane, message, paneWidth) {
+		case composerCleared:
+			return sendVerified
+		case composerMine:
+			continue
+		}
+		return sendUnverified
+	}
+	// Every Enter was ignored, and we cannot tell whether the first one landed.
 	return sendUnverified
 }
 

@@ -60,6 +60,10 @@ type Message struct {
 	// know" from "we know it failed".
 	NoRepaste      bool   `json:"noRepaste,omitempty"`
 	AttemptBinding string `json:"attempt_binding,omitempty"`
+	// UnverifiedAt is when the last paste of this record ended unverified. A
+	// screen read inside screenSettleGrace of it is not evidence either way:
+	// a loaded TUI can show the submitted text in its composer for seconds.
+	UnverifiedAt float64 `json:"unverified_at,omitempty"`
 	// TornClears counts the times bp erased a MUTILATED copy of this message from
 	// the target's composer and allowed it to be sent again. Bounded by
 	// tornClearMax: a paste that tears repeatedly is a pane problem, not
@@ -253,6 +257,9 @@ const (
 	// session file to be flushed; short enough that the operator hears about it
 	// while the context is still alive.
 	witnessWindow = 15 * time.Minute
+	// screenSettleGrace is how long after an unverified paste the composer is
+	// not read as proof of non-delivery (see Message.UnverifiedAt).
+	screenSettleGrace = 30 * time.Second
 	// noticeHeadRunes is how much of the message the sender's notice quotes —
 	// enough to recognise WHICH message, not enough to re-deliver it by accident.
 	noticeHeadRunes = 60
@@ -1721,6 +1728,15 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// above is its only way to a "delivered" close; everything below exists to put
 	// text into a pane, and for this record that is precisely what must not happen.
 	if rec.NoRepaste {
+		// Right after an unverified submit the composer may still show the text
+		// that was already sent: under load (31-36 on 2026-10-08) Claude wrote
+		// two health-watch messages to its transcript, yet the next pass read
+		// them as hanging 1.5s later and closed both as "not delivered". Until
+		// the screen has had time to settle, only the witness above may decide.
+		if rec.UnverifiedAt > 0 && q.Now().Sub(time.Unix(0, int64(rec.UnverifiedAt*1e9))) < screenSettleGrace {
+			line.block(rec.ID)
+			return
+		}
 		if reason := q.recoveryBlock(rec); !rec.ForceBusy && reason != "" {
 			q.remember(rec.path, rec.Message, reason, report)
 			// Unknown ownership cannot authorize keys. A readable exact/torn copy
@@ -2080,6 +2096,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			line.delivered = message.ID
 			if q.CanWitness != nil && q.CanWitness(message.Msg) {
 				message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
+				message.UnverifiedAt = float64(q.Now().UnixNano()) / 1e9
 				q.update(rec.path, message, report)
 				if report != nil {
 					report(fmt.Sprintf("delivery UNVERIFIED: %s -> %s; it will not be pasted again; waiting for the transcript witness", message.ID, message.To))

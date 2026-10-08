@@ -232,6 +232,8 @@ type sendHarness struct {
 	// to a shell name (e.g. "zsh") to exercise the non-agent guard.
 	command string
 	width   int
+	// lastCapture is what capture-pane keeps returning once captures run out.
+	lastCapture string
 }
 
 func (h *sendHarness) run(_ context.Context, stdin []byte, args ...string) ([]byte, error) {
@@ -253,9 +255,14 @@ func (h *sendHarness) run(_ context.Context, stdin []byte, args ...string) ([]by
 		if h.clearRow != nil {
 			return []byte(h.clearPane), nil
 		}
-		value := h.captures[0]
+		// The last scripted screen stays on: a pane that is not repainted
+		// keeps showing what it showed.
+		if len(h.captures) == 0 {
+			return []byte(h.lastCapture), nil
+		}
+		h.lastCapture = h.captures[0]
 		h.captures = h.captures[1:]
-		return []byte(value), nil
+		return []byte(h.lastCapture), nil
 	case "list-clients":
 		if len(h.activities) == 0 {
 			return []byte{}, nil
@@ -592,6 +599,26 @@ func TestSendRetryStopsAtBound(t *testing.T) {
 	}
 	if got := countEnter(h.mutations); got != 3 {
 		t.Fatalf("expected 3 Enter presses (1+2 bound), got %d: %v", got, h.mutations)
+	}
+}
+
+func TestSendVerifiedWhenLoadedPaneClearsAfterBound(t *testing.T) {
+	// A loaded TUI repaints late: every read up to the retry bound still shows
+	// our message, then the composer clears while bp watches without keys.
+	h := &sendHarness{
+		captures: []string{
+			"❯ \n", "❯ \n",
+			"❯ /compact\n", "❯ /compact\n", "❯ /compact\n",
+			"❯ /compact\n", // settle read: still held
+			"❯ \n",         // settle read: cleared
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if err := testClient(h).Send(context.Background(), "target", "/compact"); err != nil {
+		t.Fatalf("err=%v, want verified", err)
+	}
+	if got := countEnter(h.mutations); got != 3 {
+		t.Fatalf("settle wait must not press keys: got %d Enters: %v", got, h.mutations)
 	}
 }
 

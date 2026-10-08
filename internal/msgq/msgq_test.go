@@ -2648,3 +2648,42 @@ func enqueueBoundUnverified(t *testing.T, q *Queue, to, from, text string) (stri
 	r.AttemptBinding = q.Binding(to)
 	return id, writePending(path, r)
 }
+
+func TestLateRepaintIsNotReadAsHangingDuringSettleGrace(t *testing.T) {
+	// Load 31-36 on 2026-10-08: Claude took two messages, but the composer still
+	// showed them when the next pass came 1.5s later, and both were closed as
+	// "not delivered". Within the grace only the witness may decide.
+	now := time.Date(2026, 10, 8, 17, 15, 0, 0, time.Local)
+	q := heldQueue(t, &now)
+	id, err := q.Enqueue("target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: "❯  ", sendErr: bptmux.ErrUnverified}
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The binding is unknown, so a held composer closes the record outright
+	// (the server-main path) instead of earning an Enter.
+	q.Binding = func(string) string { return "" }
+	target.pane, target.sendErr = deepPane(witnessable), nil
+	now = now.Add(1500 * time.Millisecond)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if status, done := q.Finished(id); done {
+		t.Fatalf("stale screen closed the record inside the grace: %q", status)
+	}
+	if len(target.submitted) != 0 || len(target.cleared) != 0 || len(target.sent) != 0 {
+		t.Fatalf("grace pass touched the pane: %+v", target)
+	}
+
+	// Still held after the grace: the screen is evidence again.
+	now = now.Add(screenSettleGrace)
+	if err = q.Dispatch(context.Background(), target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if status, done := q.Finished(id); !done || status != StatusHangingComposer {
+		t.Fatalf("status=%q done=%v, want %q", status, done, StatusHangingComposer)
+	}
+}

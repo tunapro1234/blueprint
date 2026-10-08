@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -25,6 +26,7 @@ const accountUsage = `usage:
   bp account alias N A | bp account alias N --unset
   bp account disable N | bp account enable N
   bp account auto [--once] [--dry-run] [--threshold P] [--json]
+  bp account keepalive [--once] [--model M] [--json]
   bp account bind <agent> N|email|alias|default
   bp account unbind <agent>
   bp account bindings [--json]
@@ -34,7 +36,12 @@ const accountUsage = `usage:
 An agent bound to an account runs in that account's profile home, and so do
 its descendants unless they are bound themselves; "default" stops a parent's
 binding. A binding applies when the agent is next opened or resumed. Each
-profile has its own login, made once with bp account login.`
+profile has its own login, made once with bp account login.
+
+bp account keepalive shows the plan that keeps every account's five-hour
+window running, staggered by 5h/N; --once sends the minimal prompt to the
+accounts that are due now. The daemon does this when claudeAccounts.keepAlive
+is on.`
 
 // Exit codes of bp account auto --once.
 const (
@@ -89,6 +96,8 @@ func (a *app) account(args []string) error {
 		return a.accountSetDisabled(manager, command == "disable", rest)
 	case "auto":
 		return a.accountAuto(manager, rest)
+	case "keepalive":
+		return a.accountKeepAlive(manager, rest)
 	case "bind":
 		return a.accountBind(manager, rest)
 	case "unbind":
@@ -232,6 +241,23 @@ func (a *app) accountStatus(m *claudeacct.Manager, args []string) error {
 		mode = "on"
 	}
 	fmt.Fprintf(a.out, "auto switch: %s (threshold %d%%, cooldown %dm, poll every %dm)\n", mode, cfg.Threshold, cfg.CooldownMinutes, cfg.PollMinutes)
+	if len(cfg.Limits) > 0 {
+		keys := make([]string, 0, len(cfg.Limits))
+		for key := range cfg.Limits {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, fmt.Sprintf("%s %d%%", key, cfg.Limits[key]))
+		}
+		fmt.Fprintf(a.out, "account limits: %s\n", strings.Join(parts, ", "))
+	}
+	keep := "off"
+	if cfg.KeepAlive {
+		keep = "on (model " + cfg.KeepAliveModel + ")"
+	}
+	fmt.Fprintf(a.out, "keepalive: %s\n", keep)
 	return nil
 }
 
@@ -247,7 +273,7 @@ func (a *app) accountSwitch(m *claudeacct.Manager, args []string) error {
 	if len(positional) > 1 {
 		return errors.New(accountUsage)
 	}
-	opts := claudeacct.SwitchOptions{Strategy: flags["--strategy"], DryRun: flags["--dry-run"] != "", Cooldown: a.accountCooldown()}
+	opts := claudeacct.SwitchOptions{Strategy: flags["--strategy"], DryRun: flags["--dry-run"] != "", Cooldown: a.accountCooldown(), Limits: a.config.ClaudeAccounts.LimitPercents()}
 	if _, given := flags["--strategy"]; given && opts.Strategy == "" {
 		return errors.New("--strategy needs best or next-available")
 	}
@@ -351,7 +377,7 @@ func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
 		return errors.New(accountUsage)
 	}
 	cfg := a.config.ClaudeAccounts
-	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown()}
+	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents()}
 	if text, ok := flags["--threshold"]; ok {
 		value, err := strconv.ParseFloat(strings.TrimSuffix(text, "%"), 64)
 		if err != nil || value <= 0 || value > 100 {
@@ -425,5 +451,85 @@ func (a *app) printAutoResult(result claudeacct.AutoResult, dryRun bool) {
 		fmt.Fprintf(a.out, "no viable account to switch to: %s\n", d.Reason)
 	default:
 		fmt.Fprintf(a.out, "nothing to do: %s\n", d.Reason)
+	}
+}
+
+func (a *app) accountKeepAlive(m *claudeacct.Manager, args []string) error {
+	flags, positional, err := accountFlags(args, map[string]bool{"--model": true}, map[string]bool{"--once": true, "--json": true})
+	if err != nil {
+		return err
+	}
+	if len(positional) > 0 {
+		return errors.New(accountUsage)
+	}
+	opts := claudeacct.KeepAliveOptions{Model: a.config.ClaudeAccounts.KeepAliveModel, DryRun: flags["--once"] == ""}
+	if model, ok := flags["--model"]; ok {
+		if strings.TrimSpace(model) == "" || strings.HasPrefix(model, "-") {
+			return fmt.Errorf("invalid --model %q", model)
+		}
+		opts.Model = model
+	}
+	result, err := m.KeepAliveOnce(a.ctx, opts)
+	if err != nil {
+		return err
+	}
+	if flags["--json"] != "" {
+		return a.accountJSON(result)
+	}
+	a.printKeepAlive(result, opts.DryRun)
+	return nil
+}
+
+func (a *app) printKeepAlive(result claudeacct.KeepAliveResult, dryRun bool) {
+	if len(result.Slots) == 0 {
+		fmt.Fprintln(a.out, "no stored accounts to keep alive")
+		return
+	}
+	fmt.Fprintf(a.out, "windows staggered every %s; planned idle %s in total\n", claudeacct.FormatDuration(result.Step), claudeacct.FormatDuration(result.Idle))
+	clock := func(t time.Time) string {
+		if t.IsZero() {
+			return "-"
+		}
+		return t.Local().Format("15:04")
+	}
+	for _, s := range result.Slots {
+		name := s.Email
+		if s.Alias != "" {
+			name = s.Alias + " (" + s.Email + ")"
+		}
+		var window string
+		switch {
+		case !s.Known:
+			window = "window unknown"
+		case s.Active:
+			window = "active, resets " + clock(s.ResetsAt)
+		default:
+			window = "idle"
+		}
+		var action string
+		switch {
+		case s.Skipped != "":
+			action = "skipped: " + s.Skipped
+		case s.Started:
+			action = "started its window"
+		case s.Attempted && s.Error != "":
+			action = "ping failed: " + s.Error
+		case s.Pinged:
+			action = "pinged; window not confirmed yet"
+		case s.Due && dryRun:
+			action = "due now (--once pings it)"
+		case s.Due:
+			action = "due now"
+		case !s.NextStart.IsZero():
+			action = "next start " + clock(s.NextStart)
+		}
+		if action == "" {
+			fmt.Fprintf(a.out, "  %d %s: %s\n", s.Slot, name, window)
+		} else {
+			fmt.Fprintf(a.out, "  %d %s: %s; %s\n", s.Slot, name, window, action)
+		}
+		if !s.Attempted && s.Error != "" {
+			fmt.Fprintf(a.out, "    last ping %s failed: %s\n", clock(s.LastPingAt), s.Error)
+		}
 	}
 }

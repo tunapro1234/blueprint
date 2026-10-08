@@ -26,10 +26,12 @@ type accountAPI struct {
 	mu     sync.Mutex
 	usage  map[string][2]float64
 	status map[string][2]string
+	// idle tokens report no running five-hour window.
+	idle map[string]bool
 }
 
 func newAccountAPI(t *testing.T) *accountAPI {
-	api := &accountAPI{usage: map[string][2]float64{}, status: map[string][2]string{}}
+	api := &accountAPI{usage: map[string][2]float64{}, status: map[string][2]string{}, idle: map[string]bool{}}
 	mux := http.NewServeMux()
 	rotations := 0
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +56,10 @@ func newAccountAPI(t *testing.T) *accountAPI {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if api.idle[token] {
+			fmt.Fprintf(w, `{"five_hour":{"utilization":0,"resets_at":null},"seven_day":{"utilization":%g,"resets_at":"2099-01-02T00:00:00Z"}}`, u[1])
+			return
+		}
 		fmt.Fprintf(w, `{"five_hour":{"utilization":%g,"resets_at":"2099-01-01T00:00:00Z"},"seven_day":{"utilization":%g,"resets_at":"2099-01-02T00:00:00Z"}}`, u[0], u[1])
 	})
 	api.server = httptest.NewServer(mux)
@@ -75,6 +81,8 @@ type accountEnv struct {
 	state      string
 	api        *accountAPI
 	transcript strings.Builder
+	// pinged lists the slots keepalive prompted, in order.
+	pinged []int
 }
 
 // newAccountEnv points HOME and CLAUDE_CONFIG_DIR at a temporary directory and
@@ -94,6 +102,18 @@ func newAccountEnv(t *testing.T) *accountEnv {
 		m.Client = &claudeacct.Client{TokenURL: e.api.server.URL + "/token", UsageURL: e.api.server.URL + "/usage"}
 		m.LockTimeout = 300 * time.Millisecond
 		m.LockTouch = 50 * time.Millisecond
+		// Never run the real claude binary: a prompt starts the fake window.
+		m.Pinger = func(ctx context.Context, req claudeacct.PingRequest) error {
+			e.api.mu.Lock()
+			defer e.api.mu.Unlock()
+			for n := 1; n <= 9; n++ {
+				if req.Token == accountToken("access", n) {
+					e.pinged = append(e.pinged, n)
+				}
+			}
+			delete(e.api.idle, req.Token)
+			return nil
+		}
 		return m
 	}
 	t.Cleanup(func() { newAccountManager = previous })
@@ -218,7 +238,7 @@ func TestAccountCLIEndToEnd(t *testing.T) {
 	out, code = e.run(a, "auto", "--once")
 	expect(out, code, accountAutoNothing, "cooling down")
 	out, code = e.run(a, "auto", "--once", "--threshold", "99")
-	expect(out, code, accountAutoNothing, "below 99%")
+	expect(out, code, accountAutoNothing, "below threshold 99%")
 
 	a = e.app(0)
 	out, code = e.run(a, "auto", "--once", "--dry-run")
@@ -260,6 +280,62 @@ func TestAccountCLIEndToEnd(t *testing.T) {
 	out, code = e.run(a, "frobnicate")
 	expect(out, code, 1, "unknown account command")
 
+	if strings.Contains(e.transcript.String(), accountSecret) {
+		t.Fatalf("a token value reached command output:\n%s", e.transcript.String())
+	}
+}
+
+func TestAccountCLIKeepAliveAndLimits(t *testing.T) {
+	e := newAccountEnv(t)
+	a := e.app(0)
+	for n := 1; n <= 2; n++ {
+		e.login(n)
+		if out, code := e.run(a, "add"); code != 0 {
+			t.Fatalf("add %d: %s", n, out)
+		}
+	}
+	e.api.set(1, 50, 10)
+	e.api.set(2, 10, 10)
+	e.api.idle[accountToken("access", 1)] = true
+	_, _ = e.run(a, "list", "--refresh")
+
+	// Slot 2 is live at 10%; its own 5% limit makes auto look for room.
+	out, code := e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoNothing {
+		t.Fatalf("without limits: code=%d %s", code, out)
+	}
+	a.config.ClaudeAccounts.Limits = map[string]int{"user2@example.com": 5}
+	out, code = e.run(a, "status")
+	if code != 0 || !strings.Contains(out, "account limits: user2@example.com 5%") || !strings.Contains(out, "keepalive: off") {
+		t.Fatalf("status: %s", out)
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoSwitched || !strings.Contains(out, "its 5% limit") {
+		t.Fatalf("with a limit: code=%d %s", code, out)
+	}
+	out, code = e.run(a, "switch", "--dry-run")
+	if code != 0 || !strings.Contains(out, "to slot 1") {
+		t.Fatalf("switch with a limit: code=%d %s", code, out)
+	}
+
+	// The plan alone pings nothing; --once pings the idle slot 1.
+	out, code = e.run(a, "keepalive")
+	if code != 0 || !strings.Contains(out, "staggered every 2h30m") || !strings.Contains(out, "due now (--once pings it)") || len(e.pinged) != 0 {
+		t.Fatalf("keepalive plan: code=%d pinged=%v %s", code, e.pinged, out)
+	}
+	out, code = e.run(a, "keepalive", "--once")
+	if code != 0 || !strings.Contains(out, "started its window") || len(e.pinged) != 1 || e.pinged[0] != 1 {
+		t.Fatalf("keepalive --once: code=%d pinged=%v %s", code, e.pinged, out)
+	}
+	out, code = e.run(a, "keepalive", "--once", "--json")
+	var result claudeacct.KeepAliveResult
+	if err := json.Unmarshal([]byte(out), &result); code != 0 || err != nil || len(result.Slots) != 2 || len(e.pinged) != 1 {
+		t.Fatalf("keepalive --json code=%d err=%v pinged=%v: %s", code, err, e.pinged, out)
+	}
+	out, code = e.run(a, "keepalive", "--model", "")
+	if code != 1 || !strings.Contains(out, "invalid --model") {
+		t.Fatalf("empty model: code=%d %s", code, out)
+	}
 	if strings.Contains(e.transcript.String(), accountSecret) {
 		t.Fatalf("a token value reached command output:\n%s", e.transcript.String())
 	}

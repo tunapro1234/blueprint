@@ -280,3 +280,57 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestDecideAndStrategiesHonourPerAccountLimits(t *testing.T) {
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	slot := func(n int, alias, email string, five float64) Slot {
+		return Slot{Number: n, AccountUUID: fmt.Sprint("a", n), Alias: alias, Email: email,
+			LastUsage: &UsageCache{Usage: &Usage{FiveHour: &Window{five, reset}}}}
+	}
+	policy := AutoPolicy{Threshold: 90, Limits: map[string]float64{"HUSEYIN": 40, "cerci@example.com": 40, "9": 50}}
+	if got := policy.LimitFor(slot(3, "huseyin", "", 0)); got != 40 {
+		t.Fatalf("alias limit %v", got)
+	}
+	if got := policy.LimitFor(slot(4, "", "Cerci@Example.com", 0)); got != 40 {
+		t.Fatalf("email limit %v", got)
+	}
+	if got := policy.LimitFor(slot(9, "", "", 0)); got != 50 {
+		t.Fatalf("number limit %v", got)
+	}
+	if got := (AutoPolicy{Threshold: 30, Limits: policy.Limits}).LimitFor(slot(3, "huseyin", "", 0)); got != 30 {
+		t.Fatalf("a lower threshold wins: %v", got)
+	}
+	old := AutoState{LastSwitchAt: now.Add(-time.Hour)}
+	cases := []struct {
+		name   string
+		slots  []Slot
+		active int
+		action string
+		to     int
+	}{
+		{"capped account over its limit switches", []Slot{slot(1, "team", "", 20), slot(3, "huseyin", "", 41)}, 3, AutoSwitch, 1},
+		{"capped account under its limit stays", []Slot{slot(1, "team", "", 20), slot(3, "huseyin", "", 39)}, 3, AutoNone, 0},
+		{"capped target with no room skipped", []Slot{slot(1, "team", "", 95), slot(3, "huseyin", "", 45), slot(2, "azra", "", 70)}, 1, AutoSwitch, 2},
+		{"room not raw usage ranks targets", []Slot{slot(1, "team", "", 95), slot(3, "huseyin", "", 5), slot(2, "azra", "", 40)}, 1, AutoSwitch, 2},
+		{"only capped targets full", []Slot{slot(1, "team", "", 95), slot(3, "huseyin", "", 40)}, 1, AutoNoTarget, 0},
+	}
+	for _, c := range cases {
+		d := Decide(&Accounts{Slots: c.slots}, c.active, old, policy, now)
+		if d.Action != c.action || d.To != c.to {
+			t.Errorf("%s: %+v", c.name, d)
+		}
+	}
+
+	accounts := &Accounts{Slots: []Slot{slot(1, "team", "", 30), slot(3, "huseyin", "", 10), slot(4, "", "cerci@example.com", 45)}}
+	best := strategyCandidates(accounts, &liveLogin{}, StrategyBest, policy.Limits, now)
+	if len(best) != 3 || best[0] != 1 || best[1] != 3 {
+		t.Fatalf("best with caps %v", best)
+	}
+	next := strategyCandidates(accounts, &liveLogin{}, StrategyNextAvailable, policy.Limits, now)
+	for _, n := range next {
+		if n == 4 {
+			t.Fatalf("next-available chose an account over its cap: %v", next)
+		}
+	}
+}

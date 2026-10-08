@@ -212,10 +212,10 @@ func TestDefaultColorConfig(t *testing.T) {
 
 func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 	c, err := yamlConfig(t, "config.yaml", "{}")
-	if err != nil || c.ClaudeAccounts != DefaultClaudeAccounts() || c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.Threshold != 90 {
+	if err != nil || !reflect.DeepEqual(c.ClaudeAccounts, DefaultClaudeAccounts()) || c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.Threshold != 90 || c.ClaudeAccounts.KeepAlive || c.ClaudeAccounts.KeepAliveModel != "haiku" {
 		t.Fatalf("defaults=%+v err=%v", c.ClaudeAccounts, err)
 	}
-	if defaults("/srv/blueprint", true).ClaudeAccounts != DefaultClaudeAccounts() {
+	if !reflect.DeepEqual(defaults("/srv/blueprint", true).ClaudeAccounts, DefaultClaudeAccounts()) {
 		t.Fatal("legacy default differs")
 	}
 	c, err = yamlConfig(t, "config.yaml", "claudeAccounts:\n  autoSwitch: true\n  threshold: 80\n")
@@ -228,18 +228,27 @@ func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 		"claudeAccounts:\n  cooldownMinutes: 0\n",
 		"claudeAccounts:\n  pollMinutes: -1\n",
 		"claudeAccounts:\n  autoswitch: true\n",
+		"claudeAccounts:\n  limits:\n    huseyin: 0\n",
+		"claudeAccounts:\n  limits:\n    \"3\": 101\n",
+		"claudeAccounts:\n  limits:\n    \" \": 40\n",
+		"claudeAccounts:\n  keepAliveModel: \"\"\n",
+		"claudeAccounts:\n  keepAliveModel: --bare\n",
 	} {
 		if _, err := yamlConfig(t, "config.yaml", bad); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
 	}
+	c, err = yamlConfig(t, "config.yaml", "claudeAccounts:\n  keepAlive: true\n  keepAliveModel: sonnet\n  limits:\n    huseyin: 40\n    \"4\": 35\n")
+	if err != nil || !c.ClaudeAccounts.KeepAlive || c.ClaudeAccounts.KeepAliveModel != "sonnet" || !reflect.DeepEqual(c.ClaudeAccounts.Limits, map[string]int{"huseyin": 40, "4": 35}) || c.ClaudeAccounts.AutoSwitch {
+		t.Fatalf("keepalive=%+v err=%v", c.ClaudeAccounts, err)
+	}
 	home := t.TempDir()
 	t.Setenv("BP_HOME", home)
-	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"autoSwitch":true,"pollMinutes":3}}`), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"autoSwitch":true,"pollMinutes":3,"limits":{"cerci":40}}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	c, err = Load()
-	if err != nil || !c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.PollMinutes != 3 || c.ClaudeAccounts.Threshold != 90 {
+	if err != nil || !c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.PollMinutes != 3 || c.ClaudeAccounts.Threshold != 90 || c.ClaudeAccounts.Limits["cerci"] != 40 {
 		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
 	}
 }

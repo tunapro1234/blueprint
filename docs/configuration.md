@@ -129,7 +129,7 @@ substitution are not applied.
 ## Claude accounts
 
 `bp account` stores Claude Code logins and switches between them on demand.
-Automatic switching by the daemon is opt-in:
+Automatic switching and keepalive by the daemon are opt-in:
 
 ```yaml
 claudeAccounts:
@@ -137,6 +137,10 @@ claudeAccounts:
   threshold: 90         # switch away when the active 5h or 7d usage reaches this percent
   cooldownMinutes: 5    # minimum time between switches, manual ones included
   pollMinutes: 5        # how old cached usage of an account may be before it is fetched again
+  limits:               # optional per-account caps below threshold (slot number, alias or email)
+    shared: 40
+  keepAlive: false      # keep every account's five-hour window running
+  keepAliveModel: haiku # model of the minimal keepalive prompt
 ```
 
 When enabled, the daemon runs one pass a minute and fetches usage for at most
@@ -149,6 +153,27 @@ active account and logs that at most once an hour. `bp account auto --once`
 runs the same decision by hand; it exits 0 after a switch, 2 when nothing is to
 be done, 3 when no account is viable and 1 on error. The job and the command
 are not available on macOS.
+
+`limits` lowers the threshold for single accounts: an account with `40` counts
+as used up at 40% of its 5h or 7d window, so switching (manual `best` and
+`next-available` included) leaves it once it gets there and never picks it as a
+target above that. A slot number key wins over an alias, an alias over an
+email. Limits govern switching only; an agent bound to an account's profile
+keeps using it.
+
+A Claude five-hour window starts with the first request after the previous one
+ran out. With `keepAlive` on, each pass also sends a one-word prompt
+(`claude -p` with `keepAliveModel`, no tools, no session saved, in a private
+config directory under the accounts state) to every enabled account whose
+window has run out and whose planned start has come. Starts are planned on a
+grid of 5h/N for N accounts (1h15m for four), choosing the order that leaves
+the windows idle the least, so under heavy use another account resets within
+5h/N. Accounts whose usage was never fetched are planned once it is known. A
+failed prompt is retried after 2 minutes, backing off to 30. The live account
+is prompted with the live token and is never refreshed by bp; stored accounts
+are refreshed like a switch would. `bp account keepalive` shows the plan and
+`--once` runs one pass by hand. Keepalive runs whether or not `autoSwitch` is
+on.
 
 ## Turning off new Codex sessions
 
@@ -198,7 +223,7 @@ windows:
 | `codex.sockets` | Read-only Codex app-server observation sockets |
 | `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
-| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes` | Claude account auto-switching (see above) |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel` | Claude account auto-switching, per-account caps and keepalive (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

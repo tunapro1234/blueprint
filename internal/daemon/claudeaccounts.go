@@ -24,24 +24,34 @@ const (
 	claudeAccountQuietLog = time.Hour
 )
 
-// claudeAccountAuto runs the bp account auto decision once per tick. It holds
-// the memory that keeps the daemon log quiet: one line per switch, one line
-// per hour while every account is exhausted or the same error repeats.
+// claudeAccountAuto runs the bp account auto decision and the keepalive pass
+// once per tick. It holds the memory that keeps the daemon log quiet: one
+// line per switch and per keepalive ping, one line per hour while every
+// account is exhausted or the same error repeats.
 type claudeAccountAuto struct {
-	manager *claudeacct.Manager
-	options claudeacct.AutoOptions
-	log     *log.Logger
-	notify  func(context.Context, string) error
-	now     func() time.Time
+	manager    *claudeacct.Manager
+	options    claudeacct.AutoOptions
+	autoSwitch bool
+	keepAlive  *claudeacct.KeepAliveOptions
+	log        *log.Logger
+	notify     func(context.Context, string) error
+	now        func() time.Time
 
 	exhaustedAt time.Time
 	lastError   string
 	errorAt     time.Time
+	// keepErrors remembers when each account's keepalive error was logged.
+	keepErrors map[int]quietError
+}
+
+type quietError struct {
+	text string
+	at   time.Time
 }
 
 func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountAuto {
 	accounts := cfg.ClaudeAccounts
-	return &claudeAccountAuto{
+	auto := &claudeAccountAuto{
 		manager: &claudeacct.Manager{
 			Store:  claudeacct.NewStore(cfg.StateDir),
 			Env:    claudeacct.OSEnv(),
@@ -51,19 +61,26 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 			Policy: claudeacct.AutoPolicy{
 				Threshold: float64(accounts.Threshold),
 				Cooldown:  time.Duration(accounts.CooldownMinutes) * time.Minute,
+				Limits:    accounts.LimitPercents(),
 			},
 			PollEvery: time.Duration(accounts.PollMinutes) * time.Minute,
 			MaxPolls:  1,
 		},
-		log:    logger,
-		notify: func(ctx context.Context, text string) error { return ntfy.Send(ctx, cfg.Ntfy, text) },
-		now:    time.Now,
+		autoSwitch: accounts.AutoSwitch,
+		log:        logger,
+		notify:     func(ctx context.Context, text string) error { return ntfy.Send(ctx, cfg.Ntfy, text) },
+		now:        time.Now,
+		keepErrors: map[int]quietError{},
 	}
+	if accounts.KeepAlive {
+		auto.keepAlive = &claudeacct.KeepAliveOptions{Model: accounts.KeepAliveModel}
+	}
+	return auto
 }
 
-// startClaudeAccountAuto starts the opt-in auto-switch job.
+// startClaudeAccountAuto starts the opt-in auto-switch and keepalive job.
 func (s *Service) startClaudeAccountAuto(ctx context.Context) {
-	if !s.config.ClaudeAccounts.AutoSwitch {
+	if !s.config.ClaudeAccounts.AutoSwitch && !s.config.ClaudeAccounts.KeepAlive {
 		return
 	}
 	if runtime.GOOS == "darwin" {
@@ -85,8 +102,71 @@ func (s *Service) startClaudeAccountAuto(ctx context.Context) {
 	})
 }
 
-// pass runs one auto check and logs/notifies its outcome.
+// pass runs one auto check (or, without auto switching, one usage poll) and
+// then the keepalive pass.
 func (c *claudeAccountAuto) pass(ctx context.Context) error {
+	var err error
+	if c.autoSwitch {
+		err = c.switchPass(ctx)
+	} else {
+		_, err = c.manager.PollOnce(ctx, c.options.PollEvery, c.options.MaxPolls)
+		err = c.quiet(ctx, err)
+	}
+	if c.keepAlive == nil || ctx.Err() != nil {
+		return err
+	}
+	if keepErr := c.keepAlivePass(ctx); keepErr != nil && err == nil {
+		err = keepErr
+	}
+	return err
+}
+
+// quiet logs an error unless the same one was logged within the hour.
+func (c *claudeAccountAuto) quiet(ctx context.Context, err error) error {
+	if err == nil {
+		c.lastError = ""
+		return nil
+	}
+	now := c.now()
+	if ctx.Err() == nil && (err.Error() != c.lastError || now.Sub(c.errorAt) >= claudeAccountQuietLog) {
+		c.log.Printf("%s: %v", claudeAccountJob, err)
+		c.lastError, c.errorAt = err.Error(), now
+	}
+	return err
+}
+
+// keepAlivePass pings the accounts whose staggered window start has come and
+// logs each ping and, at most hourly, each account's repeating error.
+func (c *claudeAccountAuto) keepAlivePass(ctx context.Context) error {
+	result, err := c.manager.KeepAliveOnce(ctx, *c.keepAlive)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.log.Printf("%s: keepalive: %v", claudeAccountJob, err)
+		}
+		return err
+	}
+	now := c.now()
+	for _, view := range result.Slots {
+		name := fmt.Sprintf("slot %d (%s)", view.Slot, view.Email)
+		switch {
+		case view.Pinged && view.Started:
+			c.log.Printf("%s: keepalive started the five-hour window of %s; it resets at %s", claudeAccountJob, name, view.ResetsAt.Local().Format("15:04"))
+			delete(c.keepErrors, view.Slot)
+		case view.Pinged:
+			c.log.Printf("%s: keepalive pinged %s; usage has not confirmed the window yet", claudeAccountJob, name)
+		case view.Attempted && view.Error != "":
+			last := c.keepErrors[view.Slot]
+			if view.Error != last.text || now.Sub(last.at) >= claudeAccountQuietLog {
+				c.log.Printf("%s: keepalive for %s failed: %s", claudeAccountJob, name, view.Error)
+				c.keepErrors[view.Slot] = quietError{view.Error, now}
+			}
+		}
+	}
+	return nil
+}
+
+// switchPass runs one auto check and logs/notifies its outcome.
+func (c *claudeAccountAuto) switchPass(ctx context.Context) error {
 	result, err := c.manager.AutoOnce(ctx, c.options)
 	now := c.now()
 	if err != nil {

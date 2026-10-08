@@ -151,13 +151,15 @@ bp account add --alias work    # store the current Claude login as a slot
 bp account list                # slots, token status and 5h/7d usage
 bp account switch work         # install another slot as the live login
 bp account auto --once         # switch only if the active account is near its limit
+bp account keepalive           # the staggered five-hour window plan; --once pings due accounts
 ```
 
 A switch rewrites Claude Code's credentials file and the `oauthAccount` key of
 its global config under Claude Code's own locks; running Claude agents pick up
 the new login on their next request. Stored tokens stay in private files under
-the bp state directory and are never printed. Automatic switching by the daemon
-is opt-in; see [Claude accounts](docs/configuration.md#claude-accounts). Not
+the bp state directory and are never printed. Automatic switching, per-account usage
+limits and keeping every account's five-hour window running are opt-in; see
+[Claude accounts](docs/configuration.md#claude-accounts). Not
 supported on macOS, where Claude Code keeps its login in the Keychain.
 
 Different agent trees can also run on different accounts at the same time. Bind

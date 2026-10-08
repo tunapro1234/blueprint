@@ -450,7 +450,7 @@ func TestInvalidGrantMarksDeadAndStrategiesSkipIt(t *testing.T) {
 	}
 	live, _ := f.m.readLive()
 	for _, strategy := range []string{StrategyRotation, StrategyBest, StrategyNextAvailable} {
-		for _, n := range strategyCandidates(accounts, live, strategy, f.now) {
+		for _, n := range strategyCandidates(accounts, live, strategy, nil, f.now) {
 			if n == 1 {
 				t.Fatalf("%q picked the dead slot", strategy)
 			}
@@ -511,7 +511,7 @@ func TestStrategiesAndSelectors(t *testing.T) {
 	live, _ := f.m.readLive()
 	check := func(strategy string, want ...int) {
 		t.Helper()
-		got := strategyCandidates(accounts, live, strategy, f.now)
+		got := strategyCandidates(accounts, live, strategy, nil, f.now)
 		if len(got) != len(want) {
 			t.Fatalf("%q: %v want %v", strategy, got, want)
 		}

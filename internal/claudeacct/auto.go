@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,25 +25,71 @@ const (
 type AutoPolicy struct {
 	Threshold float64
 	Cooldown  time.Duration
+	// Limits caps single accounts below the threshold. Keys are a slot
+	// number, an alias or an email; values are utilization percentages.
+	Limits map[string]float64
+}
+
+// LimitFor is the utilization at which a slot counts as used up: the
+// threshold (100 when unset), lowered by the slot's own limit.
+func (p AutoPolicy) LimitFor(s Slot) float64 {
+	limit := p.threshold()
+	if own, ok := SlotLimit(p.Limits, s); ok && own < limit {
+		limit = own
+	}
+	return limit
+}
+
+func (p AutoPolicy) threshold() float64 {
+	if p.Threshold <= 0 || p.Threshold > 100 {
+		return 100
+	}
+	return p.Threshold
+}
+
+// SlotLimit finds a slot's own limit. A slot number key wins over an alias
+// key, and an alias key over an email key; alias and email match without
+// regard to case.
+func SlotLimit(limits map[string]float64, s Slot) (float64, bool) {
+	if len(limits) == 0 {
+		return 0, false
+	}
+	if value, ok := limits[strconv.Itoa(s.Number)]; ok {
+		return value, true
+	}
+	for _, field := range []string{s.Alias, s.Email} {
+		if field == "" {
+			continue
+		}
+		for key, value := range limits {
+			if strings.EqualFold(strings.TrimSpace(key), field) {
+				return value, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // Decision is what auto switching would do now.
 type Decision struct {
-	Action    string  `json:"action"`
-	Reason    string  `json:"reason"`
-	From      int     `json:"from,omitempty"`
-	To        int     `json:"to,omitempty"`
-	ActiveMax float64 `json:"activeMax,omitempty"`
-	TargetMax float64 `json:"targetMax,omitempty"`
+	Action      string  `json:"action"`
+	Reason      string  `json:"reason"`
+	From        int     `json:"from,omitempty"`
+	To          int     `json:"to,omitempty"`
+	ActiveMax   float64 `json:"activeMax,omitempty"`
+	ActiveLimit float64 `json:"activeLimit,omitempty"`
+	TargetMax   float64 `json:"targetMax,omitempty"`
 }
 
-// Decide is the pure auto-switch decision table:
+// Decide is the pure auto-switch decision table. Each account is measured
+// against its own limit (the threshold, or the account's lower limit):
 //
 //   - no stored account is live, or its usage is unknown: none
-//   - the live account's 5h and 7d are both below the threshold: none
+//   - the live account's 5h and 7d are both below its limit: none
 //   - a switch happened less than the cooldown ago: none
-//   - otherwise the usable account with the lowest max(5h, 7d) that is below
-//     the threshold and at least AutoHysteresis points better: switch
+//   - otherwise the usable account with the most room left under its own
+//     limit, if that room is at least AutoHysteresis points more than the
+//     live account has: switch
 //   - no such account: no-target
 func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, now time.Time) Decision {
 	if active == 0 || accounts.Slot(active) == nil {
@@ -52,9 +100,10 @@ func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, 
 	if !known {
 		return Decision{Action: AutoNone, From: active, Reason: "usage of the active account is unknown"}
 	}
-	d := Decision{From: active, ActiveMax: activeMax}
-	if activeMax < policy.Threshold {
-		d.Action, d.Reason = AutoNone, fmt.Sprintf("active account at %.0f%%, below %.0f%%", activeMax, policy.Threshold)
+	limit := policy.LimitFor(*current)
+	d := Decision{From: active, ActiveMax: activeMax, ActiveLimit: limit}
+	if activeMax < limit {
+		d.Action, d.Reason = AutoNone, fmt.Sprintf("active account at %.0f%%, below %s", activeMax, limitText(limit, policy))
 		return d
 	}
 	if !state.LastSwitchAt.IsZero() && now.Before(state.LastSwitchAt.Add(policy.Cooldown)) {
@@ -62,51 +111,57 @@ func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, 
 		d.Reason = "cooling down for " + FormatDuration(state.LastSwitchAt.Add(policy.Cooldown).Sub(now)) + " after the last switch"
 		return d
 	}
-	type ranked struct {
-		n     int
-		value float64
+	targets := rankTargets(accounts, active, limit-activeMax, policy, now)
+	if len(targets) == 0 {
+		d.Action = AutoNoTarget
+		d.Reason = fmt.Sprintf("active account at %.0f%% (%s) and no other account has room under its limit", activeMax, limitText(limit, policy))
+		return d
 	}
-	var list []ranked
+	d.Action, d.To, d.TargetMax = AutoSwitch, targets[0].n, targets[0].value
+	d.Reason = fmt.Sprintf("active account at %.0f%% (%s); slot %d at %.0f%%", activeMax, limitText(limit, policy), d.To, d.TargetMax)
+	return d
+}
+
+func limitText(limit float64, policy AutoPolicy) string {
+	if limit < policy.threshold() {
+		return fmt.Sprintf("its %.0f%% limit", limit)
+	}
+	return fmt.Sprintf("threshold %.0f%%", limit)
+}
+
+type rankedTarget struct {
+	n     int
+	value float64
+	room  float64
+}
+
+// rankTargets lists the usable accounts other than from that are below
+// their own limit and have at least AutoHysteresis more room than the
+// active account, most room first.
+func rankTargets(accounts *Accounts, from int, activeRoom float64, policy AutoPolicy, now time.Time) []rankedTarget {
+	var list []rankedTarget
 	for _, s := range accounts.Slots {
-		if s.Number == active || !s.Usable() {
+		if s.Number == from || !s.Usable() {
 			continue
 		}
 		value, known := slotUsage(s).Max(now)
-		if !known || value >= policy.Threshold || value > activeMax-AutoHysteresis {
+		if !known {
 			continue
 		}
-		list = append(list, ranked{s.Number, value})
+		room := policy.LimitFor(s) - value
+		if room <= 0 || room < activeRoom+AutoHysteresis {
+			continue
+		}
+		list = append(list, rankedTarget{s.Number, value, room})
 	}
-	if len(list) == 0 {
-		d.Action = AutoNoTarget
-		d.Reason = fmt.Sprintf("active account at %.0f%% and no other account is below %.0f%%", activeMax, policy.Threshold)
-		return d
-	}
-	sort.SliceStable(list, func(i, j int) bool { return list[i].value < list[j].value })
-	d.Action, d.To, d.TargetMax = AutoSwitch, list[0].n, list[0].value
-	d.Reason = fmt.Sprintf("active account at %.0f%% (threshold %.0f%%); slot %d at %.0f%%", activeMax, policy.Threshold, d.To, d.TargetMax)
-	return d
+	sort.SliceStable(list, func(i, j int) bool { return list[i].room > list[j].room })
+	return list
 }
 
 // candidatesFor lists auto targets best first (the decision's pick first).
 func candidatesFor(accounts *Accounts, d Decision, policy AutoPolicy, now time.Time) []int {
-	type ranked struct {
-		n     int
-		value float64
-	}
-	var list []ranked
-	for _, s := range accounts.Slots {
-		if s.Number == d.From || !s.Usable() {
-			continue
-		}
-		value, known := slotUsage(s).Max(now)
-		if known && value < policy.Threshold && value <= d.ActiveMax-AutoHysteresis {
-			list = append(list, ranked{s.Number, value})
-		}
-	}
-	sort.SliceStable(list, func(i, j int) bool { return list[i].value < list[j].value })
-	out := make([]int, 0, len(list))
-	for _, r := range list {
+	var out []int
+	for _, r := range rankTargets(accounts, d.From, d.ActiveLimit-d.ActiveMax, policy, now) {
 		out = append(out, r.n)
 	}
 	return out
@@ -171,7 +226,7 @@ func (m *Manager) AutoOnce(ctx context.Context, opts AutoOptions) (AutoResult, e
 		return result, nil
 	}
 	candidates := candidatesFor(accounts, result.Decision, opts.Policy, now)
-	switched, err := m.switchAmong(ctx, accounts, live, candidates, false, SwitchOptions{Cooldown: opts.Policy.Cooldown})
+	switched, err := m.switchAmong(ctx, accounts, live, candidates, false, SwitchOptions{Cooldown: opts.Policy.Cooldown, Limits: opts.Policy.Limits})
 	if err != nil {
 		if errors.Is(err, ErrNoTarget) {
 			result.Decision.Action, result.Decision.Reason = AutoNoTarget, err.Error()
@@ -182,6 +237,34 @@ func (m *Manager) AutoOnce(ctx context.Context, opts AutoOptions) (AutoResult, e
 	result.Decision.To = switched.To.Number
 	result.Switched = &switched
 	return result, nil
+}
+
+// PollOnce refreshes due usage without deciding anything: the daemon's pass
+// when keepalive runs without auto switching. It polls like AutoOnce.
+func (m *Manager) PollOnce(ctx context.Context, every time.Duration, max int) ([]int, error) {
+	unlock, err := m.lockStore(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	accounts, err := m.Store.Load()
+	if err != nil {
+		return nil, err
+	}
+	live, err := m.readLive()
+	if err != nil {
+		return nil, err
+	}
+	active := 0
+	if current := live.liveSlot(accounts); current != nil {
+		active = current.Number
+	}
+	polled := pollOrder(accounts, active, m.now(), every, max)
+	if len(polled) == 0 {
+		return nil, nil
+	}
+	m.refreshUsage(ctx, accounts, live, polled)
+	return polled, m.Store.Save(accounts)
 }
 
 // pollOrder picks which accounts to refetch: the active account first when

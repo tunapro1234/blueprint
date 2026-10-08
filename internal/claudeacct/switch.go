@@ -27,6 +27,9 @@ type SwitchOptions struct {
 	// Cooldown is recorded in auto-state so auto switching waits after any
 	// switch, manual or automatic.
 	Cooldown time.Duration
+	// Limits are the per-account usage limits (see AutoPolicy.Limits);
+	// strategies treat an account at its limit like one at 100%.
+	Limits map[string]float64
 }
 
 // SwitchResult describes a switch (or what a dry run would do).
@@ -86,7 +89,7 @@ func (m *Manager) Switch(ctx context.Context, opts SwitchOptions) (SwitchResult,
 		if opts.Strategy != StrategyRotation && !opts.DryRun {
 			m.refreshDueUsage(ctx, accounts, live, ListMaxAge)
 		}
-		candidates = strategyCandidates(accounts, live, opts.Strategy, m.now())
+		candidates = strategyCandidates(accounts, live, opts.Strategy, opts.Limits, m.now())
 	}
 	return m.switchAmong(ctx, accounts, live, candidates, explicit, opts)
 }
@@ -192,39 +195,46 @@ func rotation(accounts *Accounts, live *liveLogin) []Slot {
 	return append(after, before...)
 }
 
-// strategyCandidates orders candidate slots for a strategy.
+// strategyCandidates orders candidate slots for a strategy. An account's
+// cap is its own limit, or 100% without one.
 //   - rotation: the next usable slot after the active one, wrapping.
-//   - best: lowest max(5h, 7d); accounts without usage come last.
+//   - best: most room left under the cap (max of 5h and 7d); accounts
+//     without usage come last.
 //   - next-available: rotation order, skipping accounts known to be at
-//     100% in either window.
-func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, now time.Time) []int {
+//     their cap in either window.
+func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, limits map[string]float64, now time.Time) []int {
 	order := rotation(accounts, live)
+	capOf := func(s Slot) float64 {
+		if own, ok := SlotLimit(limits, s); ok && own < 100 {
+			return own
+		}
+		return 100
+	}
 	var out []int
 	switch strategy {
 	case StrategyBest:
 		type ranked struct {
 			n     int
-			value float64
+			room  float64
 			known bool
 		}
 		var list []ranked
 		for _, s := range order {
 			value, known := slotUsage(s).Max(now)
-			list = append(list, ranked{s.Number, value, known})
+			list = append(list, ranked{s.Number, capOf(s) - value, known})
 		}
 		sort.SliceStable(list, func(i, j int) bool {
 			if list[i].known != list[j].known {
 				return list[i].known
 			}
-			return list[i].known && list[i].value < list[j].value
+			return list[i].known && list[i].room > list[j].room
 		})
 		for _, r := range list {
 			out = append(out, r.n)
 		}
 	case StrategyNextAvailable:
 		for _, s := range order {
-			u := slotUsage(s)
-			if u != nil && (u.FiveHour != nil && u.FiveHour.effective(now) >= 100 || u.SevenDay != nil && u.SevenDay.effective(now) >= 100) {
+			if value, known := slotUsage(s).Max(now); known && value >= capOf(s) {
 				continue
 			}
 			out = append(out, s.Number)

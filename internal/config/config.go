@@ -73,20 +73,38 @@ type LifecycleConfig struct {
 	ArchiveOnClose   bool `json:"archiveOnClose" yaml:"archiveOnClose"`
 }
 
-// ClaudeAccountsConfig controls the daemon's automatic Claude account switch.
-// The switch itself is always available through `bp account switch`; the
-// daemon only acts when AutoSwitch is enabled. Threshold is a utilization
-// percentage (1-100); the minute values must be at least one.
+// ClaudeAccountsConfig controls the daemon's automatic Claude account switch
+// and keepalive. The switch itself is always available through
+// `bp account switch`; the daemon only switches when AutoSwitch is enabled
+// and only pings when KeepAlive is enabled. Threshold and the Limits values
+// are utilization percentages (1-100); the minute values must be at least
+// one. Limits keys are a slot number, an alias or an email.
 type ClaudeAccountsConfig struct {
-	AutoSwitch      bool `json:"autoSwitch" yaml:"autoSwitch"`
-	Threshold       int  `json:"threshold" yaml:"threshold"`
-	CooldownMinutes int  `json:"cooldownMinutes" yaml:"cooldownMinutes"`
-	PollMinutes     int  `json:"pollMinutes" yaml:"pollMinutes"`
+	AutoSwitch      bool           `json:"autoSwitch" yaml:"autoSwitch"`
+	Threshold       int            `json:"threshold" yaml:"threshold"`
+	CooldownMinutes int            `json:"cooldownMinutes" yaml:"cooldownMinutes"`
+	PollMinutes     int            `json:"pollMinutes" yaml:"pollMinutes"`
+	Limits          map[string]int `json:"limits,omitempty" yaml:"limits,omitempty"`
+	KeepAlive       bool           `json:"keepAlive" yaml:"keepAlive"`
+	KeepAliveModel  string         `json:"keepAliveModel" yaml:"keepAliveModel"`
+}
+
+// LimitPercents returns Limits as percentages for the account policy, or nil
+// when no account has its own limit.
+func (c ClaudeAccountsConfig) LimitPercents() map[string]float64 {
+	if len(c.Limits) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(c.Limits))
+	for key, value := range c.Limits {
+		out[key] = float64(value)
+	}
+	return out
 }
 
 // DefaultClaudeAccounts is the claudeAccounts block used when none is set.
 func DefaultClaudeAccounts() ClaudeAccountsConfig {
-	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5}
+	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku"}
 }
 
 // BarConfig controls which metrics appear in the tmux status bar and their order.
@@ -158,10 +176,13 @@ type overrides struct {
 }
 
 type claudeAccountsOverrides struct {
-	AutoSwitch      *bool `json:"autoSwitch" yaml:"autoSwitch"`
-	Threshold       *int  `json:"threshold" yaml:"threshold"`
-	CooldownMinutes *int  `json:"cooldownMinutes" yaml:"cooldownMinutes"`
-	PollMinutes     *int  `json:"pollMinutes" yaml:"pollMinutes"`
+	AutoSwitch      *bool           `json:"autoSwitch" yaml:"autoSwitch"`
+	Threshold       *int            `json:"threshold" yaml:"threshold"`
+	CooldownMinutes *int            `json:"cooldownMinutes" yaml:"cooldownMinutes"`
+	PollMinutes     *int            `json:"pollMinutes" yaml:"pollMinutes"`
+	Limits          *map[string]int `json:"limits" yaml:"limits"`
+	KeepAlive       *bool           `json:"keepAlive" yaml:"keepAlive"`
+	KeepAliveModel  *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
 }
 
 type lifecycleOverrides struct {
@@ -488,6 +509,19 @@ func apply(result *Config, values overrides) {
 		if accounts.PollMinutes != nil {
 			result.ClaudeAccounts.PollMinutes = *accounts.PollMinutes
 		}
+		if accounts.Limits != nil {
+			limits := make(map[string]int, len(*accounts.Limits))
+			for key, value := range *accounts.Limits {
+				limits[key] = value
+			}
+			result.ClaudeAccounts.Limits = limits
+		}
+		if accounts.KeepAlive != nil {
+			result.ClaudeAccounts.KeepAlive = *accounts.KeepAlive
+		}
+		if accounts.KeepAliveModel != nil {
+			result.ClaudeAccounts.KeepAliveModel = *accounts.KeepAliveModel
+		}
 	}
 	if values.Windows != nil {
 		result.Windows = *values.Windows
@@ -506,6 +540,17 @@ func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 	}
 	if value.PollMinutes < 1 {
 		return fmt.Errorf("pollMinutes must be at least 1")
+	}
+	for key, limit := range value.Limits {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("limits keys must name a slot number, alias or email")
+		}
+		if limit < 1 || limit > 100 {
+			return fmt.Errorf("limits[%q] must be between 1 and 100", key)
+		}
+	}
+	if strings.TrimSpace(value.KeepAliveModel) == "" || strings.HasPrefix(strings.TrimSpace(value.KeepAliveModel), "-") {
+		return fmt.Errorf("keepAliveModel must name a Claude model")
 	}
 	return nil
 }

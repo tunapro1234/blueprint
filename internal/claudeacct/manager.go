@@ -35,6 +35,8 @@ type Manager struct {
 	LockTouch time.Duration
 	// UsageTimeout bounds one usage fetch (default 5s).
 	UsageTimeout time.Duration
+	// Pinger sends keepalive prompts (default ExecPinger).
+	Pinger Pinger
 
 	// writeLive replaces a live Claude Code file; tests inject failures.
 	writeLive func(path string, data []byte, mode os.FileMode) error

@@ -160,6 +160,23 @@ the bp state directory and are never printed. Automatic switching by the daemon
 is opt-in; see [Claude accounts](docs/configuration.md#claude-accounts). Not
 supported on macOS, where Claude Code keeps its login in the Keychain.
 
+Different agent trees can also run on different accounts at the same time. Bind
+an agent to a stored account; it and every descendant without a binding of its
+own then start in that account's profile home:
+
+```bash
+bp account bind research work      # research and its tree use the "work" account
+bp account login work              # one-time Claude login inside the profile
+bp account bindings                # who runs on which account, and who needs a reopen
+bp account bind research-scratch default # opt one subtree back out
+```
+
+`bp open --account <N|email|alias|default>` binds a new agent as it opens. A
+binding applies when an agent is launched or resumed. Profiles share
+transcripts, settings, skills and history with the default home, but hold their
+own login, which is never copied from a stored slot. Automatic switching only
+changes the default login.
+
 ## Configure
 
 Settings live in `~/.blueprint/config.yaml`, or under `BP_HOME`. Shell integration

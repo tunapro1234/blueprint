@@ -99,6 +99,23 @@ config is replaced. The daemon job `claude-account-auto` is off by default; when
 enabled it polls at most one account per minute and switches with a threshold,
 a 10-point hysteresis and a cooldown.
 
+Account bindings run several accounts side by side. The agentbook field
+`claudeAccount` holds an account email (or `default`, which stops inheritance);
+an agent's effective binding is its own or its nearest ancestor's. Each bound
+account has a profile, `<stateDir>/claude-accounts/profiles/<accountUuid>/`, a
+Claude Code config home with a `.bp-account-profile` marker. Shared entries
+(projects, sessions, settings.json, skills, history and similar) are symlinks
+to the default home; credentials and `.claude.json` stay per profile. The
+profile config is seeded once from the default global config without its
+`oauthAccount`, and the login comes from `claude auth login` run inside the
+profile, never from a slot's tokens, because refresh-token rotation would log
+two homes sharing one lineage out of each other. Launch options are recomputed
+on every open, resume, fleet restart and keepalive and prefix the Claude command
+with `CLAUDE_CONFIG_DIR=<profile>`. A profile that is not logged in as its
+account fails `bp open`; daemon keepalive logs and falls back to the default
+login. Inside a profile, bp resolves the default home from the marker, so
+switching and agents opened from a bound agent never inherit the profile.
+
 Interactive remote terminals use a separate `remotes` registry. Local bp only
 constructs the configured mosh or SSH transport; agent lookup and revival are
 delegated to `bp attach` on the destination, so remote agentbook state is never

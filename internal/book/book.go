@@ -35,6 +35,9 @@ type Agent struct {
 	ColorOverride    string              `json:"colorOverride,omitempty"`
 	NativeTitle      *NativeTitle        `json:"nativeTitle,omitempty"`
 	FleetUpdate      *FleetUpdate        `json:"fleetUpdate,omitempty"`
+	// ClaudeAccount binds the agent and its descendants to a stored Claude
+	// account (an email, or "default" to stop a parent's binding).
+	ClaudeAccount string `json:"claudeAccount,omitempty"`
 }
 
 // FleetUpdate keeps a requested model migration with the durable agent record.
@@ -591,6 +594,36 @@ func SetColorOverride(paths []string, name, colour string) error {
 		}
 		return true
 	})
+}
+
+// SetClaudeAccount stores the Claude account binding of an active agent. An
+// empty value removes it, so the agent inherits its parent's binding again.
+func SetClaudeAccount(paths []string, name, account string) error {
+	return mutateActive(paths, name, func(agent map[string]any) bool {
+		if current, _ := agent["claudeAccount"].(string); current == account {
+			return false
+		}
+		if account == "" {
+			delete(agent, "claudeAccount")
+		} else {
+			agent["claudeAccount"] = account
+		}
+		return true
+	})
+}
+
+// EffectiveClaudeAccount is the Claude account binding that applies to name:
+// its own, or else the nearest ancestor's. from names the agent that holds
+// it; both are empty when no agent on the path is bound.
+func (f Fleet) EffectiveClaudeAccount(name string) (account, from string) {
+	seen := map[string]bool{}
+	for current := name; current != "" && !seen[current]; current = f.Parents[current] {
+		seen[current] = true
+		if agent, ok := f.Agents[current]; ok && agent.ClaudeAccount != "" {
+			return agent.ClaudeAccount, current
+		}
+	}
+	return "", ""
 }
 
 // SetFleetUpdate stores a model migration or deferral on an existing record.

@@ -7,9 +7,11 @@ import (
 	"runtime"
 	"time"
 
+	"blueprint/internal/book"
 	"blueprint/internal/claudeacct"
 	"blueprint/internal/config"
 	"blueprint/internal/ntfy"
+	bptmux "blueprint/internal/tmux"
 )
 
 const (
@@ -118,4 +120,26 @@ func (c *claudeAccountAuto) pass(ctx context.Context) error {
 		c.exhaustedAt = time.Time{}
 	}
 	return nil
+}
+
+// keepaliveAccount puts the coordinator back on its bound Claude account. A
+// binding that cannot be honoured (no profile login yet) is logged and the
+// coordinator comes back on the default login: being up matters more than
+// which account pays for it.
+func (s *Service) keepaliveAccount(fleet book.Fleet, name string, opts *bptmux.OpenOptions) {
+	opts.ClaudeAccount, opts.ClaudeConfigDir = "", ""
+	if opts.Codex || opts.Hermes || opts.OpenCode {
+		return
+	}
+	binding, _ := fleet.EffectiveClaudeAccount(name)
+	if binding == "" || s.config.StateDir == "" {
+		return
+	}
+	manager := &claudeacct.Manager{Store: claudeacct.NewStore(s.config.StateDir), Env: claudeacct.OSEnv()}
+	dir, slot, err := manager.LaunchDir(binding)
+	if err != nil {
+		s.log.Printf("keepalive: %s is bound to Claude account %s but relaunches on the default login: %v", name, binding, err)
+		return
+	}
+	opts.ClaudeAccount, opts.ClaudeConfigDir = slot.Email, dir
 }

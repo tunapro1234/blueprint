@@ -764,6 +764,15 @@ func (b *liveFleetUpdate) observe(name string) (cache.State, error) {
 func (b *liveFleetUpdate) ApplyBar(name string) { b.app.applyOpenBar(name) }
 
 func (a *app) managedFleetLaunch(name string, opts bptmux.OpenOptions) (bptmux.OpenOptions, error) {
+	// A restart comes back on the account the agentbook binds now, checked
+	// before the running CLI is asked to exit.
+	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	if err != nil {
+		return opts, err
+	}
+	if err := a.applyLaunchAccount(effectiveLaunchAccount(fleet, name, "", ""), &opts); err != nil {
+		return opts, err
+	}
 	if a.config.Legacy || opts.Hermes || opts.Remote != "" {
 		return opts, nil
 	}
@@ -775,12 +784,7 @@ func (a *app) managedFleetLaunch(name string, opts bptmux.OpenOptions) (bptmux.O
 	if opts.Codex {
 		harness = "codex"
 	}
-	opts.Launcher = "env BP_HOME=" + quoteShell(a.config.Home)
-	for _, key := range []string{"HOME", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENTBOOK"} {
-		if value, ok := os.LookupEnv(key); ok {
-			opts.Launcher += " " + key + "=" + quoteShell(value)
-		}
-	}
+	opts.Launcher = managedLauncherEnv(a.config.Home)
 	opts.Launcher += " " + quoteShell(self) + " _open-session " + quoteShell(name) + " " + harness
 	return opts, nil
 }

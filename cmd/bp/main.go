@@ -63,7 +63,7 @@ bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] [--allow-codex] <codex|claude|opencode|hermes> [arguments...]
                               # bp open also accepts --opencode for managed sessions
-bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]
+bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [--account <N|email|alias|default>] [-- <native flags>]
 bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
 bp attach <agent>@<server>      # delegate the same command to a registered remote
 bp schema export [<project-dir>] [--lead <agent>]
@@ -109,6 +109,8 @@ bp account add [--slot N] [--alias A] | list [--json] [--refresh] | status [--js
 bp account switch [N|email|alias] [--strategy best|next-available] [--dry-run]
 bp account remove N | alias N A|--unset | disable N | enable N
 bp account auto [--once] [--dry-run] [--threshold P] [--json]
+bp account bind <agent> <N|email|alias|default> | unbind <agent> | bindings [--json]
+bp account login <N|email|alias> | profile [N|email|alias] [--json]
 bp service
 bp workflow add <dir> [--replace] | list | show <name> | check <dir|name> [--workdir <dir>]
 bp workflow start <name> --workdir <dir> --agent <a> [--agent <b> ...] [--limit N] [--dry-run]
@@ -1372,7 +1374,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [--account <N|email|alias|default>] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1402,7 +1404,7 @@ func (a *app) open(args []string) error {
 	harness := ""
 	resumeRequested, threadExplicit, freshRequested := false, false, false
 	rebind, adopt, allowCodex := false, false, false
-	worktreeTopic := ""
+	worktreeTopic, accountSelector := "", ""
 	reg := book.Registration{Lifetime: book.LifetimePersistent}
 	if stored.Agents[name].IsEphemeral() {
 		reg.UpdateLifetime = true
@@ -1479,6 +1481,12 @@ func (a *app) open(args []string) error {
 			}
 			reg.Parent = args[index+1]
 			index++
+		case "--account":
+			if index+1 >= len(args) {
+				return fmt.Errorf("--account requires a Claude account (slot number, email, alias or default)")
+			}
+			accountSelector = args[index+1]
+			index++
 		case "--role":
 			if index+1 >= len(args) {
 				return fmt.Errorf("--role requires a role text")
@@ -1515,6 +1523,20 @@ func (a *app) open(args []string) error {
 	}
 	if err := opts.Validate(); err != nil {
 		return err
+	}
+	accountBindingValue := ""
+	if accountSelector != "" {
+		if launchHarnessName(opts) != "claude" {
+			return fmt.Errorf("--account binds a Claude account; %s is opened as %s", name, launchHarnessName(opts))
+		}
+		if accountGOOS == "darwin" || a.config.StateDir == "" {
+			return fmt.Errorf("--account needs bp account support (Linux and a bp state directory)")
+		}
+		value, _, err := accountBinding(newAccountManager(a.config), accountSelector)
+		if err != nil {
+			return err
+		}
+		accountBindingValue = value
 	}
 	if err := a.checkThreadBinding(name, opts.ResumeID, adopt); err != nil {
 		return err
@@ -1564,6 +1586,12 @@ func (a *app) open(args []string) error {
 		pane, _ := a.tmux.Capture(a.ctx, name)
 		if perr != nil || bptmux.IsAgentPane(process.Command, pane) {
 			a.applyOpenBar(name)
+			if accountBindingValue != "" {
+				if err := book.SetClaudeAccount(a.config.Agentbooks, name, accountBindingValue); err != nil {
+					return err
+				}
+				fmt.Fprintf(a.out, "%s: Claude account binding recorded; the running agent keeps its account until it is reopened\n", name)
+			}
 			// Nothing to launch — but explicit --parent/--role is a correction
 			// of the agentbook entry, so it still applies to a running agent.
 			if reg.Parent != "" || reg.Role != "" || reg.UpdateLifetime {
@@ -1647,6 +1675,11 @@ func (a *app) open(args []string) error {
 			return err
 		}
 	}
+	// The account comes from the agentbook binding (this agent's, or the
+	// nearest bound ancestor's), checked before anything is started.
+	if err := a.applyLaunchAccount(effectiveLaunchAccount(fleet, name, reg.Parent, accountBindingValue), &opts); err != nil {
+		return err
+	}
 	reg.Launch = &opts
 	// Reviving used to print nothing until it finished or timed out minutes
 	// later; each step now reports with its elapsed time on stderr, and a wait
@@ -1660,6 +1693,9 @@ func (a *app) open(args []string) error {
 		thread = "new conversation"
 	}
 	opts.Progress(fmt.Sprintf("record resolved (%s, %s, %s)", launchHarnessName(opts), thread, dir))
+	if opts.ClaudeAccount != "" {
+		opts.Progress("Claude account " + opts.ClaudeAccount)
+	}
 	// The session comes up before the book can record it, so the gap between the
 	// two used to be a lie: a timeout or a Ctrl-C in between left the book saying
 	// "closed" over an agent that was really running, and a reader of bp status
@@ -1669,6 +1705,11 @@ func (a *app) open(args []string) error {
 	reg.Sender = a.sender()
 	if err := book.SetStatus(a.config.Agentbooks, name, "opening", dir, reg); err != nil {
 		return err
+	}
+	if accountBindingValue != "" {
+		if err := book.SetClaudeAccount(a.config.Agentbooks, name, accountBindingValue); err != nil {
+			return err
+		}
 	}
 	previousRollout := ""
 	if opts.Codex && !opts.Resume {
@@ -1689,12 +1730,7 @@ func (a *app) open(args []string) error {
 		if err != nil {
 			return err
 		}
-		opts.Launcher = "env BP_HOME=" + quoteShell(a.config.Home)
-		for _, key := range []string{"HOME", "PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENTBOOK"} {
-			if value, ok := os.LookupEnv(key); ok {
-				opts.Launcher += " " + key + "=" + quoteShell(value)
-			}
-		}
+		opts.Launcher = managedLauncherEnv(a.config.Home)
 		opts.Launcher += " " + quoteShell(self) + " _open-session " + quoteShell(name) + " " + managedHarness
 	}
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {

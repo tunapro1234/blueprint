@@ -24,7 +24,17 @@ const accountUsage = `usage:
   bp account remove N
   bp account alias N A | bp account alias N --unset
   bp account disable N | bp account enable N
-  bp account auto [--once] [--dry-run] [--threshold P] [--json]`
+  bp account auto [--once] [--dry-run] [--threshold P] [--json]
+  bp account bind <agent> N|email|alias|default
+  bp account unbind <agent>
+  bp account bindings [--json]
+  bp account login N|email|alias
+  bp account profile [N|email|alias] [--json]
+
+An agent bound to an account runs in that account's profile home, and so do
+its descendants unless they are bound themselves; "default" stops a parent's
+binding. A binding applies when the agent is next opened or resumed. Each
+profile has its own login, made once with bp account login.`
 
 // Exit codes of bp account auto --once.
 const (
@@ -79,6 +89,16 @@ func (a *app) account(args []string) error {
 		return a.accountSetDisabled(manager, command == "disable", rest)
 	case "auto":
 		return a.accountAuto(manager, rest)
+	case "bind":
+		return a.accountBind(manager, rest)
+	case "unbind":
+		return a.accountUnbind(rest)
+	case "bindings":
+		return a.accountBindings(rest)
+	case "login":
+		return a.accountLogin(manager, rest)
+	case "profile", "profiles":
+		return a.accountProfile(manager, rest)
 	}
 	return fmt.Errorf("unknown account command %q\n%s", command, accountUsage)
 }

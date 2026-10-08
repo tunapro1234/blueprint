@@ -540,6 +540,7 @@ func (s *Service) keepalive(ctx context.Context) error {
 	if dir == "" {
 		return fmt.Errorf("keepalive: %s has no workspace", name)
 	}
+	s.keepaliveAccount(fleet, name, &opts)
 	if err := s.tmux.Open(ctx, name, dir, opts, func(message string) { s.log.Print(message) }); err != nil {
 		return err
 	}

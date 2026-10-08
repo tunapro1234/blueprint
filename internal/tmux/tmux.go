@@ -2573,6 +2573,12 @@ type OpenOptions struct {
 	// resume comes back in the same mode rather than the harness default
 	// (#25), and are passed verbatim after the harness binary.
 	Args []string `json:"args,omitempty"`
+	// ClaudeAccount is the stored Claude account a Claude agent was launched
+	// on, and ClaudeConfigDir the account profile it ran in. bp recomputes
+	// both from the agentbook binding at every launch; they are recorded
+	// for inspection only.
+	ClaudeAccount   string `json:"claudeAccount,omitempty"`
+	ClaudeConfigDir string `json:"claudeConfigDir,omitempty"`
 	// Progress, when set, receives one line per launch step and names what a
 	// slow launch is waiting on, instead of a silent multi-minute wait (#22).
 	Progress func(string) `json:"-"`
@@ -3119,6 +3125,9 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 			command = command[:end] + " " + extra + command[end:]
 		}
 	}
+	// Prefixed after the flag splice so the profile path is never taken for
+	// the binary.
+	command = ClaudeConfigPrefix(opts) + command
 	// A brand-new Codex may not persist a rollout until its first user turn.
 	// Supply that first prompt through the native CLI, before a user can type
 	// into the TUI, instead of waiting for transcript evidence it must create.
@@ -3374,4 +3383,13 @@ func (c *Client) CallingSession(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no pane in caller process ancestry")
 	}
 	return found, nil
+}
+
+// ClaudeConfigPrefix is the environment assignment that starts an
+// account-bound Claude agent in its account's profile home, or "".
+func ClaudeConfigPrefix(opts OpenOptions) string {
+	if opts.ClaudeConfigDir == "" || opts.Codex || opts.Hermes || opts.OpenCode {
+		return ""
+	}
+	return "CLAUDE_CONFIG_DIR=" + shellQuote(opts.ClaudeConfigDir) + " "
 }

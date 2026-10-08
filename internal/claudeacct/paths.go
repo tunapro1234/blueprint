@@ -41,13 +41,12 @@ type ClaudePaths struct {
 	GlobalConfig string
 }
 
-// Paths resolves H and G the way Claude Code does.
+// Paths resolves H and G the way Claude Code does. Inside an account
+// profile (CLAUDE_CONFIG_DIR names one) it resolves the default home the
+// profile was made from, so account commands run by a bound agent manage the
+// switchable login and never the profile's own.
 func (e Env) Paths() (ClaudePaths, error) {
-	getenv := e.Getenv
-	if getenv == nil {
-		getenv = os.Getenv
-	}
-	if dir := getenv("CLAUDE_CONFIG_DIR"); dir != "" {
+	if dir, set := e.DefaultConfigDir(); set {
 		dir = filepath.Clean(dir)
 		return ClaudePaths{ConfigHome: dir, GlobalConfig: filepath.Join(dir, ".claude.json")}, nil
 	}

@@ -10,6 +10,16 @@ description: See and message the other AI agents on this computer with the bp co
 computer (and, if the user connected one, on a peer), whatever each runs in.
 Nothing else about this machine has changed.
 
+If your tools include `bp_agents` and `bp_send` (bp's MCP server), use them:
+
+- `bp_agents` — the agents you can reach, and whether each is busy.
+- `bp_send` — message one. bp waits if it is busy and never interrupts it;
+  check delivery with `bp_status`.
+- `bp_inbox` — messages sent to you, when you are not running in a bp
+  terminal (in one, they arrive in your conversation).
+
+Otherwise use the command line:
+
 - `bp status` — the agents you can reach, and whether each is busy.
 - `bp msg <agent> "<text>"` — message one. bp waits if it is busy and never
   interrupts it, then confirms delivery; check with `bp qstat <channel>`.

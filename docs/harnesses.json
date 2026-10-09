@@ -416,15 +416,16 @@
           "support": "unknown"
         },
         "B8-identity-after-compaction": {
-          "support": "planned",
+          "support": "partial",
           "via": "hooks",
-          "note": "pre_llm_call hook restates identity when the session id rotates"
+          "note": "compaction-hooks module (opt-in, off by default): a pre_llm_call shell hook restates identity on the first turn of a session with a parent_session_id (a compression fork); in-place compression (no rotation) has no signal a shell hook can see"
         }
       },
       "sources": [
         "hermes --version",
         "/usr/local/lib/hermes-agent/website/docs/user-guide/features/hooks.md",
-        "internal/tmux/hermes.go"
+        "internal/tmux/hermes.go",
+        "hermes_state.py (parent_session_id set on a compression fork)"
       ]
     },
     {
@@ -529,16 +530,17 @@
           "support": "unknown"
         },
         "B8-identity-after-compaction": {
-          "support": "planned",
+          "support": "partial",
           "via": "hooks",
-          "note": "plugin: experimental.session.compacting adds the bp identity to the summary"
+          "note": "compaction-hooks module (opt-in, off by default): a plugin's event hook watches session.compacted and calls client.session.promptAsync (noReply) with the bp identity note"
         }
       },
       "sources": [
         "opencode --help (1.18.32)",
         "https://opencode.ai/docs/plugins",
         "https://opencode.ai/docs/server",
-        "internal/tmux/opencode.go"
+        "internal/tmux/opencode.go",
+        "@opencode-ai/plugin and @opencode-ai/sdk installed type definitions (EventSessionCompacted, Session.promptAsync)"
       ]
     }
   ]

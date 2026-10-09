@@ -33,6 +33,10 @@ const (
 	Monitor  = "monitor"
 	// GuardHooks is the tool-call tripwire (docs/security/guard-hooks-module.md).
 	GuardHooks = "guard-hooks"
+	// CompactionHooks restates the bp identity to OpenCode and Hermes agents
+	// after a context compaction (docs/security/compaction-hooks-module.md).
+	// Claude already does this through its own SessionStart hook.
+	CompactionHooks = "compaction-hooks"
 )
 
 // Module describes one opt-in feature.
@@ -94,6 +98,14 @@ var registry = []Module{
 		Owns:        []string{"guardHooks"},
 		Conflict:    guardHooksConflicts,
 		Notes:       "applies to Claude agents opened with bp open or bp run from now on (not plain claude); running agents keep their settings until reopened; alerts: bp audit --kind guard.reach",
+	},
+	{
+		Name:        CompactionHooks,
+		Description: "restates the bp identity to OpenCode and Hermes agents after a context compaction, the way Claude's own SessionStart hook already does",
+		Owns:        []string{"compactionHooks"},
+		Conflict:    compactionHooksConflicts,
+		Apply:       applyCompactionHooks,
+		Notes:       "installs ~/.config/opencode/plugins/bp-compaction.js and a pre_llm_call entry in ~/.hermes/config.yaml; applies to sessions started from now on; Hermes shows a one-time consent prompt for the new hook command (bp disable compaction-hooks removes both; hermes hooks doctor checks consent)",
 	},
 }
 

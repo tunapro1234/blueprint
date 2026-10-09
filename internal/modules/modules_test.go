@@ -332,3 +332,25 @@ func TestDetectEnablesOnUncertainEvidence(t *testing.T) {
 		t.Error("disabled wrapper stub detected as sessions in use")
 	}
 }
+
+func TestDisableKeepsUserEditsThatKeepTheMarker(t *testing.T) {
+	f := newFixture(t, "modules: {}\n")
+	rc := filepath.Join(f.home, ".zshrc")
+	// The user already sources bp's file themselves.
+	mine := "export A=1\n" + RCLine + "\n"
+	must(t, os.MkdirAll(f.home, 0700))
+	must(t, os.WriteFile(rc, []byte(mine), 0600))
+	_, err := Enable(f.env, Sessions, Options{})
+	must(t, err)
+	f.reload()
+	edited := read(t, ShellPath(f.home)) + "alias ll='ls -l'\n"
+	must(t, os.WriteFile(ShellPath(f.home), []byte(edited), 0600))
+	result, err := Disable(f.env, Sessions, Options{})
+	must(t, err)
+	if read(t, rc) != mine {
+		t.Fatalf("removed the user's own line: %q", read(t, rc))
+	}
+	if read(t, ShellPath(f.home)) != edited {
+		t.Fatalf("deleted the user's edits of shell.sh: %+v", result)
+	}
+}

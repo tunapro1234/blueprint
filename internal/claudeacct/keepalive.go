@@ -67,7 +67,8 @@ type keepMember struct {
 
 // phasePlan assigns each account the start of its next window.
 type phasePlan struct {
-	step  time.Duration
+	step   time.Duration
+	anchor time.Time
 	start map[int]time.Time
 	// idle is the total time the plan leaves accounts without a window.
 	idle time.Duration
@@ -78,7 +79,16 @@ type phasePlan struct {
 // account in an optimal plan starts exactly when it is ready, so the grid
 // anchors tried are the members' ready times. Ties go to the first anchor and
 // assignment tried (members in slot order), so the plan is deterministic.
-func planPhases(members []keepMember) phasePlan {
+func planPhases(members []keepMember) phasePlan { return planPhasesNear(members, time.Time{}) }
+
+// keepAliveStickiness is how much more idle time a plan may cost before the
+// grid of the previous plan is given up. Without it two nearly equal grids
+// take turns as time moves and the planned starts jump between ticks.
+const keepAliveStickiness = 10 * time.Minute
+
+// planPhasesNear is planPhases that keeps the previous grid (prev, any point
+// on it) while it costs at most keepAliveStickiness more than the best one.
+func planPhasesNear(members []keepMember, prev time.Time) phasePlan {
 	n := len(members)
 	plan := phasePlan{start: map[int]time.Time{}}
 	if n == 0 {
@@ -105,7 +115,13 @@ func planPhases(members []keepMember) phasePlan {
 			best, bestAnchor, bestAssign = cost, anchor, assign
 		}
 	}
+	if !prev.IsZero() {
+		if assign, cost := assignPositions(sorted, prev, plan.step); cost <= best+keepAliveStickiness {
+			best, bestAnchor, bestAssign = cost, prev, assign
+		}
+	}
 	plan.idle = best
+	plan.anchor = bestAnchor
 	for i, m := range sorted {
 		grid := bestAnchor.Add(time.Duration(bestAssign[i]) * plan.step)
 		if !m.known {
@@ -222,6 +238,9 @@ func windowState(s Slot, now time.Time) (known, active bool, resetsAt time.Time)
 // KeepAliveState is keepalive-state.json: the outcome of past pings.
 type KeepAliveState struct {
 	Slots map[string]*KeepAliveSlot `json:"slots,omitempty"`
+	// Anchor is a point on the grid the last plan used, kept so the next
+	// plan stays on it (see keepAliveStickiness).
+	Anchor time.Time `json:"anchor,omitempty"`
 }
 
 // KeepAliveSlot is one account's ping history.
@@ -425,7 +444,8 @@ type KeepAliveSlotView struct {
 
 // KeepAliveResult is the plan and what a pass did.
 type KeepAliveResult struct {
-	Step  time.Duration       `json:"step"`
+	Step   time.Duration       `json:"step"`
+	Anchor time.Time           `json:"anchor,omitempty"`
 	Idle  time.Duration       `json:"idle"`
 	Slots []KeepAliveSlotView `json:"slots"`
 }
@@ -571,6 +591,12 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 	if opts.DryRun {
 		return result, nil, state, nil
 	}
+	if !result.Anchor.IsZero() && !result.Anchor.Equal(state.Anchor) {
+		state.Anchor = result.Anchor
+		if err := m.Store.SaveKeepAliveState(state); err != nil {
+			return result, nil, state, err
+		}
+	}
 	now := m.now()
 	current := live.liveSlot(accounts)
 	var jobs []keepAliveJob
@@ -610,8 +636,8 @@ func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time) Kee
 		}
 		members = append(members, keepMember{slot: s.Number, ready: ready, known: known})
 	}
-	plan := planPhases(members)
-	result := KeepAliveResult{Step: plan.step, Idle: plan.idle}
+	plan := planPhasesNear(members, state.Anchor)
+	result := KeepAliveResult{Step: plan.step, Anchor: plan.anchor, Idle: plan.idle}
 	for _, s := range accounts.Slots {
 		if !s.Usable() {
 			continue
@@ -620,6 +646,11 @@ func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time) Kee
 		past := state.peek(s.Number)
 		view := KeepAliveSlotView{Slot: s.Number, Email: s.Email, Alias: s.Alias, Known: known, Active: active, ResetsAt: resetsAt,
 			NextStart: plan.start[s.Number], LastPingAt: past.LastPingAt, Error: past.Error}
+		if active && past.Error != "" && !past.LastPingAt.After(resetsAt.Add(-KeepAlivePeriod)) {
+			// A failure from before the running window started is history,
+			// not the account's state.
+			view.Error = ""
+		}
 		switch {
 		case !known:
 			view.Skipped = "five-hour window unknown until its usage is fetched"

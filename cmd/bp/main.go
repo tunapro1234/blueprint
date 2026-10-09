@@ -127,6 +127,9 @@ bp guard hook claude [--ask] [--canary <path>]...  # PreToolUse tripwire (stdin)
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
+bp serve --api [--listen 127.0.0.1:PORT] [--no-socket]   # local HTTP API (A2A, MCP, REST)
+bp mcp [--as <name>]          # MCP server on stdio for any agent harness
+bp api token [--path] | bp api config <client> [--http]
 bp fed status|ping|token|log [n]
 bp daemon`
 
@@ -408,6 +411,8 @@ func (a *app) run(args []string) error {
 		return a.localWorker(args[1:])
 	case "_workflow-run":
 		return a.workflowRun(args[1:])
+	case "_hook":
+		return a.hookCommand(args[1:])
 	case "whoami":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp whoami")
@@ -525,6 +530,12 @@ func (a *app) run(args []string) error {
 		return a.dashboard(args[1:])
 	case "p2p":
 		return a.p2pCommand(args[1:])
+	case "serve":
+		return a.serve(args[1:])
+	case "mcp":
+		return a.mcp(args[1:])
+	case "api":
+		return a.apiCommand(args[1:])
 	case "audit":
 		return a.auditCommand(args[1:])
 	case "messages":
@@ -2606,23 +2617,7 @@ func (a *app) prepareDispatch() {
 			a.queue.NoticeOwner = fleet.Root
 		}
 		a.queue.CanWitness = book.CanWitness
-		// Frame records from outside this machine with guard before they are
-		// pasted. The same framer key (under StateDir) backs the daemon, so a
-		// record the daemon and a synchronous bp msg both touch frames identically.
-		if a.config.StateDir != "" {
-			a.queue.FrameExternal = delivery.External
-			if render, err := delivery.Renderer(a.config.StateDir); err != nil {
-				// Fail CLOSED: hold external records instead of pasting them raw,
-				// and record the gap in the owner's audit log. (bp-guard D2.)
-				a.queue.Render = delivery.FailClosedRenderer()
-				fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
-				if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
-					fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
-				}
-			} else {
-				a.queue.Render = render
-			}
-		}
+		a.wireFraming()
 		if len(a.config.Agentbooks) > 0 {
 			projects := bptmux.ClaudeProjectsRoot()
 			a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
@@ -2633,6 +2628,31 @@ func (a *app) prepareDispatch() {
 			a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
 		}
 	})
+}
+
+// wireFraming installs the untrusted-input framer on a.queue so a record from
+// outside this machine is delivered wrapped in a guard frame, while a local
+// record is delivered unchanged. The same framer key (under StateDir) backs the
+// daemon, so a record the daemon, a synchronous bp msg and the hook path all
+// touch frames to identical bytes. It needs only StateDir — no tmux — so the
+// Claude hook delivery path (an agent outside any pane) frames exactly as
+// terminal dispatch does. On a framer-load error it fails CLOSED: external
+// records are HELD, not pasted raw, and the gap is written to the audit log the
+// owner reads. (bp-guard D2.) Safe to call repeatedly.
+func (a *app) wireFraming() {
+	if a.queue == nil || a.config.StateDir == "" {
+		return
+	}
+	a.queue.FrameExternal = delivery.External
+	if render, err := delivery.Renderer(a.config.StateDir); err != nil {
+		a.queue.Render = delivery.FailClosedRenderer()
+		fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
+		if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+			fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
+		}
+	} else {
+		a.queue.Render = render
+	}
 }
 
 // dedupWindow is how long an identical message to the same target counts as still
@@ -4104,6 +4124,7 @@ func (a *app) daemon(args []string) error {
 	defer stop()
 	logger := log.New(a.err, "blueprint: ", log.LstdFlags)
 	service := daemon.New(logger, a.config)
+	a.startDaemonAPI(ctx, logger)
 	renderer := newBarRenderer(a, logger)
 	rendererDone := make(chan struct{})
 	go func() {

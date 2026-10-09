@@ -1,0 +1,545 @@
+{
+  "schema": "bp-harness-matrix/1",
+  "behaviors": [
+    "B1-receive-at-turn-boundary",
+    "B2-never-interrupt-busy-turn",
+    "B3-confirm-delivery",
+    "B4-survive-compaction",
+    "B5-resume-after-restart",
+    "B6-report-context-and-usage",
+    "B7-rename-and-title",
+    "B8-identity-after-compaction"
+  ],
+  "paths": [
+    "terminal",
+    "push",
+    "hooks",
+    "pull"
+  ],
+  "harnesses": [
+    {
+      "kind": "claude",
+      "name": "Claude Code",
+      "vendor": "Anthropic",
+      "class": "cli",
+      "checked": "2.1.295, 2026-10-09",
+      "license": "proprietary",
+      "install": [
+        "curl -fsSL https://claude.ai/install.sh | bash",
+        "npm install -g @anthropic-ai/claude-code"
+      ],
+      "login": "Claude subscription OAuth (/login) or ANTHROPIC_API_KEY",
+      "binaries": [
+        "claude"
+      ],
+      "wrappers": [
+        "node",
+        "bwrap"
+      ],
+      "interactive": true,
+      "headless": "claude -p \u003cprompt\u003e [--output-format text|json|stream-json] [--input-format stream-json]",
+      "resume": {
+        "continue": "claude --continue",
+        "by_id": "claude --resume \u003csession-id\u003e",
+        "id_format": "UUID"
+      },
+      "naming": "claude --name \u003cname\u003e; /rename \u003cname\u003e (custom-title record)",
+      "mcp": {
+        "client": true,
+        "config": [
+          "~/.claude.json (user, local)",
+          ".mcp.json (project)",
+          "claude --mcp-config \u003cfile\u003e (per launch)"
+        ],
+        "format": "json",
+        "transports": [
+          "stdio",
+          "http",
+          "sse"
+        ],
+        "add_command": "claude mcp add \u003cname\u003e -- \u003ccommand\u003e"
+      },
+      "hooks": {
+        "config": "~/.claude/settings.json, .claude/settings.json, .claude/settings.local.json; per launch: --settings \u003cfile-or-json\u003e",
+        "events": [
+          "SessionStart",
+          "UserPromptSubmit",
+          "PreToolUse",
+          "PostToolUse",
+          "Notification",
+          "Stop",
+          "SubagentStop",
+          "PreCompact",
+          "SessionEnd"
+        ],
+        "inject": "UserPromptSubmit/SessionStart: hookSpecificOutput.additionalContext; Stop: {\"decision\":\"block\",\"reason\":...} continues the turn with the reason",
+        "per_launch": "--settings layer (bp already passes one to the sessions it launches)"
+      },
+      "push": "none for a local TUI session (Remote Control links a claude.ai session; channels are research preview)",
+      "transcripts": {
+        "root": "$CLAUDE_CONFIG_DIR/projects/\u003cmunged-cwd\u003e/\u003csession-id\u003e.jsonl (default ~/.claude/projects)",
+        "format": "jsonl",
+        "records": [
+          "user",
+          "assistant",
+          "system/turn_duration",
+          "system/compact_boundary",
+          "system/stop_hook_summary",
+          "attachment/hook_additional_context",
+          "custom-title",
+          "continued-in"
+        ]
+      },
+      "compaction": {
+        "manual": "/compact [instructions]",
+        "auto": "on by default near the context limit",
+        "markers": [
+          "system subtype \"compact_boundary\" (compactMetadata.trigger manual|auto, postTokens)",
+          "user record with isCompactSummary=true",
+          "\u003clocal-command-stdout\u003eCompacted (ctrl+o to see full summary)\u003c/local-command-stdout\u003e"
+        ],
+        "event": "PreCompact hook; SessionStart hook with source=compact afterwards"
+      },
+      "screen": {
+        "busy": "spinner row above the composer: one symbol glyph, one word ending in an ellipsis, optional (timer ...) counter; none while a long answer streams",
+        "idle": "bordered composer box with the agent name in the top border; footer below shows -- INSERT -- / bypass permissions",
+        "paste": "bracketed paste; large or multi-line pastes become [Pasted text #N +M lines]; trailing image paths turn into [Image #N]",
+        "submit": "Enter",
+        "dialogs": "Enter to select · Esc to cancel footers; trust and resume pickers at start-up"
+      },
+      "usage": "status line JSON (context_window, current_usage); assistant message.usage in the transcript; /context, /cost",
+      "instructions": "CLAUDE.md (user, project, local); skills in ~/.claude/skills/\u003cname\u003e/SKILL.md",
+      "terms": "Consumer subscription use is governed by Anthropic's Consumer Terms and usage policy; automated or programmatic access is meant for the API / Agent SDK. bp drives the user's own interactive client at human-like turn boundaries and never shares credentials.",
+      "delivery": [
+        "hooks",
+        "terminal",
+        "pull"
+      ],
+      "behaviors": {
+        "B1-receive-at-turn-boundary": {
+          "support": "supported",
+          "via": "hooks",
+          "note": "Stop and UserPromptSubmit hooks claim queued messages; the terminal path covers an agent idle between turns"
+        },
+        "B2-never-interrupt-busy-turn": {
+          "support": "supported",
+          "via": "terminal",
+          "note": "busy spinner + transcript TurnOpen probe; hooks run only at boundaries"
+        },
+        "B3-confirm-delivery": {
+          "support": "supported",
+          "note": "hook claims close as delivered (hook); pastes are confirmed by the transcript witness"
+        },
+        "B4-survive-compaction": {
+          "support": "supported",
+          "via": "hooks",
+          "note": "queue and spool are on disk; SessionStart(source=compact) carries queued messages"
+        },
+        "B5-resume-after-restart": {
+          "support": "supported",
+          "note": "bp open --resume follows customTitle and continued-in chains"
+        },
+        "B6-report-context-and-usage": {
+          "support": "supported",
+          "note": "status-line observation and transcript usage"
+        },
+        "B7-rename-and-title": {
+          "support": "supported",
+          "note": "--name at launch, /rename after Remote Control"
+        },
+        "B8-identity-after-compaction": {
+          "support": "supported",
+          "via": "hooks",
+          "note": "SessionStart(source=compact|clear) restates the bp identity"
+        }
+      },
+      "sources": [
+        "claude --help (2.1.295)",
+        "https://docs.anthropic.com/en/docs/claude-code/hooks",
+        "internal/tmux (measured signatures)",
+        "real claude -p run with Stop/UserPromptSubmit hooks, 2026-10-09"
+      ]
+    },
+    {
+      "kind": "codex",
+      "name": "Codex CLI",
+      "vendor": "OpenAI",
+      "class": "cli",
+      "checked": "codex-cli 0.162.0, 2026-10-09",
+      "license": "Apache-2.0",
+      "install": [
+        "npm install -g @openai/codex",
+        "brew install codex"
+      ],
+      "login": "ChatGPT account OAuth (codex login) or OPENAI_API_KEY",
+      "binaries": [
+        "codex"
+      ],
+      "wrappers": [
+        "node",
+        "bwrap"
+      ],
+      "interactive": true,
+      "headless": "codex exec \u003cprompt\u003e [--json] [resume \u003cid\u003e]",
+      "resume": {
+        "continue": "codex resume --last",
+        "by_id": "codex resume \u003cthread-uuid|name\u003e",
+        "id_format": "UUID"
+      },
+      "naming": "session_index.jsonl thread_name rows (bp writes them)",
+      "mcp": {
+        "client": true,
+        "config": [
+          "$CODEX_HOME/config.toml [mcp_servers.\u003cname\u003e] (default ~/.codex)",
+          "-c mcp_servers.\u003cname\u003e.command=... (per launch)"
+        ],
+        "format": "toml",
+        "transports": [
+          "stdio",
+          "streamable-http"
+        ],
+        "add_command": "codex mcp add \u003cname\u003e -- \u003ccommand\u003e"
+      },
+      "hooks": {
+        "config": "~/.codex/hooks.json, \u003crepo\u003e/.codex/hooks.json (trusted projects), [hooks] in config.toml, plugin hooks/hooks.json; on by default; each hook needs persisted trust (/hooks) or --dangerously-bypass-hook-trust",
+        "events": [
+          "SessionStart",
+          "SessionEnd",
+          "UserPromptSubmit",
+          "PreToolUse",
+          "PostToolUse",
+          "PermissionRequest",
+          "PreCompact",
+          "PostCompact",
+          "Stop",
+          "SubagentStart",
+          "SubagentStop",
+          "Interrupt"
+        ],
+        "inject": "Claude-compatible: additionalContext from SessionStart (source startup|resume|clear|compact), UserPromptSubmit, Pre/PostToolUse; Stop {\"decision\":\"block\",\"reason\":...} continues the turn; PostCompact cannot inject",
+        "per_launch": "unverified: -c overrides of [hooks] plus --dangerously-bypass-hook-trust"
+      },
+      "push": "app-server JSON-RPC (codex app-server; turn/start on a thread); codex queue --thread \u003cid\u003e --message \u003ctext\u003e (app-server thread/queue/add; runs after the current turn; an unloaded thread waits until resumed)",
+      "transcripts": {
+        "root": "$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-\u003cuuid\u003e.jsonl",
+        "format": "jsonl",
+        "records": [
+          "session_meta",
+          "turn_context",
+          "event_msg/token_count",
+          "event_msg/task_started",
+          "event_msg/task_complete",
+          "event_msg/turn_aborted",
+          "response_item/message",
+          "compacted",
+          "event_msg/context_compacted"
+        ]
+      },
+      "compaction": {
+        "manual": "/compact",
+        "auto": "model_auto_compact_token_limit",
+        "markers": [
+          "record type \"compacted\"",
+          "event_msg type \"context_compacted\""
+        ],
+        "event": "PreCompact / PostCompact hooks"
+      },
+      "screen": {
+        "busy": "• Working (Ns • esc to interrupt) row above the composer; busy composer footer 'tab to queue message'",
+        "idle": "› Ask Codex ... placeholder; footer '\u003cmodel\u003e \u003ceffort\u003e · /abs/cwd' in every state",
+        "paste": "bracketed paste; \u003e~1024 chars become [Pasted Content N chars]; first Enter expands, second submits",
+        "submit": "Enter when idle; Tab queues into Codex's own queue while busy",
+        "dialogs": "trust modal, start-up navigation menu, / and ? search prompts"
+      },
+      "usage": "event_msg/token_count (last_token_usage, model_context_window); app-server thread status",
+      "instructions": "AGENTS.md (CODEX_HOME and project); skills in $CODEX_HOME/skills/\u003cname\u003e/SKILL.md",
+      "terms": "ChatGPT plan usage is governed by OpenAI's Terms of Use and usage policies; programmatic use is offered through codex exec, the SDK and app-server.",
+      "delivery": [
+        "push",
+        "terminal",
+        "hooks",
+        "pull"
+      ],
+      "behaviors": {
+        "B1-receive-at-turn-boundary": {
+          "support": "supported",
+          "via": "terminal",
+          "note": "paste at boundary; Tab into the native queue when busy; app-server for remote threads"
+        },
+        "B2-never-interrupt-busy-turn": {
+          "support": "supported",
+          "via": "terminal",
+          "note": "Working row + app-server status + rollout turn state"
+        },
+        "B3-confirm-delivery": {
+          "support": "supported",
+          "note": "rollout response_item/message witness"
+        },
+        "B4-survive-compaction": {
+          "support": "partial",
+          "note": "queue is on disk and rollouts are append-only so the witness survives; no identity restatement yet"
+        },
+        "B5-resume-after-restart": {
+          "support": "supported",
+          "note": "identity thread pin + codex resume \u003cuuid\u003e"
+        },
+        "B6-report-context-and-usage": {
+          "support": "supported",
+          "note": "token_count records"
+        },
+        "B7-rename-and-title": {
+          "support": "supported",
+          "note": "session_index.jsonl thread_name"
+        },
+        "B8-identity-after-compaction": {
+          "support": "planned",
+          "via": "hooks",
+          "note": "PostCompact / SessionStart hooks or a queued identity note after a compacted record"
+        }
+      },
+      "sources": [
+        "codex --help, codex queue --help, codex features list (0.162.0)",
+        "strings of the 0.162 binary (hook events)",
+        "https://developers.openai.com/codex/hooks",
+        "openai/codex PR #39092 (codex queue)",
+        "internal/cache/codex.go, internal/tmux/codex.go"
+      ]
+    },
+    {
+      "kind": "hermes",
+      "name": "Hermes Agent",
+      "vendor": "Nous Research",
+      "class": "cli",
+      "checked": "v0.20.5 (2026.8.19), 2026-10-09",
+      "license": "MIT",
+      "install": [
+        "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash"
+      ],
+      "login": "provider API keys or OAuth per provider (hermes model / hermes login)",
+      "binaries": [
+        "hermes"
+      ],
+      "wrappers": [
+        "python",
+        "python3"
+      ],
+      "interactive": true,
+      "headless": "hermes chat -q \u003cprompt\u003e",
+      "resume": {
+        "continue": "hermes --continue",
+        "by_id": "hermes --resume \u003csession-id\u003e"
+      },
+      "mcp": {
+        "client": true,
+        "config": [
+          "~/.hermes/config.yaml mcp_servers:"
+        ],
+        "format": "yaml",
+        "transports": [
+          "stdio",
+          "http"
+        ]
+      },
+      "hooks": {
+        "config": "~/.hermes/config.yaml hooks: (shell hooks); ~/.hermes/plugins/\u003cname\u003e/ (Python plugins)",
+        "events": [
+          "pre_llm_call",
+          "post_llm_call",
+          "pre_tool_call",
+          "post_tool_call",
+          "pre_verify",
+          "on_session_start",
+          "on_session_end",
+          "on_session_reset",
+          "subagent_stop"
+        ],
+        "inject": "pre_llm_call: stdout {\"context\": \"...\"} is appended to the turn's user message; pre_verify: {\"decision\":\"block\",\"reason\":...} keeps the agent going (only when code was edited)",
+        "per_launch": "none: hooks live in config.yaml and need first-use consent (--accept-hooks / HERMES_ACCEPT_HOOKS=1)"
+      },
+      "push": "ACP server (hermes acp); API server and webhooks (gateway); plugins can ctx.inject_message",
+      "transcripts": {
+        "root": "~/.hermes/state.db (SQLite: sessions, messages)",
+        "format": "sqlite"
+      },
+      "compaction": {
+        "manual": "/compress",
+        "auto": "context compression before each turn when near the limit",
+        "markers": [
+          "compression rotates the session id (parent_session_id chain)"
+        ],
+        "event": "pre_llm_call fires after compression"
+      },
+      "screen": {
+        "busy": "⚕ in front of the prompt marker (⚕ ❯ msg=interrupt · /queue · /bg · /steer)",
+        "idle": "❯ Ask anything, or type / for commands…",
+        "paste": "bracketed paste",
+        "submit": "Enter; Enter on a busy pane interrupts the turn",
+        "dialogs": "⚠ ❯ composer and 'to select ... to confirm' hints"
+      },
+      "usage": "session_model_usage table; status row shows context percent",
+      "instructions": "AGENTS.md / SOUL.md / .hermes.md context files; skills in ~/.hermes/skills",
+      "terms": "open source; provider terms apply",
+      "delivery": [
+        "terminal",
+        "hooks",
+        "push",
+        "pull"
+      ],
+      "behaviors": {
+        "B1-receive-at-turn-boundary": {
+          "support": "supported",
+          "via": "terminal",
+          "note": "paste only when the caduceus is absent"
+        },
+        "B2-never-interrupt-busy-turn": {
+          "support": "supported",
+          "via": "terminal",
+          "note": "busy Hermes refuses even forced delivery (Enter would cancel the turn)"
+        },
+        "B3-confirm-delivery": {
+          "support": "partial",
+          "note": "no transcript reader (SQLite); deliveries stay unverified"
+        },
+        "B4-survive-compaction": {
+          "support": "partial",
+          "note": "queue is on disk; compaction is not observed"
+        },
+        "B5-resume-after-restart": {
+          "support": "partial",
+          "note": "launch only; no session pin"
+        },
+        "B6-report-context-and-usage": {
+          "support": "partial",
+          "note": "external usage snapshot script"
+        },
+        "B7-rename-and-title": {
+          "support": "unknown"
+        },
+        "B8-identity-after-compaction": {
+          "support": "planned",
+          "via": "hooks",
+          "note": "pre_llm_call hook restates identity when the session id rotates"
+        }
+      },
+      "sources": [
+        "hermes --version",
+        "/usr/local/lib/hermes-agent/website/docs/user-guide/features/hooks.md",
+        "internal/tmux/hermes.go"
+      ]
+    },
+    {
+      "kind": "opencode",
+      "name": "OpenCode",
+      "vendor": "SST / Anomaly",
+      "class": "cli",
+      "checked": "1.18.32, 2026-10-09",
+      "license": "MIT",
+      "install": [
+        "curl -fsSL https://opencode.ai/install | bash",
+        "npm install -g opencode-ai"
+      ],
+      "login": "opencode auth login (provider OAuth or API keys); OpenCode Zen",
+      "binaries": [
+        "opencode"
+      ],
+      "interactive": true,
+      "headless": "opencode run \u003cmessage\u003e [--format json]",
+      "resume": {
+        "continue": "opencode --continue",
+        "by_id": "opencode --session \u003cid\u003e"
+      },
+      "naming": "opencode run --title \u003ctitle\u003e; PATCH /session/:id",
+      "mcp": {
+        "client": true,
+        "config": [
+          "~/.config/opencode/opencode.json mcp:",
+          "opencode.json (project)"
+        ],
+        "format": "json",
+        "transports": [
+          "local (stdio)",
+          "remote (http)"
+        ]
+      },
+      "hooks": {
+        "config": "JS/TS plugins in ~/.config/opencode/plugins/ or .opencode/plugins/",
+        "events": [
+          "session.idle",
+          "session.status",
+          "session.compacted",
+          "session.created",
+          "message.updated",
+          "tool.execute.before",
+          "tool.execute.after",
+          "experimental.session.compacting"
+        ],
+        "inject": "a plugin calls the SDK client (session.prompt / tui.appendPrompt); experimental.session.compacting adds output.context to the compaction summary"
+      },
+      "push": "opencode serve HTTP API: POST /session/:id/prompt_async, /tui/append-prompt, /tui/submit-prompt; GET /event (SSE); opencode acp",
+      "transcripts": {
+        "root": "~/.local/share/opencode/opencode.db (SQLite: session, message, part, event)",
+        "format": "sqlite"
+      },
+      "compaction": {
+        "manual": "/compact (alias /summarize), POST /session/:id/summarize",
+        "auto": "automatic when the context overflows",
+        "event": "session.compacted plugin event; experimental.session.compacting hook"
+      },
+      "screen": {
+        "busy": "progress dots with 'esc interrupt'",
+        "idle": "┃ rail composer, 'Ask anything...' placeholder, ╹▀▀▀ bottom edge",
+        "paste": "[Pasted ~N lines] chip",
+        "submit": "Enter",
+        "dialogs": "permission prompts"
+      },
+      "usage": "opencode stats; step-finish parts carry tokens",
+      "instructions": "AGENTS.md (/init creates it)",
+      "terms": "open source; provider terms apply",
+      "delivery": [
+        "terminal",
+        "push",
+        "hooks",
+        "pull"
+      ],
+      "behaviors": {
+        "B1-receive-at-turn-boundary": {
+          "support": "supported",
+          "via": "terminal"
+        },
+        "B2-never-interrupt-busy-turn": {
+          "support": "supported",
+          "via": "terminal",
+          "note": "esc interrupt row"
+        },
+        "B3-confirm-delivery": {
+          "support": "partial",
+          "note": "no transcript reader (SQLite); deliveries stay unverified"
+        },
+        "B4-survive-compaction": {
+          "support": "partial",
+          "note": "queue is on disk; compaction is not observed"
+        },
+        "B5-resume-after-restart": {
+          "support": "partial"
+        },
+        "B6-report-context-and-usage": {
+          "support": "unknown"
+        },
+        "B7-rename-and-title": {
+          "support": "unknown"
+        },
+        "B8-identity-after-compaction": {
+          "support": "planned",
+          "via": "hooks",
+          "note": "plugin: experimental.session.compacting adds the bp identity to the summary"
+        }
+      },
+      "sources": [
+        "opencode --help (1.18.32)",
+        "https://opencode.ai/docs/plugins",
+        "https://opencode.ai/docs/server",
+        "internal/tmux/opencode.go"
+      ]
+    }
+  ]
+}

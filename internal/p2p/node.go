@@ -261,19 +261,7 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 			break
 		}
 		res.QueueID = m.ID
-		res.State = "accepted"
-		res.Reason = m.Reason
-		switch {
-		case m.Cleanup:
-			res.State = "delivered"
-		case msgq.IsUnverifiedDelivery(m.Status):
-			res.State = "unverified"
-		case msgq.IsVerifiedDelivery(m.Status):
-			res.State = "delivered"
-		case m.Status != "":
-			res.State = "failed"
-			res.Reason = m.Status
-		}
+		res.State, res.Reason = msgq.DeliveryState(m)
 		if p == MessageProtocol && res.State == "accepted" {
 			n.signalInbound()
 		}

@@ -346,6 +346,19 @@ func inboxResult(item InboxItem) SendResult {
 }
 
 // queueResult maps a queue record to a state exactly as the P2P status does.
+// loggedMessage finds the last final state of id in msgq's message log.
+func (c *Core) loggedMessage(id string) (msgq.LogEntry, bool) {
+	var last msgq.LogEntry
+	found := false
+	_ = readJSONL(msgq.MessageLogPath(c.Queue.Root), func(entry msgq.LogEntry) bool {
+		if entry.ID == id {
+			last, found = entry, true
+		}
+		return true
+	})
+	return last, found
+}
+
 func queueResult(m msgq.Message) SendResult {
 	result := SendResult{ID: m.ID, To: m.To, Route: "queue", State: StateAccepted, Reason: m.Reason}
 	switch {
@@ -383,6 +396,11 @@ func (c *Core) Status(id string) (SendResult, error) {
 	}
 	message, err := c.Queue.Record(id)
 	if errors.Is(err, os.ErrNotExist) {
+		// Records are pruned after a while; the message log keeps final states.
+		if entry, ok := c.loggedMessage(id); ok {
+			return queueResult(msgq.Message{ID: entry.ID, To: entry.To, From: entry.From, Msg: entry.Msg,
+				TS: entry.TS, Finished: entry.Finished, Status: entry.Status}), nil
+		}
 		return SendResult{}, fmt.Errorf("%w: message %s", ErrNotFound, id)
 	}
 	if err != nil {

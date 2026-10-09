@@ -3,15 +3,14 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"blueprint/internal/audit"
 )
 
-// Event is one security-relevant decision. Its fields follow the audit
-// contract in docs/workplan-2026-10.md; Core.Audit is swapped for
-// internal/audit's Append once W1 lands, and until then DefaultAudit writes
-// the same events to <state>/api/audit.jsonl.
+// Event is one security-relevant decision. DefaultAudit records it in the
+// owner's audit log (internal/audit) as kind "api.<Kind>.<Decision>".
 type Event struct {
 	TS        string `json:"ts"`
 	Kind      string `json:"kind"`             // send, inbox.read, room.post, board.put, auth, ...
@@ -23,14 +22,21 @@ type Event struct {
 	Detail    string `json:"detail,omitempty"`
 }
 
-// DefaultAudit returns an audit sink that appends to <stateDir>/api/audit.jsonl.
+// DefaultAudit returns an audit sink that appends to <stateDir>/audit.jsonl
+// through internal/audit. Rejections are warnings; everything else is info.
 func DefaultAudit(stateDir string) func(Event) {
-	path := filepath.Join(stateDir, "api", "audit.jsonl")
 	return func(event Event) {
-		if event.TS == "" {
-			event.TS = time.Now().UTC().Format(time.RFC3339Nano)
+		severity := audit.Info
+		if event.Decision == "rejected" {
+			severity = audit.Warn
 		}
-		_ = withLock(path, func() error { return appendJSONL(path, event) })
+		ev := audit.Event{Kind: "api." + event.Kind + "." + event.Decision, Severity: severity,
+			Actor: event.Actor, Target: event.Target, ID: event.ID, Reason: event.Detail,
+			Fields: map[string]string{"transport": event.Transport}}
+		if ts, err := time.Parse(time.RFC3339Nano, event.TS); err == nil {
+			ev.Time = ts
+		}
+		_ = audit.Append(stateDir, ev)
 	}
 }
 

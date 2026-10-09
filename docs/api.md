@@ -127,7 +127,7 @@ call `bp_register`.
   This includes messages, room posts and board values. The frame is a
   stand-in until `guard.Frame` (W6) lands.
 - **Audit.** Every request, rejection and token operation is logged to
-  `<state>/api/audit.jsonl`. This file will move to `audit.Append` (W1).
+  `<state>/audit.jsonl` (kinds `api.*`; read them with `bp audit`).
 - **No slash commands.** Every delivered message starts with a sender
   envelope, so a message can never begin with `/`.
 

@@ -269,3 +269,21 @@ func TestStoresArePrivateAndAudited(t *testing.T) {
 		t.Fatalf("audit %v", kinds)
 	}
 }
+
+func TestStatusFallsBackToMessageLog(t *testing.T) {
+	core := testCore(t, "worker")
+	line := `{"id":"qpold","to":"worker","from":"http:alice","msg":"x","ts":1,"finished":2,"status":"delivered"}` + "\n"
+	if err := os.MkdirAll(core.Queue.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(msgq.MessageLogPath(core.Queue.Root), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := core.Status("qpold")
+	if err != nil || got.State != StateDelivered || got.To != "worker" {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if _, err := core.Status("qpmissing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing id: %v", err)
+	}
+}

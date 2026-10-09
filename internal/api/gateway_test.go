@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"blueprint/internal/audit"
 )
 
 func testGateway(t *testing.T) (*Gateway, *httptest.Server) {
@@ -239,8 +241,8 @@ func TestGatewayStaticTokenOriginRevokeAndRate(t *testing.T) {
 	if code, _ := mcpCall(t, ts, token, "bp_agents", map[string]any{}); code != 401 {
 		t.Fatalf("revoked token: %d", code)
 	}
-	events, err := os.ReadFile(filepath.Join(g.Core.dir(), "audit.jsonl"))
-	if err != nil || !strings.Contains(string(events), `"gateway.revoke"`) || !strings.Contains(string(events), `"gateway.request"`) {
+	events, err := os.ReadFile(audit.Path(g.Core.StateDir))
+	if err != nil || !strings.Contains(string(events), `"api.gateway.revoke.accepted"`) || !strings.Contains(string(events), `"api.gateway.request.accepted"`) {
 		t.Fatalf("audit missing gateway events: %v", err)
 	}
 }

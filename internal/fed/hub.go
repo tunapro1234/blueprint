@@ -2,10 +2,8 @@ package fed
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -282,17 +280,8 @@ func (h *Hub) handleSend(writer http.ResponseWriter, request *http.Request, peer
 		writeError(writer, http.StatusTooManyRequests, "peer rate limit exceeded")
 		return http.StatusTooManyRequests
 	}
-	// "external:" keeps a peer's sender visibly outside the local hierarchy;
-	// Origin lets delivery frame the body as untrusted data.
-	from := "external:" + input.From + "@" + peerName
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		writeError(writer, http.StatusInternalServerError, err.Error())
-		return http.StatusInternalServerError
-	}
-	origin := &msgq.Origin{Transport: "fed", PeerID: "fed:" + peerName, PeerAlias: peerName, PeerAuthenticated: true, AgentClaim: input.From}
-	message, err := h.Queue.EnqueueOnceOrigin("bp-fed-hub-v1:"+peerName+":"+hex.EncodeToString(nonce), input.To, from, "["+from+"] "+input.Msg, origin)
-	id := message.ID
+	from := input.From + "@" + peerName
+	id, err := h.Queue.Enqueue(input.To, from, "["+from+"] "+input.Msg)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return http.StatusInternalServerError

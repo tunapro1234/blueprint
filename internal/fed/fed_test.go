@@ -130,7 +130,7 @@ func TestHubSendEnqueuesLocalMessage(t *testing.T) {
 	if len(messages) != 1 {
 		t.Fatalf("queue length=%d, want 1", len(messages))
 	}
-	if messages[0].To != "ada" || messages[0].From != "external:oz@yigit" || messages[0].Msg != "[external:oz@yigit] lineone\nline two" || messages[0].Origin == nil || messages[0].Origin.Transport != "fed" || messages[0].Origin.AgentClaim != "oz" {
+	if messages[0].To != "ada" || messages[0].From != "oz@yigit" || messages[0].Msg != "[oz@yigit] lineone\nline two" {
 		t.Fatalf("message=%+v", messages[0])
 	}
 }
@@ -245,7 +245,7 @@ func TestClientPollEnqueuesAndRecordsLastPoll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(messages) != 1 || !strings.HasPrefix(messages[0].Msg, "[external:ada@tuna@") || !strings.HasSuffix(messages[0].Msg, "] reply") || messages[0].Origin == nil || messages[0].Origin.Transport != "fed" {
+	if len(messages) != 1 || messages[0].Msg != "[ada@tuna] reply" {
 		t.Fatalf("messages=%+v", messages)
 	}
 	if _, err := os.Stat(LastPollPath(stateDir)); err != nil {
@@ -281,8 +281,8 @@ func TestClientPollStripsControlBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "] hi there[201~rm -rfx"
-	if len(messages) != 1 || !strings.HasSuffix(messages[0].Msg, want) {
+	want := "[ada@tuna] hi there[201~rm -rfx"
+	if len(messages) != 1 || messages[0].Msg != want {
 		t.Fatalf("messages=%+v, want msg %q", messages, want)
 	}
 }

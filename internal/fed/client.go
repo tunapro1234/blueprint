@@ -174,11 +174,7 @@ func (c *Client) PollAndEnqueue(ctx context.Context, stateDir string, queue *msg
 		from := sanitize(message.From)
 		text := sanitize(message.Msg)
 		if c.allowed(message.To) {
-			// The hub asserts From; it must never read as a local sender.
-			hub := c.hubName()
-			label := "external:" + from + "@" + hub
-			origin := &msgq.Origin{Transport: "fed", PeerID: "fed-hub:" + hub, PeerAlias: hub, ChannelID: clipID(message.ID), PeerAuthenticated: true, AgentClaim: from}
-			if _, err := queue.EnqueueOnceOrigin("bp-fed-client-v1:"+c.Hub+":"+message.ID, message.To, label, "["+label+"] "+text, origin); err != nil {
+			if _, err := queue.Enqueue(message.To, from, "["+from+"] "+text); err != nil {
 				return 0, err
 			}
 			if err := Journal(stateDir, "in", message.ID, from, message.To, text); err != nil && c.Log != nil {
@@ -323,20 +319,4 @@ func CheckHubURL(value string) error {
 		}
 	}
 	return nil
-}
-
-// hubName is the hub's host, used as the peer part of inbound sender labels.
-func (c *Client) hubName() string {
-	if u, err := url.Parse(c.Hub); err == nil && u.Host != "" {
-		return strings.NewReplacer("[", "", "]", "").Replace(u.Host)
-	}
-	return "hub"
-}
-
-func clipID(id string) string {
-	id = sanitize(id)
-	if len(id) > 128 {
-		return id[:128]
-	}
-	return id
 }

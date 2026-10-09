@@ -103,6 +103,28 @@ type Message struct {
 	// unsubmitted, so a follower waits for the witness or, failing that, for
 	// forceCooldown measured from this moment.
 	ForcedAt float64 `json:"forcedAt,omitempty"`
+	// wire is the body actually pasted into the pane: the raw Msg for a local
+	// caller, or the guard-framed body for a record whose Origin crossed a trust
+	// boundary. It is computed per dispatch pass by Queue.Render in
+	// pendingRecords and is deliberately UNEXPORTED and unserialised, so
+	// writePending, finish, done/ and messages.jsonl keep the raw Msg and replay
+	// dedup is unchanged. Empty means "not rendered" (no Render set, or a
+	// non-dispatch read); Wire() then falls back to Msg so display and status are
+	// unaffected.
+	wire string
+}
+
+// Wire returns the text to paste into the target pane and to look for when
+// verifying delivery: the guard-framed body when Queue.Render produced one for
+// this record's Origin, otherwise the raw Msg. Every delivery site — paste,
+// witness, post-paste verification — uses Wire so they all agree on the exact
+// bytes the agent received. Owner-facing notices, display and local-sender
+// dedup keep Msg.
+func (m Message) Wire() string {
+	if m.wire != "" {
+		return m.wire
+	}
+	return m.Msg
 }
 
 // SenderEvidence is captured by the local sending bp, separate from remote
@@ -171,6 +193,15 @@ type Queue struct {
 	Binding      func(to string) string
 	RuntimeBlock func(to string, force bool) string
 	TurnOpen     func(to string) bool
+	// Render, when set, turns a stored record into the body that is actually
+	// pasted into the pane. cmd/bp binds it to a guard framer so a record whose
+	// Origin crossed a trust boundary is delivered wrapped in an untrusted-input
+	// frame, while a local record is returned unchanged. It is called once per
+	// record per dispatch pass in pendingRecords; a non-nil error holds the
+	// record (it becomes a badRecord) rather than pasting it raw. A nil Render
+	// leaves every record's wire empty, so Wire() falls back to Msg and the queue
+	// behaves exactly as before.
+	Render func(Message) (string, error)
 	// PaneLock lets an in-process caller share its reentrant lock bookkeeping
 	// with queue dispatch. Standalone daemon queues leave it unset and use flock.
 	// Reentrancy is per process, so a caller that types from several goroutines
@@ -671,6 +702,17 @@ func (q *Queue) pendingRecords() ([]record, []badRecord, error) {
 			bad = append(bad, badRecord{path: path, err: readErr})
 			continue
 		}
+		// Render the delivery body once, here, the single place dispatch reads
+		// records. A render failure holds the record as a badRecord so it is
+		// reported and never pasted raw; Dispatch keeps delivering the rest.
+		if q.Render != nil {
+			wire, rerr := q.Render(message)
+			if rerr != nil {
+				bad = append(bad, badRecord{path: path, err: fmt.Errorf("render delivery body: %w", rerr)})
+				continue
+			}
+			message.wire = wire
+		}
 		records = append(records, record{path: path, Message: message})
 	}
 	sort.Slice(records, func(i, j int) bool {
@@ -798,10 +840,10 @@ func (q *Queue) PendingFor(to string) []string {
 		// one has already been delivered: submitting the copy hanging in the
 		// composer would produce the duplicate the Cleanup state exists to prevent.
 		// Dispatch finalizes legacy cleanup records without touching the composer.
-		if rec.Cleanup || messagetext.Validate(rec.Msg) != nil || messagetext.Label(rec.From) != nil {
+		if rec.Cleanup || messagetext.Validate(rec.Wire()) != nil || messagetext.Label(rec.From) != nil {
 			continue
 		}
-		texts = append(texts, rec.Msg)
+		texts = append(texts, rec.Wire())
 	}
 	return texts
 }
@@ -870,7 +912,7 @@ func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
 	// "Oldest" now really means oldest: the records arrive in send-time order, not
 	// in the order of a file name that carries a fraction of a second.
 	for _, rec := range records {
-		recorded, _ := messagetext.NeutralizeImagePaths(rec.Msg)
+		recorded, _ := messagetext.NeutralizeImagePaths(rec.Wire())
 		if rec.To != to || recorded != text {
 			continue
 		}
@@ -1175,12 +1217,12 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 	if reason := q.recoveryBlock(rec); reason != "" {
 		return false, fmt.Errorf("%s", reason)
 	}
-	submitted, err := target.SubmitStuck(ctx, rec.To, []string{rec.Msg})
+	submitted, err := target.SubmitStuck(ctx, rec.To, []string{rec.Wire()})
 	if err != nil {
 		return false, err
 	}
 	since := time.Unix(0, int64(rec.TS*1e9))
-	if q.Witness != nil && q.Witness(rec.To, rec.Msg, since) {
+	if q.Witness != nil && q.Witness(rec.To, rec.Wire(), since) {
 		return true, nil
 	}
 	if !submitted {
@@ -1208,7 +1250,7 @@ func (q *Queue) clearTornPaste(ctx context.Context, target Target, rec record) (
 	if reason := q.recoveryBlock(rec); reason != "" {
 		return false, fmt.Errorf("%s", reason)
 	}
-	return target.ClearDelivered(ctx, rec.To, []string{rec.Msg})
+	return target.ClearDelivered(ctx, rec.To, []string{rec.Wire()})
 }
 
 func (q *Queue) recoveryBlock(rec record) string {
@@ -1291,7 +1333,7 @@ func (q *Queue) resolveNoticeHome(ctx context.Context, target Target, from, id s
 func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string, message Message, report func(string)) bool {
 	// The window exists to give the transcript witness time. A target that keeps
 	// no transcript has no witness to wait for, so it is settled at once.
-	witnessCanFindText := q.CanWitness == nil || q.CanWitness(message.Msg)
+	witnessCanFindText := q.CanWitness == nil || q.CanWitness(message.Wire())
 	witnessPossible := witnessCanFindText && (q.HasTranscript == nil || q.HasTranscript(message.To))
 	knownNotDelivered := strings.HasPrefix(message.Reason, hangingPasteReason) || message.Reason == shortUnverifiedReason || strings.HasPrefix(message.Reason, damagedPasteReason)
 	if !knownNotDelivered && witnessPossible && q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
@@ -1302,8 +1344,8 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 	hanging, torn := false, false
 	if target != nil {
 		if pane, err := target.CaptureAnsi(ctx, message.To); err == nil {
-			hanging = bptmux.ExactPaste(pane, []string{message.Msg})
-			torn = bptmux.DamagedPaste(pane, []string{message.Msg})
+			hanging = bptmux.ExactPaste(pane, []string{message.Wire()})
+			torn = bptmux.DamagedPaste(pane, []string{message.Wire()})
 		}
 	}
 	// Neither an unknown injection nor a torn composer may be labelled delivered.
@@ -1696,7 +1738,7 @@ func lines(records []record) ([]string, map[string][]record) {
 // silence would have been the cheaper failure by far.
 func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
 	// Legacy records must not authorize Enter, cleanup, or a fresh paste.
-	err := messagetext.Validate(rec.Msg)
+	err := messagetext.Validate(rec.Wire())
 	if err == nil {
 		err = messagetext.Label(rec.From)
 	}
@@ -1707,7 +1749,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	}
 	// Delivery is a past fact, independent of the current pane, runtime or turn.
 	// Legacy cleanup records already contain this proof, even after a restart.
-	witnessed := rec.Cleanup || (q.Witness != nil && q.Witness(rec.To, rec.Msg, time.Unix(0, int64(rec.TS*1e9))))
+	witnessed := rec.Cleanup || (q.Witness != nil && q.Witness(rec.To, rec.Wire(), time.Unix(0, int64(rec.TS*1e9))))
 	if witnessed {
 		q.settleDelivered(rec, line, report)
 		return
@@ -1745,9 +1787,9 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil {
 				settled := rec.Message
 				switch {
-				case bptmux.ExactPaste(pane, []string{rec.Msg}):
+				case bptmux.ExactPaste(pane, []string{rec.Wire()}):
 					settled.Reason = hangingPasteReason + "; recovery blocked: " + reason
-				case bptmux.DamagedPaste(pane, []string{rec.Msg}):
+				case bptmux.DamagedPaste(pane, []string{rec.Wire()}):
 					settled.Reason = damagedPasteReason + "; recovery blocked: " + reason
 				default:
 					settled = Message{}
@@ -1783,7 +1825,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
 			}
 			return
-		} else if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil && !rec.ForceBusy && holdsTorn(pane, rec.Msg) {
+		} else if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil && !rec.ForceBusy && holdsTorn(pane, rec.Wire()) {
 			// A TORN copy of our message is sitting in the box. This is the one
 			// state in which "never paste again" may be lifted: the witness has
 			// already said the text is not in the transcript, and the mutilated
@@ -1833,7 +1875,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			}
 			line.block(rec.ID)
 			return
-		} else if err == nil && !rec.ForceBusy && stillHolds(pane, rec.Msg) {
+		} else if err == nil && !rec.ForceBusy && stillHolds(pane, rec.Wire()) {
 			// bp could not finish it (a damaged box, a busy or asking pane, a
 			// forced record) but the text IS still sitting there — so the record
 			// must say what a PERSON should do. The old wording named the
@@ -1849,7 +1891,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// exactly as ada and I built it.
 			unsettled := rec.Message
 			reason := hangingPasteReason
-			if bptmux.DamagedPaste(pane, []string{rec.Msg}) {
+			if bptmux.DamagedPaste(pane, []string{rec.Wire()}) {
 				reason = damagedPasteReason
 			}
 			unsettled.Reason = reason
@@ -1958,7 +2000,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	if rec.ForceBusy {
 		blocked = bptmux.ComposerContentBlockReason
 	}
-	if reason := blocked(paneAnsi, []string{rec.Msg}); reason != "" {
+	if reason := blocked(paneAnsi, []string{rec.Wire()}); reason != "" {
 		q.remember(rec.path, rec.Message, reason, report)
 		line.block(rec.ID)
 		return
@@ -2011,7 +2053,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		return
 	}
 	message.AttemptBinding = intent.AttemptBinding
-	err = deliver(ctx, rec.To, message.Msg)
+	err = deliver(ctx, rec.To, message.Wire())
 	// The moment a forced text reached the pane, recorded whatever the verdict on it
 	// was: delivered, unconfirmed, or provably broken all mean keystrokes went in,
 	// and it is the keystrokes the record behind this one has to wait out. The
@@ -2095,7 +2137,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// composer, and nothing else may follow it until a later pass has seen
 			// the composer clear.
 			line.delivered = message.ID
-			if q.CanWitness != nil && q.CanWitness(message.Msg) {
+			if q.CanWitness != nil && q.CanWitness(message.Wire()) {
 				message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
 				message.UnverifiedAt = float64(q.Now().UnixNano()) / 1e9
 				q.update(rec.path, message, report)
@@ -2119,9 +2161,9 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			}
 			if pane, capErr := target.CaptureAnsi(ctx, rec.To); capErr == nil {
 				switch {
-				case bptmux.ExactPaste(pane, []string{message.Msg}):
+				case bptmux.ExactPaste(pane, []string{message.Wire()}):
 					message.Reason = hangingPasteReason
-				case bptmux.DamagedPaste(pane, []string{message.Msg}):
+				case bptmux.DamagedPaste(pane, []string{message.Wire()}):
 					message.Reason = damagedPasteReason
 				}
 			}

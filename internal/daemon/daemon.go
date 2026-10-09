@@ -22,6 +22,7 @@ import (
 	"blueprint/internal/codexrpc"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/lowprio"
 	"blueprint/internal/msgq"
@@ -67,6 +68,18 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	queue.RuntimeBlock = book.RuntimeBlockProbe(cfg.Agentbooks)
 	queue.Binding = book.DeliveryBindingProbe(cfg.Agentbooks)
+	// Messages that crossed a trust boundary are pasted wrapped in an
+	// untrusted-input frame. The framer key lives under StateDir so the daemon
+	// and a synchronous bp msg frame a record identically; without a StateDir, or
+	// if the key cannot be loaded, delivery runs unframed and says so loudly
+	// rather than refusing to start.
+	if cfg.StateDir != "" {
+		if render, err := delivery.Renderer(cfg.StateDir); err != nil {
+			logger.Printf("WARNING: inbound framing OFF: %v; external messages will be delivered unframed", err)
+		} else {
+			queue.Render = render
+		}
+	}
 	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 	return service
 }

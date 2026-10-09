@@ -33,6 +33,7 @@ import (
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/identity"
 	"blueprint/internal/monitorcli"
@@ -2608,6 +2609,16 @@ func (a *app) prepareDispatch() {
 			a.queue.NoticeOwner = fleet.Root
 		}
 		a.queue.CanWitness = book.CanWitness
+		// Frame records from outside this machine with guard before they are
+		// pasted. The same framer key (under StateDir) backs the daemon, so a
+		// record the daemon and a synchronous bp msg both touch frames identically.
+		if a.config.StateDir != "" {
+			if render, err := delivery.Renderer(a.config.StateDir); err != nil {
+				fmt.Fprintf(a.err, "bp: inbound framing OFF: %v; external messages will be delivered unframed\n", err)
+			} else {
+				a.queue.Render = render
+			}
+		}
 		if len(a.config.Agentbooks) > 0 {
 			projects := bptmux.ClaudeProjectsRoot()
 			a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)

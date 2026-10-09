@@ -100,3 +100,10 @@ this step; record it in the threat model as T-L2 partial.
   spends a rate token, so some get "rate limited". This is benign because
   the client retries, but a per-channel lock around the check-and-admit
   would remove the flake.
+- **Lookup audit source (blueprint's follow-up on b1805fb):** `handleLookup`
+  resets an unconfigured identity before it writes any audit line, so the
+  path blueprint flagged could not be reached by rotating identities. The
+  lookup audits now use `auditSource(remote, alias)` anyway, so a later
+  change to that early reset cannot give each new identity its own budget.
+  `TestLookupProtocolRefusesUnknownPeersAndInvalidQueries` asserts that an
+  unconfigured lookup writes no audit line.

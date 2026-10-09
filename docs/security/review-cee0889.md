@@ -58,3 +58,12 @@ this step; record it in the threat model as T-L2 partial.
 - Pauses survive a service restart and are owner-visible (`bp p2p pauses`).
 - Hidden lookup answers exactly like an unknown name.
 - Audit fields are clipped; the file and directory are 0600 and 0700.
+
+## Follow-up: d8afaf5 (lookup rate limit)
+
+- Closes R3's cost half: the limiter runs before `ResolveLookup`.
+- `firstRejection("lookup:"+peer, "rate")` audits only the first throttle per
+  peer for the life of the process (until the 4096-entry map resets). A peer
+  that floods again hours later leaves no new trace. Re-audit once per
+  window with a suppressed count (same fix shape as R1).
+- R1 (audit flood from unconfigured identities) is still open.

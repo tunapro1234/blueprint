@@ -81,8 +81,12 @@ func TestGatewayCommandPairTokenRevoke(t *testing.T) {
 	if err := a.gatewayCommand([]string{"clients"}); err != nil || !strings.Contains(read(), "phone\tagents=[worker]") {
 		t.Fatalf("clients: %v", err)
 	}
-	if err := a.gatewayCommand([]string{"pair", "phone"}); err != nil || !strings.Contains(read(), "-") {
-		t.Fatalf("pair: %v", err)
+	if err := a.gatewayCommand([]string{"pending"}); err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	read()
+	if err := a.gatewayCommand([]string{"pair", "phone", "bpc_unknown"}); err == nil {
+		t.Fatal("paired an unregistered client")
 	}
 	if err := a.gatewayCommand([]string{"token", "nobody"}); err == nil {
 		t.Fatal("token for an unconfigured client")

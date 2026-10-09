@@ -81,7 +81,8 @@ mcp_servers:
 }
 
 var httpSnippets = map[string]string{
-	"claude": `# Claude Code over local HTTP (export BP_TOKEN=$(bp api token) first)
+	"claude": `# Claude Code over local HTTP (export BP_TOKEN=$(bp api token) first).
+# The token is visible to other processes (ps) while this runs; the stdio form needs no token.
 claude mcp add --scope user --transport http bp URL --header "Authorization: Bearer $BP_TOKEN" --header "X-BP-Agent: <your-name>"
 `,
 	"codex": `# ~/.codex/config.toml (export BP_TOKEN=$(bp api token))

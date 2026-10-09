@@ -87,6 +87,9 @@ type MCPSession struct {
 // NewMCPSession starts a session for caller. A caller with no name may
 // still list agents; bp_register gives it a name.
 func NewMCPSession(core *Core, caller Caller, policy *Policy) *MCPSession {
+	if caller.Policy == nil {
+		caller.Policy = policy
+	}
 	return &MCPSession{Core: core, Policy: policy, caller: caller, Instructions: mcpInstructions}
 }
 
@@ -343,6 +346,10 @@ func init() {
 				visible := []AgentInfo{}
 				for _, agent := range agents {
 					if s.Policy.agent(agent.Name) {
+						if s.Policy != nil {
+							// The hierarchy is the owner's business.
+							agent.Parent, agent.Role = "", ""
+						}
 						visible = append(visible, agent)
 					}
 				}
@@ -424,7 +431,7 @@ func init() {
 				if args.ID == "" {
 					return nil, invalid("give id or agent")
 				}
-				result, err := s.Core.Status(args.ID)
+				result, err := s.Core.StatusFor(s.Caller(), args.ID)
 				if err == nil && !s.Policy.agent(result.To) {
 					return nil, fmt.Errorf("%w: message %s", ErrNotFound, args.ID)
 				}
@@ -486,7 +493,7 @@ func init() {
 				visible := []Room{}
 				for _, room := range rooms {
 					if s.Policy.room(room.Name) {
-						visible = append(visible, room)
+						visible = append(visible, roomFor(s.Caller(), room))
 					}
 				}
 				return map[string]any{"rooms": visible}, nil

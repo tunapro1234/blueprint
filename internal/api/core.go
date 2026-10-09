@@ -35,6 +35,12 @@ type Caller struct {
 	// Like P2P inbound, the caller is external: its label is
 	// external:<name>@<transport> and the shared delivery-time frame applies.
 	Remote bool
+	// PeerID is a remote caller's stable provenance (gateway:<client id>).
+	PeerID string
+	// Policy limits what the caller reaches; nil means local trust. Core
+	// enforces it wherever a request fans out (room posts) or reveals
+	// others (room members, history).
+	Policy *Policy
 }
 
 // Label is the sender label stored with the message and shown in its
@@ -86,10 +92,17 @@ type Core struct {
 	// Kick, when set, asks for a delivery pass for one target right away
 	// instead of waiting for the daemon's next tick.
 	Kick func(target string)
+	// DeliveryFramed is set once msgq frames non-local origins at delivery
+	// (Queue.Render, guard.NeedsFrame). The gateway refuses to serve before
+	// that.
+	DeliveryFramed bool
 	// Audit records decisions; the default appends to <state>/audit.jsonl.
 	Audit func(audit.Event)
 	Frame Framer
 	Now   func() time.Time
+
+	rejects    auditBudget
+	roomLimits limiter
 
 	dirMu    sync.Mutex
 	dirCache []AgentInfo
@@ -126,6 +139,20 @@ func (c *Core) audit(ev audit.Event) {
 	}
 }
 
+// auditRejected records a rejection that an unauthenticated or untrusted
+// source can trigger at will. Each source gets a budget per minute; events
+// over it are counted and reported as one api.audit.suppressed event.
+func (c *Core) auditRejected(source string, ev audit.Event) {
+	ok, suppressed := c.rejects.admit(source, c.now())
+	if suppressed > 0 {
+		c.audit(audit.Event{Kind: "api.audit.suppressed", Severity: audit.Warn, Target: source,
+			Reason: fmt.Sprintf("%d rejection events over budget in the last minute", suppressed)})
+	}
+	if ok {
+		c.audit(ev)
+	}
+}
+
 // originTransport is the msgq Origin transport for an API caller. Local
 // callers are bp-api/http, bp-api/socket or bp-api/mcp, which
 // guard.LocalTransports treats as local. A remote (gateway) caller is mcp,
@@ -142,8 +169,12 @@ func sourceOf(caller Caller, room string) *FrameSource {
 	if !caller.Remote {
 		return nil
 	}
+	peerID := caller.PeerID
+	if peerID == "" {
+		peerID = caller.Transport + ":" + caller.Name
+	}
 	return &FrameSource{Transport: originTransport(caller), Peer: caller.Transport,
-		PeerID: caller.Transport + "/" + caller.Name, AgentClaim: caller.Name, Room: room}
+		PeerID: peerID, AgentClaim: caller.Name, Room: room}
 }
 
 // render applies the Framer to stored external text as an inbox, room or
@@ -328,6 +359,9 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	if len(req.MessageID) > 128 || messagetext.Label(req.MessageID) != nil {
 		return SendResult{}, invalid("messageId must be at most 128 printable characters")
 	}
+	if len(req.ContextID) > 128 || (req.ContextID != "" && messagetext.Label(req.ContextID) != nil) {
+		return SendResult{}, invalid("contextId must be at most 128 printable characters")
+	}
 	target, err := c.Lookup(ctx, req.To)
 	if err != nil {
 		return SendResult{}, err
@@ -383,6 +417,34 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	}
 	result := queueResult(message)
 	result.ContextID = req.ContextID
+	return result, nil
+}
+
+// maxInboxRead bounds one inbox read.
+const maxInboxRead = 200
+
+// StatusFor is Status for a caller: a remote caller sees only messages it
+// sent, and anything else reads as not found.
+func (c *Core) StatusFor(caller Caller, id string) (SendResult, error) {
+	result, err := c.Status(id)
+	if err != nil || !caller.Remote {
+		return result, err
+	}
+	from := ""
+	if strings.HasPrefix(id, "ib") {
+		if item, err := c.inbox().find(id); err == nil {
+			from = item.From
+		}
+	} else if c.Queue != nil {
+		if m, err := c.Queue.Record(id); err == nil {
+			from = m.From
+		} else if entry, ok := c.loggedMessage(id); ok {
+			from = entry.From
+		}
+	}
+	if from != caller.Label() {
+		return SendResult{}, fmt.Errorf("%w: message %s", ErrNotFound, id)
+	}
 	return result, nil
 }
 
@@ -461,6 +523,11 @@ func (c *Core) Register(ctx context.Context, caller Caller, name, description st
 }
 
 func (c *Core) register(ctx context.Context, caller Caller, name, description string) (Registration, error) {
+	if caller.Remote {
+		// A remote client's name and description would reach agents as
+		// trusted text; the gateway registers its clients itself.
+		return Registration{}, fmt.Errorf("%w: remote clients cannot register agents", ErrForbidden)
+	}
 	if !identity.ValidName(name) || len(name) > 64 {
 		return Registration{}, invalid("%q is not a valid agent name", name)
 	}
@@ -516,6 +583,9 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 	}
 	if !identity.ValidName(agent) {
 		return InboxResult{}, invalid("invalid agent name")
+	}
+	if limit <= 0 || limit > maxInboxRead {
+		limit = maxInboxRead
 	}
 	items, remaining, err := c.inbox().take(agent, limit, peek, func(item InboxItem) (string, error) {
 		return c.render(item.Untrusted, item.Source, item.From, item.ID, item.Text)

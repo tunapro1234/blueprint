@@ -57,6 +57,9 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(s.serve)
 }
 
+// proxyHeaders mark a request that came through a proxy.
+var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP", "Via"}
+
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	viaSocket, _ := r.Context().Value(socketConn).(bool)
 	transport := "http"
@@ -69,6 +72,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !net.ParseIP(host).IsLoopback() {
 			s.reject(w, r, transport, http.StatusForbidden, "only loopback callers")
 			return
+		}
+		// A reverse proxy or tunnel in front of api.listen would make remote
+		// callers look local. Proxied requests are refused: remote clients
+		// use the gateway.
+		for _, header := range proxyHeaders {
+			if r.Header.Get(header) != "" {
+				s.reject(w, r, transport, http.StatusForbidden, "proxied request ("+header+"); the local API is loopback only, use the gateway")
+				return
+			}
 		}
 		if !loopbackHost(r.Host) {
 			// DNS rebinding: a page on evil.example resolving to 127.0.0.1
@@ -106,7 +118,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reject(w http.ResponseWriter, r *http.Request, transport string, code int, why string) {
-	s.Core.audit(audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: why + " " + r.Method + " " + r.URL.Path,
+	s.Core.auditRejected(transport, audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: why + " " + r.Method + " " + r.URL.Path,
 		Fields: map[string]string{"transport": transport}})
 	writeStatusError(w, code, http.StatusText(code), why, "")
 }

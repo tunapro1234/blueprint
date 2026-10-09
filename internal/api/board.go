@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -59,6 +60,8 @@ func boardName(name string) (string, error) {
 	}
 	return name, validRoom(name)
 }
+
+var remoteKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$`)
 
 func validKey(key string) error {
 	if key == "" || len(key) > maxKeyBytes || strings.TrimSpace(key) != key || strings.ContainsAny(key, "\n\t") || messagetext.Validate(key) != nil {
@@ -160,6 +163,10 @@ func (c *Core) boardPut(caller Caller, board, key, value string, expect int, del
 	if err := validKey(key); err != nil {
 		return BoardEntry{}, err
 	}
+	if caller.Remote && !remoteKey.MatchString(key) {
+		// Keys are shown unframed, so a remote key is a plain identifier.
+		return BoardEntry{}, invalid("remote clients may use only letters, digits and . _ / - in keys (at most 100)")
+	}
 	if !del {
 		if len(value) > maxValueBytes || messagetext.Validate(value) != nil {
 			return BoardEntry{}, invalid("value must be at most %d bytes of printable text", maxValueBytes)
@@ -195,7 +202,7 @@ func (c *Core) boardPut(caller Caller, board, key, value string, expect int, del
 		if err := writeJSON(path, entries); err != nil {
 			return err
 		}
-		return appendJSONL(c.boardHistory(board), BoardChange{BoardEntry: out, Op: op})
+		return appendHistory(c.boardHistory(board), BoardChange{BoardEntry: out, Op: op})
 	})
 	return out, err
 }

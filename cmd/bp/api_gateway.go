@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"time"
 
 	"blueprint/internal/api"
 )
@@ -45,6 +46,10 @@ func (a *app) startGateway(ctx context.Context, logger *log.Logger, errs chan<- 
 	if err := loopbackOnly(cfg.Listen); err != nil {
 		return err
 	}
+	// Fail closed: remote text must be framed on every path first.
+	if err := gateway.Ready(); err != nil {
+		return fmt.Errorf("the gateway stays off: %w", err)
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return err
@@ -65,7 +70,9 @@ func (a *app) startGateway(ctx context.Context, logger *log.Logger, errs chan<- 
 
 const gatewayUsage = `usage:
   bp api gateway clients
-  bp api gateway pair <client>     one-time code for a web app's OAuth sign-in
+  bp api gateway pending           registered web apps waiting to be paired
+  bp api gateway pair <client> <client-id>
+                                   one-time code for that web app's sign-in page
   bp api gateway token <client>    static bearer token (shown once)
   bp api gateway revoke <client|--all>`
 
@@ -90,12 +97,25 @@ func (a *app) gatewayCommand(args []string) error {
 			fmt.Fprintf(a.out, "%s\tagents=%v rooms=%v boards=%v read-only=%v\n", name, p.Agents, p.Rooms, p.Boards, p.ReadOnlyBoards)
 		}
 		return nil
-	case args[0] == "pair" && len(args) == 2:
-		code, err := gateway.Pair(args[1])
+	case args[0] == "pending" && len(args) == 1:
+		clients, err := gateway.Clients()
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.out, "%s\nEnter this code on the bp sign-in page within 10 minutes. It works once.\n", code)
+		for _, c := range clients {
+			state := "waiting"
+			if c.Paired {
+				state = "paired"
+			}
+			fmt.Fprintf(a.out, "%s\t%s\t%q\t%v\t%s\n", c.ID, state, c.Name, c.Redirect, c.Created.Format(time.RFC3339))
+		}
+		return nil
+	case args[0] == "pair" && len(args) == 3:
+		code, err := gateway.Pair(args[1], args[2])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.out, "%s\nEnter this code on the sign-in page that shows client id %s, within 10 minutes. It works once.\n", code, args[2])
 		return nil
 	case args[0] == "token" && len(args) == 2:
 		token, err := gateway.IssueStaticToken(args[1])

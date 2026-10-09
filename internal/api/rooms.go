@@ -24,7 +24,50 @@ type Room struct {
 	CreatedBy string   `json:"createdBy,omitempty"`
 	CreatedAt string   `json:"createdAt"`
 	Members   []string `json:"members"`
+	// Joined is when each member joined (unix seconds). A remote member
+	// reads only history from after its own join.
+	Joined map[string]float64 `json:"joined,omitempty"`
 }
+
+// roomFor is the room as caller may see it: a caller with a policy sees
+// only members it may reach, and itself.
+func roomFor(caller Caller, room Room) Room {
+	if caller.Policy == nil {
+		return room
+	}
+	members := []string{}
+	for _, m := range room.Members {
+		if m == caller.Name || caller.Policy.agent(m) {
+			members = append(members, m)
+		}
+	}
+	room.Members = members
+	room.Joined = nil
+	return room
+}
+
+// historyMaxBytes is the size at which a room or board history file is
+// rotated: renamed with a timestamp, never deleted. Reads use the active
+// file only.
+const historyMaxBytes = 4 << 20
+
+func appendHistory(path string, v any) error {
+	if err := appendJSONL(path, v); err != nil {
+		return err
+	}
+	if info, err := os.Stat(path); err == nil && info.Size() > historyMaxBytes {
+		rotated := strings.TrimSuffix(path, ".jsonl") + "." + time.Now().UTC().Format("20060102T150405.000000000") + ".jsonl.old"
+		return os.Rename(path, rotated)
+	}
+	return nil
+}
+
+// Room post budgets for remote authors: posts per room, and deliveries
+// (one per recipient) per author, both per minute.
+const (
+	remoteRoomPostsPerMinute  = 20
+	remoteDeliveriesPerMinute = 120
+)
 
 // RoomPost is one entry of a room's history.
 type RoomPost struct {
@@ -127,10 +170,17 @@ func (c *Core) join(ctx context.Context, caller Caller, name, topic string, agen
 	if len(topic) > 500 || validateTextAllowEmpty(topic) != nil {
 		return Room{}, invalid("topic must be at most 500 printable characters")
 	}
+	if caller.Remote && topic != "" {
+		// Topics reach every member unframed; only local callers set them.
+		return Room{}, fmt.Errorf("%w: remote clients cannot set a room topic", ErrForbidden)
+	}
 	if len(agents) == 0 {
 		agents = []string{caller.Name}
 	}
 	for _, agent := range agents {
+		if agent != caller.Name && !caller.Policy.agent(agent) {
+			return Room{}, fmt.Errorf("%w: agent %s", ErrNotFound, agent)
+		}
 		if _, err := c.Lookup(ctx, agent); err != nil {
 			return Room{}, err
 		}
@@ -150,16 +200,20 @@ func (c *Core) join(ctx context.Context, caller Caller, name, topic string, agen
 		if topic != "" {
 			room.Topic = topic
 		}
+		if room.Joined == nil {
+			room.Joined = map[string]float64{}
+		}
 		for _, agent := range agents {
 			if !contains(room.Members, agent) {
 				room.Members = append(room.Members, agent)
+				room.Joined[agent] = float64(c.now().UnixNano()) / 1e9
 			}
 		}
 		if len(room.Members) > maxRoomMembers {
 			return invalid("room %s would have %d members; the limit is %d", name, len(room.Members), maxRoomMembers)
 		}
 		sort.Strings(room.Members)
-		out = room
+		out = roomFor(caller, room)
 		return writeJSON(c.roomPath(name), room)
 	})
 	return out, err
@@ -190,6 +244,9 @@ func (c *Core) Leave(caller Caller, name, agent string) (Room, error) {
 			if !contains(room.Members, caller.Name) {
 				return fmt.Errorf("%w: only members change room %s", ErrForbidden, name)
 			}
+			if caller.Remote && agent != caller.Name {
+				return fmt.Errorf("%w: remote clients may only remove themselves", ErrForbidden)
+			}
 			members := room.Members[:0]
 			for _, member := range room.Members {
 				if member != agent {
@@ -197,7 +254,7 @@ func (c *Core) Leave(caller Caller, name, agent string) (Room, error) {
 				}
 			}
 			room.Members = members
-			out = room
+			out = roomFor(caller, room)
 			return writeJSON(c.roomPath(name), room)
 		})
 	}()
@@ -227,17 +284,35 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 	post := RoomPost{ID: randomID("rp"), Room: name, From: caller.Label(), Author: caller.Name,
 		Text: text, TS: float64(c.now().UnixNano()) / 1e9, Untrusted: caller.Remote, Source: sourceOf(caller, name)}
 	history := c.roomHistory(name)
-	if err := withLock(history, func() error { return appendJSONL(history, post) }); err != nil {
+	recipients := []string{}
+	for _, member := range room.Members {
+		if member == caller.Name {
+			continue
+		}
+		if !caller.Policy.agent(member) {
+			// Membership never widens what a caller reaches.
+			c.audit(audit.Event{Kind: "api.room.deliver.skipped", Actor: caller.Label(), Target: member, ID: post.ID,
+				Reason: "room " + name + ": not in the caller's expose list", Fields: map[string]string{"transport": caller.Transport}})
+			continue
+		}
+		recipients = append(recipients, member)
+	}
+	if caller.Remote {
+		now := c.now()
+		if !c.roomLimits.allow("room:"+name, remoteRoomPostsPerMinute, 1, now) ||
+			!c.roomLimits.allow("author:"+caller.Label(), remoteDeliveriesPerMinute, float64(len(recipients)), now) {
+			c.auditResult(caller, "room.post", name, "rate limit", fmt.Errorf("%w: rate limit", ErrForbidden))
+			return PostResult{}, fmt.Errorf("%w: room %s: too many posts, try again in a minute", ErrForbidden, name)
+		}
+	}
+	if err := withLock(history, func() error { return appendHistory(history, post) }); err != nil {
 		return PostResult{}, err
 	}
 	c.audit(audit.Event{Kind: "api.room.post.accepted", Actor: caller.Label(), Target: name, ID: post.ID, Fields: map[string]string{"transport": caller.Transport}})
 	result := PostResult{Post: post, Deliveries: []SendResult{}}
 	// Each member gets the raw post from the original caller, so a remote
 	// author's post stays untrusted on every delivery route.
-	for _, member := range room.Members {
-		if member == caller.Name {
-			continue
-		}
+	for _, member := range recipients {
 		sent, err := c.Send(ctx, caller, SendRequest{To: member, Text: post.Text, MessageID: post.ID, Room: name})
 		if err != nil {
 			result.Errors = append(result.Errors, member+": "+err.Error())
@@ -266,12 +341,22 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 	}
 	posts := []RoomPost{}
 	seen := after == ""
+	// A remote member reads only what was posted after it joined.
+	since := 0.0
+	if caller.Remote {
+		since = room.Joined[caller.Name]
+		if since == 0 {
+			since = float64(c.now().UnixNano()) / 1e9
+		}
+	}
 	err = readJSONL(c.roomHistory(name), func(post RoomPost) bool {
 		if !seen {
 			seen = post.ID == after
 			return true
 		}
-		posts = append(posts, post)
+		if post.TS >= since {
+			posts = append(posts, post)
+		}
 		return true
 	})
 	if err != nil {
@@ -292,7 +377,7 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 		}
 		posts[i].Text = text
 	}
-	return room, posts, nil
+	return roomFor(caller, room), posts, nil
 }
 
 func (c *Core) auditResult(caller Caller, kind, target, detail string, err error) {

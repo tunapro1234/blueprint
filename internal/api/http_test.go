@@ -279,3 +279,12 @@ func TestHTTPRefusesNonLoopbackPeer(t *testing.T) {
 		t.Fatalf("non-loopback peer got %d", rec.Code)
 	}
 }
+
+func TestHTTPRefusesProxiedRequests(t *testing.T) {
+	_, ts, token := testServer(t, "worker")
+	for _, header := range proxyHeaders {
+		if code, _ := do(t, "GET", ts.URL+"/v1/agents", token, map[string]string{header: "203.0.113.9"}, nil); code != 403 {
+			t.Fatalf("%s: got %d", header, code)
+		}
+	}
+}

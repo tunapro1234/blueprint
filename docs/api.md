@@ -27,7 +27,10 @@ You can also run it in the foreground: `bp serve --api [--listen 127.0.0.1:PORT]
   `<state>/api/token` (mode 0600, created on first use). `bp api token`
   prints it and `bp api token --path` prints where it lives. TCP requests
   must also use a loopback `Host` and, if they send an `Origin`, a loopback
-  one. That blocks DNS rebinding and cross-site browser requests.
+  one. That blocks DNS rebinding and cross-site browser requests. The peer
+  address must be loopback too, and a request carrying any proxy header
+  (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Via`) is refused: a reverse
+  proxy in front of the local API would turn remote callers into local ones.
 - The caller names itself with `X-BP-Agent: <name>`. A name that bp cannot
   prove is labeled `<transport>:<name>` in the receiver's envelope (for
   example `[http:alice] ...`). Only `bp mcp` running inside a bp terminal
@@ -41,7 +44,7 @@ You can also run it in the foreground: `bp serve --api [--listen 127.0.0.1:PORT]
 | POST | `/v1/agents` | register an inbox agent `{name, description}` |
 | DELETE | `/v1/agents/<name>` | unregister your inbox agent |
 | POST | `/v1/messages` | send `{to, text, messageId?, contextId?}`; `messageId` makes retries idempotent |
-| GET | `/v1/messages/<id>` | delivery state: accepted, unverified, delivered, failed, canceled |
+| GET | `/v1/messages/<id>` | delivery state: accepted, unverified, delivered, failed (a canceled message is failed) |
 | DELETE | `/v1/messages/<id>` | cancel your own message while it is still queued |
 | GET | `/v1/inbox?agent=&limit=&peek=` | read your inbox; reading marks items read unless `peek=1` |
 | GET | `/v1/rooms`, `/v1/rooms/<r>` | list rooms, or one room with its members |
@@ -118,7 +121,8 @@ call `bp_register`.
 - Every entry records its author and a version number.
 - `expectedVersion` gives compare-and-set writes: 0 means "create only",
   and N means "only if the entry is still at version N".
-- The full change history is kept.
+- The full change history is kept. Room and board history files rotate
+  at 4 MiB by rename to `<name>.<timestamp>.jsonl.old`; nothing is deleted.
 
 ## Safety
 
@@ -127,8 +131,9 @@ call `bp_register`.
   queue's replay check for a retried `messageId`.
   - A remote (gateway) caller is external, using the P2P inbound pattern.
     Its sender is `external:<client>@gateway`, and the queue Origin is
-    `{Transport: "mcp", PeerAlias: "gateway", PeerID: "gateway/<client>",
-    AgentClaim: <client>, AgentVerified: false}`.
+    `{Transport: "mcp", PeerAlias: "gateway", PeerID: "gateway:<oauth client id>",
+    AgentClaim: <client>, AgentVerified: false}`. A static token's PeerID is
+    `gateway:static:<client>`.
   - Local callers get `Transport: "bp-api/http"`, `"bp-api/socket"` or
     `"bp-api/mcp"`, which are `guard.LocalTransports`. msgq frames every
     other origin at delivery (`guard.NeedsFrame`; see
@@ -140,7 +145,8 @@ call `bp_register`.
     `board/key@version`).
   - A framing error fails the read, and inbox items stay unread. Raw
     external text is never returned.
-  - Until guard's Framer is wired in, the framer is a passthrough (TODO W6).
+  - Until guard's Framer is wired in, the framer is a passthrough (TODO W6),
+    which keeps the gateway off.
 - **States.** Message states come from `msgq.DeliveryState`, the same
   mapping P2P uses: accepted, unverified, delivered or failed. A canceled
   message is failed with a `canceled …` reason, and A2A shows it as
@@ -172,9 +178,19 @@ api:
 ```
 
 **Expose lists.** A client sees only what its entry lists. Agents it is not
-given are invisible to it. The client is registered as an inbox agent of
+given are invisible to it, and a denial looks exactly like not-found. Inside
+a room it shares, a remote client:
+- sees only exposed members, and its posts fan out only to them;
+- cannot set the topic, add unexposed agents, or remove anyone but itself;
+- reads only posts made after it joined;
+- pays a room budget (20 posts per minute per room and per client, 120
+  deliveries per minute);
+- can see the status only of messages it sent;
+- writes board keys only in a plain form (`[A-Za-z0-9][A-Za-z0-9._/-]{0,99}`);
+- cannot register agents. The client is registered as an inbox agent of
 the same name, so local agents can answer it with `bp msg`/`bp_send`, and it
-reads the replies with `bp_inbox`.
+reads the replies with `bp_inbox`. The gateway creates that inbox itself
+and refuses to start if a local inbox agent already has the name.
 
 **OAuth 2.1.** Claude.ai and ChatGPT both need OAuth; ChatGPT cannot send a
 fixed API key. The gateway provides:
@@ -187,9 +203,17 @@ fixed API key. The gateway provides:
   use.
 - Access tokens that last 1 hour.
 
-**Pairing codes.** The sign-in page asks for a one-time code from
-`bp api gateway pair <client>`. The code lasts 10 minutes and works once,
-so only someone at the computer can connect an app.
+**Pairing codes.** The sign-in page shows the registered client id and its
+redirect host, and asks for a one-time code from
+`bp api gateway pair <client> <client-id>`. `bp api gateway pending` lists
+registered OAuth clients waiting to be paired. The code is bound to that
+client id, lasts 10 minutes and works once, so only someone at the computer
+can connect an app, and a code made for one app cannot be used by another.
+Registered clients that are never paired expire after 1 hour.
+
+**Refresh reuse.** Presenting a refresh token that was already rotated
+revokes the whole token family and logs an `api.gateway.refresh.reused`
+alert.
 
 **Static tokens.** For clients that can send a header,
 `bp api gateway token <client>` issues a static bearer token.
@@ -199,6 +223,14 @@ so only someone at the computer can connect an app.
 
 **Other gateway commands:** `bp api gateway clients` and
 `bp api gateway revoke <client|--all>`.
+
+**Fails closed.** The gateway will not start, and `/mcp` answers 503, until
+a real guard Framer is wired into the Core and msgq frames non-local origins
+at delivery (`Core.DeliveryFramed`). The passthrough framer is never enough.
+
+**Audit budget.** Rejections before authentication are logged at most 20
+per minute per source; the rest are counted in one `api.audit.suppressed`
+event.
 
 **Origins.** Requests with no `Origin` are accepted, as are the public
 URL's origin, `https://claude.ai` and `https://chatgpt.com`.

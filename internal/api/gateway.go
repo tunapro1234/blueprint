@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"blueprint/internal/audit"
@@ -59,13 +59,21 @@ type Gateway struct {
 	// RatePerMinute bounds requests per token (default 120).
 	RatePerMinute int
 
-	mu      sync.Mutex
-	buckets map[string]*bucket
+	limits limiter
+	audits auditBudget
 }
 
-type bucket struct {
-	tokens float64
-	at     time.Time
+// Ready reports why the gateway must not serve yet. Remote text has to be
+// framed on every path before the gateway may accept it: by Core.Frame for
+// the API's own stores, and by msgq at queue delivery.
+func (g *Gateway) Ready() error {
+	if !RealFramer(g.Core.Frame) {
+		return errors.New("guard framing is not wired into the API (Core.Frame is the interim passthrough)")
+	}
+	if !g.Core.DeliveryFramed {
+		return errors.New("queue delivery does not frame external origins yet (msgq Render is not wired)")
+	}
+	return nil
 }
 
 var errBadPairing = errors.New("wrong or expired pairing code")
@@ -75,6 +83,9 @@ const (
 	refreshTTL = 30 * 24 * time.Hour
 	codeTTL    = 5 * time.Minute
 	pairTTL    = 10 * time.Minute
+	// unpairedTTL is how long a registered client that never completed an
+	// authorization is kept.
+	unpairedTTL = time.Hour
 )
 
 // gatewayState is <state>/api/gateway/state.json.
@@ -87,6 +98,14 @@ type gatewayState struct {
 	Codes map[string]authCode `json:"codes"`
 	// Pairings are one-time pairing codes, by sha256(code).
 	Pairings map[string]pairing `json:"pairings"`
+	// Spent are rotated refresh tokens, by sha256(token). Presenting one
+	// again revokes its whole family.
+	Spent map[string]spentToken `json:"spent,omitempty"`
+}
+
+type spentToken struct {
+	Family  string `json:"family"`
+	Expires int64  `json:"expires"`
 }
 
 type tokenGrant struct {
@@ -96,6 +115,8 @@ type tokenGrant struct {
 	Expires  int64  `json:"expires,omitempty"` // unix seconds; 0 = never
 	Created  int64  `json:"created"`
 	Resource string `json:"resource,omitempty"`
+	// Family groups the access and refresh tokens of one authorization.
+	Family string `json:"family,omitempty"`
 }
 
 type oauthClient struct {
@@ -115,7 +136,9 @@ type authCode struct {
 
 type pairing struct {
 	Profile string `json:"profile"`
-	Expires int64  `json:"expires"`
+	// ClientID binds the code to the one registered client the owner saw.
+	ClientID string `json:"clientId"`
+	Expires  int64  `json:"expires"`
 }
 
 func (g *Gateway) statePath() string { return filepath.Join(g.Core.dir(), "gateway", "state.json") }
@@ -124,43 +147,87 @@ func (g *Gateway) statePath() string { return filepath.Join(g.Core.dir(), "gatew
 func (g *Gateway) update(fn func(*gatewayState) error) error {
 	path := g.statePath()
 	return withLock(path, func() error {
-		state := gatewayState{}
-		if err := readJSON(path, &state); err != nil {
+		state, err := g.load()
+		if err != nil {
 			return err
-		}
-		if state.Tokens == nil {
-			state.Tokens = map[string]tokenGrant{}
-		}
-		if state.Clients == nil {
-			state.Clients = map[string]oauthClient{}
-		}
-		if state.Codes == nil {
-			state.Codes = map[string]authCode{}
-		}
-		if state.Pairings == nil {
-			state.Pairings = map[string]pairing{}
-		}
-		now := g.Core.now().Unix()
-		for k, v := range state.Tokens {
-			if v.Expires != 0 && v.Expires < now {
-				delete(state.Tokens, k)
-			}
-		}
-		for k, v := range state.Codes {
-			if v.Expires < now {
-				delete(state.Codes, k)
-			}
-		}
-		for k, v := range state.Pairings {
-			if v.Expires < now {
-				delete(state.Pairings, k)
-			}
 		}
 		if err := fn(&state); err != nil {
 			return err
 		}
 		return writeJSON(path, state)
 	})
+}
+
+// view reads the gateway state without writing it.
+func (g *Gateway) view(fn func(*gatewayState)) error {
+	path := g.statePath()
+	return withLock(path, func() error {
+		state, err := g.load()
+		if err != nil {
+			return err
+		}
+		fn(&state)
+		return nil
+	})
+}
+
+// load reads the state and drops what has expired: tokens, codes,
+// pairings, spent refresh tokens, and clients that registered but never
+// completed an authorization within unpairedTTL.
+func (g *Gateway) load() (gatewayState, error) {
+	state := gatewayState{}
+	if err := readJSON(g.statePath(), &state); err != nil {
+		return state, err
+	}
+	if state.Tokens == nil {
+		state.Tokens = map[string]tokenGrant{}
+	}
+	if state.Clients == nil {
+		state.Clients = map[string]oauthClient{}
+	}
+	if state.Codes == nil {
+		state.Codes = map[string]authCode{}
+	}
+	if state.Pairings == nil {
+		state.Pairings = map[string]pairing{}
+	}
+	now := g.Core.now().Unix()
+	for k, v := range state.Tokens {
+		if v.Expires != 0 && v.Expires < now {
+			delete(state.Tokens, k)
+		}
+	}
+	for k, v := range state.Codes {
+		if v.Expires < now {
+			delete(state.Codes, k)
+		}
+	}
+	for k, v := range state.Pairings {
+		if v.Expires < now {
+			delete(state.Pairings, k)
+		}
+	}
+	if state.Spent == nil {
+		state.Spent = map[string]spentToken{}
+	}
+	for k, v := range state.Spent {
+		if v.Expires < now {
+			delete(state.Spent, k)
+		}
+	}
+	used := map[string]bool{}
+	for _, t := range state.Tokens {
+		used[t.ClientID] = true
+	}
+	for _, c := range state.Codes {
+		used[c.ClientID] = true
+	}
+	for id, c := range state.Clients {
+		if !used[id] && c.Created < now-int64(unpairedTTL.Seconds()) {
+			delete(state.Clients, id)
+		}
+	}
+	return state, nil
 }
 
 func hashSecret(secret string) string {
@@ -201,9 +268,16 @@ func (g *Gateway) IssueStaticToken(profile string) (string, error) {
 
 // Pair creates a one-time pairing code that authorizes one OAuth connection
 // for profile within ten minutes.
-func (g *Gateway) Pair(profile string) (string, error) {
+func (g *Gateway) Pair(profile, clientID string) (string, error) {
 	if _, err := g.profile(profile); err != nil {
 		return "", err
+	}
+	known := false
+	if err := g.view(func(s *gatewayState) { _, known = s.Clients[clientID] }); err != nil {
+		return "", err
+	}
+	if !known {
+		return "", fmt.Errorf("%w: no registered client %q (bp api gateway pending lists them)", ErrNotFound, clientID)
 	}
 	var b [5]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -212,14 +286,42 @@ func (g *Gateway) Pair(profile string) (string, error) {
 	code := strings.ToUpper(hex.EncodeToString(b[:]))
 	code = code[:5] + "-" + code[5:]
 	err := g.update(func(s *gatewayState) error {
-		s.Pairings[hashSecret(code)] = pairing{Profile: profile, Expires: g.Core.now().Add(pairTTL).Unix()}
+		s.Pairings[hashSecret(code)] = pairing{Profile: profile, ClientID: clientID, Expires: g.Core.now().Add(pairTTL).Unix()}
 		return nil
 	})
-	g.Core.audit(audit.Event{Kind: "api.gateway.pair.accepted", Actor: "owner", Target: profile, Fields: map[string]string{"transport": "gateway"}})
+	g.Core.audit(audit.Event{Kind: "api.gateway.pair.accepted", Actor: "owner", Target: profile, ID: clientID, Fields: map[string]string{"transport": "gateway"}})
 	return code, err
 }
 
-// Revoke removes every token of a profile (all, when profile is "").
+// PendingClient is a registered OAuth client, as the owner sees it before
+// pairing.
+type PendingClient struct {
+	ID       string
+	Name     string
+	Redirect []string
+	Created  time.Time
+	Paired   bool
+}
+
+// Clients lists registered OAuth clients, newest first.
+func (g *Gateway) Clients() ([]PendingClient, error) {
+	var out []PendingClient
+	err := g.view(func(s *gatewayState) {
+		paired := map[string]bool{}
+		for _, t := range s.Tokens {
+			paired[t.ClientID] = true
+		}
+		for id, c := range s.Clients {
+			out = append(out, PendingClient{ID: id, Name: c.Name, Redirect: c.RedirectURIs,
+				Created: time.Unix(c.Created, 0), Paired: paired[id]})
+		}
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
+	return out, err
+}
+
+// Revoke removes every token, code and pairing of a profile (all, when
+// profile is "").
 func (g *Gateway) Revoke(profile string) (int, error) {
 	removed := 0
 	err := g.update(func(s *gatewayState) error {
@@ -227,6 +329,16 @@ func (g *Gateway) Revoke(profile string) (int, error) {
 			if profile == "" || v.Profile == profile {
 				delete(s.Tokens, k)
 				removed++
+			}
+		}
+		for k, v := range s.Codes {
+			if profile == "" || v.Profile == profile {
+				delete(s.Codes, k)
+			}
+		}
+		for k, v := range s.Pairings {
+			if profile == "" || v.Profile == profile {
+				delete(s.Pairings, k)
 			}
 		}
 		return nil
@@ -320,7 +432,7 @@ func (g *Gateway) serverMetadata(w http.ResponseWriter) {
 }
 
 func (g *Gateway) unauthorized(w http.ResponseWriter, r *http.Request, why string) {
-	g.Core.audit(audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: why + " " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
+	g.Core.auditRejected("gateway", audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: why + " " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
 	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope="bp"`, g.issuer()+"/.well-known/oauth-protected-resource"+g.mcpPath()))
 	writeStatusError(w, http.StatusUnauthorized, "UNAUTHENTICATED", why, "")
 }
@@ -343,10 +455,8 @@ func (g *Gateway) authenticate(r *http.Request) (string, tokenGrant, error) {
 	}
 	var grant tokenGrant
 	found := false
-	err := g.update(func(s *gatewayState) error {
-		grant, found = s.Tokens[hashSecret(token)]
-		return nil
-	})
+	// Read-only: authenticating a request never rewrites the state file.
+	err := g.view(func(s *gatewayState) { grant, found = s.Tokens[hashSecret(token)] })
 	if err != nil {
 		return "", tokenGrant{}, err
 	}
@@ -367,27 +477,7 @@ func (g *Gateway) allow(key string) bool {
 	if rate <= 0 {
 		rate = 120
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.buckets == nil {
-		g.buckets = map[string]*bucket{}
-	}
-	now := g.Core.now()
-	b, ok := g.buckets[key]
-	if !ok {
-		b = &bucket{tokens: float64(rate), at: now}
-		g.buckets[key] = b
-	}
-	b.tokens += now.Sub(b.at).Minutes() * float64(rate)
-	if b.tokens > float64(rate) {
-		b.tokens = float64(rate)
-	}
-	b.at = now
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
+	return g.limits.allow(key, rate, 1, g.Core.now())
 }
 
 func (g *Gateway) originAllowed(origin string) bool {
@@ -401,8 +491,12 @@ func (g *Gateway) originAllowed(origin string) bool {
 }
 
 func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
+	if err := g.Ready(); err != nil {
+		writeStatusError(w, http.StatusServiceUnavailable, "UNAVAILABLE", "the gateway is not ready: "+err.Error(), "")
+		return
+	}
 	if !g.originAllowed(r.Header.Get("Origin")) {
-		g.Core.audit(audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: "origin " + r.Header.Get("Origin"), Fields: map[string]string{"transport": "gateway"}})
+		g.Core.auditRejected("gateway", audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: "origin " + r.Header.Get("Origin"), Fields: map[string]string{"transport": "gateway"}})
 		writeStatusError(w, http.StatusForbidden, "PERMISSION_DENIED", "origin not allowed", "")
 		return
 	}
@@ -418,12 +512,18 @@ func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile := g.Profiles[grant.Profile]
-	caller := Caller{Name: profile.Name, Transport: "gateway", Remote: true}
+	policy := profile.Policy
+	// PeerID is the stable provenance: the OAuth client id, or the profile
+	// for a static token. It keys the deterministic frame.
+	peerID := "gateway:" + grant.ClientID
+	if grant.ClientID == "" {
+		peerID = "gateway:static:" + profile.Name
+	}
+	caller := Caller{Name: profile.Name, Transport: "gateway", Remote: true, PeerID: peerID, Policy: &policy}
 	if err := g.ensureInbox(r.Context(), caller); err != nil {
 		writeError(w, err)
 		return
 	}
-	policy := profile.Policy
 	session := NewMCPSession(g.Core, caller, &policy)
 	session.Instructions = gatewayInstructions
 	g.Core.audit(audit.Event{Kind: "api.gateway.request.accepted", Actor: caller.Label(), Reason: r.Header.Get("Mcp-Method"), Fields: map[string]string{"transport": "gateway"}})
@@ -436,17 +536,28 @@ Agents answer when they are free, so a reply can take minutes: check bp_inbox ag
 
 // ensureInbox registers the profile as an inbox agent so replies have a
 // place to go.
+//
+// The inbox must be the gateway's own: a profile named like an inbox agent
+// registered some other way is refused instead of sharing (and reading) that
+// agent's mail.
 func (g *Gateway) ensureInbox(ctx context.Context, caller Caller) error {
 	regs, err := g.Core.inbox().registrations()
 	if err != nil {
 		return err
 	}
-	if _, ok := regs[caller.Name]; ok {
+	if reg, ok := regs[caller.Name]; ok {
+		if reg.Transport != gatewayOwner.Transport || reg.RegisteredBy != gatewayOwner.Label() {
+			return fmt.Errorf("%w: gateway client %s collides with inbox agent %s registered by %s; rename the client", ErrForbidden, caller.Name, caller.Name, reg.RegisteredBy)
+		}
 		return nil
 	}
-	_, err = g.Core.Register(ctx, caller, caller.Name, "remote client via the bp gateway")
+	_, err = g.Core.Register(ctx, gatewayOwner, caller.Name, "remote client via the bp gateway")
 	return err
 }
+
+// gatewayOwner registers gateway inboxes. It is local: remote callers may
+// not register agents themselves.
+var gatewayOwner = Caller{Name: "bp-gateway", Verified: true, Transport: "gateway"}
 
 // --- OAuth 2.1 ---
 
@@ -504,7 +615,7 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_client_metadata", err.Error())
 		return
 	}
-	g.Core.audit(audit.Event{Kind: "api.gateway.register.accepted", ID: id, Reason: name + " " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
+	g.Core.auditRejected("gateway-register", audit.Event{Kind: "api.gateway.register.accepted", ID: id, Reason: name + " " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
 	writeJSONResponse(w, http.StatusCreated, map[string]any{
 		"client_id": id, "client_name": name, "redirect_uris": req.RedirectURIs,
 		"token_endpoint_auth_method": "none", "grant_types": []string{"authorization_code", "refresh_token"},
@@ -520,7 +631,8 @@ input,button{font:inherit;padding:.5rem;width:100%;box-sizing:border-box;margin:
 button{background:#2b5cd9;color:#fff;border:0;border-radius:4px}.err{color:#b00020}</style></head>
 <body><h1>Connect to bp</h1>
 <p><b>{{.Client}}</b> asks to reach agents on this computer.</p>
-<p>On the computer, run <code>bp api gateway pair &lt;client&gt;</code> and enter the code it prints.</p>
+<p>Client id <code>{{.ClientID}}</code>, returns to <b>{{.Host}}</b>. If you did not start this, close the page.</p>
+<p>On the computer, run <code>bp api gateway pair &lt;client&gt; {{.ClientID}}</code> and enter the code it prints.</p>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <form method="post">{{range $k, $v := .Params}}<input type="hidden" name="{{$k}}" value="{{$v}}">{{end}}
 <input name="pairing_code" autocomplete="one-time-code" placeholder="XXXXX-XXXXX" required autofocus>
@@ -573,10 +685,11 @@ func (g *Gateway) authorize(w http.ResponseWriter, r *http.Request) {
 			params[key] = v
 		}
 	}
+	redirectURL, _ := url.Parse(redirect)
 	page := struct {
-		Client, Error string
-		Params        map[string]string
-	}{Client: client.Name, Params: params}
+		Client, ClientID, Host, Error string
+		Params                        map[string]string
+	}{Client: client.Name, ClientID: clientID, Host: redirectURL.Host, Params: params}
 	if page.Client == "" {
 		page.Client = "An application"
 	}
@@ -603,6 +716,11 @@ func (g *Gateway) authorize(w http.ResponseWriter, r *http.Request) {
 			return errBadPairing
 		}
 		delete(s.Pairings, hashSecret(code)) // one use only
+		if p.ClientID != clientID {
+			// The code was issued for another client: this page may be a
+			// lure. The code is spent either way.
+			return errBadPairing
+		}
 		profile = p.Profile
 		authCodeValue = newSecret("bpa_")
 		s.Codes[hashSecret(authCodeValue)] = authCode{ClientID: clientID, RedirectURI: redirect,
@@ -611,7 +729,7 @@ func (g *Gateway) authorize(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		g.Core.audit(audit.Event{Kind: "api.gateway.authorize.rejected", Severity: audit.Warn, ID: clientID, Reason: "bad pairing code " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
+		g.Core.auditRejected("gateway", audit.Event{Kind: "api.gateway.authorize.rejected", Severity: audit.Warn, ID: clientID, Reason: "bad pairing code " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
 		page.Error = "That code is wrong or expired."
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
@@ -657,7 +775,7 @@ func (g *Gateway) token(w http.ResponseWriter, r *http.Request) {
 		challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 		if code.ClientID != form.Get("client_id") || code.RedirectURI != form.Get("redirect_uri") ||
 			subtle.ConstantTimeCompare([]byte(challenge), []byte(code.Challenge)) != 1 {
-			g.Core.audit(audit.Event{Kind: "api.gateway.token.rejected", Severity: audit.Warn, ID: form.Get("client_id"), Reason: "code exchange mismatch", Fields: map[string]string{"transport": "gateway"}})
+			g.Core.auditRejected("gateway", audit.Event{Kind: "api.gateway.token.rejected", Severity: audit.Warn, ID: form.Get("client_id"), Reason: "code exchange mismatch", Fields: map[string]string{"transport": "gateway"}})
 			oauthError(w, 400, "invalid_grant", "client, redirect_uri or code_verifier does not match")
 			return
 		}
@@ -665,20 +783,34 @@ func (g *Gateway) token(w http.ResponseWriter, r *http.Request) {
 			oauthError(w, 400, "invalid_target", "unknown resource")
 			return
 		}
-		grant = tokenGrant{Profile: code.Profile, ClientID: code.ClientID, Resource: g.PublicURL}
+		grant = tokenGrant{Profile: code.Profile, ClientID: code.ClientID, Resource: g.PublicURL, Family: randomID("fam")}
 	case "refresh_token":
 		refreshOld = hashSecret(form.Get("refresh_token"))
 		var old tokenGrant
-		found := false
+		found, reused := false, ""
 		g.update(func(s *gatewayState) error {
 			old, found = s.Tokens[refreshOld]
+			if spent, ok := s.Spent[refreshOld]; ok && !found {
+				// A rotated refresh token came back: it leaked. Revoke the
+				// whole family.
+				reused = spent.Family
+				for k, t := range s.Tokens {
+					if t.Family == spent.Family {
+						delete(s.Tokens, k)
+					}
+				}
+			}
 			return nil
 		})
+		if reused != "" {
+			g.Core.audit(audit.Event{Kind: "api.gateway.refresh.reused", Severity: audit.Alert, ID: form.Get("client_id"),
+				Reason: "a rotated refresh token was presented again; its token family is revoked", Fields: map[string]string{"transport": "gateway", "family": reused}})
+		}
 		if !found || old.Kind != "refresh" || old.ClientID != form.Get("client_id") {
 			oauthError(w, 400, "invalid_grant", "unknown or expired refresh token")
 			return
 		}
-		grant = tokenGrant{Profile: old.Profile, ClientID: old.ClientID, Resource: g.PublicURL}
+		grant = tokenGrant{Profile: old.Profile, ClientID: old.ClientID, Resource: g.PublicURL, Family: old.Family}
 	default:
 		oauthError(w, 400, "unsupported_grant_type", "authorization_code or refresh_token")
 		return
@@ -694,6 +826,7 @@ func (g *Gateway) token(w http.ResponseWriter, r *http.Request) {
 				return errors.New("refresh token already used")
 			}
 			delete(s.Tokens, refreshOld) // rotation
+			s.Spent[refreshOld] = spentToken{Family: grant.Family, Expires: now.Add(refreshTTL).Unix()}
 		}
 		a, rf := grant, grant
 		a.Kind, a.Created, a.Expires = "access", now.Unix(), now.Add(accessTTL).Unix()

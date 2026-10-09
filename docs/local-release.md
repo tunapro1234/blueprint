@@ -13,6 +13,14 @@ commit, excluding untracked files and concurrent edits, for four Linux/macOS tar
 creates a manifest with revision and hashes, signs it and the installer's checksum
 list, verifies both signatures, and prepares a complete version directory.
 
+The `go` line in `go.mod` names an exact Go patch release, the oldest standard
+library a build may use. With the default `GOTOOLCHAIN=auto` an older local Go
+downloads that release; with `GOTOOLCHAIN=local` it refuses to build. CI installs
+the same release and checks it. Move to a newer patch release with
+`go get go@<version> && go mod tidy`. `make check` runs `make vuln` (govulncheck,
+pinned in the Makefile), which fails when bp's code reaches a known vulnerability.
+Binaries built with Go 1.27 need macOS 13 or later.
+
 `PUBLISH=1` publishes `site/releases/v<version>/` and switches `latest.version`
 last. Published versions are immutable; bump the version instead of replacing
 files. If promotion stops after the immutable directory is complete, rerun

@@ -1,4 +1,8 @@
-.PHONY: build test vet check release
+.PHONY: build test vet vuln check release
+
+# Pinned; CI runs `make vuln` too. Exits nonzero when bp's code reaches a known
+# vulnerability in the toolchain's standard library or a dependency.
+GOVULNCHECK = golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 build:
 	go build ./...
@@ -10,7 +14,10 @@ test:
 vet:
 	go vet ./...
 
-check: test vet build
+vuln:
+	go run $(GOVULNCHECK) ./...
+
+check: test vet vuln build
 
 # A release is signed and immutable. PUBLISH=1 exposes it after all artifacts exist.
 release:

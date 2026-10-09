@@ -1,365 +1,243 @@
-# Blueprint (`bp`)
+# bp
 
-Run CLI agents in tmux with guarded messaging, model/context indicators and
-configurable colors. Works with local laptop sessions and configured servers.
+**bp lets your agents find each other, message each other and work as a team,
+whatever they run in and wherever they run.**
+
+[![Check](https://github.com/tunapro1234/blueprint/actions/workflows/check.yml/badge.svg?branch=dev)](https://github.com/tunapro1234/blueprint/actions/workflows/check.yml?query=branch%3Adev)
+[![Release](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fbp.tunapro.xyz%2Flatest.version&query=%24&label=release&prefix=v&color=2b5cd9)](CHANGELOG.md)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-2b5cd9)](LICENSE)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/delivery-flow-dark.svg">
+  <img src="docs/assets/delivery-flow.svg" width="100%" alt="alice, a Codex agent, runs bp msg bob while bob, a Claude Code agent, is busy. bp queues the message, waits while bob is working, while someone is typing in bob's prompt or while a menu is open, then delivers it as bob's next prompt. bp qstat moves from PENDING to DELIVERED once bob's transcript shows it.">
+</picture>
+
+bp (Blueprint) is a small command-line tool that connects the AI agents on
+your machine: Claude Code, Codex, Hermes, OpenCode, and any script that can
+make an HTTP request. It waits for the lull, the quiet moment between an
+agent's turns, then delivers, and it tells you honestly whether the message
+arrived. bp is not an agent harness and never calls a model itself.
+
+## Why bp
+
+- **It never interrupts.** A message to a busy agent waits until its turn ends.
+  A message to an agent whose prompt holds your half-typed text waits until you
+  send it. bp checks the screen and the agent's own transcript before it types.
+- **Receipts you can trust.** Every message gets a channel id. `bp qstat` says
+  `DELIVERED` only with evidence; a paste bp cannot confirm is reported as
+  unconfirmed and is never typed a second time.
+- **Across harnesses, no SDK.** Claude Code, Codex, Hermes and OpenCode run
+  under bp and use the `bp` CLI or its MCP server; scripts and other tools can
+  post through a local HTTP API with A2A-shaped bodies.
+
+Only using Claude Code? Its built-in messaging between sessions may be all you
+need. bp is for mixed teams across harnesses, with checkable receipts, draft
+protection, and machine-to-machine links that don't go through a vendor cloud.
 
 ## Install
 
-Install and sign in to your preferred agent CLI first, then:
+Ask your agent:
+
+> Install bp from https://bp.tunapro.xyz
+
+Or run the installer yourself (macOS or Linux):
 
 ```sh
-curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/install.sh | sh -s -- --local
+curl -fsSL https://bp.tunapro.xyz/install.sh | sh
 ```
 
-On first interactive installation, bp asks which CLI to use and opens a `main`
-coordinator with a generic onboarding prompt. It learns the machine's setup through
-a small, scoped inspection and helps configure bp. Non-interactive installation
-prints the next command instead of starting an agent. Reinstallation and updates
-preserve existing agents and do not automatically start onboarding; use `bp onboard`
-when you explicitly want to configure the coordinator.
+Installing doesn't change how your tools behave. The installer checks the
+release signature (Ed25519) and SHA-256, then writes only these:
+
+- `~/.local/bin/bp`
+- `~/.blueprint/`, bp's own config, agent book and state
+- `~/.claude/skills/blueprint/SKILL.md` and `~/.codex/skills/blueprint/SKILL.md`,
+  a short note that tells Claude Code and Codex that bp exists (a skill of
+  yours with that name is never overwritten)
+
+No shell rc edits, no tmux settings, no MCP config, no services and no agent
+started. Everything else is an opt-in [module](#modules). `bp uninstall`
+removes what bp added (`--dry-run` lists it first) and keeps your config and
+history unless you add `--purge`.
+
+## Quickstart
+
+You need [tmux](https://github.com/tmux/tmux) and at least one agent CLI you
+are signed in to. Start each agent from a regular terminal, not from inside
+tmux: bp opens it in its own tmux session and passes your arguments through.
 
 ```sh
-bp onboard                         # choose a CLI and start/attach the coordinator
-bp onboard --cli codex --prepare    # prepare only; no agent or model request
-bp book --json                     # inspect the actual coordinator and agent records
+bp run --name alice codex     # terminal 1
+bp run --name bob claude      # terminal 2
 ```
 
-Install tmux first with your package manager. The installer only installs missing
-dependencies when you explicitly pass `--yes`.
+Now ask alice (Codex) in plain words: *"Use bp to ask bob to review the diff
+in src/."* The note the installer added tells Codex and Claude Code how. Or
+send it yourself from a third terminal:
 
-Linux and macOS, amd64/arm64, Bash/Zsh are supported build targets. Linux integration
-is tested with real tmux and fake CLIs; macOS builds are cross-compiled.
+```console
+$ bp msg bob 'Please review the diff in src/ and tell alice what you find.'
+sent
+RESULT=delivered CHANNEL=q442887000
+delivered: q442887000 -> bob
+```
 
-## Use
+If bob is busy, the message waits for the lull:
 
-After opening a new terminal, your usual `codex`, `claude`, `opencode` and `hermes`
-commands start through bp. Existing aliases and their arguments are preserved;
-existing custom shell functions take precedence. Batch commands, pipes and help
-retain native behavior. Exiting the CLI closes its pane; detaching keeps it alive.
+```console
+$ bp msg bob 'Run the tests before you reply.'
+QUEUED (channel: q708724000). Check: bp qstat q708724000
+...
+$ bp qstat q708724000         # after bob's turn ends
+DELIVERED: bob (at 16:38)
+```
+
+bob (Claude Code) reads `[alice] Please review the diff…` as its next prompt
+and can answer with `bp msg alice '…'`. A message sent from a plain terminal
+carries your login name; for Codex on macOS, see [Known issues](#known-issues).
+`bp status` shows who is here and who is busy. Quote messages with single
+quotes: inside double quotes your shell would expand `$(…)` and backticks
+before bp sees the text.
+
+## Known issues
+
+These are on `dev` and being fixed before the next release.
+
+- On macOS, bp can't bind Codex agents to their conversation yet: macOS `lsof` doesn't report flock locks, and Codex 0.162 holds its thread writer lock in its app-server daemon child. Messages to Codex agents stay queued, and messages from them carry the unverified label `codex?:<thread>` instead of the agent name. Codex → Claude delivery works.
+- tmux is required for everything that lists or reaches agents, including MCP and HTTP.
+- `bp mcp` started outside a bp terminal speaks as your login user (`--as` and `BP_AGENT` are ignored); run MCP clients inside agents started with `bp run` for now.
+- `bp msg` to an HTTP or MCP inbox agent doesn't reach its inbox yet; use `bp_send` or `POST /v1/messages`.
+
+## How delivery works
+
+bp uses the best path each agent has:
+
+| Path | For | How the message arrives |
+|---|---|---|
+| Terminal | agents started with `bp run` | pasted into the prompt at a turn boundary, then submitted |
+| Hooks | Claude Code sessions bp starts | handed over by Claude Code's own `UserPromptSubmit`, `Stop` and `SessionStart` hooks; nothing is typed |
+| Inbox | scripts and tools that register over the HTTP API | kept until they read it (`GET /v1/inbox`) |
+| Peer | agents on another machine | sent over P2P, then delivered by that machine's own queue |
+
+Before typing, bp waits while the agent is working, while text it did not
+write sits in the prompt, while a menu or permission dialog is open, and while
+it cannot tell which conversation the terminal holds. Only the root
+coordinator and bp's own infrastructure may push a message to a busy agent
+(`--force-busy`), and never into a Hermes turn, where it would cancel the work.
+
+| `bp qstat` says | Meaning |
+|---|---|
+| `PENDING: bob — <reason>` | stored and waiting; the reason says what for |
+| `DELIVERED: bob (at 15:48)` | evidence that bob received it: a verified submit, bob's transcript or a hook hand-over |
+| `UNCONFIRMED: bob (…)` | typed but not confirmed; bp will not type it again |
+| `NOT DELIVERED (…)`, `CANCELED (…)` | final, with the reason |
+
+Delivered means the agent received the message, not that it did the work
+([edge cases and test matrix](docs/message-delivery.md)).
+
+## Use it from your agents and scripts
+
+**CLI.** `bp status`, `bp msg`, `bp qstat` and `bp whoami`, as above. Inside an
+agent started with `bp run`, the terminal proves who is speaking.
+
+**MCP.** `bp api config <client>` prints a ready snippet for claude, codex,
+gemini, antigravity, grok, opencode, cursor and hermes. For Claude Code:
 
 ```sh
-bp run --name work codex
-bp status
-bp msg work "Please review the change"
-bp qstat <channel-id>
-bp peek work
-bp color work purple
-bp attach work                    # attach if live, otherwise revive its recorded launch
+claude mcp add --scope user bp -- bp mcp
 ```
 
-`bp attach` resolves an exact canonical name first, then an unambiguous native
-title. It never creates an unregistered or empty tmux session. A closed agent is
-resumed with its recorded folder, harness, conversation, permission mode, model,
-effort, search flags and parent; `--no-revive` limits the command to live sessions.
-For an unknown local name, a running P2P service can show which connected peer has it.
-Inside tmux it switches the current client, while an outer terminal attaches a
-new client without detaching any other client.
+The server offers `bp_agents`, `bp_send`, `bp_status`, `bp_inbox` and
+`bp_register`, plus rooms (`bp_room_*`) and a shared board (`bp_board_*`).
+Inside a bp terminal the pane decides who is speaking (see
+[Known issues](#known-issues) for MCP outside one).
 
-`bp open` accepts `--fresh` to ignore a stored conversation binding and start a
-new one; it cannot be combined with `--resume` or `--thread`. Project schemas
-use this for closed agents when `history: none` is selected. Managed OpenCode
-launches use `bp open ... --opencode`.
-
-When a thread is also recorded on another closed registration, `bp open` and
-named `bp run` report every holder and require `--adopt` to move the binding to
-the requested name. For example, `bp run --name work --adopt claude --resume <uuid>`
-clears that thread reference from the other closed or archived rows, keeps those
-rows intact, and prints each move. A live tmux session always blocks adoption;
-attach to that session with `bp attach <name>` first.
-
-Messages wait when the target is working, its state is uncertain, or the user is
-typing. A transport acknowledgement alone is not proof of agent delivery.
-
-`claude --resume` (or `-r`) and `codex resume` open the CLI's own interactive
-resume screen inside tmux. Search, selection, cancellation and named-session
-lookup belong to the native CLI; bp does not replace the picker or read its keys.
-The temporary bp session is observed after selection, using Claude's callbacks
-or Codex's writer lock. Until then its conversation is unknown and messages wait.
-
-For explicit UUIDs, `claude -c` and `codex resume --last`, bp can attach to an
-existing verified owner before starting another CLI. This pre-launch routing does
-not replace a native picker. If Codex exits with its specific active-writer
-resume error, bp can attach that client to one kernel-verified existing tmux
-writer. It never kills that writer or removes its lock. Other native errors are
-preserved in a private `exit.json` and printed after tmux exits; `bp doctor --agent <name> --json` locates them. Shared app-server connections retain `--remote`.
-Native Claude
-and Codex `/rename` changes update the display name without changing authority.
-
-Archive a closed registration without deleting its conversation:
+**HTTP.** Nothing listens until you start it, and it binds loopback only:
 
 ```sh
-bp archive work
-bp archive --list --json
-bp restore work
+bp serve --api --listen 127.0.0.1:8765 &
+TOKEN="$(cat "$(bp api token --path)")"
+curl -s -H "Authorization: Bearer $TOKEN" -H 'X-BP-Agent: ci' \
+  -d '{"to":"alice","text":"Build finished: 0 failures"}' \
+  http://127.0.0.1:8765/v1/messages
+# {"id":"qp0a2260…","to":"alice","route":"queue","state":"accepted"}
 ```
 
-Archived records stay in their original agentbook with an `archivedAt` timestamp;
-they leave active BP lists but retain their name, launch metadata and native
-conversation files. Restore makes the record available again without launching a
-CLI. Native resume pickers are not modified. Exit the agent first; a coordinator,
-an agent with children, or an agent with pending messages cannot be archived.
-Remote Codex threads must also be confirmed unloaded. Restore an archived parent
-before its children. `bp open` and named local launches require an explicit
-restore instead of silently reusing an archived name.
+alice reads `[http:ci] Build finished: 0 failures`; the `http:` prefix marks a
+name bp could not verify. `GET /v1/messages/<id>` returns the receipt, and A2A
+clients start at `/.well-known/agent-card.json`. See [docs/api.md](docs/api.md).
 
-## Agent lifetime
+## Safety model
 
-`bp run` marks new shell-integration sessions ephemeral by default. Use
-`bp run --persistent` to keep one, or `bp run --ephemeral` to make the choice
-explicit. Named `bp open` registrations are persistent by default;
-`bp open <name> <directory> --ephemeral` opts into automatic archival. Existing
-agentbook rows without a `lifetime` field remain persistent.
+1. Installing adds only the bp binary, bp's own state and a short skill note for Claude Code and Codex; every behavior that touches your environment is a module that `bp disable` or `bp uninstall` undoes.
+2. Text from outside this machine reaches an agent only inside a frame that names its source and marks it as untrusted data, not instructions.
+3. Peers reach only the agents you expose to them; per-peer rate limits and loop caps stop floods and endless back-and-forth.
+4. The API listens only when you start it, on loopback, with a token or peer credentials; API, peer and module decisions go to an audit log (`bp audit`).
+5. Releases are signed and verified on install and update. bp is not a sandbox: agents under one OS user share that user's files ([SECURITY.md](SECURITY.md), [threat model](docs/security/threat-model.md)).
 
-`bp keep <name>` makes an active registration persistent and `bp release <name>`
-marks it ephemeral. A successful `bp rename` or a native Claude/Codex retitle
-observed by bp promotes an ephemeral record to persistent. Closing an ephemeral
-agent archives its registration when `lifecycle.archiveOnClose` is enabled.
-Archives retain registration metadata and do not touch native transcripts.
-Parents with children stay active and report the archive refusal.
+## Modules
 
-Closed ephemeral rows are hidden from `bp status` and `bp tree` by default;
-`--all` includes archived and closed rows. `bp archive --stale --dry-run` previews
-closed registrations whose bound transcript is missing and which are not marked
-persistent; `bp archive --stale` applies that migration without guessing from an
-agent name.
+Everything below is off until you turn it on. `bp modules` shows the state and
+any conflict, `bp enable <module> --dry-run` shows what would change, and
+`bp disable <module>` removes only what bp added. For a guided setup,
+`bp onboard` opens a coordinator agent that explains the modules and enables
+only what you choose.
 
-When a native transcript title drifts from the canonical name,
-`bp rename <name> <name>` reapplies it. If it already matches, bp reports that
-no repair is needed. `bp doctor` warns about mismatches and prints this repair
-command.
+| Module | When enabled |
+|---|---|
+| `sessions` | your usual `claude`, `codex`, `opencode` and `hermes` commands start through bp in tmux, so agents survive a closed terminal; the daemon reopens the coordinator |
+| `bar` | tmux status bar with live agent state on the sessions bp opens |
+| `guard-hooks` | tool-call tripwire for Claude agents: an alert when an agent that recently received outside text touches secrets or canary files |
+| `compaction-hooks` | OpenCode and Hermes agents keep their bp identity and queued messages after a context compaction (needs `sessions`) |
 
-## Windows and attention
+Maintainer modules, not supported for general use yet:
 
-`bp windows` maps local compositor windows to registered tmux agents; add
-`--json` for launcher integrations. `bp focus <agent>` focuses a mapped window
-and records that you looked at the agent. `bp con <agent>` records the same
-when it attaches to a local session. `bp windows watch` paints active and dimmed
-inactive borders in each agent's bp accent and resets departed windows to the
-configured color.
+| Module | What it is |
+|---|---|
+| `accounts` | several Claude accounts, usage limits, automatic switching and staggered keepalive; review your provider's terms first |
+| `wa` | WhatsApp bridge for the maintainer's setup |
+| `ui` | the maintainer's monitoring dashboard; contacts monitor.tunapro.xyz |
+| `monitor` | jobs for the maintainer's `/srv/blueprint` server |
 
-`bp status --json` includes `awaiting_user` and `unread`. Remote agents reached
-through mosh are outside the local window map. See [window integration](docs/windows.md)
-for compositor support and the JSON fields.
+## Across machines
 
-## Claude accounts
+Two bp installs can message each other over libp2p, authenticated by
+persistent Ed25519 machine keys: directly when the machines can reach each
+other, otherwise through a relay you run. Each side lists the other's Peer ID
+(`bp p2p id`) and which of its own agents that peer may reach; then
+`bp msg main@laptop '…'` works like a local message. See [docs/p2p.md](docs/p2p.md).
 
-`bp account` keeps several Claude Code subscription logins on one machine and
-switches the live login between them. Log in with `claude`, then store it:
+## Requirements
 
-```bash
-bp account add --alias work    # store the current Claude login as a slot
-bp account list                # slots, token status and 5h/7d usage
-bp account switch work         # install another slot as the live login
-bp account auto --once         # switch only if the active account is near its limit
-bp account keepalive           # the staggered five-hour window plan; --once pings due accounts
-```
+- macOS 13 or later, or Linux, on amd64 or arm64. No native Windows.
+- tmux, required today for everything that lists or reaches agents, including
+  MCP and HTTP. Without it, `bp run` starts the CLI natively.
+- bash or zsh for the `sessions` module's shell wrappers.
+- `curl` and OpenSSL with Ed25519 to install (macOS: `brew install openssl@3`).
+- Checked against Claude Code 2.1.295, Codex CLI 0.162.0 (macOS: see
+  [Known issues](#known-issues)), Hermes Agent 0.20.5 and OpenCode 1.18.32
+  ([matrix](docs/harnesses.json)). Hermes and OpenCode get the same waiting,
+  but their deliveries stay unconfirmed for now.
 
-A switch rewrites Claude Code's credentials file and the `oauthAccount` key of
-its global config under Claude Code's own locks; running Claude agents pick up
-the new login on their next request. Stored tokens stay in private files under
-the bp state directory and are never printed. Automatic switching, per-account usage
-limits and keeping every account's five-hour window running are opt-in; see
-[Claude accounts](docs/configuration.md#claude-accounts). Not
-supported on macOS, where Claude Code keeps its login in the Keychain.
+## Documentation
 
-Different agent trees can also run on different accounts at the same time. Bind
-an agent to a stored account; it and every descendant without a binding of its
-own then start in that account's profile home:
+| Page | Covers |
+|---|---|
+| [docs/usage.md](docs/usage.md) | every command, by task |
+| [docs/api.md](docs/api.md) | HTTP, MCP, A2A, rooms, board, remote gateway |
+| [docs/message-delivery.md](docs/message-delivery.md) | queue states, receipts, edge cases |
+| [docs/configuration.md](docs/configuration.md) | `config.yaml` reference and platform limits |
+| [docs/p2p.md](docs/p2p.md) | machines, peers and relays |
+| [docs/security/threat-model.md](docs/security/threat-model.md) | trust boundaries and mitigations |
+| [docs/harnesses.json](docs/harnesses.json), [docs/runtime-status.md](docs/runtime-status.md) | per-harness capability matrix, `bp status --json` contract |
+| [docs/windows.md](docs/windows.md), [docs/workflow.md](docs/workflow.md) | window integration, workflows |
+| [DESIGN.md](DESIGN.md), [docs/local-release.md](docs/local-release.md) | architecture, build and release |
+| [docs/direction.md](docs/direction.md) | where bp is going |
+| [CHANGELOG.md](CHANGELOG.md) | what changed |
 
-```bash
-bp account bind research work      # research and its tree use the "work" account
-bp account login work              # one-time Claude login inside the profile
-bp account bindings                # who runs on which account, and who needs a reopen
-bp account bind research-scratch default # opt one subtree back out
-```
+## Contributing and license
 
-`bp open --account <N|email|alias|default>` binds a new agent as it opens. A
-binding applies when an agent is launched or resumed. Profiles share
-transcripts, settings, skills and history with the default home, but hold their
-own login, which is never copied from a stored slot. Automatic switching only
-changes the default login.
-
-## Configure
-
-Settings live in `~/.blueprint/config.yaml`, or under `BP_HOME`. Shell integration
-lives in `~/.config/bp/shell.sh`. Native transcripts stay in their CLI directories.
-Setup preserves existing configuration, aliases and records. It installs the
-bundled `blueprint` skill for Codex and Claude, respecting `CODEX_HOME` and
-`CLAUDE_CONFIG_DIR`. User-owned skills are preserved; changed managed copies are
-backed up before an update.
-
-For local session problems, run `bp doctor --agent <canonical-name> --json`.
-It checks runtime binding, conflicting live registrations, stale resume names and
-bar commands, without changing sessions or records. Closed historical entries do
-not block the current session. A live thread conflict blocks message delivery,
-but keeps model/context visible as a shared thread snapshot. `bp rename` updates
-local resume claims and both bar commands; `--no-retitle` preserves native input
-and leaves the native transcript title unchanged.
-
-```sh
-bp setup                   # install/refresh shell integration
-bp setup --wrappers        # also install non-clobbering lush/rush compatibility functions
-bp config path
-bp config check
-```
-
-Register interactive remote bp servers separately from P2P message peers:
-
-```sh
-bp remote add server --host server.example --user tuna --transport mosh \
-  --identity ~/.ssh/server --mosh-ports 60000:61000 --elevate "sudo -i"
-bp remote list
-bp attach worker@server           # delegates to `bp attach worker` on server
-bp shell server                   # interactive remote shell
-bp shell server worker            # delegates to remote attach; unknown names fail
-bp remote rm server
-```
-
-SSH uses a PTY; mosh can use a configured SSH port, identity path and UDP port
-range. Remote records contain no credential values beyond the identity-file path.
-The existing `bp remote [<agent>...]` Claude remote-control action remains
-available, except that `list`, `add`, and `rm` are reserved subcommand words.
-It dismisses the Continue menu an already-connected session opens, including on
-sessions where delivery could not be verified, and reports any session showing
-a fresh claude.ai/code link as active. `bp doctor` warns about Claude sessions
-whose Remote Control dropped after it was active (for example after the signed-in
-account or organization changed); `bp remote <agent>` reconnects them.
-Optional `lush` and `rush` wrappers call `bp attach` and `bp shell`; setup does
-not replace an existing alias or function with either name.
-
-### Portable project trees
-
-Keep a project’s agent tree in `<project>/.blueprint/schema.yaml` and recreate
-it on another machine:
-
-```sh
-bp schema export [<project-dir>] [--lead <agent>]
-bp continue [<project-dir>] [--dry-run] [--yes]
-bp history export [<project-dir>] [--agent <name>] [--keep N]
-bp history export --stdout --agent <name>  # remote history transfer
-```
-
-The version 1 schema records relative folders, parents, runtime, role, color,
-and optional model, effort and launch mode. `bp continue --dry-run` prints the
-full plan. The first real use in a project, and every schema content change,
-requires review and confirmation; a non-interactive run must pass `--yes`.
-Live agents are left running. Closed agents with `history: none` start fresh;
-`history: file` imports portable transcripts before resuming. A name already
-registered for another folder is refused; there is no automatic prefix or
-suffix override. `bp rename` reports schemas that still contain the old name
-and leaves those committed files for a human to update.
-
-History modes are `none`, `file`, and `remote`. Portable history supports Claude
-JSONL transcripts and Codex rollout files with their session-index rows; use
-`history: none` for Hermes or OpenCode trees. Export keeps one session per agent
-by default; `--keep N` changes that limit. Different existing transcript
-contents are never overwritten. `.blueprint/.gitignore`
-ignores history by default because it can contain private conversation data;
-use `git add -f .blueprint/history` only when you intend to commit it. Remote
-history accepts `ssh://user@host[:port]` or a name from the local `remotes:`
-config block and transfers tar data over SSH. No credentials belong in the
-project schema.
-
-`bp onboard` prepares `$BP_HOME/main/ONBOARDING.md`. The coordinator creates tailored
-`MACHINE.md` guidance there. Existing files and real coordinators are preserved.
-Optional desktop integration is proposed, not installed automatically. Native
-model, effort and permission settings are not overridden.
-
-For another CLI, specify how it accepts a prompt:
-
-```sh
-bp onboard --cli custom -- /path/to/agent --prompt '{prompt}'
-```
-
-Custom CLIs can run in tmux; structured activity and automatic delivery require a
-supported harness. Run interactive onboarding outside tmux. `BP_ONBOARD=skip`
-skips automatic onboarding during installation:
-
-```sh
-curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/install.sh | BP_ONBOARD=skip sh -s -- --local
-```
-
-## Updates and diagnostics
-
-```sh
-bp version --json
-bp update --check
-bp update
-bp update --clis --dry-run
-bp update --models claude-opus-5=claude-opus-5-5 gpt-5.6-sol=gpt-6-sol --dry-run
-bp doctor --json
-bp setup --disable
-```
-
-Releases are versioned and signed. The installer requires OpenSSL with Ed25519
-support; macOS can use `brew install openssl@3`. Pin installation with `BP_VERSION`
-on the installer side of the pipe, for example:
-
-```sh
-curl -fsSL https://github.com/tunapro1234/blueprint/releases/latest/download/install.sh | BP_VERSION=1.6.0 sh -s -- --local
-```
-
-The updater verifies the signed
-manifest and binary checksum, keeps a backup, and restores the previous binary if
-setup fails. Running agents are not restarted. Server installations use an explicit
-host rollout so CLI and daemon versions are verified together.
-
-`bp update` without fleet flags retains that binary-only behavior. `--clis` updates
-installed native harness CLIs and rolling-restarts eligible live agents;
-`--models from=to ...` migrates only matching models while preserving each agent's
-observed reasoning effort and launch mode. `--all` combines both operations.
-Use repeatable `--agent <name>` to limit the plan and, with `--clis`, the native
-harnesses to update. The coordinator is restarted last. Busy, modal, draft-bearing,
-unloaded, or incompletely observed agents are deferred without touching their
-panes. Closed resumable records retain the model map for their next
-`bp open --resume`.
-
-Fleet updates print a plan and require confirmation on a terminal. Non-interactive
-runs require `--yes`; `--dry-run` never changes CLIs, panes, defaults, or records.
-Add `--json` for the same per-agent result as structured data. Future-launch
-defaults change only with `--set-defaults`, which writes timestamped backups first.
-
-Local agent startup can show a cached update notice. `updateCheck: false` in YAML
-disables its daily background check. No model prompt is sent. Disabling shell
-integration preserves aliases, agent records and open sessions; open a new terminal
-to use native commands again.
-
-## Disable or remove
-
-Run `bp setup --disable` before uninstalling, then open a new terminal. Npm users
-can run `npm uninstall -g @tunapro/blueprint`. Shell-installer users can remove
-`~/.local/bin/bp` after checking `command -v bp`. The disabled shell source line
-is harmless; remove the line ending `# bp local agents` from your shell startup
-file if you want it gone. Agent records and configuration under `~/.blueprint`,
-and native CLI transcripts, are kept. If bp is missing, its shell wrappers fall
-back to the native CLI.
-
-Installer and updater output names the previous binary backup. To roll back a
-shell installation, copy that backup over `~/.local/bin/bp`, then run `bp setup`.
-Use npm to change versions of an npm-managed installation.
-
-## Develop
-
-```sh
-make check
-python3 -m unittest scripts.test_local_cli
-```
-
-- [Configuration and platform limits](docs/configuration.md)
-- [Architecture](DESIGN.md)
-- [Runtime JSON contract](docs/runtime-status.md)
-- [Security boundaries](SECURITY.md)
-- [Build and release](docs/local-release.md)
-
-Server-only integrations are optional. [P2P messaging](docs/p2p.md) is opt-in and uses
-libp2p with your own rendezvous/relay and explicit peer permissions.
-
-
-Report bugs and feature requests in [GitHub Issues](https://github.com/tunapro1234/blueprint/issues).
-For a session problem, include the BP version, `bp doctor --agent <name> --json`
-output and relevant channel ID; distinguish automatic delivery from a manual Enter.
-
-## License
-
-Blueprint is licensed under the [GNU General Public License v3.0](LICENSE)
-(SPDX: `GPL-3.0-only`).
+Bug reports and pull requests are welcome; start with
+[CONTRIBUTING.md](CONTRIBUTING.md). Please do not report vulnerabilities in a
+public issue; see [SECURITY.md](SECURITY.md). bp is licensed under the
+[GNU General Public License v3.0](LICENSE) (SPDX: `GPL-3.0-only`).

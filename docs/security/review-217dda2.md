@@ -127,3 +127,16 @@ Two small notes:
     `guard.reach.relay` (`TestOutboundAfterTaintAlertsRelay`).
 - The Wire() rule applies to the Codex, Hermes and OpenCode hook paths when
   they land.
+
+## Follow-up: the two small notes (8e17829)
+
+D1, D2 and D3 were already verified closed in 3576643 (see above).
+blueprint's 8e17829 closes the two small notes, and I verified it:
+
+- The external-delivery notice now says "check delivery with bp qstat
+  <id>". That is true, because qstat reports delivery state and never prints
+  bodies.
+- `wireFraming` writes `guard.frame.unavailable` at most once an hour. A
+  marker file under `<state>/guard/` holds the time, and a marker error
+  fails toward alerting. The stderr warning still prints on every call.
+  `TestFrameUnavailableAlertThrottle` covers it.

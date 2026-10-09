@@ -12,8 +12,11 @@ import (
 
 func TestLookupProtocolReturnsOnlyAgentSummary(t *testing.T) {
 	a, b := pair(t)
+	b.Config.Peers["a"] = Peer{ID: a.Host.ID().String(), Expose: []string{"worker", "canonical-worker"}}
 	b.ResolveLookup = func(query string) LookupResponse {
 		switch query {
+		case "hidden":
+			return LookupResponse{Found: true, Name: "server-main", State: "live"}
 		case "live":
 			return LookupResponse{Found: true, Name: "worker", State: "live"}
 		case "closed":
@@ -39,6 +42,7 @@ func TestLookupProtocolReturnsOnlyAgentSummary(t *testing.T) {
 		{query: "title", found: true, name: "canonical-worker", state: "closed"},
 		{query: "missing"},
 		{query: "ambiguous"},
+		{query: "hidden"},
 	} {
 		t.Run(test.query, func(t *testing.T) {
 			got, err := a.callLookup(context.Background(), b.Host.ID(), test.query)

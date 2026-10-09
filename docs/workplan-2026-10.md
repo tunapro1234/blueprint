@@ -24,8 +24,9 @@ into `dev`; nobody else pushes.
   decision is logged: message accepted, rejected, held, delivered; peer
   connect and reject; expose list change; module enable and disable; loop
   cap and rate limit hits; guard findings.
-- **Messages log:** `<state>/messages.jsonl`, one line per final message
-  state, written by msgq. Readers never parse `done/`.
+- **Messages log:** `<msgq root>/messages.jsonl`, one line per final message
+  state, written by msgq (`msgq.LogEntry`); `bp messages reindex` adds
+  older `done/` records. Readers never parse `done/`.
 - **Inbound framing:** text that crosses a trust boundary (P2P, HTTP from a
   non-local caller, remote MCP, rooms fed by peers) reaches an agent only
   through `guard.Frame`. The frame names the source, says the content is

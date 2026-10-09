@@ -104,6 +104,35 @@ func (a *app) p2pCommand(args []string) error {
 		return nil
 	case "lookup":
 		return a.p2pLookup(args[1:])
+	case "resume":
+		if len(args) < 2 || len(args) > 3 {
+			return fmt.Errorf("usage: bp p2p resume <peer> [agent]")
+		}
+		if a.config.P2P == nil {
+			return fmt.Errorf("p2p is not configured")
+		}
+		agent := ""
+		if len(args) == 3 {
+			agent = args[2]
+		}
+		lifted, e := p2p.Resume(a.config.StateDir, *a.config.P2P, args[1], agent)
+		if e != nil {
+			return e
+		}
+		fmt.Fprintf(a.out, "%s: %d paused conversation(s) resumed\n", args[1], lifted)
+		return nil
+	case "pauses":
+		pauses, e := p2p.ReadPauses(a.config.StateDir)
+		if e != nil {
+			return e
+		}
+		if len(args) == 2 && args[1] == "--json" {
+			return json.NewEncoder(a.out).Encode(pauses)
+		}
+		for key, until := range pauses {
+			fmt.Fprintf(a.out, "%s until %s\n", key, until.Local().Format(time.DateTime))
+		}
+		return nil
 	case "serve":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp p2p serve")
@@ -123,7 +152,7 @@ func (a *app) p2pCommand(args []string) error {
 		n.ResolveLookup = a.resolvePeerLookup
 		return n.Serve(ctx, a.dispatchP2P)
 	default:
-		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|lookup|serve")
+		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|lookup|resume|pauses|serve")
 	}
 }
 

@@ -49,7 +49,12 @@ type Config struct {
 	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
 	Windows          WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts   ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
-	InvalidConfig    string                  `json:"-" yaml:"-"`
+	// Modules records which opt-in modules are enabled (internal/modules).
+	// ModulesSet is false when the file has no modules key: an install from
+	// before modules existed, which internal/modules migrates.
+	Modules       map[string]bool `json:"modules,omitempty" yaml:"modules,omitempty"`
+	ModulesSet    bool            `json:"-" yaml:"-"`
+	InvalidConfig string          `json:"-" yaml:"-"`
 }
 
 // RemoteConfig describes an interactive bp host. It deliberately contains no
@@ -173,6 +178,7 @@ type overrides struct {
 	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
 	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts   *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Modules          *map[string]bool         `json:"modules" yaml:"modules"`
 }
 
 type claudeAccountsOverrides struct {
@@ -405,6 +411,13 @@ func defaultCLIUpdates() map[string][]string {
 }
 
 func apply(result *Config, values overrides) {
+	if values.Modules != nil {
+		result.ModulesSet = true
+		result.Modules = make(map[string]bool, len(*values.Modules))
+		for name, enabled := range *values.Modules {
+			result.Modules[name] = enabled
+		}
+	}
 	if values.Lifecycle != nil && values.Lifecycle.EphemeralDefault != nil {
 		result.Lifecycle.EphemeralDefault = *values.Lifecycle.EphemeralDefault
 	}

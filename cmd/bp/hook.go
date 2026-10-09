@@ -42,25 +42,23 @@ type claudeHookInput struct {
 	StopHookActive bool   `json:"stop_hook_active"`
 }
 
-// hookCommand runs `bp _hook <harness> [--agent <name>]` with the harness's
-// hook payload on stdin. claude is the original turn-boundary delivery path
+// hookCommand runs `bp _hook <harness>` with the harness's hook payload on
+// stdin. claude is the original turn-boundary delivery path
 // (docs/direction.md, "Hooks"); opencode and hermes are the compaction-hooks
 // module's compaction-survival path (docs/security/compaction-hooks-module.md):
 // each harness detects its own compaction differently, but all three end up
 // asking bp for the same identity note (internal/identity.CompactionNote) and
 // any messages queued while the agent was busy.
+//
+// The agent is always the verified pane label (hookAgent). There is no
+// --agent override: any process running as the user could otherwise claim
+// another agent's queued messages, which then count as delivered and never
+// reach that agent (docs/security/review-compaction-hooks-917c098.md, M4).
 func (a *app) hookCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: bp _hook claude|opencode|hermes [--agent <name>]")
+		return fmt.Errorf("usage: bp _hook claude|opencode|hermes")
 	}
-	harness, rest := args[0], args[1:]
-	agent := ""
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == "--agent" && i+1 < len(rest) {
-			agent = rest[i+1]
-			i++
-		}
-	}
+	harness := args[0]
 	if harness != "claude" && harness != "opencode" && harness != "hermes" {
 		return nil
 	}
@@ -68,18 +66,24 @@ func (a *app) hookCommand(args []string) error {
 	if err != nil {
 		return nil
 	}
-	if agent == "" {
-		agent = a.hookAgent()
-	}
+	agent := a.hookAgent()
 	if agent == "" {
 		return nil
 	}
+	a.runHook(harness, agent, data)
+	return nil
+}
+
+// runHook answers one hook payload for agent, which the caller has verified.
+// Errors go to stderr only: a broken hook must never fail the agent.
+func (a *app) runHook(harness, agent string, data []byte) {
 	var out map[string]any
+	var err error
 	switch harness {
 	case "claude":
 		var input claudeHookInput
 		if json.Unmarshal(data, &input) != nil {
-			return nil
+			return
 		}
 		out, err = a.claudeHook(agent, input)
 	case "opencode":
@@ -89,12 +93,11 @@ func (a *app) hookCommand(args []string) error {
 	}
 	if err != nil {
 		fmt.Fprintln(a.err, "bp hook:", err)
-		return nil
+		return
 	}
 	if out != nil {
 		_ = json.NewEncoder(a.out).Encode(out)
 	}
-	return nil
 }
 
 // hookAgent names the agent the hook runs for. Only a verified label counts: a

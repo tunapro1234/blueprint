@@ -35,7 +35,7 @@ The module is opt-in and off by default. Nothing is enabled anywhere.
   the new bytes, or the bytes this journal last recorded for the path;
   otherwise refuse with an error. Test: `TestCompactionHooksKeepsUserFiles`.
 
-## Medium (open, pre-existing, not compaction-hooks)
+## Medium (pre-existing, not compaction-hooks; fixed on feat/guard after ee7fe19)
 
 - **M4: `bp _hook <harness> --agent X` bypasses the verified identity**
   (cmd/bp/hook.go:57-63, from 8df48d9). `hookAgent` accepts only a certain
@@ -46,9 +46,12 @@ The module is opt-in and off by default. Nothing is enabled anywhere.
   server-main's queued messages as `delivered_hook`, so server-main never
   sees them: silent suppression and redirection of another agent's inbox.
   No production caller passes `--agent`: the settings hooks, the OpenCode
-  plugin and the Hermes script all omit it. Fix: drop the flag, or honour
-  it only in tests (for example when `BP_HOME` points at a test directory
-  and an explicit test env var is set).
+  plugin and the Hermes script all omit it.
+
+  Fix: the flag is gone. The hook always uses `hookAgent` (a certain pane
+  label), and tests go through `runHook` or the `resolveSender` seam.
+  `TestHookIgnoresAgentArgument` failed on the old code: the unverified
+  caller received "secret for worker" and the record was claimed.
 
 ## Low (open)
 
@@ -71,8 +74,8 @@ The module is opt-in and off by default. Nothing is enabled anywhere.
   OpenCode and Hermes as well. External records reach those harnesses framed,
   exactly as terminal delivery would deliver them. This closes the Wire()
   check for these two harnesses; Codex is not covered here.
-- **Identity:** without `--agent` (M4), it comes only from a certain pane
-  label.
+- **Identity:** it comes only from a certain pane label (M4 removed the
+  `--agent` override).
 - **Hermes hook:**
   - It answers only `pre_llm_call` on a first turn that has a parent session.
   - Stdin is capped at 2 MiB.

@@ -297,7 +297,15 @@ func (n *Node) handleLookup(s network.Stream) {
 		_ = s.Reset()
 		return
 	}
+	// Every query counts toward enumeration, including throttled ones.
 	n.watch.Observe(guard.Event{Kind: guard.EvLookup, Peer: alias, Target: req.Find})
+	if !n.limits.admitLookup(remote.String(), policy, time.Now()) {
+		if n.limits.firstRejection("lookup:"+remote.String(), "rate") {
+			_ = audit.Append(n.Root, audit.Event{Kind: "p2p.lookup.rejected", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Reason: "lookup rate limit"})
+		}
+		_ = s.Reset()
+		return
+	}
 	result := LookupResponse{}
 	if n.ResolveLookup != nil {
 		result = n.ResolveLookup(req.Find)

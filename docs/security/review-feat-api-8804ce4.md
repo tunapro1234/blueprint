@@ -255,3 +255,7 @@ Remaining notes, none blocking:
 - **Hop marker (M7):** not needed now. bp never relays by itself, and the
   per-client limiter and room budgets bound agent-driven loops. Tracked as
   T-L2 partial in the threat model.
+
+8aa04df: room topics (`Core.roomFor`) and agent descriptions (`bp_agents`,
+`bp_status` agent) now pass `outbound()` for remote readers. Verified; the
+unredacted-metadata note is closed.

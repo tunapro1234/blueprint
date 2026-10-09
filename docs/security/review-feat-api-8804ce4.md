@@ -125,3 +125,46 @@ the room creator (or a local caller) change the topic.
    (`alert`) through `audit.Append`; keep warn-level flags as fields on the
    accepted event. The decision is `guard.NeedsFrame(origin.Transport)`, not
    `PeerAuthenticated`.
+
+## Follow-up: fcac8ef and 32effcb
+
+Resolved:
+
+- M9 and both answers: the seam is now
+  `Frame(src FrameSource, text string) (string, error)`; `FrameSource` has
+  guard.Source's fields in the same order, so the adapter is a plain
+  conversion (`guard.Source(src)`). Gateway origins carry
+  `PeerID: gateway/<profile>`; the profile name is set by the owner at
+  pairing, so it is stable.
+- Fail closed: a nil Framer is an error, an inbox render error fails the
+  whole read before anything is marked read, and room and board reads return
+  the error instead of raw text. Channels are stable (item id, post id,
+  `board/key@version`), so frames are deterministic.
+- Gateway origin transport is `mcp`, which `guard.NeedsFrame` frames.
+- M1 half: TCP callers whose `RemoteAddr` is not loopback are refused.
+
+Still open:
+
+- **H1:** `NewCore` still defaults to `PassthroughFramer` (core.go:103), so
+  until blueprint wires `guard.LoadFramer` the stores return raw remote text.
+  Make the gateway refuse to start while `Core.Frame` is a
+  `PassthroughFramer`, so enabling it before the wiring is impossible rather
+  than a convention.
+- **M1 other half:** a reverse proxy or tunnel on the same host connects from
+  127.0.0.1 and passes the new check. The local listener should still refuse
+  requests that carry `Forwarded`, `X-Forwarded-*`, `X-Real-IP` or `Via`.
+- **H2, H3, M2-M8:** unchanged. Room topic and the `bp_register`
+  description are still unframed.
+- Read-time framing drops `Framed.Findings`; this is fine as long as
+  `guard.Scan` runs at intake as planned, once guard is on dev.
+
+Adapter for blueprint (cmd/bp):
+
+```go
+type guardFramer struct{ f *guard.Framer }
+
+func (g guardFramer) Frame(src api.FrameSource, text string) (string, error) {
+    framed, err := g.f.Frame(guard.Source(src), text)
+    return framed.Text, err
+}
+```

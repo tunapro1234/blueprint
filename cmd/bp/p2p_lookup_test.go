@@ -37,7 +37,8 @@ func startP2PLookupFixture(t *testing.T, resolver func(string) p2p.LookupRespons
 		t.Fatal(err)
 	}
 	local.Config.Peers = map[string]p2p.Peer{"peer": {ID: remote.Host.ID().String()}}
-	remote.Config.Peers = map[string]p2p.Peer{"local": {ID: local.Host.ID().String()}}
+	// The remote exposes the names these tests look up; hidden names answer as unknown.
+	remote.Config.Peers = map[string]p2p.Peer{"local": {ID: local.Host.ID().String(), Expose: []string{"worker", "canonical-worker"}}}
 	remote.ResolveLookup = resolver
 	local.Host.Peerstore().AddAddrs(remote.Host.ID(), remote.Host.Addrs(), peerstore.PermanentAddrTTL)
 	connectCtx, connectCancel := context.WithTimeout(context.Background(), 3*time.Second)

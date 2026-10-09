@@ -24,6 +24,11 @@ type Peer struct {
 	Addresses []string `json:"addresses,omitempty" yaml:"addresses,omitempty"`
 	// Empty exposes nothing. Discovery and connectivity never grant agent access.
 	Expose []string `json:"expose,omitempty" yaml:"expose,omitempty"`
+	// Rate is the most new inbound messages per minute; 0 means the default.
+	Rate int `json:"rate,omitempty" yaml:"rate,omitempty"`
+	// LoopCap is the most new inbound messages to one agent per LoopWindow
+	// before the pair is paused for the owner; 0 means the default.
+	LoopCap int `json:"loopCap,omitempty" yaml:"loopCap,omitempty"`
 }
 
 func ValidName(s string) bool {
@@ -52,6 +57,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate p2p peer identity: %s", name)
 		}
 		ids[id] = true
+		if p.Rate < 0 || p.Rate > 600 || p.LoopCap < 0 || p.LoopCap > 1000 {
+			return fmt.Errorf("peer %s: rate must be 0..600 and loopCap 0..1000", name)
+		}
 		for _, a := range p.Expose {
 			if !ValidName(a) {
 				return fmt.Errorf("peer %s: invalid exposed agent", name)

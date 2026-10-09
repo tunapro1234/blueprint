@@ -126,6 +126,17 @@ func TestMCPPolicyLimitsWhatASessionSees(t *testing.T) {
 	if reply := call(t, session, 2, "bp_send", map[string]any{"to": "private", "text": "x"}); !reply.Result.IsError {
 		t.Fatal("sent to an unexposed agent")
 	}
+	// A denial must read exactly like a target that does not exist.
+	denied := call(t, session, 20, "bp_send", map[string]any{"to": "private", "text": "x"}).Result.Content[0].Text
+	missing := call(t, session, 21, "bp_send", map[string]any{"to": "ghost", "text": "x"}).Result.Content[0].Text
+	if denied != strings.ReplaceAll(missing, "ghost", "private") {
+		t.Fatalf("denial differs from not-found: %q vs %q", denied, missing)
+	}
+	hidden := call(t, session, 22, "bp_board_get", map[string]any{"board": "secret"})
+	empty := call(t, NewMCPSession(core, alice, nil), 23, "bp_board_get", map[string]any{"board": "nothing-here"})
+	if hidden.Result.IsError || hidden.Result.Content[0].Text != empty.Result.Content[0].Text {
+		t.Fatalf("hidden board differs from an empty one: %q vs %q", hidden.Result.Content[0].Text, empty.Result.Content[0].Text)
+	}
 	if reply := call(t, session, 3, "bp_send", map[string]any{"to": "public", "text": "hello"}); reply.Result.IsError {
 		t.Fatalf("send to exposed agent: %+v", reply.Result.Content)
 	}

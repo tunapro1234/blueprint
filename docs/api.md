@@ -127,9 +127,11 @@ call `bp_register`.
   queue's replay check for a retried `messageId`.
   - A remote (gateway) caller is external, using the P2P inbound pattern.
     Its sender is `external:<client>@gateway`, and the queue Origin is
-    `{Transport: "mcp", PeerAlias: "gateway", AgentClaim: <client>,
+    `{Transport: "bp-api/gateway", PeerAlias: "gateway", AgentClaim: <client>,
     AgentVerified: false}`.
-  - Local callers get `Transport: "http"` (REST, A2A) or `"mcp"`.
+  - Local callers get `Transport: "bp-api/http"`, `"bp-api/socket"` or
+    `"bp-api/mcp"`. Those are `guard.LocalTransports`; every other origin
+    transport is framed at delivery (`guard.NeedsFrame`).
   - The shared delivery-time frame (`guard.Frame`, W6) applies to queue
     deliveries.
   - Inbox items, room posts and board values are read directly rather than

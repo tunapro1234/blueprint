@@ -56,6 +56,13 @@ type Policy struct {
 
 func (p *Policy) agent(name string) bool { return p == nil || contains(p.Agents, name) }
 func (p *Policy) room(name string) bool  { return p == nil || contains(p.Rooms, name) }
+func boardOrDefault(name string) string {
+	if name == "" {
+		return DefaultBoard
+	}
+	return name
+}
+
 func (p *Policy) board(name string, write bool) bool {
 	if p == nil {
 		return true
@@ -615,8 +622,13 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
+				// A board outside the expose list reads exactly like an empty
+				// one, so a denial reveals nothing.
 				if !s.Policy.board(args.Board, false) {
-					return nil, fmt.Errorf("%w: board %s", ErrNotFound, args.Board)
+					if args.Key != "" {
+						return nil, fmt.Errorf("%w: key %q on board %s", ErrNotFound, args.Key, boardOrDefault(args.Board))
+					}
+					return map[string]any{"entries": []BoardEntry{}}, nil
 				}
 				entries, err := s.Core.BoardGet(args.Board, args.Key, args.Prefix)
 				if err != nil {
@@ -678,7 +690,7 @@ func init() {
 					return nil, err
 				}
 				if !s.Policy.board(args.Board, false) {
-					return nil, fmt.Errorf("%w: board %s", ErrNotFound, args.Board)
+					return map[string]any{"changes": []BoardChange{}}, nil
 				}
 				changes, err := s.Core.BoardHistory(args.Board, args.Key, args.Limit)
 				if err != nil {

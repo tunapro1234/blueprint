@@ -126,14 +126,11 @@ func (c *Core) audit(ev audit.Event) {
 	}
 }
 
-// originTransport is the msgq Origin transport for an API caller: mcp for
-// MCP sessions (stdio, /mcp and the gateway), http for REST and A2A.
-func originTransport(transport string) string {
-	if transport == "mcp" || transport == "gateway" {
-		return "mcp"
-	}
-	return "http"
-}
+// originTransport is the msgq Origin transport for an API caller:
+// bp-api/<transport>. guard.LocalTransports lists bp-api/http, bp-api/socket
+// and bp-api/mcp as local; every other one (bp-api/gateway) is framed at
+// delivery by guard.NeedsFrame.
+func originTransport(transport string) string { return "bp-api/" + transport }
 
 // render applies the shared Framer to stored external text as an inbox,
 // room or board read hands it to an agent: these stores are read directly,

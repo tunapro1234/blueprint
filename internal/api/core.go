@@ -275,6 +275,53 @@ func (c *Core) Agents(ctx context.Context) ([]AgentInfo, error) {
 	return out, nil
 }
 
+// InboxAgent reports whether name is a registered inbox agent in stateDir.
+// It only reads the registry, so callers need no Core.
+func InboxAgent(stateDir, name string) (Registration, bool, error) {
+	regs, err := inboxStore{dir: filepath.Join(stateDir, "api"), now: time.Now}.registrations()
+	if err != nil {
+		return Registration{}, false, err
+	}
+	reg, ok := regs[name]
+	return reg, ok, nil
+}
+
+// InboxSummary is one inbox agent as local tools (bp status) show it.
+type InboxSummary struct {
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	RegisteredAt string `json:"registered_at,omitempty"`
+	// Unread counts messages the agent has not read with bp_inbox yet.
+	Unread int `json:"unread"`
+}
+
+// InboxAgents lists the inbox agents registered in stateDir, sorted by name,
+// with their unread counts. It only reads, and it is for local tools: remote
+// callers see bp_agents, which carries no counts.
+func InboxAgents(stateDir string) ([]InboxSummary, error) {
+	store := inboxStore{dir: filepath.Join(stateDir, "api"), now: time.Now}
+	regs, err := store.registrations()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]InboxSummary, 0, len(regs))
+	for name, reg := range regs {
+		items, err := store.load(name)
+		if err != nil {
+			return nil, err
+		}
+		unread := 0
+		for _, item := range items {
+			if item.ReadAt == 0 {
+				unread++
+			}
+		}
+		out = append(out, InboxSummary{Name: name, Description: reg.Description, RegisteredAt: reg.RegisteredAt, Unread: unread})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 // directoryTTL keeps repeated tool calls from rescanning the fleet.
 const directoryTTL = 2 * time.Second
 

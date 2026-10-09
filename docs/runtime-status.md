@@ -18,6 +18,7 @@ checks. Calls made at different times can legitimately report different states.
 | `activity.screen_busy`, `turn_busy` | Separate evidence; absence is not false |
 | `activity.delivery_blocked` | Safety decision, including user draft and unknown runtime |
 | `usage_observed_at`, `usage_scope` | Context snapshot time/scope, not spending in a time window |
+| `inbox_agents[].name`, `description`, `registered_at`, `unread` | API inbox agents (registered with `bp_register`); not terminals, so no `agents[]` fields. `unread` counts messages not yet read with `bp_inbox`. Omitted when there are none |
 
 `busy=true` can mean delivery is unsafe; it does not necessarily mean active work.
 Monitoring must use the structured activity state and freshness. An old cumulative

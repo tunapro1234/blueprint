@@ -64,7 +64,9 @@ Errors use the `google.rpc.Status` shape: `{"error":{"code","status","message"}}
   they are idle.
 - **Inbox agents** (registered through the API) are not in a bp terminal.
   Messages wait in `<state>/api/inbox/<agent>.jsonl` until the agent reads
-  them.
+  them. `bp msg` routes to an inbox agent through the same `Core.Send` when
+  the name has no session and is not an agentbook agent; `bp qstat ib...`
+  reads its state.
 
 ## A2A (`/a2a`)
 

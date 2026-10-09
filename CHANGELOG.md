@@ -92,6 +92,11 @@ Changes on `dev` since the 1.9.30 release.
   each chat once.
 - The account keepalive plan no longer flips between two near-equal schedules,
   and old ping failures are no longer shown as current.
+- `bp msg` reaches inbox agents (agents connected through bp's MCP tools or
+  the HTTP API). It used to hold their messages in the offline spool, where
+  they never arrived. The receipt now says the message is accepted into the
+  inbox (`RESULT=queued ... ROUTE=inbox`), `bp qstat` shows when the agent
+  has read it, and `bp status` lists inbox agents with their unread counts.
 
 ### Security
 

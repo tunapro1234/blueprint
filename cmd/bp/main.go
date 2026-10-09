@@ -25,6 +25,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"blueprint/internal/api"
 	"blueprint/internal/audit"
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
@@ -974,6 +975,7 @@ func (a *app) status(args []string) error {
 			fmt.Fprintf(statusApp.out, "  recovery: %s\n", state.Runtime.Activity.RecoveryHint)
 		}
 	}
+	statusApp.renderInboxAgents()
 	statusApp.renderCodexStatus(statusApp.codexThreads())
 	return nil
 }
@@ -1012,6 +1014,9 @@ type statusReport struct {
 	Agents             []statusAgent       `json:"agents"`
 	Codex              []statusThread      `json:"codex,omitempty"`
 	CodexUnloaded      int                 `json:"codex_unloaded,omitempty"`
+	// Inbox lists API inbox agents (bp_register): not terminals, so they
+	// have none of the agents[] fields.
+	Inbox []api.InboxSummary `json:"inbox_agents,omitempty"`
 }
 
 type statusAgent struct {
@@ -1146,6 +1151,7 @@ func (a *app) statusJSON(fleet book.Fleet, states map[string]book.State, cacheSt
 		}
 		report.Codex = append(report.Codex, row)
 	}
+	report.Inbox = a.inboxAgents()
 	encoder := json.NewEncoder(a.out)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(report)
@@ -2374,6 +2380,9 @@ func (a *app) message(args []string) error {
 	}
 	if sender == "" || sender == identity.Unknown {
 		return fmt.Errorf("sender identity unavailable (%s: %s); message not sent or queued; inspect bp whoami", who.Source, who.Reason)
+	}
+	if a.inboxTarget(name) {
+		return a.inboxMessage(who, name, message, force)
 	}
 	if a.queue != nil {
 		a.queue.Sender = &msgq.SenderEvidence{Label: who.Label, ThreadID: who.ThreadID, Parent: who.Parent, Source: who.Source, Certain: who.Certain, Authority: who.Authoritative(), PID: os.Getpid()}
@@ -3655,6 +3664,20 @@ func (a *app) queueList(args []string) error {
 func (a *app) queueStatus(args []string) error {
 	if len(args) > 0 && strings.HasPrefix(args[0], "p") {
 		return a.p2pChannelStatus(args)
+	}
+	if len(args) > 0 && strings.HasPrefix(args[0], "ib") {
+		// Inbox message ids (bp msg to an inbox agent, bp_send, the HTTP API).
+		if len(args) == 2 && args[1] == "--json" {
+			result, err := a.apiCore().Status(args[0])
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(a.out).Encode(result)
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("usage: bp qstat <channel-id> [--json]")
+		}
+		return a.inboxStatus(args[0])
 	}
 	if len(args) == 2 && args[1] == "--json" {
 		m, err := a.queue.Record(args[0])

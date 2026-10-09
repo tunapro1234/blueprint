@@ -101,7 +101,7 @@ unless `--purge`. Prints each action.
 
 ## 6. Agent hint
 
-Until W3 lands an MCP server: a short skill/hint file (`skills/bp/SKILL.md`
+A short skill/hint file (`skills/blueprint/SKILL.md`
 for Claude Code and Codex, written only if absent or bp-marked, recorded in
 the install manifest). Draft text goes to blueprint for approval before it
 replaces the current long skill.
@@ -129,5 +129,6 @@ copies are updated and user copies are kept) on installs where only
 communication is in use. Installs with `sessions` enabled, and the legacy
 server, keep the operational skill (`internal/bpskill/SKILL.md`); enabling or
 disabling `sessions` switches between the two. The written files are recorded
-in the install journal, so `bp uninstall` removes them. An MCP server entry
-replaces this once W3 lands.
+in the install journal, so `bp uninstall` removes them. W3 shipped `bp mcp`;
+the hint names its tools, but bp setup writes no MCP entry into a harness
+config (the user runs `bp api config <client>`).

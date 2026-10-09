@@ -273,8 +273,17 @@ func TestSweepRunsBlockedQueueWithoutMonitor(t *testing.T) {
 		service.tmux = bptmux.New()
 		service.tmux.Bin = fake
 		enqueueStuck(t, root, queue, "stuck", "composer is not empty", blockedQueueThreshold+time.Minute, time.Time{}, now)
-		if err := service.busySanity(context.Background(), monitor); err != nil {
-			t.Fatal(err)
+		// Two sweeps. The monitor module's session-file finding (a claude pane
+		// whose transcript bp cannot resolve) is debounced across two consecutive
+		// sweeps (panesanity.go debounceSessionFileFindings), because a live
+		// transcript can be momentarily unreadable; the fake tmux here reports no
+		// session file on every sweep, so the finding confirms on the second and
+		// alarms. The blocked-queue alarm fires on the first sweep and then sits
+		// in its own 24h cooldown, so it is counted exactly once across both.
+		for i := 0; i < 2; i++ {
+			if err := service.busySanity(context.Background(), monitor); err != nil {
+				t.Fatal(err)
+			}
 		}
 		var blocked, other int
 		for _, notice := range noticesTo(t, queue, "main") {

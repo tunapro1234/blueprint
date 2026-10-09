@@ -81,6 +81,12 @@ Changes on `dev` since the 1.9.30 release.
 
 ### Fixed
 
+- The `monitor` module no longer raises a false "cannot find its session file"
+  alarm for a live Claude agent whose large transcript is momentarily
+  unreadable (compaction, a concurrent write, fd pressure under load). The
+  session-file check is debounced across two consecutive hourly sweeps, so a
+  genuine misconfiguration still alarms one beat later while a transient read
+  blip is ignored.
 - `bp disable` and `bp uninstall` remove only lines and files bp added, never a
   matching line of yours, and edits to your files no longer race with your own
   writes or change their owner.

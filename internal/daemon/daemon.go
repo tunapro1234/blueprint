@@ -774,6 +774,13 @@ type busySanityState struct {
 	// contradiction was last reported (see panesanity.go). An entry is dropped
 	// as soon as the contradiction clears, so a relapse alarms again.
 	PaneSanityReported map[string]string `json:"pane_sanity_reported,omitempty"`
+	// PaneSanityPending debounces the session-file class of pane-sanity finding
+	// (see panesanity.go): it holds an agent seen with an unresolvable transcript
+	// on one sweep but not yet confirmed on the next. A live Claude pane's 96 MB+
+	// transcript can be momentarily unreadable (compaction, a concurrent write,
+	// fd pressure under load) and resolve on the very next sweep, so one bad
+	// sample must not alarm. Dropped as soon as the transcript resolves again.
+	PaneSanityPending map[string]string `json:"pane_sanity_pending,omitempty"`
 	// BlockedQueueReported maps an agent to the moment its stuck-queue block was
 	// last reported (see blockedqueue.go). Dropped as soon as the queue drains, so
 	// a new block alarms again.

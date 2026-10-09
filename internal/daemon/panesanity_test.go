@@ -92,3 +92,47 @@ func TestAgentBinaryIn(t *testing.T) {
 		}
 	}
 }
+
+// The session-file class is debounced: a live Claude pane whose 96 MB+ transcript
+// is momentarily unreadable (compaction, a concurrent write, fd pressure) must
+// not alarm on one bad sweep, but a contradiction that persists still does. The
+// recognition class is never delayed.
+func TestDebounceSessionFileFindings(t *testing.T) {
+	now := time.Now()
+	pending := map[string]string{}
+	observations := []paneObservation{
+		{Session: "server-main", Open: true, IsAgent: true, ClaudePane: true, SessionFound: false, Folder: "/srv (home: /srv/server-main)"},
+	}
+	sessionFile := sessionFileFindingSessions(observations)
+	if !sessionFile["server-main"] {
+		t.Fatalf("server-main should be the session-file class, got %v", sessionFile)
+	}
+	findings := paneSanityFindings(observations)
+
+	// First sweep: the transient is held back, nothing to report.
+	if got := debounceSessionFileFindings(findings, sessionFile, pending, now); len(got) != 0 {
+		t.Fatalf("first sweep should hold back the session-file finding, got %v", got)
+	}
+	if _, ok := pending["server-main"]; !ok {
+		t.Fatalf("server-main should be pending after the first sweep, got %v", pending)
+	}
+	// Second consecutive sweep: confirmed, it passes through to alarm.
+	if got := debounceSessionFileFindings(findings, sessionFile, pending, now); len(got) != 1 {
+		t.Fatalf("second consecutive sweep should confirm the finding, got %v", got)
+	}
+
+	// It clears (transcript resolves): pending is forgotten so the next lone
+	// occurrence debounces afresh instead of alarming immediately.
+	if got := debounceSessionFileFindings(map[string]string{}, map[string]bool{}, pending, now); len(got) != 0 {
+		t.Fatalf("a cleared sweep emits nothing, got %v", got)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending should be empty after the finding clears, got %v", pending)
+	}
+
+	// The recognition class is never debounced: it alarms on the first sweep.
+	classA := map[string]string{"compec-mail-ox": "NOT RECOGNIZED AS AN AGENT"}
+	if got := debounceSessionFileFindings(classA, map[string]bool{}, pending, now); len(got) != 1 {
+		t.Fatalf("the recognition class must pass through on the first sweep, got %v", got)
+	}
+}

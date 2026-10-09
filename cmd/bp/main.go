@@ -398,6 +398,8 @@ func (a *app) run(args []string) error {
 		return a.localWorker(args[1:])
 	case "_workflow-run":
 		return a.workflowRun(args[1:])
+	case "_hook":
+		return a.hookCommand(args[1:])
 	case "whoami":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp whoami")

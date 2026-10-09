@@ -149,7 +149,7 @@ func TestUninstallRemovesOnlyWhatBPAdded(t *testing.T) {
 		t.Fatal("sessions still enabled")
 	}
 
-	f.run("uninstall", "--purge")
+	f.run("uninstall", "--purge", "--yes")
 	if exists(f.bpHome) {
 		t.Fatal("--purge kept bp's home")
 	}
@@ -158,17 +158,52 @@ func TestUninstallRemovesOnlyWhatBPAdded(t *testing.T) {
 func TestUninstallKeepsReplacedBinary(t *testing.T) {
 	f := newInstallFixture(t)
 	f.run("setup")
-	binary := filepath.Join(f.home, "bin", "bp")
+	binary := filepath.Join(f.home, ".local", "bin", "bp")
 	if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(binary, []byte("someone else's bp"), 0755); err != nil {
+	if err := os.WriteFile(binary, []byte("\x7fELF "+binaryMarker+" v1"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	f.run("_install-record", "binary", binary)
+	// Another tool (or the user) puts a different bp there later.
+	if err := os.WriteFile(binary, []byte("\x7fELF "+binaryMarker+" someone else's build"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	out := f.run("uninstall")
 	if !exists(binary) || !strings.Contains(out, "kept: file "+binary) {
 		t.Fatalf("foreign binary removed or not reported:\n%s", out)
+	}
+}
+
+func TestInstallRecordRefusesAnythingTheInstallerDoesNotWrite(t *testing.T) {
+	f := newInstallFixture(t)
+	f.run("setup")
+	keys := filepath.Join(f.home, ".ssh", "authorized_keys")
+	if err := os.MkdirAll(filepath.Dir(keys), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keys, []byte("ssh-ed25519 AAAA user\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(f.home, "notes.txt")
+	if err := os.WriteFile(other, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"line", keys, "ssh-ed25519 AAAA user"},
+		{"line", filepath.Join(f.home, ".tmux.conf"), "run-shell evil"},
+		{"file", other, "x"},
+		{"binary", other},
+		{"link", other, "/usr/bin/bp"},
+	} {
+		if err := f.app().run(append([]string{"_install-record"}, args...)); err == nil {
+			t.Errorf("accepted %v", args)
+		}
+	}
+	f.run("uninstall")
+	if data, _ := os.ReadFile(keys); string(data) != "ssh-ed25519 AAAA user\n" || !exists(other) {
+		t.Fatal("uninstall touched a file the installer never wrote")
 	}
 }
 
@@ -232,5 +267,34 @@ func TestHintKeepsUsersOwnBlueprintSkill(t *testing.T) {
 	}
 	if exists(codex) {
 		t.Fatal("bp's hint left behind")
+	}
+}
+
+func TestPurgeRefusesADirectoryBPCannotProveItOwns(t *testing.T) {
+	f := newInstallFixture(t)
+	project := filepath.Join(f.home, "work", "app")
+	if err := os.MkdirAll(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Someone's project with a config.json of its own.
+	if err := os.WriteFile(filepath.Join(project, "config.json"), []byte(`{"name":"app"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BP_HOME", project)
+	f.bpHome = project
+	f.run("setup")
+	if bpconfig.IsMarkedHome(project) {
+		t.Fatal("setup marked a pre-existing custom home as bp's")
+	}
+	err := f.app().run([]string{"uninstall", "--purge", "--yes"})
+	if err == nil || !strings.Contains(err.Error(), bpconfig.HomeSentinel) {
+		t.Fatalf("err = %v", err)
+	}
+	if !exists(filepath.Join(project, "config.json")) {
+		t.Fatal("project deleted")
+	}
+	t.Setenv("BP_HOME", "relative/home")
+	if err := (&app{ctx: context.Background(), config: bpconfig.Config{Home: "relative/home"}, out: f.out, err: f.out}).run([]string{"uninstall", "--purge", "--yes"}); err == nil || !strings.Contains(err.Error(), "relative") {
+		t.Fatalf("relative home: %v", err)
 	}
 }

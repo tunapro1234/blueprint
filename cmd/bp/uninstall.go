@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"blueprint/internal/audit"
+	bpconfig "blueprint/internal/config"
 	"blueprint/internal/modules"
 )
 
@@ -14,9 +18,24 @@ import (
 // recorded binary only while it is still bp.
 const binaryMarker = "blueprint (bp) — agent infrastructure CLI"
 
+// installerTmuxLines are the only lines install.sh appends to ~/.tmux.conf.
+var installerTmuxLines = map[string]bool{
+	"# blueprint: clipboard, scroll, and mosh integration": true,
+	"set -g mouse on":                               true,
+	"set -g history-limit 100000":                   true,
+	"setw -g mode-keys vi":                          true,
+	"set -sg escape-time 10":                        true,
+	"set -s set-clipboard on":                       true,
+	"set -as terminal-features ',xterm*:clipboard'": true,
+	"set -g allow-passthrough on":                   true,
+}
+
 // installRecord is the installer's hook: install.sh calls
 // bp _install-record <file|line|link|binary> <path> [marker|line|target]
 // for every change it makes outside bp's home, so bp uninstall can undo it.
+// Only the exact changes install.sh makes are accepted: anything that can
+// run one bp command must not be able to schedule a deletion of an
+// arbitrary file or line for the next bp uninstall.
 func (a *app) installRecord(args []string) error {
 	if len(args) < 2 || len(args) > 3 || !filepath.IsAbs(args[1]) {
 		return fmt.Errorf("usage: bp _install-record <file|line|link|binary> <absolute-path> [marker|line|target]")
@@ -25,21 +44,47 @@ func (a *app) installRecord(args []string) error {
 	if len(args) == 3 {
 		extra = args[2]
 	}
-	change := modules.Change{Path: filepath.Clean(args[1])}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Clean(args[1])
+	change := modules.Change{Path: path}
+	refuse := func() error {
+		return fmt.Errorf("bp _install-record only records the changes install.sh makes; refusing %s %s", args[0], path)
+	}
 	switch args[0] {
-	case "file":
-		change.Kind, change.Marker = modules.KindFile, extra
 	case "binary":
-		change.Kind, change.Marker = modules.KindFile, binaryMarker
+		// The installer's own copy, recorded with the hash of what is there now.
+		if path != filepath.Join(home, ".local", "bin", "bp") || extra != "" {
+			return refuse()
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || !bytes.Contains(data, []byte(binaryMarker)) {
+			return refuse()
+		}
+		change.Kind, change.Marker, change.SHA256 = modules.KindFile, binaryMarker, modules.SHA256(data)
+	case "file":
+		// /etc/blueprint/home selects the server home; its content is the marker.
+		data, err := os.ReadFile(path)
+		if path != "/etc/blueprint/home" || extra == "" || err != nil || strings.TrimSpace(string(data)) != extra {
+			return refuse()
+		}
+		change.Kind, change.Marker, change.SHA256 = modules.KindFile, extra, modules.SHA256(data)
 	case "line":
+		if path != filepath.Join(home, ".tmux.conf") || !installerTmuxLines[extra] {
+			return refuse()
+		}
 		change.Kind, change.Line = modules.KindLine, extra
 	case "link":
+		// /usr/local/bin/bp -> the server's bp binary.
+		target, err := os.Readlink(path)
+		if path != "/usr/local/bin/bp" || !filepath.IsAbs(extra) || filepath.Base(extra) != "bp" || err != nil || target != extra {
+			return refuse()
+		}
 		change.Kind, change.Target = modules.KindLink, extra
 	default:
 		return fmt.Errorf("unknown install record kind %q", args[0])
-	}
-	if change.Kind != modules.KindFile && extra == "" || args[0] == "file" && extra == "" {
-		return fmt.Errorf("%s records need a third argument", args[0])
 	}
 	return modules.RecordInstall(a.config, change)
 }
@@ -48,19 +93,31 @@ func (a *app) installRecord(args []string) error {
 // hint, and the installer's records (binary, link, tmux.conf lines). State,
 // books, config and logs stay unless --purge is given.
 func (a *app) uninstall(args []string) error {
-	purge, dryRun := false, false
+	purge, dryRun, yes := false, false, false
 	for _, arg := range args {
 		switch arg {
 		case "--purge":
 			purge = true
 		case "--dry-run":
 			dryRun = true
+		case "--yes":
+			yes = true
 		default:
-			return fmt.Errorf("usage: bp uninstall [--purge] [--dry-run]")
+			return fmt.Errorf("usage: bp uninstall [--purge [--yes]] [--dry-run]")
 		}
 	}
-	if purge && a.config.Legacy {
-		return fmt.Errorf("--purge would delete %s, which is the server installation and its repository; remove what you want by hand", a.config.Home)
+	var purgeTargets []string
+	if purge {
+		targets, err := a.purgeTargets()
+		if err != nil {
+			return err
+		}
+		if !dryRun && !yes {
+			if err := confirmPurge(targets); err != nil {
+				return err
+			}
+		}
+		purgeTargets = targets
 	}
 	say := func(format string, values ...any) {
 		prefix := ""
@@ -127,6 +184,13 @@ func (a *app) uninstall(args []string) error {
 			return err
 		}
 	}
+	// The installer's backups of earlier binaries are the user's to delete.
+	for _, pattern := range []string{"bp.before-*", "bp.failed-install.*", "bp.before-update-*"} {
+		matches, _ := filepath.Glob(filepath.Join(env.UserHome, ".local", "bin", pattern))
+		for _, match := range matches {
+			fmt.Fprintf(a.out, "left in place: %s (a backup the installer made; delete it when you no longer need it)\n", match)
+		}
+	}
 	for _, unit := range []string{"/etc/systemd/system/blueprint.service", filepath.Join(env.UserHome, ".config/systemd/user/blueprint.service")} {
 		if _, err := os.Lstat(unit); err == nil {
 			fmt.Fprintf(a.out, "left in place: %s (bp did not install it; stop and remove it yourself if you no longer want it)\n", unit)
@@ -147,18 +211,7 @@ func (a *app) uninstall(args []string) error {
 		fmt.Fprintln(a.out, "Agents already running in tmux keep running; close them with bp close <name> before uninstalling if you want them gone.")
 		return nil
 	}
-	targets := []string{a.config.Home, filepath.Join(env.UserHome, ".config", "bp")}
-	for _, target := range targets {
-		if target == "" || target == "/" || target == env.UserHome {
-			continue
-		}
-		if _, err := os.Lstat(target); errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if target == a.config.Home && !looksLikeBPHome(target) {
-			fmt.Fprintf(a.out, "kept: %s (no bp config or book in it; not removing a directory bp may not own)\n", target)
-			continue
-		}
+	for _, target := range purgeTargets {
 		if dryRun {
 			say("remove %s", target)
 			continue
@@ -174,11 +227,57 @@ func (a *app) uninstall(args []string) error {
 	return nil
 }
 
-func looksLikeBPHome(dir string) bool {
-	for _, name := range []string{"config.yaml", "config.yml", "config.json", "agentbook.json"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return true
+// purgeTargets lists what --purge deletes, refusing anything bp cannot
+// prove it owns.
+func (a *app) purgeTargets() ([]string, error) {
+	home := a.config.Home
+	if a.config.Legacy {
+		return nil, fmt.Errorf("--purge would delete %s, which is the server installation and its repository; remove what you want by hand", home)
+	}
+	if !filepath.IsAbs(home) {
+		return nil, fmt.Errorf("--purge refuses the relative bp home %q; set BP_HOME to an absolute path", home)
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	clean := filepath.Clean(home)
+	if clean == "/" || clean == filepath.Clean(userHome) {
+		return nil, fmt.Errorf("--purge refuses to delete %s", clean)
+	}
+	var targets []string
+	if _, err := os.Lstat(clean); err == nil {
+		if !bpconfig.IsMarkedHome(clean) {
+			return nil, fmt.Errorf("--purge refuses %s: it has no %s file, so bp cannot tell it created this directory; delete it by hand if it is bp's", clean, bpconfig.HomeSentinel)
+		}
+		targets = append(targets, clean)
+	}
+	if dir := filepath.Join(userHome, ".config", "bp"); dir != clean {
+		if _, err := os.Lstat(dir); err == nil {
+			targets = append(targets, dir)
 		}
 	}
-	return false
+	return targets, nil
+}
+
+func confirmPurge(targets []string) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("--purge deletes %s; rerun with --yes to confirm without a terminal", strings.Join(targets, " and "))
+	}
+	defer tty.Close()
+	fmt.Fprintln(tty, "bp uninstall --purge permanently deletes:")
+	for _, target := range targets {
+		fmt.Fprintln(tty, "  "+target)
+	}
+	fmt.Fprint(tty, "Delete these? [y/N] ")
+	answer, _ := bufio.NewReader(tty).ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return nil
+	}
+	return errors.New("purge cancelled; nothing was changed")
 }

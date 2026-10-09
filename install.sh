@@ -131,6 +131,7 @@ configure_remote() {
 }
 
 install_client_binary() {
+    check_home_owner
     backup_binary=
     fetch_verified_release
     configure_remote
@@ -148,7 +149,7 @@ install_client_binary() {
     if [ -z "${backup_binary:-}" ]; then
         record_install binary "$install_dir/bp"
     fi
-    say "installed $install_dir/bp (signature and SHA-256 verified)"
+    say "installed $install_dir/bp ($release_verified)"
 }
 
 fetch_verified_release() {
@@ -157,7 +158,9 @@ fetch_verified_release() {
     trap 'rm -rf "$local_tmp"' EXIT HUP INT TERM
     if [ -n "${BP_LOCAL_BINARY:-}" ]; then
         cp "$BP_LOCAL_BINARY" "$local_tmp/bp"
+        release_verified="from BP_LOCAL_BINARY; not signature-checked"
     else
+        release_verified="signature and SHA-256 verified"
         command -v curl >/dev/null 2>&1 || { say "error: curl is required"; exit 1; }
         local_base=https://bp.tunapro.xyz
         local_version=${BP_VERSION:-$(curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/latest.version")}
@@ -231,7 +234,18 @@ ensure_tmux() {
 # user's agents bp exists. It does not install tmux, edit shell rc files or
 # tmux options, start services or open an agent. Each of those is an opt-in
 # module (bp modules, bp enable <module>).
+# check_home_owner refuses a run as another user than the owner of $HOME
+# (typically sudo with HOME kept), which would leave root-owned files there.
+check_home_owner() {
+    home_uid=$(stat -c %u "$HOME" 2>/dev/null || stat -f %u "$HOME" 2>/dev/null || echo "")
+    if [ -n "$home_uid" ] && [ "$home_uid" != "$(id -u)" ] && [ "${BP_ALLOW_FOREIGN_HOME:-}" != 1 ]; then
+        say "error: running as uid $(id -u) but $HOME belongs to uid $home_uid; run the installer as that user (or set BP_ALLOW_FOREIGN_HOME=1 if you mean it)"
+        exit 1
+    fi
+}
+
 install_local() {
+    check_home_owner
     BP_HOME=${BP_HOME:-$HOME/.blueprint}
     export BP_HOME
     local_existing=no

@@ -5,9 +5,11 @@ import (
 	bpconfig "blueprint/internal/config"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"blueprint/internal/modules"
+	"blueprint/internal/safefile"
 )
 
 // localSetup prepares bp's own home (config and book) and refreshes what the
@@ -65,8 +67,16 @@ func (a *app) localSetup(args []string) error {
 	if err != nil {
 		return err
 	}
-	if created && len(inUse) > 0 {
-		if err := bpconfig.SetModules(configPath, inUse); err != nil {
+	if created {
+		if err := modules.Seed(a.config, configPath, inUse); err != nil {
+			return err
+		}
+	}
+	// Mark the home as bp's when bp created its config here, or when it is
+	// the default location; a custom BP_HOME that already had a config may
+	// be someone's project and stays unmarked (purge then refuses it).
+	if userHome, err := os.UserHomeDir(); err == nil && (created || filepath.Clean(a.config.Home) == filepath.Join(userHome, ".blueprint")) {
+		if err := bpconfig.MarkHome(a.config.Home); err != nil {
 			return err
 		}
 	}
@@ -119,6 +129,9 @@ func (a *app) localSetup(args []string) error {
 // invasive channel each harness offers: a skill file. Each file bp writes is
 // recorded so bp uninstall removes it.
 func (a *app) installAgentHint(env modules.Env) ([]string, error) {
+	if err := safefile.CheckOwner(env.UserHome); err != nil {
+		return nil, err
+	}
 	// Installs that run agent sessions get the operational skill; a
 	// communicate-only install gets the short generic hint.
 	content := bpskill.Hint
@@ -133,8 +146,11 @@ func (a *app) installAgentHint(env modules.Env) ([]string, error) {
 	for _, line := range lines {
 		for _, prefix := range []string{"skill installed: ", "skill ready: "} {
 			if path, ok := strings.CutPrefix(line, prefix); ok {
-				changes = append(changes, modules.Change{Kind: modules.KindFile, Path: path, Marker: bpskill.Marker})
+				changes = append(changes, modules.Change{Kind: modules.KindFile, Path: path, Marker: bpskill.Marker, SHA256: modules.SHA256(content)})
 			}
+		}
+		if backup, ok := strings.CutPrefix(line, "skill backup: "); ok {
+			changes = append(changes, modules.Change{Kind: modules.KindNote, Text: "your earlier copy of bp's skill: " + backup + " (delete it when you no longer need it)"})
 		}
 	}
 	if err := modules.RecordInstall(a.config, changes...); err != nil {

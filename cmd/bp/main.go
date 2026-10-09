@@ -61,7 +61,7 @@ bp modules [--json]           # opt-in modules: sessions bar accounts wa ui moni
 bp enable <module> [--force] [--dry-run] | bp disable <module> [--dry-run]
                               # enable sessions [--shell bash|zsh] [--wrappers]
 bp setup [--check|--disable]  # bp's own config and book; changes nothing else
-bp uninstall [--purge] [--dry-run] # remove what bp added; --purge also deletes its home
+bp uninstall [--purge [--yes]] [--dry-run] # remove what bp added; --purge also deletes its home
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation

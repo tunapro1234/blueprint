@@ -45,9 +45,24 @@ func (a *app) localSetup(args []string) error {
 		}
 	}
 	created := a.config.Path == ""
+	// An install used before it had a config file (bp run alone) keeps the
+	// modules it already used; a new one starts with none.
+	inUse := map[string]bool{}
+	if created {
+		for _, name := range modules.Names() {
+			if modules.EnabledIn(a.config, name) {
+				inUse[name] = true
+			}
+		}
+	}
 	configPath, err := bpconfig.InitYAML(a.config.Home)
 	if err != nil {
 		return err
+	}
+	if created && len(inUse) > 0 {
+		if err := bpconfig.SetModules(configPath, inUse); err != nil {
+			return err
+		}
 	}
 	if err := a.initLocalBook(); err != nil {
 		return err

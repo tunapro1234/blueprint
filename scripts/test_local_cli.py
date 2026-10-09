@@ -842,6 +842,16 @@ class LocalCLITest(unittest.TestCase):
         panes = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"], text=True).splitlines()
         self.assertEqual(len(panes), 1)
 
+    def assert_config_only_gained_modules(self, path, before):
+        # Upgrading records the modules an install already uses: one
+        # "modules:" line is appended and every other byte stays.
+        after = path.read_text()
+        self.assertTrue(after.startswith(before), after)
+        added = after[len(before):].strip().splitlines()
+        self.assertLessEqual(len(added), 1, after)
+        for line in added:
+            self.assertTrue(line.startswith("modules: {"), after)
+
     def piped_installer(self, shell="/bin/sh", interactive=True):
         # Serve the actual installer through curl, with a compiled local binary
         # fixture. Signature/download failures have separate installer tests.
@@ -863,7 +873,8 @@ class LocalCLITest(unittest.TestCase):
         self.addCleanup(stop_server)
         env = dict(self.env, BP_LOCAL_BINARY=self.binary,
                    BP_TEST_INSTALLER_URL="http://127.0.0.1:%d/install.sh" % server.server_port)
-        env.pop("BP_ONBOARD", None)
+        # Onboarding is opt-in; these tests exercise the opted-in path.
+        env["BP_ONBOARD"] = "yes"
         # Optional release smoke: same PTY path, but download signed public bits.
         if os.environ.get("BP_TEST_PUBLIC_INSTALLER_URL"):
             env["BP_TEST_INSTALLER_URL"] = os.environ["BP_TEST_PUBLIC_INSTALLER_URL"]
@@ -937,11 +948,11 @@ class LocalCLITest(unittest.TestCase):
         os.write(original, b"unfinished user input")
         config = self.root / ".blueprint/config.yaml"
         config.write_text("# user setting\nbar:\n  widgets: [model]\n")
-        before_config = config.read_bytes()
+        before_config = config.read_text()
         before_pids = subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"])
         fd = self.piped_installer()
         self.read_until(fd, b"existing installation preserved")
-        self.assertEqual(config.read_bytes(), before_config)
+        self.assert_config_only_gained_modules(config, before_config)
         self.assertEqual(subprocess.check_output([self.tmux, "-S", self.socket, "list-panes", "-a", "-F", "#{pane_pid}"]), before_pids)
         pane = subprocess.check_output([self.tmux, "-S", self.socket, "capture-pane", "-p", "-t", "existing-work"], text=True)
         self.assertIn("unfinished user input", pane)
@@ -999,7 +1010,7 @@ class LocalCLITest(unittest.TestCase):
     def test_disable_preserves_aliases_and_records(self):
         rc = self.root / ".bashrc"
         rc.write_text('alias claude="claude --dangerously-skip-permissions"\n')
-        subprocess.run([self.binary, "setup"], env=self.env, check=True, capture_output=True)
+        subprocess.run([self.binary, "setup", "--shell", "bash"], env=self.env, check=True, capture_output=True)
         book = self.root / ".blueprint/agentbook.json"
         before = book.read_bytes()
         subprocess.run([self.binary, "setup", "--disable"], env=self.env, check=True, capture_output=True)
@@ -1066,7 +1077,8 @@ class LocalCLITest(unittest.TestCase):
             command = dependency_bin / name
             command.write_text('#!/bin/sh\n/bin/touch "' + str(marker) + '"\n')
             command.chmod(0o755)
-        result = subprocess.run(["/bin/sh", str(REPO / "install.sh")],
+        # Only an opt-in that runs agents in tmux needs tmux at all.
+        result = subprocess.run(["/bin/sh", str(REPO / "install.sh"), "--enable", "sessions"],
             env=dict(self.env, PATH=str(dependency_bin), BP_LOCAL_BINARY=self.binary), capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("tmux is required", result.stdout)
@@ -1154,9 +1166,32 @@ class LocalCLITest(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), args)
         self.assertFalse((self.root / ".blueprint").exists())
 
-    def test_one_command_install_and_repeated_shell_setup(self):
+    def test_default_install_changes_nothing_and_uninstall_removes_it(self):
         (self.root / ".bashrc").write_text("export KEEP_ME=yes\n")
         env = dict(self.env, BP_LOCAL_BINARY=self.binary)
+        result = subprocess.run(["sh", str(REPO / "install.sh")], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Nothing else on this machine was changed", result.stdout)
+        self.assertEqual((self.root / ".bashrc").read_text(), "export KEEP_ME=yes\n")
+        self.assertFalse((self.root / ".config/bp/shell.sh").exists())
+        self.assertFalse((self.root / ".tmux.conf").exists())
+        self.assertFalse(self.alive("main"))
+        sessions = subprocess.run([self.tmux, "-S", self.socket, "list-sessions"], capture_output=True)
+        self.assertNotEqual(sessions.returncode, 0)
+        modules = json.loads(subprocess.check_output([self.binary, "modules", "--json"], env=env))
+        self.assertEqual([m["name"] for m in modules if m["enabled"]], [])
+        installed = self.root / ".local/bin/bp"
+        self.assertTrue(installed.is_file())
+        out = subprocess.run([str(installed), "uninstall"], env=env, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertFalse(installed.exists())
+        for native in [".codex", ".claude"]:
+            self.assertFalse((self.root / native / "skills/blueprint/SKILL.md").exists())
+        self.assertTrue((self.root / ".blueprint/agentbook.json").exists())
+
+    def test_one_command_install_and_repeated_shell_setup(self):
+        (self.root / ".bashrc").write_text("export KEEP_ME=yes\n")
+        env = dict(self.env, BP_LOCAL_BINARY=self.binary, BP_ENABLE="sessions")
         for _ in range(2):
             subprocess.run(["sh", str(REPO / "install.sh"), "--local"], env=env, check=True, capture_output=True)
         rc = (self.root / ".bashrc").read_text()
@@ -1168,7 +1203,7 @@ class LocalCLITest(unittest.TestCase):
         self.assertEqual(settings.stat().st_mode & 0o777, 0o600)
         settings.write_text("bar:\n  widgets: [model, quota]\n")
         subprocess.run(["sh", str(REPO / "install.sh"), "--local"], env=env, check=True, capture_output=True)
-        self.assertEqual(settings.read_text(), "bar:\n  widgets: [model, quota]\n")
+        self.assert_config_only_gained_modules(settings, "bar:\n  widgets: [model, quota]\n")
         checked = subprocess.run([self.binary, "config", "check"], env=env, capture_output=True, text=True)
         self.assertEqual(checked.returncode, 0, checked.stderr)
         self.assertIn(str(settings), checked.stdout)
@@ -1863,7 +1898,7 @@ class LocalCLITest(unittest.TestCase):
         self.wait_closed("claude-test")
 
     def test_interactive_shell_wrapper_returns_to_outer_shell(self):
-        subprocess.run(["sh", str(REPO / "install.sh"), "--local"],
+        subprocess.run(["sh", str(REPO / "install.sh"), "--local", "--enable", "sessions"],
                        env=dict(self.env, BP_LOCAL_BINARY=self.binary), check=True, capture_output=True)
         pid, fd = pty.fork()
         if pid == 0:

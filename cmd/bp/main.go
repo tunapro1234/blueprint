@@ -2678,12 +2678,38 @@ func (a *app) wireFraming() {
 	if render, err := delivery.Renderer(a.config.StateDir); err != nil {
 		a.queue.Render = delivery.FailClosedRenderer()
 		fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
-		if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
-			fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
+		if a.frameUnavailableAlertDue() {
+			if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+				fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
+			}
 		}
 	} else {
 		a.queue.Render = render
 	}
+}
+
+// frameUnavailableAlertDue rate-limits the guard.frame.unavailable audit alert to
+// at most once per hour. wireFraming runs on every dispatching bp command (via
+// prepareDispatch), so a persistently broken framer would otherwise append one
+// Alert per bp invocation and bury the audit log the owner reads. The marker
+// file's mtime under <state>/guard/ is the clock. A broken framer still prints
+// the per-call stderr warning every time; only the durable audit record is
+// throttled. On any marker error the call fails toward alerting, since a silently
+// dropped framing alert is worse than a duplicate line.
+func (a *app) frameUnavailableAlertDue() bool {
+	marker := filepath.Join(a.config.StateDir, "guard", "frame-unavailable.alerted")
+	if info, err := os.Stat(marker); err == nil && time.Since(info.ModTime()) < time.Hour {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		return true
+	}
+	if f, err := os.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+		_ = f.Close()
+	}
+	now := time.Now()
+	_ = os.Chtimes(marker, now, now)
+	return true
 }
 
 // dedupWindow is how long an identical message to the same target counts as still

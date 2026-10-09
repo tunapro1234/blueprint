@@ -17,10 +17,13 @@ other and work as a team, whatever they run in and wherever they run.*
 
 1. **Installing bp changes nothing.** One command installs it, and nothing the
    user is used to behaves differently afterwards. bp does not open a
-   coordinator agent, does not require tmux, does not keep agents alive after
-   their terminal closes, does not switch accounts and does not restyle
-   anything. Every such behavior is an opt-in module. Everything bp adds is
-   additive and `bp uninstall` removes it.
+   coordinator agent, does not ask the user to move their agents into tmux,
+   does not keep agents alive after their terminal closes, does not switch
+   accounts and does not restyle anything. Every such behavior is an opt-in
+   module. Everything bp adds is additive and `bp uninstall` removes it.
+   Upgrading an existing install keeps its behavior: the modules it already
+   uses are recorded as enabled, so the bar, accounts and sessions stay as
+   they were.
 2. **Agents learn about bp; users don't have to.** After installing, bp tells
    the user's agents that it exists: "you have the bp tool; you can see and
    message the other agents on this computer; here is how; here is where to
@@ -50,6 +53,30 @@ other and work as a team, whatever they run in and wherever they run.*
    - framing of messages from outside as untrusted input.
 
    This is not an optional module.
+
+## Delivery and the terminal layer
+
+An interactive agent with no API and no hook can only be woken by writing to
+its terminal, so bp always needs a screen-like layer for those agents. It is
+one delivery path among several, and bp picks the best one each agent has:
+
+1. **Terminal:** the agent runs under a terminal bp can write to. bp pastes
+   the message at a turn boundary and never interrupts a busy agent.
+2. **Push:** the harness accepts messages itself (Codex app-server, A2A
+   endpoints such as Hermes, Claude Code channels where available, a
+   webhook).
+3. **Hooks:** the harness asks bp at turn boundaries (for example a Claude
+   Code Stop hook). The message arrives at the agent's next turn.
+4. **Pull:** the agent reads its inbox through MCP, HTTP or the CLI.
+
+The terminal layer sits behind one interface with two backends:
+
+- **tmux:** for people who already live in tmux. The bar and the session
+  tools stay tmux features.
+- **built-in:** `bp run <agent>` starts the agent under a pty that bp owns,
+  passes the terminal through unchanged and keeps the screen state in
+  memory, so the agent survives a closed terminal and `bp attach` brings it
+  back. No tmux install, no tmux config, no polling subprocesses.
 
 ## Two kinds of users
 

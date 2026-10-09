@@ -627,4 +627,32 @@ func (n *Node) auditAccepted(remote peer.ID, alias string, req request, queueID 
 	}
 	_ = audit.Append(n.Root, audit.Event{Kind: "p2p.msg.accepted", Severity: severity, Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID,
 		Fields: fields})
+	if severity == audit.Warn {
+		// High flags are the owner-facing signal; warn-level flags (an IP URL,
+		// a slash at line start) stay as fields so ordinary text never pages.
+		_ = audit.Append(n.Root, audit.Event{Kind: "guard.finding", Severity: audit.Alert, Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID,
+			Reason: "inbound text raised high guard flags: " + guard.Summary(highOnly(findings)), Fields: map[string]string{"queue": queueID, "rules": rules(findings)}})
+	}
+}
+
+func highOnly(fs []guard.Finding) []guard.Finding {
+	var out []guard.Finding
+	for _, f := range fs {
+		if f.Severity == guard.High {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func rules(fs []guard.Finding) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range fs {
+		if !seen[f.Rule] {
+			seen[f.Rule] = true
+			out = append(out, f.Rule)
+		}
+	}
+	return strings.Join(out, ",")
 }

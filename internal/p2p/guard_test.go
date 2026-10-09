@@ -49,6 +49,10 @@ func TestInboundBodyIsFramedAndReplayStable(t *testing.T) {
 	if len(ev) != 1 || ev[0].Severity != audit.Warn || !strings.Contains(ev[0].Fields["guard.flags"], "envelope-spoof") {
 		t.Fatalf("accepted audit (once, with flags) = %+v", ev)
 	}
+	alerts, _ := audit.Read(b.Root, audit.Filter{Kind: "guard.finding", Severity: audit.Alert})
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Fields["rules"], "envelope-line") {
+		t.Fatalf("finding alert = %+v", alerts)
+	}
 }
 
 func TestFrameKeyPersistsAcrossRestart(t *testing.T) {

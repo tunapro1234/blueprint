@@ -189,15 +189,13 @@ func (a *app) reloadConfig() (bpconfig.Config, error) {
 }
 
 // moduleActor names the caller for the audit log: the bp agent when the
-// command runs inside one, otherwise the OS user.
+// command runs inside one, otherwise "owner" (the person at the terminal).
 func (a *app) moduleActor() string {
 	if a.resolveSender != nil || os.Getenv("TMUX") != "" || os.Getenv("BP_SESSION") != "" {
 		if who := a.senderIdentity(); who.Label != "" {
 			return who.Label
 		}
 	}
-	if user := os.Getenv("USER"); user != "" {
-		return "user:" + user
-	}
-	return "user"
+	// Run outside any agent session: the person at the terminal.
+	return "owner"
 }

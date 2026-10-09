@@ -14,10 +14,15 @@ import (
 // modules existed and never writes anything.
 func Detect(cfg config.Config, env Env) map[string]bool {
 	found := map[string]bool{}
+	// When the evidence is uncertain, enable: a module wrongly left on behaves
+	// as before, one wrongly turned off silently drops a feature in use.
 	sessions := cfg.Legacy || booksInUse(cfg) || fileExists(filepath.Join(cfg.Home, "main", "onboarding.json"))
 	if !sessions && env.UserHome != "" {
-		sessions = len(rcLinePresent(env)) > 0
+		sessions = len(rcLinePresent(env)) > 0 || bpShellPresent(env.UserHome)
 	}
+	// A daemon that ever ran served the dashboard and ran the monitor jobs
+	// (which still skip themselves when their tools are missing).
+	daemon := cfg.StateDir != "" && fileExists(filepath.Join(cfg.StateDir, "jobs.json"))
 	if sessions {
 		found[Sessions] = true
 		// bp styles every session it opens today: the bar comes with sessions.
@@ -30,10 +35,10 @@ func Detect(cfg config.Config, env Env) map[string]bool {
 	if cfg.WAOutbox != "" {
 		found[WA] = true
 	}
-	if cfg.Legacy || cfg.UsageBin != "" || cfg.UsageHistory != "" {
+	if cfg.Legacy || daemon || cfg.UsageBin != "" || cfg.UsageHistory != "" {
 		found[UI] = true
 	}
-	if cfg.Legacy {
+	if cfg.Legacy || daemon {
 		found[Monitor] = true
 	}
 	return found
@@ -68,6 +73,13 @@ func accountsStored(cfg config.Config) bool {
 	}
 	entries, err := os.ReadDir(filepath.Join(cfg.StateDir, "claude-accounts", "slots"))
 	return err == nil && len(entries) > 0
+}
+
+// bpShellPresent reports the wrappers an older bp setup always wrote, even
+// when the rc line sourcing them was removed or lives in a file bp cannot see.
+func bpShellPresent(home string) bool {
+	data, err := os.ReadFile(ShellPath(home))
+	return err == nil && strings.HasPrefix(string(data), ShellMarker) && !strings.HasPrefix(string(data), ShellMarker+" Disabled;")
 }
 
 func fileExists(path string) bool {

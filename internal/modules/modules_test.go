@@ -313,3 +313,22 @@ func TestEnableDisableAreAudited(t *testing.T) {
 		t.Fatalf("kinds = %v", kinds)
 	}
 }
+
+func TestDetectEnablesOnUncertainEvidence(t *testing.T) {
+	f := newFixture(t, "")
+	must(t, os.MkdirAll(filepath.Dir(ShellPath(f.home)), 0700))
+	must(t, os.WriteFile(ShellPath(f.home), []byte(LocalShell), 0600))
+	must(t, os.MkdirAll(f.cfg.StateDir, 0700))
+	must(t, os.WriteFile(filepath.Join(f.cfg.StateDir, "jobs.json"), []byte("{}"), 0600))
+	got := Detect(f.cfg, f.env)
+	for _, name := range []string{Sessions, Bar, UI, Monitor} {
+		if !got[name] {
+			t.Errorf("%s not detected: %v", name, got)
+		}
+	}
+	// A wrapper file bp itself disabled is not use.
+	must(t, os.WriteFile(ShellPath(f.home), []byte(ShellMarker+" Disabled; native aliases and records are preserved.\n"), 0600))
+	if Detect(f.cfg, f.env)[Sessions] {
+		t.Error("disabled wrapper stub detected as sessions in use")
+	}
+}

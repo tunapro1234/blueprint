@@ -252,17 +252,13 @@ func procCmdline(pid int) []string {
 
 // paneSanityScan turns one sweep's observations into alarms. Like the other two
 // watchdogs on this beat it swallows nothing but its own noise: findings go to
-// the log and to server-main, and the state it keeps is only the cooldown.
+// the log and to the coordinator (alarm), and the state it keeps is only the
+// cooldown.
 func (s *Service) paneSanityScan(observations []paneObservation, state *busySanityState, now time.Time) {
 	if state.PaneSanityReported == nil {
 		state.PaneSanityReported = make(map[string]string)
 	}
 	for _, message := range dueFindings(paneSanityFindings(observations), state.PaneSanityReported, now) {
-		s.log.Print(message)
-		if s.queue != nil {
-			if _, err := s.queue.Enqueue("server-main", "bp", message); err != nil {
-				s.log.Printf("pane-sanity: alarm could not be queued: %v", err)
-			}
-		}
+		s.alarm("pane-sanity", message)
 	}
 }

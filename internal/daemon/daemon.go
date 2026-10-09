@@ -163,8 +163,13 @@ func (s *Service) Run(ctx context.Context) {
 			return err
 		})
 	})
-	// The owner server's monitoring scripts and sanity alarms to the
-	// coordinator are the monitor module's.
+	// One hourly sweep carries four watchdogs. The blocked-queue watchdog is
+	// delivery integrity and runs on every install; the busy-detector,
+	// merge and pane-recognition alarms are the monitor module's.
+	s.startLoop(ctx, "busy-sanity", 5*time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
+		s.tracked(run, "busy-sanity", interval, func() error { return s.busySanity(run, monitor) })
+	})
+	// The owner server's monitoring scripts are the monitor module's.
 	if monitor {
 		s.startLoop(ctx, "watch-radar-chain", 3*time.Minute, 30*time.Minute, func(run context.Context, interval time.Duration) {
 			steps := []struct {
@@ -184,9 +189,6 @@ func (s *Service) Run(ctx context.Context) {
 					return
 				}
 			}
-		})
-		s.startLoop(ctx, "busy-sanity", 5*time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
-			s.tracked(run, "busy-sanity", interval, func() error { return s.busySanity(run) })
 		})
 		// hermes-usage writes one line an hour into state/hermes-usage.jsonl.
 		//
@@ -260,6 +262,39 @@ func (s *Service) Run(ctx context.Context) {
 
 func (s *Service) module(name string) bool {
 	return modules.EnabledIn(s.config, name)
+}
+
+// coordinator is who the watchdogs report to: the first book's orchestrator,
+// when a book lists it as an agent. A fresh install's book names the
+// installer's placeholder "local" until onboarding picks a coordinator; an
+// alarm queued to an agent that does not exist would never be read, so then
+// it goes to the log alone.
+func (s *Service) coordinator() string {
+	fleet, err := book.LoadFleet(book.Paths(s.config.Agentbooks))
+	if err != nil {
+		return ""
+	}
+	// LoadFleet always adds the root as a bare entry; only a root some book
+	// lists is an agent that can read the alarm.
+	if len(fleet.Sources[fleet.Root]) == 0 {
+		return ""
+	}
+	return fleet.Root
+}
+
+// alarm logs one watchdog finding and queues it to the coordinator.
+func (s *Service) alarm(job, message string) {
+	s.log.Print(message)
+	if s.queue == nil {
+		return
+	}
+	to := s.coordinator()
+	if to == "" {
+		return
+	}
+	if _, err := s.queue.Enqueue(to, "bp", message); err != nil {
+		s.log.Printf("%s: alarm could not be queued: %v", job, err)
+	}
 }
 
 func (s *Service) startDashboard(ctx context.Context) {
@@ -747,8 +782,9 @@ type busySanityState struct {
 
 // busySanity runs one sweep. Errors from a single pane are never fatal: a session
 // that closed between the listing and the capture proves nothing either way, and
-// the loop must keep its own state file current regardless.
-func (s *Service) busySanity(ctx context.Context) error {
+// the loop must keep its own state file current regardless. monitor reports
+// whether the monitor module's alarms run; the blocked-queue watchdog always does.
+func (s *Service) busySanity(ctx context.Context, monitor bool) error {
 	path := filepath.Join(s.config.StateDir, busySanityFile)
 	state := readBusySanity(path)
 	sessions, err := s.tmux.Sessions(ctx)
@@ -846,25 +882,23 @@ func (s *Service) busySanity(ctx context.Context) error {
 		state.LastActivitySeen = now.Format(time.RFC3339)
 	}
 	state.observeGates(now, samples, agreed)
-	if state.alarmDue(now) {
+	if monitor && state.alarmDue(now) {
 		state.LastAlarm = now.Format(time.RFC3339)
-		message := busySanityMessage(state.TurnOpenSamples)
-		s.log.Print(message)
-		if s.queue != nil {
-			if _, err := s.queue.Enqueue("server-main", "bp", message); err != nil {
-				s.log.Printf("busy-sanity: alarm could not be queued: %v", err)
-			}
-		}
+		s.alarm("busy-sanity", busySanityMessage(state.TurnOpenSamples))
 	}
 	// The second watchdog on the same hourly beat, and on the same principle: this
 	// one reads what the agents RECEIVED and asks whether it still looks like one
 	// message per delivery. It shares the state file, never fails the sweep, and is
 	// run last so a failure in it cannot cost the busy verdict its bookkeeping.
-	s.mergeScan(sessions, &state, now)
+	if monitor {
+		s.mergeScan(sessions, &state, now)
+	}
 	// The third watchdog on the same beat: whether bp still RECOGNISES the agents
 	// it is supposed to be talking to. Run after the others for the same reason —
 	// a failure here must not cost the sweep its bookkeeping.
-	s.paneSanityScan(observations, &state, now)
+	if monitor {
+		s.paneSanityScan(observations, &state, now)
+	}
 	// The fourth watchdog on the same beat: whether a message is stuck in the
 	// queue at an idle agent because the composer is not free. Run last, after the
 	// bookkeeping the busy verdict needs, for the same reason as the others — a

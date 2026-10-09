@@ -288,14 +288,17 @@ func (n *Node) handleLookup(s network.Stream) {
 	// Every query counts toward enumeration, including throttled ones.
 	n.watch.Observe(guard.Event{Kind: guard.EvLookup, Peer: alias, Target: req.Find})
 	if !n.limits.admitLookup(remote.String(), policy, time.Now()) {
-		if n.limits.firstRejection("lookup:"+remote.String(), "rate") {
-			_ = audit.Append(n.Root, audit.Event{Kind: "p2p.lookup.rejected", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Reason: "lookup rate limit"})
+		// One line per peer per minute while it keeps hitting the limit.
+		if n.limits.onceEvery("lookup-rate:"+remote.String(), auditWindow, time.Now()) {
+			n.auditRemote(remote.String(), audit.Event{Kind: "p2p.lookup.rejected", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Reason: "lookup rate limit"})
 		}
 		_ = s.Reset()
 		return
 	}
 	result := LookupResponse{}
-	if n.ResolveLookup != nil {
+	// With nothing exposed every answer is "unknown": skip the agentbook read
+	// and tmux probes entirely.
+	if n.ResolveLookup != nil && len(policy.Expose) > 0 {
 		result = n.ResolveLookup(req.Find)
 	}
 	if !result.Found || result.Name == "" || (result.State != "live" && result.State != "closed" && result.State != "archived") {
@@ -304,7 +307,7 @@ func (n *Node) handleLookup(s network.Stream) {
 	// A peer only learns about agents its owner exposed to it; anything else
 	// answers exactly like an unknown name, so lookup cannot enumerate.
 	if result.Found && !exposed(policy, result.Name) {
-		_ = audit.Append(n.Root, audit.Event{Kind: "p2p.lookup.hidden", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Target: result.Name, Reason: "lookup matched an agent that is not exposed to this peer"})
+		n.auditRemote(remote.String(), audit.Event{Kind: "p2p.lookup.hidden", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Target: result.Name, Reason: "lookup matched an agent that is not exposed to this peer"})
 		result = LookupResponse{}
 	}
 	if err := writeFrame(s, result); err != nil {
@@ -435,6 +438,7 @@ func (n *Node) Addresses() []string {
 func (n *Node) Step(ctx context.Context) error {
 	n.stepMu.Lock()
 	defer n.stepMu.Unlock()
+	n.FlushAudit()
 	channels, err := Channels(n.Root)
 	if err != nil {
 		return err
@@ -592,7 +596,53 @@ func (n *Node) reject(remote peer.ID, alias string, req request, p protocol.ID, 
 	if alias == "" {
 		kind = "p2p.peer.denied"
 	}
-	_ = audit.Append(n.Root, audit.Event{Kind: kind, Severity: severity, Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID, Reason: reason})
+	n.auditRemote(auditSource(remote, alias), audit.Event{Kind: kind, Severity: severity, Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID, Reason: reason})
+}
+
+// auditSource is the audit budget a remote request is charged to: its own
+// for a configured peer, one shared budget for every other identity.
+func auditSource(remote peer.ID, alias string) string {
+	if alias == "" {
+		return unconfiguredSource
+	}
+	return remote.String()
+}
+
+// auditRemote writes an event a remote request caused, within the source's
+// audit budget, and reports windows that went over it. The audit log stays
+// append-only: over-budget events are counted, never written and removed.
+func (n *Node) auditRemote(source string, ev audit.Event) {
+	ok, reports := n.limits.auditBudget(source, ev.Severity, time.Now())
+	n.reportSuppressed(reports)
+	if ok {
+		_ = audit.Append(n.Root, ev)
+	}
+}
+
+// FlushAudit reports audit windows that suppressed events and have ended, so
+// a flood that stopped still leaves its count. The service loop calls it.
+func (n *Node) FlushAudit() { n.reportSuppressed(n.limits.flushAudits(time.Now())) }
+
+func (n *Node) reportSuppressed(reports []suppressedReport) {
+	for _, r := range reports {
+		ev := audit.Event{Time: r.end, Kind: "p2p.audit.suppressed", Severity: audit.Warn,
+			Reason: fmt.Sprintf("%d rejection events over the audit budget (%d per minute) were not written", r.count, AuditBudgetPerMinute),
+			Fields: map[string]string{"count": fmt.Sprint(r.count), "since": r.start.UTC().Format(time.RFC3339), "worst": r.worst}}
+		if r.worst == audit.Alert {
+			ev.Severity = audit.Alert
+		}
+		if r.source == unconfiguredSource {
+			ev.Peer = "(unconfigured peers)"
+		} else {
+			ev.PeerID = r.source
+			for alias, p := range n.Config.Peers {
+				if p.ID == r.source {
+					ev.Peer = alias
+				}
+			}
+		}
+		_ = audit.Append(n.Root, ev)
+	}
 }
 
 // auditAccepted records a new inbound message once, with the guard flags

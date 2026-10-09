@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"blueprint/internal/audit"
+
+	"github.com/libp2p/go-libp2p/core/peerstore"
 )
 
 func TestLimiterRateAndLoopCap(t *testing.T) {
@@ -169,5 +173,139 @@ func TestHandleLookupRateLimitAudited(t *testing.T) {
 	}
 	if ev, _ := audit.Read(b.Root, audit.Filter{Kind: "p2p.lookup.rejected"}); len(ev) == 0 {
 		t.Fatal("rate-limited lookup not audited")
+	}
+}
+
+// R1: one source writes at most AuditBudgetPerMinute rejection events per
+// window; the rest become one p2p.audit.suppressed line, never deletions.
+func TestAuditBudgetCountsOverflow(t *testing.T) {
+	l := newLimiter()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	written := 0
+	for i := 0; i < AuditBudgetPerMinute+20; i++ {
+		sev := audit.Warn
+		if i == AuditBudgetPerMinute+5 {
+			sev = audit.Alert
+		}
+		ok, reports := l.auditBudget(unconfiguredSource, sev, now.Add(time.Duration(i)*time.Millisecond))
+		if len(reports) != 0 {
+			t.Fatalf("report inside the window: %+v", reports)
+		}
+		if ok {
+			written++
+		}
+	}
+	if written != AuditBudgetPerMinute {
+		t.Fatalf("written = %d, want %d", written, AuditBudgetPerMinute)
+	}
+	// Another source has its own budget.
+	if ok, _ := l.auditBudget("peer-x", audit.Warn, now); !ok {
+		t.Fatal("second source charged to the first budget")
+	}
+	if got := l.flushAudits(now.Add(30 * time.Second)); len(got) != 0 {
+		t.Fatalf("flush before the window ended: %+v", got)
+	}
+	got := l.flushAudits(now.Add(auditWindow))
+	if len(got) != 1 || got[0].source != unconfiguredSource || got[0].count != 20 || got[0].worst != audit.Alert {
+		t.Fatalf("reports = %+v", got)
+	}
+	// A new window starts with a fresh budget.
+	if ok, _ := l.auditBudget(unconfiguredSource, audit.Warn, now.Add(2*auditWindow)); !ok {
+		t.Fatal("budget not renewed")
+	}
+}
+
+// R1 end to end: a flood of denied requests from unconfigured identities is
+// capped on disk and the overflow is reported by FlushAudit.
+func TestDeniedFloodIsCappedAndReported(t *testing.T) {
+	_, b := pair(t)
+	outsider := testNode(t, Config{})
+	outsider.Host.Peerstore().AddAddrs(b.Host.ID(), b.Host.Addrs(), peerstore.PermanentAddrTTL)
+	const flood = AuditBudgetPerMinute + 15
+	for i := 0; i < flood; i++ {
+		id := fmt.Sprintf("p%032x", i)
+		if r := send(t, outsider, b, id, "hello"); r.Error == "" {
+			t.Fatal("unknown peer accepted")
+		}
+	}
+	denied, _ := audit.Read(b.Root, audit.Filter{Kind: "p2p.peer.denied"})
+	if len(denied) != AuditBudgetPerMinute {
+		t.Fatalf("denied lines = %d, want %d", len(denied), AuditBudgetPerMinute)
+	}
+	// End the window without waiting a minute.
+	b.limits.mu.Lock()
+	for _, w := range b.limits.audits {
+		w.start = w.start.Add(-auditWindow)
+	}
+	b.limits.mu.Unlock()
+	b.FlushAudit()
+	sup, _ := audit.Read(b.Root, audit.Filter{Kind: "p2p.audit.suppressed"})
+	if len(sup) != 1 || sup[0].Fields["count"] != "15" || sup[0].Peer != "(unconfigured peers)" || sup[0].Fields["worst"] != denied[0].Severity {
+		t.Fatalf("suppressed = %+v", sup)
+	}
+	// Records already written stay.
+	if again, _ := audit.Read(b.Root, audit.Filter{Kind: "p2p.peer.denied"}); len(again) != AuditBudgetPerMinute {
+		t.Fatalf("audit lines changed: %d", len(again))
+	}
+}
+
+func TestOnceEvery(t *testing.T) {
+	l := newLimiter()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	if !l.onceEvery("k", time.Minute, now) || l.onceEvery("k", time.Minute, now.Add(59*time.Second)) {
+		t.Fatal("onceEvery fired twice in one minute")
+	}
+	if !l.onceEvery("k", time.Minute, now.Add(time.Minute)) {
+		t.Fatal("onceEvery did not fire after a minute")
+	}
+}
+
+// R2: concurrent Pause and Resume never lose each other's change.
+func TestPauseResumeConcurrentNoLostUpdate(t *testing.T) {
+	root := t.TempDir()
+	const id = "12D3KooWAB9b653acxC6ihu2qXfTQsS7xv2gpc5JZFB2RcpezGcw"
+	cfg := Config{Peers: map[string]Peer{"x": {ID: id}}}
+	until := time.Now().Add(time.Hour)
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			if err := Pause(root, id, fmt.Sprintf("keep%d", i), until); err != nil {
+				t.Error(err)
+			}
+		}(i)
+		go func() {
+			defer wg.Done()
+			if _, err := Resume(root, cfg, "x", "gone"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	p, err := ReadPauses(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p) != 40 {
+		t.Fatalf("pauses = %d, want 40 (lost updates)", len(p))
+	}
+}
+
+// R3: with nothing exposed, lookup answers without resolving.
+func TestLookupWithNoExposeSkipsResolve(t *testing.T) {
+	a, b := pair(t)
+	b.Config.Peers["a"] = Peer{ID: a.Host.ID().String()}
+	var called atomic.Bool
+	b.ResolveLookup = func(string) LookupResponse {
+		called.Store(true)
+		return LookupResponse{Found: true, Name: "agent", State: "live"}
+	}
+	got, err := a.callLookup(context.Background(), b.Host.ID(), "agent")
+	if err != nil || got.Found {
+		t.Fatalf("lookup = %+v %v", got, err)
+	}
+	if called.Load() {
+		t.Fatal("ResolveLookup ran for a peer with nothing exposed")
 	}
 }

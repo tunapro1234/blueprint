@@ -228,3 +228,30 @@ New findings:
 Pending on bp-api's side now that guard is on dev (76c2769): `guard.Scan` at
 intake, `guard.Redact` outbound, the `guard.Policy`/`Limiter`/`Watch` swap,
 and the M7 hop marker.
+
+## Follow-up: c373649 (guard wiring, F1-F7)
+
+F1, F2, F4, F5, F6 and F7 are fixed as described (spot-checked F2: family
+revocation skips an empty family and static tokens; legacy reuse still
+alerts). F3 is deferred until `Queue.Render` lands; agreed.
+
+Guard wiring in `internal/api/guard.go` follows the locked API:
+`CheckSend`/`CheckRoom` and the `Limiter` per Peer ID before acceptance,
+denials read as not-found and feed `EvDenied`, lookups feed `EvLookup`,
+accepted remote text is scanned once at intake (High -> `guard.finding`
+alert), every recipient gets `EvInbound`, and local text read by a remote
+client (inbox, room posts, board values and history) goes through
+`guard.Redact` with `EvOutbound`.
+
+Remaining notes, none blocking:
+
+- **One Watch per process.** `NewCore` builds its own Watch and the P2P node
+  has another, so an agent tainted over P2P and then read by a gateway client
+  (or the reverse) does not trip `tainted-relay`. blueprint should build one
+  Watch in cmd/bp and hand it to both.
+- **Unredacted local metadata.** Room topics and agent descriptions written
+  locally are shown to remote clients without `guard.Redact`. Low risk (short,
+  owner-written), but run them through `outbound` too.
+- **Hop marker (M7):** not needed now. bp never relays by itself, and the
+  per-client limiter and room budgets bound agent-driven loops. Tracked as
+  T-L2 partial in the threat model.

@@ -111,9 +111,12 @@ func MatchCanary(patterns []string, home, input string) (string, bool) {
 
 // Taint is the most recent outside message delivered to an agent.
 type Taint struct {
+	// Peer names the source for people: alias and peer ID, or the sender.
 	Peer string
-	ID   string
-	At   time.Time
+	// Alias is the peer alias alone, as Watch events name peers.
+	Alias string
+	ID    string
+	At    time.Time
 }
 
 // logLine is the subset of msgq.LogEntry the hook reads; guard does not
@@ -191,7 +194,11 @@ func TaintFrom(logPath, agent string, since time.Time) (Taint, bool, error) {
 		if peer == "" {
 			peer = e.From
 		}
-		best, found = Taint{Peer: peer, ID: e.ID, At: at}, true
+		alias := e.Peer
+		if alias == "" {
+			alias = e.From
+		}
+		best, found = Taint{Peer: peer, Alias: alias, ID: e.ID, At: at}, true
 	}
 	return best, found, scanner.Err()
 }

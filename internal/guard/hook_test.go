@@ -159,3 +159,35 @@ func TestAuditSinkMapsCanary(t *testing.T) {
 		t.Fatalf("canary-access maps to %q", m.kind)
 	}
 }
+
+// Taint from another process reaches Watch through MessageLogTaint: a P2P
+// message delivered to "main" (logged by the p2p service) makes a later
+// outbound to a different peer, seen by the API process, a tainted relay.
+func TestWatchTaintSourceCrossesProcesses(t *testing.T) {
+	now := time.Now()
+	path := writeLog(t,
+		map[string]any{"id": "qp1", "to": "main", "from": "external:eve@laptop", "ts": unixf(now.Add(-5 * time.Minute)), "finished": unixf(now.Add(-5 * time.Minute)), "status": "delivered", "peer": "laptop", "peerId": "12D3Koo", "remote": true},
+	)
+	rec := &recorder{}
+	w := NewWatch(WatchConfig{TaintSource: MessageLogTaint(path)}, rec)
+	w.Observe(Event{Time: now, Kind: EvOutbound, Agent: "main", Peer: "laptop"})
+	if len(rec.alerts) != 0 {
+		t.Fatalf("a reply to the tainting peer is not a relay: %+v", rec.alerts)
+	}
+	w.Observe(Event{Time: now, Kind: EvOutbound, Agent: "main", Peer: "gateway"})
+	if len(rec.alerts) != 1 || rec.alerts[0].Rule != "tainted-relay" || rec.alerts[0].Peer != "laptop" || rec.alerts[0].Channel != "qp1" {
+		t.Fatalf("relay alert: %+v", rec.alerts)
+	}
+	w.Observe(Event{Time: now, Kind: EvSensitive, Agent: "main", Target: ".credentials.json"})
+	if len(rec.alerts) != 2 || rec.alerts[1].Rule != "tainted-secret-access" {
+		t.Fatalf("secret alert: %+v", rec.alerts)
+	}
+	// An agent the log never names stays untainted; without a source nothing
+	// changes.
+	w.Observe(Event{Time: now, Kind: EvOutbound, Agent: "other", Peer: "gateway"})
+	plain := &recorder{}
+	NewWatch(WatchConfig{}, plain).Observe(Event{Time: now, Kind: EvOutbound, Agent: "main", Peer: "gateway"})
+	if len(rec.alerts) != 2 || len(plain.alerts) != 0 {
+		t.Fatalf("alerts = %+v / %+v", rec.alerts, plain.alerts)
+	}
+}

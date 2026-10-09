@@ -123,6 +123,7 @@ bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent
 bp p2p resume <peer> [agent] | pauses [--json]   # lift loop-cap pauses
 bp messages reindex                               # add done/ history to messages.jsonl
 bp audit [--since <dur>] [--kind <prefix>] [--severity info|warn|alert] [--peer <alias>] [-n N] [--json]
+bp guard hook claude [--ask] [--canary <path>]...  # PreToolUse tripwire (stdin)
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
@@ -247,6 +248,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "guard" {
+		guardHookMain(os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "_observe" {

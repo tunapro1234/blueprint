@@ -24,7 +24,9 @@ it is opt-in and `bp disable guard-hooks` removes exactly what enable added.
 ```
 
 Config (`guardHooks`): `mode` = `observe` (default) or `ask`; `canaries` =
-extra path patterns (W7 supplies the defaults).
+extra path patterns (W7 supplies the defaults). Apply turns them into the
+hook command line (`--ask`, `--canary <path>` per pattern), so the hook never
+reads bp's config on the fast path.
 
 ## What Apply changes (Claude Code)
 
@@ -32,7 +34,7 @@ One entry in `~/.claude/settings.json`:
 
 ```json
 {"hooks": {"PreToolUse": [{"matcher": "Read|Bash|Grep|Glob|Edit|Write|WebFetch",
-  "hooks": [{"type": "command", "command": "bp guard hook claude", "timeout": 5}]}]}}
+  "hooks": [{"type": "command", "command": "bp guard hook claude [--ask] [--canary <path>]...", "timeout": 5}]}]}}
 ```
 
 The journal needs one new change kind, proposed for W2:
@@ -61,7 +63,8 @@ is installed, so the module only enables the transcript check.
    starting `external:` (or a non-nil `Origin` once the log carries it) in the
    last 30 minutes. Reads only the file tail.
 5. Write `guard.reach.secret` (alert) through `guard.AuditSink` when tainted,
-   or when a canary path matched (always alert). Untainted access to an
+   or `guard.reach.canary` (alert) when a canary path matched, tainted or
+   not. Untainted access to an
    ordinary secret path writes nothing: that is normal work.
 6. Mode `ask` and tainted: print
    `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"bp guard: this agent received outside text from <peer> <n> min ago; confirm access to <path>"}}`
@@ -73,6 +76,14 @@ is installed, so the module only enables the transcript check.
 A per-harness `ToolCall{Agent, Harness, Tool, Input string; Time time.Time}`
 source: hook payload where the harness has a pre-tool hook, transcript tail
 otherwise. guard consumes it; it does not install anything itself.
+
+## Status
+
+Runtime implemented on feat/guard: `internal/guard/hook.go` (`ParseHook`,
+`Flatten`, `MatchCanary`, `TaintFrom`, `HookConfig.Match`/`Evaluate`) and
+`cmd/bp/guard_hook.go` (`bp guard hook claude`, run before normal startup;
+config and identity load only after a match). Apply (the module entry and
+`AddJSONEntry` call) waits for feat/modules on dev.
 
 ## Tests
 

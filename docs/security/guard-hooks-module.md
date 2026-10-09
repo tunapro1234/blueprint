@@ -30,14 +30,22 @@ reads bp's config on the fast path.
 
 ## What Apply changes (Claude Code)
 
-One entry in `~/.claude/settings.json`:
+Decision (9 Oct, after blueprint found the tripwire dormant): nothing in the
+user's own settings changes. When the module is on, `prepareLocalObservation`
+(cmd/bp/local_observation.go) adds one PreToolUse group to the per-agent
+`--settings` layer that already carries bp's other Claude hooks. Disabling
+needs no undo journal. Only agents opened or restarted after enabling are
+covered, and `bp guard status` must say so. The group, with the absolute bp
+path in place of `bp`:
 
 ```json
 {"hooks": {"PreToolUse": [{"matcher": "Read|Bash|Grep|Glob|Edit|Write|WebFetch",
   "hooks": [{"type": "command", "command": "bp guard hook claude [--ask] [--canary <path>]...", "timeout": 5}]}]}}
 ```
 
-The journal needs one new change kind, proposed for W2:
+The earlier plan to edit `~/.claude/settings.json` through the journal is
+dropped. `json-entry` landed in W2 for other modules but guard does not use
+it. The original proposal, kept for the record:
 
 - `json-entry`: `Path`, `Option` = JSON pointer of the array
   (`/hooks/PreToolUse`), `Value` = the exact entry added. Undo removes only an
@@ -82,8 +90,11 @@ otherwise. guard consumes it; it does not install anything itself.
 Runtime implemented on feat/guard: `internal/guard/hook.go` (`ParseHook`,
 `Flatten`, `MatchCanary`, `TaintFrom`, `HookConfig.Match`/`Evaluate`) and
 `cmd/bp/guard_hook.go` (`bp guard hook claude`, run before normal startup;
-config and identity load only after a match). Apply (the module entry and
-`AddJSONEntry` call) waits for feat/modules on dev.
+config and identity load only after a match). The module is not wired yet,
+so no live agent runs the hook. The registry entry, the `guardHooks` config
+and the PreToolUse group in the settings layer are built on feat/guard once
+feat/modules is on dev. Enabling it on the live install is the owner's
+call.
 
 ## Tests
 

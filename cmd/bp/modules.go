@@ -42,17 +42,22 @@ func (a *app) modulesCommand(args []string) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(rows)
 	}
+	width := 0
+	for _, row := range rows {
+		width = max(width, len(row.Name))
+	}
+	indent := width + 7
 	for _, row := range rows {
 		state := "off"
 		if row.Enabled {
 			state = "on"
 		}
-		fmt.Fprintf(a.out, "%-9s %-3s  %s\n", row.Name, state, row.Description)
+		fmt.Fprintf(a.out, "%-*s %-3s  %s\n", width, row.Name, state, row.Description)
 		for _, change := range row.Changes {
-			fmt.Fprintf(a.out, "%16s changed: %s\n", "", change)
+			fmt.Fprintf(a.out, "%*s changed: %s\n", indent, "", change)
 		}
 		for _, conflict := range row.Conflicts {
-			fmt.Fprintf(a.out, "%16s conflict: %s\n", "", conflict)
+			fmt.Fprintf(a.out, "%*s conflict: %s\n", indent, "", conflict)
 		}
 	}
 	if unknown := modules.Unknown(a.config); len(unknown) > 0 {

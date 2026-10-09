@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -226,7 +227,8 @@ func TestEnableRefusesConflictWithoutForce(t *testing.T) {
 		t.Fatal("--force did not enable")
 	}
 	out := f.run("modules")
-	if !strings.Contains(out, "accounts  on") {
+	// The name column is as wide as the longest module name.
+	if !regexp.MustCompile(`(?m)^accounts +on `).MatchString(out) {
 		t.Fatalf("bp modules:\n%s", out)
 	}
 	f.run("disable", "accounts")

@@ -44,6 +44,7 @@ type Config struct {
 	P2P              *p2p.Config             `json:"p2p,omitempty" yaml:"p2p,omitempty"`
 	API              *APIConfig              `json:"api,omitempty" yaml:"api,omitempty"`
 	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
+	GuardHooks       *GuardHooksConfig       `json:"guardHooks,omitempty" yaml:"guardHooks,omitempty"`
 	CLIUpdates       map[string][]string     `json:"cliUpdates,omitempty" yaml:"cliUpdates,omitempty"`
 	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
 	Bar              BarConfig               `json:"bar" yaml:"bar"`
@@ -135,6 +136,32 @@ type CodexConfig struct {
 	Disabled bool `json:"disabled" yaml:"disabled"`
 }
 
+// GuardHooksConfig shapes the tool-call tripwire of the guard-hooks module
+// (docs/security/guard-hooks-module.md). It matters only while that module is
+// enabled.
+type GuardHooksConfig struct {
+	// Mode is "observe" (alert and let the call run, the default) or "ask"
+	// (also ask the human to confirm a tainted secret access).
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+	// Canaries are extra path patterns that always alert when touched.
+	Canaries []string `json:"canaries,omitempty" yaml:"canaries,omitempty"`
+}
+
+func validateGuardHooks(g *GuardHooksConfig) error {
+	if g == nil {
+		return nil
+	}
+	if g.Mode != "" && g.Mode != "observe" && g.Mode != "ask" {
+		return fmt.Errorf("mode must be observe or ask, not %q", g.Mode)
+	}
+	for _, c := range g.Canaries {
+		if strings.TrimSpace(c) == "" || strings.ContainsAny(c, "\x00\n\r") {
+			return fmt.Errorf("invalid canary pattern %q", c)
+		}
+	}
+	return nil
+}
+
 // CodexDisabled reports whether the Codex policy forbids new Codex sessions.
 func (c Config) CodexDisabled() bool {
 	return c.Codex != nil && c.Codex.Disabled
@@ -174,6 +201,7 @@ type overrides struct {
 	P2P              *p2p.Config              `json:"p2p" yaml:"p2p"`
 	API              *APIConfig               `json:"api" yaml:"api"`
 	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
+	GuardHooks       *GuardHooksConfig        `json:"guardHooks" yaml:"guardHooks"`
 	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
 	CLIUpdates       *map[string][]string     `json:"cliUpdates" yaml:"cliUpdates"`
 	Bar              *barOverrides            `json:"bar" yaml:"bar"`
@@ -336,6 +364,9 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 	}
 	if err := validateClaudeAccounts(result.ClaudeAccounts); err != nil {
 		return Config{}, fmt.Errorf("parse %s: claudeAccounts: %w", path, err)
+	}
+	if err := validateGuardHooks(result.GuardHooks); err != nil {
+		return Config{}, fmt.Errorf("parse %s: guardHooks: %w", path, err)
 	}
 	return result, nil
 }
@@ -510,6 +541,11 @@ func apply(result *Config, values overrides) {
 		value := *values.Codex
 		value.Sockets = append([]string(nil), value.Sockets...)
 		result.Codex = &value
+	}
+	if values.GuardHooks != nil {
+		value := *values.GuardHooks
+		value.Canaries = append([]string(nil), value.Canaries...)
+		result.GuardHooks = &value
 	}
 	if values.Remotes != nil {
 		result.Remotes = make(map[string]RemoteConfig, len(*values.Remotes))

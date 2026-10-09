@@ -354,3 +354,39 @@ func TestDisableKeepsUserEditsThatKeepTheMarker(t *testing.T) {
 		t.Fatalf("deleted the user's edits of shell.sh: %+v", result)
 	}
 }
+
+func TestGuardHooksOffByDefaultAndDetectedOnlyFromItsConfig(t *testing.T) {
+	f := newFixture(t, "")
+	if Detect(f.cfg, f.env)[GuardHooks] {
+		t.Fatal("guard-hooks detected on an install that never asked for it")
+	}
+	f = newFixture(t, "guardHooks:\n  mode: observe\n")
+	if !Detect(f.cfg, f.env)[GuardHooks] {
+		t.Fatal("guard-hooks not detected from an existing guardHooks config")
+	}
+}
+
+func TestGuardHooksConflicts(t *testing.T) {
+	f := newFixture(t, "modules: {}\n")
+	old := managedClaudeSettings
+	managedClaudeSettings = filepath.Join(t.TempDir(), "managed-settings.json")
+	t.Cleanup(func() { managedClaudeSettings = old })
+	env := f.env
+	env.Config.LocalObservation = true
+	env.Config.Modules = map[string]bool{Sessions: true}
+	if got := guardHooksConflicts(env); len(got) != 0 {
+		t.Fatalf("clean setup conflicts: %v", got)
+	}
+	// Without sessions, plain `claude` launches never get the hook.
+	env.Config.Modules = map[string]bool{}
+	if got := guardHooksConflicts(env); len(got) != 1 || !strings.Contains(got[0], "sessions is off") {
+		t.Fatalf("sessions off: %v", got)
+	}
+	must(t, os.WriteFile(managedClaudeSettings, []byte(`{"allowManagedHooksOnly":true}`), 0o600))
+	must(t, os.MkdirAll(filepath.Join(f.home, ".claude"), 0o700))
+	must(t, os.WriteFile(filepath.Join(f.home, ".claude", "settings.json"), []byte(`{"disableAllHooks":true}`), 0o600))
+	env.Config.LocalObservation = false
+	if got := guardHooksConflicts(env); len(got) != 4 {
+		t.Fatalf("conflicts = %v, want sessions, localObservation, managed and user", got)
+	}
+}

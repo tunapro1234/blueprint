@@ -14,6 +14,7 @@ import (
 
 	"blueprint/internal/cache"
 	"blueprint/internal/identity"
+	"blueprint/internal/modules"
 	"context"
 )
 
@@ -66,6 +67,11 @@ func (a *app) prepareLocalObservation(harness string, args []string) ([]string, 
 	for event, added := range claudeHookGroups(quoteShell(self) + " _hook claude") {
 		existing, _ := hooks[event].([]any)
 		hooks[event] = append(existing, added.([]any)...)
+	}
+	// The guard-hooks module's tool-call tripwire (cmd/bp/guard_hook.go).
+	if a.moduleEnabled(modules.GuardHooks) {
+		existing, _ := hooks["PreToolUse"].([]any)
+		hooks["PreToolUse"] = append(existing, guardHookGroup(self, a.config.GuardHooks))
 	}
 	settings["hooks"] = hooks
 	// Preserve an existing status-line command and its output, while recording

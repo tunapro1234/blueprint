@@ -264,6 +264,14 @@ class LocalCLITest(unittest.TestCase):
                         USER="test-user", LOGNAME="test-user", SUDO_USER="", PATH=str(self.bin) + os.pathsep + os.environ["PATH"], TERM="xterm-256color", SHELL="/bin/bash")
         for key in ["TMUX", "TMUX_PANE", "BP_SESSION", "AGENT", "AGENTBOOK", "ZDOTDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CODEX_THREAD_ID"]:
             self.env.pop(key, None)
+        # Scrub leaked harness vars inherited from a parent shell or a polluted
+        # tmux server. BP_FAKE_* steer the fake TUI, so a stale path from an
+        # earlier run makes it write the wrong file; CLAUDE_CODE_CHILD_SESSION
+        # disables transcripts. Inheriting either turns these E2E tests red from
+        # outside their own setup (observed: a live tmux server carrying both).
+        # The intentional BP_FAKE_* this harness needs are set below, after this.
+        for key in [k for k in self.env if k.startswith("BP_FAKE") or k == "CLAUDE_CODE_CHILD_SESSION"]:
+            self.env.pop(key, None)
         # A synthetic unverified caller thread avoids inheriting the host agent identity.
         self.env["CODEX_THREAD_ID"] = "bbbbbbbb-2222-2222-2222-222222222222"
         if self.coverage_dir:

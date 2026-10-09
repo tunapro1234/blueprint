@@ -15,7 +15,7 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
-const guardHookUsage = "usage: bp guard hook claude [--ask] [--canary <path>]... (reads the PreToolUse payload on stdin)"
+const guardHookUsage = "usage: bp guard status | bp guard hook claude [--ask] [--canary <path>]... (reads the PreToolUse payload on stdin)"
 
 // guardHookMain runs `bp guard hook <harness>` before the normal startup, so
 // a tool call that touches nothing sensitive costs one stdin read and a

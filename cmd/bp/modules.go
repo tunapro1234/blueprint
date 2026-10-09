@@ -15,7 +15,7 @@ import (
 // moduleEnv builds the environment module hooks inspect and change.
 func (a *app) moduleEnv() modules.Env {
 	home, _ := os.UserHomeDir()
-	env := modules.Env{Config: a.config, UserHome: home, Getenv: os.Getenv, ProcRoot: "/proc", Shell: filepath.Base(os.Getenv("SHELL"))}
+	env := modules.Env{Config: a.config, UserHome: home, Getenv: os.Getenv, ProcRoot: "/proc", Shell: filepath.Base(os.Getenv("SHELL")), Actor: a.moduleActor()}
 	if a.tmux != nil {
 		env.Tmux = func(args ...string) (string, error) { return a.tmux.Exec(a.ctx, args...) }
 	}
@@ -163,6 +163,12 @@ func (a *app) afterModuleSwitch(name string, enable, wasEnabled bool) error {
 	if err == nil {
 		a.config = cfg
 	}
+	if name == modules.Sessions && enable != wasEnabled && !a.config.Legacy {
+		// The agent hint follows: sessions installs get the operational skill.
+		if _, err := a.installAgentHint(a.moduleEnv()); err != nil {
+			return err
+		}
+	}
 	if name != modules.Bar || enable == wasEnabled {
 		return nil
 	}
@@ -180,4 +186,18 @@ func (a *app) reloadConfig() (bpconfig.Config, error) {
 		return cfg, err
 	}
 	return modules.Init(cfg), nil
+}
+
+// moduleActor names the caller for the audit log: the bp agent when the
+// command runs inside one, otherwise the OS user.
+func (a *app) moduleActor() string {
+	if a.resolveSender != nil || os.Getenv("TMUX") != "" || os.Getenv("BP_SESSION") != "" {
+		if who := a.senderIdentity(); who.Label != "" {
+			return who.Label
+		}
+	}
+	if user := os.Getenv("USER"); user != "" {
+		return "user:" + user
+	}
+	return "user"
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/modules"
 )
 
@@ -129,6 +130,11 @@ func (a *app) uninstall(args []string) error {
 	for _, unit := range []string{"/etc/systemd/system/blueprint.service", filepath.Join(env.UserHome, ".config/systemd/user/blueprint.service")} {
 		if _, err := os.Lstat(unit); err == nil {
 			fmt.Fprintf(a.out, "left in place: %s (bp did not install it; stop and remove it yourself if you no longer want it)\n", unit)
+		}
+	}
+	if !dryRun {
+		if err := audit.Append(a.config.StateDir, audit.Event{Kind: "bp.uninstall", Actor: a.moduleActor(), Fields: map[string]string{"purge": fmt.Sprint(purge)}}); err != nil {
+			fmt.Fprintf(a.err, "warning: audit log: %v\n", err)
 		}
 	}
 	if self, err := os.Executable(); err == nil && !dryRun {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/config"
 )
 
@@ -283,5 +284,32 @@ func TestMigrationFallsBackInMemoryWhenWriteFails(t *testing.T) {
 	cfg := Init(f.cfg)
 	if !EnabledIn(cfg, WA) || !EnabledIn(cfg, Sessions) {
 		t.Fatalf("in-memory set = %v", cfg.Modules)
+	}
+}
+
+func TestEnableDisableAreAudited(t *testing.T) {
+	f := newFixture(t, "modules: {}\n")
+	f.env.Actor = "tester"
+	_, err := Enable(f.env, UI, Options{})
+	must(t, err)
+	f.reload()
+	f.env.Actor = "tester"
+	_, err = Enable(f.env, UI, Options{}) // no change: no second event
+	must(t, err)
+	f.reload()
+	f.env.Actor = "tester"
+	_, err = Disable(f.env, UI, Options{})
+	must(t, err)
+	events, err := audit.Read(f.cfg.StateDir, audit.Filter{})
+	must(t, err)
+	var kinds []string
+	for _, event := range events {
+		if event.Target != UI || event.Actor != "tester" {
+			t.Fatalf("event = %+v", event)
+		}
+		kinds = append(kinds, event.Kind)
+	}
+	if strings.Join(kinds, ",") != "module.enable,module.disable" {
+		t.Fatalf("kinds = %v", kinds)
 	}
 }

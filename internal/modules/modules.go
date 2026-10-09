@@ -18,6 +18,7 @@ import (
 	"sync"
 	"syscall"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/config"
 )
 
@@ -124,6 +125,8 @@ type Env struct {
 	Shell string
 	// Wrappers adds the optional lush/rush helpers to shell.sh.
 	Wrappers bool
+	// Actor names who asked for the change, for the audit log.
+	Actor string
 }
 
 func (e Env) getenv(key string) string {
@@ -200,10 +203,32 @@ func migrate(cfg config.Config, detected map[string]bool) error {
 	if err == nil && fresh.Path == cfg.Path && fresh.ModulesSet {
 		return nil
 	}
-	if err := recordExisting(Env{Config: cfg, UserHome: detectEnv(cfg).UserHome, Getenv: os.Getenv}, detected); err != nil {
+	env := Env{Config: cfg, UserHome: detectEnv(cfg).UserHome, Getenv: os.Getenv}
+	if err := recordExisting(env, detected); err != nil {
 		return err
 	}
-	return config.SetModules(cfg.Path, detected)
+	if err := config.SetModules(cfg.Path, detected); err != nil {
+		return err
+	}
+	var names []string
+	for _, name := range Names() {
+		if detected[name] {
+			names = append(names, name)
+		}
+	}
+	auditEvent(env, audit.Event{Kind: "module.migrate", Reason: "config had no modules key; recorded the modules in use", Fields: map[string]string{"enabled": strings.Join(names, ","), "config": cfg.Path}})
+	return nil
+}
+
+// auditEvent records a module decision in the audit log. A logging failure
+// never undoes the change; it is reported on stderr.
+func auditEvent(env Env, event audit.Event) {
+	if event.Actor == "" {
+		event.Actor = env.Actor
+	}
+	if err := audit.Append(env.Config.StateDir, event); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: audit log: %v\n", err)
+	}
 }
 
 func journalDir(cfg config.Config) string {
@@ -319,7 +344,15 @@ func Enable(env Env, name string, options Options) (Result, error) {
 		result.Actions = append(result.Actions, "set modules."+name+" = true in "+configLabel(cfg))
 	}
 	result.Changed = !wasEnabled || len(journal.Changes) > before
-	// TODO(audit): audit.Append(cfg.StateDir, audit.Event{Kind: "module.enable", ...}) once internal/audit lands on dev.
+	if result.Changed {
+		fields := map[string]string{"changes": strings.Join(result.Actions, "; ")}
+		severity := audit.Info
+		if len(result.Conflicts) > 0 {
+			fields["forcedConflicts"] = strings.Join(result.Conflicts, "; ")
+			severity = audit.Warn
+		}
+		auditEvent(env, audit.Event{Kind: "module.enable", Severity: severity, Target: name, Fields: fields})
+	}
 	return result, nil
 }
 
@@ -367,7 +400,13 @@ func Disable(env Env, name string, options Options) (Result, error) {
 		result.Actions = append(result.Actions, "set modules."+name+" = false in "+configLabel(cfg))
 	}
 	result.Changed = wasEnabled || len(actions) > 0
-	// TODO(audit): see Enable.
+	if result.Changed {
+		fields := map[string]string{"changes": strings.Join(result.Actions, "; ")}
+		if len(result.Kept) > 0 {
+			fields["kept"] = strings.Join(result.Kept, "; ")
+		}
+		auditEvent(env, audit.Event{Kind: "module.disable", Target: name, Fields: fields})
+	}
 	return result, nil
 }
 

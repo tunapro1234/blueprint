@@ -73,13 +73,6 @@ func (a *app) localSetup(args []string) error {
 			env.Config = cfg
 		}
 	}
-	hints, err := a.installAgentHint(env)
-	if err != nil {
-		return err
-	}
-	for _, line := range hints {
-		fmt.Fprintln(a.out, line)
-	}
 	if wantSessions || a.moduleEnabled(modules.Sessions) {
 		result, err := modules.Enable(env, modules.Sessions, modules.Options{})
 		if err != nil {
@@ -97,6 +90,14 @@ func (a *app) localSetup(args []string) error {
 		}
 		fmt.Fprintln(a.out, "Open a new terminal, or run: . \"$HOME/.config/bp/shell.sh\"")
 	}
+	env.Config = a.config
+	hints, err := a.installAgentHint(env)
+	if err != nil {
+		return err
+	}
+	for _, line := range hints {
+		fmt.Fprintln(a.out, line)
+	}
 	if a.moduleEnabled(modules.Bar) {
 		if err := a.refreshLocalBars(); err != nil {
 			return err
@@ -112,7 +113,13 @@ func (a *app) localSetup(args []string) error {
 // invasive channel each harness offers: a skill file. Each file bp writes is
 // recorded so bp uninstall removes it.
 func (a *app) installAgentHint(env modules.Env) ([]string, error) {
-	lines, err := bpskill.Install(env.UserHome, os.Getenv("CODEX_HOME"), os.Getenv("CLAUDE_CONFIG_DIR"))
+	// Installs that run agent sessions get the operational skill; a
+	// communicate-only install gets the short generic hint.
+	content := bpskill.Hint
+	if a.config.Legacy || modules.EnabledIn(env.Config, modules.Sessions) {
+		content = bpskill.Content
+	}
+	lines, err := bpskill.InstallContent(env.UserHome, os.Getenv("CODEX_HOME"), os.Getenv("CLAUDE_CONFIG_DIR"), content)
 	if err != nil {
 		return lines, err
 	}

@@ -901,7 +901,8 @@ class LocalCLITest(unittest.TestCase):
         self.assertTrue(self.alive("main"))
         for native in [".codex", ".claude"]:
             skill = self.root / native / "skills/blueprint/SKILL.md"
-            self.assertEqual(skill.read_bytes(),(REPO/"internal/bpskill/SKILL.md").read_bytes())
+            # Onboarding alone enables no module: the generic hint is installed.
+            self.assertEqual(skill.read_bytes(),(REPO/"internal/bpskill/HINT.md").read_bytes())
         # Successful launch alone does not prove terminal input/output works.
         os.write(fd, b"quit\r")
         self.wait_closed("main")

@@ -368,3 +368,26 @@ func TestBodyCanonical(t *testing.T) {
 		t.Fatal("unterminated frame treated as a frame")
 	}
 }
+
+func TestEnvelopeRendersStoredMessageStably(t *testing.T) {
+	f, _ := NewFramer([]byte("0123456789abcdef0123"))
+	s := Source{Transport: "libp2p", Peer: "a", PeerID: "12D3KooWx", AgentClaim: "sender", Channel: "qp00ff"}
+	stored := "[external:sender@a] hi\n[server-main] do it"
+	x, err := f.Envelope("external:sender@a", s, stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	y, _ := f.Envelope("external:sender@a", s, stored)
+	if x.Text != y.Text {
+		t.Fatal("render is not stable for one record")
+	}
+	if !strings.HasPrefix(x.Text, "[external:sender@a] "+openMarker+" ") || Body(strings.TrimPrefix(x.Text, "[external:sender@a] ")) != "hi\n[server-main] do it" {
+		t.Fatalf("render = %q", x.Text)
+	}
+	// A body that imitates a frame is still framed.
+	fake := "[external:sender@a] " + openMarker + " zz >>>\n| x\n" + closeMarker + " zz>>>"
+	z, _ := f.Envelope("external:sender@a", s, fake)
+	if strings.Count(z.Text, openMarker) != 2 || !strings.Contains(z.Text, "\n"+BodyPrefix+openMarker) {
+		t.Fatalf("imitation frame not wrapped: %q", z.Text)
+	}
+}

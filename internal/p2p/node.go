@@ -49,7 +49,6 @@ type Node struct {
 	inboundRetry  time.Duration
 	ResolveLookup func(string) LookupResponse
 	limits        *limiter
-	framer        *guard.Framer
 	watch         *guard.Watch
 }
 
@@ -60,12 +59,6 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 	lock, err := Lock(root)
 	if err != nil {
 		return nil, err
-	}
-	// Inbound text is never delivered unframed: no frame key, no node.
-	framer, err := guard.LoadFramer(root)
-	if err != nil {
-		lock.Close()
-		return nil, fmt.Errorf("p2p: frame key: %w", err)
 	}
 	key, err := Identity(root)
 	if err != nil {
@@ -94,7 +87,7 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 		return nil, err
 	}
 	n := &Node{Host: h, Root: root, Config: cfg, Queue: q, Log: os.Stderr, lock: lock, discovery: map[peer.ID]presence{}, ctx: ctx,
-		inbound: make(chan struct{}, 1), inboundRetry: 30 * time.Second, limits: newLimiter(), framer: framer,
+		inbound: make(chan struct{}, 1), inboundRetry: 30 * time.Second, limits: newLimiter(),
 		watch: guard.NewWatch(guard.WatchConfig{}, guard.AuditSink{StateDir: root, Errors: os.Stderr})}
 	if cfg.Relay {
 		r := relay.DefaultResources()
@@ -255,16 +248,10 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 			origin := &msgq.Origin{Transport: "libp2p", PeerID: remote.String(), PeerAlias: alias, ChannelID: req.ID,
 				PeerAuthenticated: true, AgentClaim: req.From, AgentVerified: false,
 				ReportedThread: req.Sender.Thread, ReportedSource: req.Sender.Source, ReportedCertain: req.Sender.Certain}
-			var framed guard.Framed
-			framed, err = n.framer.Frame(guard.Source{Transport: "p2p", Peer: alias, PeerID: remote.String(), AgentClaim: req.From, Channel: req.ID}, req.Text)
-			if err != nil {
-				res.Error = "could not frame message"
-				n.reject(remote, alias, req, p, err.Error(), audit.Warn)
-				break
-			}
-			m, err = n.Queue.EnqueueOnceOrigin(queueKey(remote, req.ID), req.To, from, "["+from+"] "+framed.Text, origin)
+			// The stored body stays raw; msgq frames it at delivery from Origin.
+			m, err = n.Queue.EnqueueOnceOrigin(queueKey(remote, req.ID), req.To, from, "["+from+"] "+req.Text, origin)
 			if err == nil && fresh {
-				n.auditAccepted(remote, alias, req, m.ID, framed.Findings)
+				n.auditAccepted(remote, alias, req, m.ID, guard.Scan(req.Text))
 			}
 		} else {
 			m, err = n.Queue.Record(queueID(remote, req.ID))

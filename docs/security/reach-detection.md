@@ -93,9 +93,9 @@ In `internal/p2p/node.go`:
 1. `handle`, MessageProtocol: replace the inline expose loop with
    `policy.CheckSend(req.To, len(req.Text))` and `limiter.Allow(alias, policy)`;
    on deny, `watch.Observe(Event{Kind: EvDenied, Detail: d.Code, ...})` and audit.
-2. Build the body as `"["+from+"] " + guard.Frame(src, req.Text).Text`, with
-   `src` from the authenticated peer (alias, Peer ID, channel) and the claim.
-   Store `Framed.Findings` kinds in the origin record and audit them.
+2. Keep the stored body raw; audit `guard.Scan(req.Text)` with the accepted
+   event (done on feat/guard). Framing happens at delivery, see
+   [guard-api.md](guard-api.md) "Delivery seam".
 3. `handleLookup`: `policy.CheckLookup(req.Find)` before resolving; a deny
    returns an empty `LookupResponse`; observe `EvLookup` for every query.
 4. Outbound (`Service` send path): `guard.Redact(text, policy.Redact)` before

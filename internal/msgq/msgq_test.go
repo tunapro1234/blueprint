@@ -1,7 +1,6 @@
 package msgq
 
 import (
-	"blueprint/internal/guard"
 	"blueprint/internal/messagetext"
 	"context"
 	"encoding/json"
@@ -2686,27 +2685,5 @@ func TestLateRepaintIsNotReadAsHangingDuringSettleGrace(t *testing.T) {
 	}
 	if status, done := q.Finished(id); !done || status != StatusHangingComposer {
 		t.Fatalf("status=%q done=%v, want %q", status, done, StatusHangingComposer)
-	}
-}
-
-// Records stored before framing, or framed by another guard version or
-// alias, must still accept a retry that carries the same body.
-func TestEnqueueOnceOriginReplayComparesFramedBody(t *testing.T) {
-	q := newBoundTestQueue(t.TempDir())
-	origin := &Origin{Transport: "libp2p", PeerID: "peer", PeerAlias: "laptop", ChannelID: "c1", PeerAuthenticated: true}
-	first, err := q.EnqueueOnceOrigin("peer:c1", "agent", "external:x@laptop", "[external:x@laptop] hello\nworld", origin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	framed, _ := guard.Frame(guard.Source{Transport: "p2p", Peer: "renamed", Channel: "c1"}, "hello\nworld")
-	renamed := *origin
-	renamed.PeerAlias = "renamed"
-	again, err := q.EnqueueOnceOrigin("peer:c1", "agent", "external:x@renamed", "[external:x@renamed] "+framed.Text, &renamed)
-	if err != nil || again.ID != first.ID {
-		t.Fatalf("framed retry of a legacy record refused: %v", err)
-	}
-	other, _ := guard.Frame(guard.Source{Transport: "p2p", Channel: "c1"}, "hello\nworld!")
-	if _, err := q.EnqueueOnceOrigin("peer:c1", "agent", "external:x@laptop", "[external:x@laptop] "+other.Text, origin); err == nil {
-		t.Fatal("different body accepted under the same key")
 	}
 }

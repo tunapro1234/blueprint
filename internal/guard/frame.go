@@ -153,6 +153,22 @@ func (f *Framer) Frame(src Source, text string) (Framed, error) {
 	})
 }
 
+// Envelope renders a stored queue message "[from] body" for delivery: the
+// envelope stays first, the body is framed. It always frames, whatever the
+// body looks like, so a body that imitates a frame is framed too. Set
+// src.Channel to the queue record ID and src.PeerID to the authenticated
+// peer so every render of one record is identical (delivery witnesses
+// compare the rendered text across restarts).
+func (f *Framer) Envelope(from string, src Source, stored string) (Framed, error) {
+	body := strings.TrimPrefix(stored, "["+from+"] ")
+	framed, err := f.Frame(src, body)
+	if err != nil {
+		return Framed{}, err
+	}
+	framed.Text = "[" + from + "] " + framed.Text
+	return framed, nil
+}
+
 // frame builds the framed text. The result starts with the open marker on
 // the first line, so a caller that prepends a "[sender] " envelope keeps the
 // marker on the envelope line.

@@ -718,6 +718,10 @@ type busySanityState struct {
 	// contradiction was last reported (see panesanity.go). An entry is dropped
 	// as soon as the contradiction clears, so a relapse alarms again.
 	PaneSanityReported map[string]string `json:"pane_sanity_reported,omitempty"`
+	// BlockedQueueReported maps an agent to the moment its stuck-queue block was
+	// last reported (see blockedqueue.go). Dropped as soon as the queue drains, so
+	// a new block alarms again.
+	BlockedQueueReported map[string]string `json:"blocked_queue_reported,omitempty"`
 }
 
 // busySanity runs one sweep. Errors from a single pane are never fatal: a session
@@ -742,6 +746,9 @@ func (s *Service) busySanity(ctx context.Context) error {
 	projects := bptmux.ClaudeProjectsRoot()
 	hashes := make(map[string]string, len(sessions))
 	observations := make([]paneObservation, 0, len(sessions))
+	// busyBy carries each agent pane's busy verdict out of the sweep for the
+	// blocked-queue watchdog, which only alarms on an IDLE agent.
+	busyBy := make(map[string]bool, len(sessions))
 	busy, moved, agreed := false, false, false
 	samples := 0
 	for _, session := range sessions {
@@ -788,6 +795,7 @@ func (s *Service) busySanity(ctx context.Context) error {
 		hash := paneHash(pane)
 		hashes[session] = hash
 		screen := bptmux.Busy(pane)
+		busyBy[session] = screen
 		if screen {
 			busy = true
 		}
@@ -836,6 +844,11 @@ func (s *Service) busySanity(ctx context.Context) error {
 	// it is supposed to be talking to. Run after the others for the same reason —
 	// a failure here must not cost the sweep its bookkeeping.
 	s.paneSanityScan(observations, &state, now)
+	// The fourth watchdog on the same beat: whether a message is stuck in the
+	// queue at an idle agent because the composer is not free. Run last, after the
+	// bookkeeping the busy verdict needs, for the same reason as the others — a
+	// failure here must not cost the sweep its state.
+	s.blockedQueueScan(observations, busyBy, &state, now)
 	return writeBusySanity(path, state)
 }
 

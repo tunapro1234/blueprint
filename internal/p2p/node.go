@@ -50,6 +50,42 @@ type Node struct {
 	ResolveLookup func(string) LookupResponse
 	limits        *limiter
 	watch         *guard.Watch
+	channelMu     sync.Mutex
+	channels      map[string]*channelLock
+}
+
+// channelLock serializes inbound handling of one (peer, channel) pair; refs
+// counts holders and waiters so the map entry goes away with the last one.
+type channelLock struct {
+	sync.Mutex
+	refs int
+}
+
+// lockChannel makes the "is this channel new" check, the rate-limit token and
+// the enqueue one step per channel. Without it, concurrent retries of a
+// message whose reply was lost all saw no record, each spent a token, and the
+// late ones were refused as rate limited although the message was accepted.
+func (n *Node) lockChannel(key string) func() {
+	n.channelMu.Lock()
+	if n.channels == nil {
+		n.channels = map[string]*channelLock{}
+	}
+	l := n.channels[key]
+	if l == nil {
+		l = &channelLock{}
+		n.channels[key] = l
+	}
+	l.refs++
+	n.channelMu.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		n.channelMu.Lock()
+		if l.refs--; l.refs == 0 {
+			delete(n.channels, key)
+		}
+		n.channelMu.Unlock()
+	}
 }
 
 func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, error) {
@@ -236,10 +272,12 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 				n.reject(remote, alias, req, p, res.Error, audit.Warn)
 				break
 			}
+			unlock := n.lockChannel(queueKey(remote, req.ID))
 			_, missing := n.Queue.Record(queueID(remote, req.ID))
 			fresh := missing != nil
 			if fresh {
 				if err = n.admit(remote, alias, policy, req); err != nil {
+					unlock()
 					res.Error = err.Error()
 					break
 				}
@@ -250,6 +288,7 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 				ReportedThread: req.Sender.Thread, ReportedSource: req.Sender.Source, ReportedCertain: req.Sender.Certain}
 			// The stored body stays raw; msgq frames it at delivery from Origin.
 			m, err = n.Queue.EnqueueOnceOrigin(queueKey(remote, req.ID), req.To, from, "["+from+"] "+req.Text, origin)
+			unlock()
 			if err == nil && fresh {
 				n.auditAccepted(remote, alias, req, m.ID, guard.Scan(req.Text))
 			}

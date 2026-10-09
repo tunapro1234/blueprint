@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"blueprint/internal/audit"
 	bpconfig "blueprint/internal/config"
@@ -131,5 +132,33 @@ func TestLocalObservationGuardHookFollowsModule(t *testing.T) {
 	on.GuardHooks = nil
 	if command := layer(on)["PreToolUse"][0].Hooks[0].Command; !strings.HasSuffix(command, " guard hook claude") {
 		t.Fatalf("default command = %q", command)
+	}
+}
+
+func TestGuardStatusStatesCoverageCaveat(t *testing.T) {
+	home := t.TempDir()
+	state := filepath.Join(home, "state")
+	now := time.Now()
+	var out bytes.Buffer
+	off := bpconfig.Config{StateDir: state, ModulesSet: true, Modules: map[string]bool{}}
+	guardStatus(off, home, now, &out)
+	if text := out.String(); !strings.HasPrefix(text, "guard-hooks: off") || !strings.Contains(text, "mode: observe") || !strings.Contains(text, "canaries: none") {
+		t.Fatalf("off status:\n%s", text)
+	}
+	if err := audit.Append(state, audit.Event{Kind: "guard.reach.canary", Severity: audit.Alert}); err != nil {
+		t.Fatal(err)
+	}
+	on := off
+	on.Modules = map[string]bool{modules.GuardHooks: true}
+	on.GuardHooks = &bpconfig.GuardHooksConfig{Mode: "ask", Canaries: []string{"~/canary.txt"}}
+	out.Reset()
+	guardStatus(on, home, now.Add(time.Second), &out)
+	text := out.String()
+	for _, want := range []string{"guard-hooks: on", "mode: ask", "canaries: ~/canary.txt",
+		"only Claude Code agents opened or restarted", "already running keep their old settings", "Codex, Hermes or OpenCode agents are not watched",
+		"not working: sessions is off", "not working: localObservation is off", "alerts in the last 24h: 1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("status lacks %q:\n%s", want, text)
+		}
 	}
 }

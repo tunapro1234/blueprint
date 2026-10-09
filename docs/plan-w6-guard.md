@@ -46,5 +46,5 @@ security decision.
 5. Regression tests for every confirmed bp-redteam attack in
    `internal/guard/testdata/attacks/`.
 
-Tests: `flock /run/lock/bp-gotest.lock nice -n 10 go test ./internal/guard/...`
+Tests: `flock /run/lock/bp-gobuild.lock nice -n 10 go test ./internal/guard/...`
 after a heat check.

@@ -88,5 +88,5 @@ share are solid and tested.
 No push; no live install (`/srv/blueprint/state`, `config.json`,
 `/usr/local/bin/bp`, `blueprint.service`); tests on temp roots with
 `env -u TMUX -u TMUX_PANE` and `tmux -S`; heat check below 80C and
-`flock /run/lock/bp-gotest.lock nice -n 10` for Go builds and tests; English
+`flock /run/lock/bp-gobuild.lock nice -n 10` for Go builds and tests; English
 only; each finished step is committed and reported with `bp msg blueprint`.

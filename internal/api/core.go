@@ -65,6 +65,7 @@ const (
 	StateDelivered  = "delivered"  // reached the agent (terminal: verified; inbox: read)
 	StateUnverified = "unverified" // reached the pane, not confirmed
 	StateFailed     = "failed"
+	StateCanceled   = "canceled"
 	StateUnknown    = "unknown"
 )
 
@@ -354,6 +355,8 @@ func queueResult(m msgq.Message) SendResult {
 		result.State = StateUnverified
 	case msgq.IsVerifiedDelivery(m.Status):
 		result.State = StateDelivered
+	case strings.HasPrefix(m.Status, "cancel"):
+		result.State, result.Reason = StateCanceled, m.Status
 	case m.Status != "":
 		result.State, result.Reason = StateFailed, m.Status
 	}
@@ -474,3 +477,41 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 	}
 	return InboxResult{Agent: agent, Messages: items, Remaining: remaining}, nil
 }
+
+// Cancel withdraws a queued message that has not been delivered yet. Only its
+// sender may cancel it. Inbox items cannot be withdrawn once stored.
+func (c *Core) Cancel(caller Caller, id string) (SendResult, error) {
+	result, err := c.cancel(caller, id)
+	c.auditResult(caller, "cancel", result.To, id, err)
+	return result, err
+}
+
+func (c *Core) cancel(caller Caller, id string) (SendResult, error) {
+	if err := ValidateCaller(caller); err != nil {
+		return SendResult{}, err
+	}
+	current, err := c.Status(id)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if current.Route != "queue" {
+		return current, fmt.Errorf("%w: inbox messages cannot be withdrawn", ErrNotCancelable)
+	}
+	record, err := c.Queue.Record(id)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if record.From != caller.Label() {
+		return SendResult{}, fmt.Errorf("%w: only the sender cancels a message", ErrForbidden)
+	}
+	if current.State != StateAccepted {
+		return current, fmt.Errorf("%w: message is already %s", ErrNotCancelable, current.State)
+	}
+	if _, err := c.Queue.Cancel(id); err != nil {
+		return current, fmt.Errorf("%w: %v", ErrNotCancelable, err)
+	}
+	return c.Status(id)
+}
+
+// ErrNotCancelable reports a message that can no longer be withdrawn.
+var ErrNotCancelable = errors.New("not cancelable")

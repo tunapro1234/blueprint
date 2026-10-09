@@ -122,6 +122,9 @@ bp workflow status [<run-id>] [--json] | stop <run-id> | resume <run-id> [--retr
 bp workflow times <run-id|name> [--json]
 bp wait <agent> --until idle|working [--confirm N] [--timeout D] [--json]
 bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent> [--timeout <dur>] [--json]
+bp p2p resume <peer> [agent] | pauses [--json]   # lift loop-cap pauses
+bp messages reindex                               # add done/ history to messages.jsonl
+bp audit [--since <dur>] [--kind <prefix>] [--severity info|warn|alert] [--peer <alias>] [-n N] [--json]
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
@@ -531,6 +534,10 @@ func (a *app) run(args []string) error {
 		return a.dashboard(args[1:])
 	case "p2p":
 		return a.p2pCommand(args[1:])
+	case "audit":
+		return a.auditCommand(args[1:])
+	case "messages":
+		return a.messagesCommand(args[1:])
 	case "fed":
 		return a.federation(args[1:])
 	case "daemon":

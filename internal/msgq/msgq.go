@@ -1467,6 +1467,7 @@ func (q *Queue) finish(path string, message Message, status string) error {
 	if err = syncQueueDir(q.done()); err != nil {
 		return err
 	}
+	_ = q.appendMessageLog(message)
 	if err = os.Remove(path); err != nil {
 		return err
 	}

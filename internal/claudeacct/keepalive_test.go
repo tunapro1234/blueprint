@@ -563,3 +563,43 @@ func TestPlanPhasesSimulatedDay(t *testing.T) {
 	}
 	t.Logf("pings %d, second-day idle %v, phases %v", pings, idle, phases)
 }
+
+func TestPlanKeepsPreviousGridWhileNearlyAsGood(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	members := []keepMember{{1, now, true}, {2, now.Add(2*time.Hour + 20*time.Minute), true}}
+	best := planPhasesNear(members, time.Time{})
+	if best.idle != 10*time.Minute || !best.anchor.Equal(now) {
+		t.Fatalf("best = idle %s anchor %s", best.idle, best.anchor)
+	}
+	near := planPhasesNear(members, now.Add(5*time.Minute))
+	if near.idle != 20*time.Minute || !near.start[1].Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("near = idle %s start %v", near.idle, near.start)
+	}
+	far := planPhasesNear(members, now.Add(30*time.Minute))
+	if far.idle != best.idle || !far.anchor.Equal(best.anchor) {
+		t.Fatalf("far kept a worse grid: idle %s", far.idle)
+	}
+}
+
+func TestKeepAliveHidesFailureFromBeforeRunningWindow(t *testing.T) {
+	f, _ := keepFixture(t, map[int]time.Duration{1: 75 * time.Minute, 3: 150 * time.Minute, 4: 225 * time.Minute})
+	// Slot 1's window started 225 minutes ago.
+	for _, c := range []struct {
+		pinged time.Duration
+		shown  bool
+	}{{-4 * time.Hour, false}, {-time.Hour, true}} {
+		state := KeepAliveState{}
+		entry := state.slot(1)
+		entry.LastPingAt, entry.Error = f.now.Add(c.pinged), "claude failed: exit status 1"
+		if err := f.m.Store.SaveKeepAliveState(state); err != nil {
+			t.Fatal(err)
+		}
+		result, err := f.m.KeepAliveOnce(testCtx(t), KeepAliveOptions{DryRun: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view := result.Slots[0]; !view.Active || (view.Error != "") != c.shown {
+			t.Fatalf("pinged %s: view %+v", c.pinged, view)
+		}
+	}
+}

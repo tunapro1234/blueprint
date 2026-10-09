@@ -18,3 +18,7 @@ all = { level = "warn", priority = -1 }
 lto = "thin"
 codegen-units = 4
 strip = "debuginfo"
+
+# Hashing the test binary is slow unoptimized.
+[profile.dev.package.sha2]
+opt-level = 3

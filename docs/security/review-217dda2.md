@@ -106,9 +106,20 @@ Two small notes:
 - API: `Core.Frame` is `GuardFramer` only when the key loads, and
   `Core.Render` is the delivery renderer. `Gateway.Ready` probes both with a
   real frame, so a passthrough can no longer pass. Verified.
-- Still open: one shared `guard.Watch` (api `NewCore` and the P2P node each
-  build their own). The tool-call hook (dd8b9c1) reads taint from
-  `messages.jsonl`, which covers both transports, so this only affects the
-  in-memory rules (probe, enumeration, relay).
+- Closed (decision, 9 Oct): no shared `guard.Watch`. api `NewCore` and the
+  P2P node run in different processes, so sharing one `*Watch` in memory
+  would not unify them. Unifying them would need Watch state persisted
+  across processes, which is not worth it:
+  - Taint, the cross-transport signal, is already unified on disk. The
+    tool-call hook reads `messages.jsonl`, where p2p, fed and api records all
+    carry Remote.
+  - The in-memory rules (probe, enumeration, relay) key on a transport's own
+    peer identity (libp2p peer ID, or API token and gateway). Those
+    identities do not correlate across transports, so a merged window would
+    add nothing.
+  - Both Watches write to the same audit log through `AuditSink`, so the
+    owner already sees one timeline.
+
+  Revisit only if a rule needs to correlate one actor across transports.
 - The Wire() rule applies to the Codex, Hermes and OpenCode hook paths when
   they land.

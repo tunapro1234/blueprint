@@ -324,3 +324,27 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	return os.Rename(name, path)
 }
+
+// Install is the journal name for what the installer and bp setup add outside
+// any module (agent hint files, the binary link). bp uninstall undoes it last.
+const Install = "install"
+
+// RecordInstall adds changes to the install journal.
+func RecordInstall(cfg config.Config, changes ...Change) error {
+	if len(changes) == 0 || cfg.StateDir == "" {
+		return nil
+	}
+	unlock, err := lock(cfg)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	journal, err := LoadJournal(cfg, Install)
+	if err != nil {
+		return err
+	}
+	for _, change := range changes {
+		journal.Record(change)
+	}
+	return journal.Save(cfg)
+}

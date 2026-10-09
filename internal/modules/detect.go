@@ -26,7 +26,8 @@ func Detect(cfg config.Config, env Env) map[string]bool {
 	if cfg.ClaudeAccounts.AutoSwitch || cfg.ClaudeAccounts.KeepAlive || len(cfg.ClaudeAccounts.Limits) > 0 || accountsStored(cfg) {
 		found[Accounts] = true
 	}
-	if cfg.WABridge && cfg.WAOutbox != "" {
+	// bp wa needs only the outbox; the bridge may run elsewhere.
+	if cfg.WAOutbox != "" {
 		found[WA] = true
 	}
 	if cfg.Legacy || cfg.UsageBin != "" || cfg.UsageHistory != "" {

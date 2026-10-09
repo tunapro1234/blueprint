@@ -233,13 +233,8 @@ func (a *app) setupCheck() error {
 	if a.config.InvalidConfig != "" {
 		return fmt.Errorf("invalid configuration: %s", a.config.InvalidConfig)
 	}
-	shell := filepath.Base(os.Getenv("SHELL"))
-	if shell != "bash" && shell != "zsh" {
-		return fmt.Errorf("unsupported shell %q; select bash or zsh before installing", shell)
-	}
-	if _, err := exec.LookPath(a.tmux.Bin); err != nil {
-		return fmt.Errorf("tmux is required: %w", err)
-	}
+	// tmux and the shell matter only to the sessions and bar modules; their
+	// enable checks them. Installing bp needs neither.
 	// Validate every existing book before replacing a usable binary.
 	for _, path := range book.Paths(a.config.Agentbooks) {
 		if _, err := os.Stat(path); os.IsNotExist(err) {

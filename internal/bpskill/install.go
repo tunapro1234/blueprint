@@ -11,6 +11,9 @@ import (
 //go:embed SKILL.md
 var Content []byte
 
+// Marker identifies a skill file bp manages; files without it are the user's.
+const Marker = "<!-- Managed by bp setup. -->"
+
 // Install updates only bp-managed skills. Unmarked user skills and symlinks stay
 // untouched; modified managed copies get a backup before replacement.
 func Install(home, codexHome, claudeHome string) ([]string, error) {
@@ -46,7 +49,7 @@ func Install(home, codexHome, claudeHome string) ([]string, error) {
 				results = append(results, "skill ready: "+path)
 				continue
 			}
-			if !bytes.Contains(old, []byte("<!-- Managed by bp setup. -->")) {
+			if !bytes.Contains(old, []byte(Marker)) {
 				results = append(results, "preserved user skill: "+path)
 				continue
 			}

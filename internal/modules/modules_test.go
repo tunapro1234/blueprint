@@ -245,7 +245,7 @@ func TestMigrationRecordsInUseAndJournalsOldRCLine(t *testing.T) {
 	f := newFixture(t, "agentbooks: [agentbook.json]\nstateDir: state\n")
 	must(t, os.WriteFile(filepath.Join(f.bpHome, "agentbook.json"), []byte(`{"orchestrator":"main","agents":[{"name":"main"}]}`), 0600))
 	must(t, os.MkdirAll(filepath.Join(f.home, ".config", "bp"), 0700))
-	must(t, os.WriteFile(ShellPath(f.home), []byte(localShell), 0600))
+	must(t, os.WriteFile(ShellPath(f.home), []byte(LocalShell), 0600))
 	zshrc := filepath.Join(f.home, ".zshrc")
 	must(t, os.WriteFile(zshrc, []byte("export A=1\n\n"+RCLine+"\n"), 0644))
 	f.reload()

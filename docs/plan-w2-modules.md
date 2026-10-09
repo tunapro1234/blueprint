@@ -57,7 +57,7 @@ derived set is still used in memory so behavior never changes):
 | sessions | legacy server home, or a book has agents/coordinator, or the shell.sh rc line is present, or `main/onboarding.json` exists |
 | bar | sessions detected (bp styles every session it opens today) |
 | accounts | `claudeAccounts.autoSwitch` or `keepAlive` true, or stored account slots exist |
-| wa | effective `waBridge` true (legacy default included) with `waOutbox` set |
+| wa | `waOutbox` set (the legacy default sets it; `bp wa` needs only the outbox) |
 | ui | legacy server (dash-server runs today), or `usageBin`/`usageHistory` set |
 | monitor | legacy server |
 

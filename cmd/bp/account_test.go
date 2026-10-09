@@ -139,7 +139,7 @@ func (e *accountEnv) login(n int) {
 func (e *accountEnv) app(cooldown int) *app {
 	cfg := bpconfig.DefaultClaudeAccounts()
 	cfg.CooldownMinutes = cooldown
-	return &app{ctx: context.Background(), config: bpconfig.Config{StateDir: e.state, ClaudeAccounts: cfg}}
+	return &app{ctx: context.Background(), config: bpconfig.Config{StateDir: e.state, ClaudeAccounts: cfg, ModulesSet: true, Modules: map[string]bool{"accounts": true}}}
 }
 
 // run executes one bp account command and returns stdout, stderr and the

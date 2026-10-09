@@ -196,7 +196,7 @@ func migrate(cfg config.Config, detected map[string]bool) error {
 	}
 	defer unlock()
 	// Another process may have migrated while this one waited.
-	fresh, err := config.Load()
+	fresh, err := config.LoadHome(cfg.Home)
 	if err == nil && fresh.Path == cfg.Path && fresh.ModulesSet {
 		return nil
 	}

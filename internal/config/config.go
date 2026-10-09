@@ -207,6 +207,22 @@ func Load() (Config, error) {
 	return loadWithWarning(os.Getenv, os.Stat, os.UserHomeDir, os.ReadFile, os.Stderr)
 }
 
+// LoadHome reads the config of the installation at home, ignoring BP_HOME and
+// /etc/blueprint/home. Code that re-reads a config it already has uses this so
+// it can never switch to another installation.
+func LoadHome(home string) (Config, error) {
+	if home == "" {
+		return Config{}, fmt.Errorf("no bp home")
+	}
+	getenv := func(key string) string {
+		if key == "BP_HOME" {
+			return home
+		}
+		return os.Getenv(key)
+	}
+	return loadWithWarning(getenv, os.Stat, os.UserHomeDir, os.ReadFile, os.Stderr)
+}
+
 func loadWith(getenv func(string) string, stat func(string) (os.FileInfo, error), userHome func() (string, error), readFile func(string) ([]byte, error)) (Config, error) {
 	return loadWithWarning(getenv, stat, userHome, readFile, os.Stderr)
 }

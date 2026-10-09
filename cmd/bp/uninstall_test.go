@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"blueprint/internal/bpskill"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/modules"
 )
@@ -317,5 +319,55 @@ func TestTmuxLinesCountOnlyInsideBPBlock(t *testing.T) {
 	f.run("uninstall")
 	if data, _ := os.ReadFile(conf); string(data) != "set -g mouse on\nset -g prefix C-a\n\nset -g mouse on\n" {
 		t.Fatalf("tmux.conf = %q", data)
+	}
+}
+
+// The owner's server (legacy) runs agent sessions and already has the
+// operational skill; an upgrade must leave it in place, never swap in the
+// short hint, and enabling or disabling modules must not touch it either.
+func TestLegacyUpgradeKeepsOperationalSkill(t *testing.T) {
+	f := newInstallFixture(t)
+	var skills []string
+	for _, root := range []string{".claude", ".codex"} {
+		path := filepath.Join(f.home, root, "skills", "blueprint", "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, bpskill.Content, 0600); err != nil {
+			t.Fatal(err)
+		}
+		skills = append(skills, path)
+	}
+	before := map[string]os.FileInfo{}
+	for _, path := range skills {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = info
+	}
+	cfg, err := bpconfig.LoadHome(f.bpHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Legacy with sessions switched off still gets the operational skill.
+	cfg.Legacy, cfg.Modules, cfg.ModulesSet = true, map[string]bool{}, true
+	a := &app{ctx: context.Background(), config: cfg, out: f.out, err: f.out}
+	lines, err := a.installAgentHint(a.moduleEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range skills {
+		data, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(data, bpskill.Content) {
+			t.Fatalf("%s is no longer the operational skill (%v):\n%s", path, err, data)
+		}
+		info, _ := os.Stat(path)
+		if !info.ModTime().Equal(before[path].ModTime()) || !os.SameFile(info, before[path]) {
+			t.Fatalf("%s was rewritten", path)
+		}
+	}
+	if got := strings.Join(lines, "\n"); strings.Count(got, "skill ready: ") != 2 {
+		t.Fatalf("got %q", got)
 	}
 }

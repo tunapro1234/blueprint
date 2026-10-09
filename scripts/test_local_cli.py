@@ -1026,6 +1026,60 @@ class LocalCLITest(unittest.TestCase):
         self.assertIn("dangerously-skip-permissions", result.stdout)
         self.assertNotIn("_bp_agent", (self.root / ".config/bp/shell.sh").read_text())
 
+    def test_upgrade_from_pre_modules_config_keeps_owner_setup(self):
+        # An install shaped like the owner's server before modules existed:
+        # no modules key, onboarded agents in a book, account switching with
+        # stored slots, the WhatsApp outbox, a daemon that ran, and bp's
+        # operational skill in both harnesses. The upgrade (what bp update
+        # runs: setup --check, then setup) must keep all of it.
+        home = self.root / ".blueprint"
+        book = home / "agentbook.json"
+        book.parent.mkdir(parents=True)
+        book.write_text(json.dumps({"orchestrator": "main", "agents": [
+            {"name": "main", "folder": str(self.root)},
+            {"name": "main-worker", "folder": str(self.root / "work")}]}, indent=2) + "\n")
+        (home / "main").mkdir()
+        onboarding = home / "main/onboarding.json"
+        onboarding.write_text('{"cli": "claude"}\n')
+        (home / "state/claude-accounts/slots/1").mkdir(parents=True)
+        (home / "state/jobs.json").write_text("{}\n")
+        config = home / "config.json"
+        original = ('{\n  "agentbooks": ["%s"],\n  "codex": {\n    "disabled": true\n  },\n'
+                    '  "claudeAccounts": {\n    "autoSwitch": true,\n    "threshold": 90,\n'
+                    '    "keepAlive": true,\n    "limits": {"one": 80}\n  },\n'
+                    '  "waOutbox": "%s"\n}\n') % (book, self.root / "wa/outbox")
+        config.write_text(original)
+        config.chmod(0o600)
+        skill = (REPO / "internal/bpskill/SKILL.md").read_bytes()
+        skills = [self.root / native / "skills/blueprint/SKILL.md" for native in [".claude", ".codex"]]
+        for path in skills:
+            path.parent.mkdir(parents=True)
+            path.write_bytes(skill)
+        before = {path: path.stat() for path in skills}
+        kept = {path: path.read_bytes() for path in [book, onboarding]}
+
+        subprocess.run([self.binary, "setup", "--check"], env=self.env, check=True, capture_output=True)
+        subprocess.run([self.binary, "setup"], env=self.env, check=True, capture_output=True)
+
+        result = subprocess.run([self.binary, "modules", "--json"], env=self.env, check=True, capture_output=True, text=True)
+        enabled = {row["name"]: row["enabled"] for row in json.loads(result.stdout)}
+        for name in ["sessions", "bar", "accounts", "wa", "ui", "monitor"]:
+            self.assertTrue(enabled.get(name), f"{name} not enabled after upgrade: {enabled}")
+        # The operational skill stays, byte for byte and untouched.
+        for path in skills:
+            self.assertEqual(path.read_bytes(), skill, f"{path} is not the operational skill")
+            self.assertEqual(path.stat().st_mtime_ns, before[path].st_mtime_ns, f"{path} was rewritten")
+            self.assertEqual(path.stat().st_ino, before[path].st_ino, f"{path} was replaced")
+        # Onboarded agents stay as they were.
+        for path, data in kept.items():
+            self.assertEqual(path.read_bytes(), data, f"{path} changed")
+        # The config only gained the modules member.
+        data = config.read_text()
+        inserted = ',\n  "modules": {"accounts": true, "bar": true, "monitor": true, "sessions": true, "ui": true, "wa": true}'
+        self.assertIn(inserted, data)
+        self.assertEqual(data.replace(inserted, "", 1), original)
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+
     @unittest.skipUnless(shutil.which("openssl"), "OpenSSL required")
     def test_signed_installer_rejects_tampering_before_replacement(self):
         import hashlib

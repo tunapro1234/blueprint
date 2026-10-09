@@ -144,7 +144,7 @@ func TestHTTPNativeRESTFlow(t *testing.T) {
 	if code, body := do(t, "GET", ts.URL+"/v1/boards/main?prefix=plan/", token, bot, nil); code != 200 || len(body["entries"].([]any)) != 1 {
 		t.Fatalf("board get %d %v", code, body)
 	}
-	if code, body := do(t, "DELETE", ts.URL+"/v1/messages/"+sent["id"].(string), token, alice, nil); code != 200 || body["state"] != StateCanceled {
+	if code, body := do(t, "DELETE", ts.URL+"/v1/messages/"+sent["id"].(string), token, alice, nil); code != 200 || body["state"] != StateFailed || !strings.HasPrefix(body["reason"].(string), "canceled") {
 		t.Fatalf("cancel %d %v", code, body)
 	}
 	pending, _ := core.Queue.List()

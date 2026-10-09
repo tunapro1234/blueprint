@@ -33,7 +33,8 @@ type InboxItem struct {
 	TS        float64 `json:"ts"`
 	ContextID string  `json:"contextId,omitempty"`
 	Room      string  `json:"room,omitempty"`
-	// Untrusted marks text that crossed a trust boundary; it is already framed.
+	// Untrusted marks text that crossed a trust boundary. It is stored raw and
+	// framed when the inbox is read.
 	Untrusted bool    `json:"untrusted,omitempty"`
 	ReadAt    float64 `json:"readAt,omitempty"`
 	// Key is the idempotency key the item was stored under, so a retried send

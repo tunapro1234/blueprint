@@ -109,15 +109,19 @@ func a2aText(m A2AMessage) (string, error) {
 	return strings.Join(pieces, "\n"), nil
 }
 
-// a2aState maps a bp delivery state to an A2A task state.
-func a2aState(state, version string) string {
+// a2aState maps a bp delivery state (the P2P states, see msgq.DeliveryState)
+// to an A2A task state. bp has no separate canceled state: a canceled message
+// is failed with a "canceled" reason, which A2A shows as CANCELED.
+func a2aState(state, reason, version string) string {
 	v1 := map[string]string{
 		StateAccepted:   "TASK_STATE_SUBMITTED",
 		StateUnverified: "TASK_STATE_WORKING",
 		StateDelivered:  "TASK_STATE_COMPLETED",
 		StateFailed:     "TASK_STATE_FAILED",
-		StateCanceled:   "TASK_STATE_CANCELED",
 	}[state]
+	if state == StateFailed && strings.HasPrefix(reason, "canceled") {
+		v1 = "TASK_STATE_CANCELED"
+	}
 	if v1 == "" {
 		v1 = "TASK_STATE_UNSPECIFIED"
 	}
@@ -141,7 +145,7 @@ func a2aRole(version string) string {
 // a2aTask renders a send result as an A2A task.
 func a2aTask(result SendResult, version string, now time.Time) A2ATask {
 	task := A2ATask{ID: result.ID, ContextID: result.ContextID,
-		Status:   A2ATaskStatus{State: a2aState(result.State, version), Timestamp: now.UTC().Format("2006-01-02T15:04:05.000Z")},
+		Status:   A2ATaskStatus{State: a2aState(result.State, result.Reason, version), Timestamp: now.UTC().Format("2006-01-02T15:04:05.000Z")},
 		Metadata: map[string]any{"bp/to": result.To, "bp/route": result.Route, "bp/state": result.State}}
 	if task.ContextID == "" {
 		task.ContextID = result.ID

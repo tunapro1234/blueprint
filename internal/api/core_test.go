@@ -287,3 +287,63 @@ func TestStatusFallsBackToMessageLog(t *testing.T) {
 		t.Fatalf("missing id: %v", err)
 	}
 }
+
+func TestRemoteRetryIsIdempotentAndStoredRaw(t *testing.T) {
+	core := testCore(t, "worker")
+	ctx := context.Background()
+	remote := Caller{Name: "chatgpt", Transport: "gateway", Remote: true}
+	first, err := core.Send(ctx, remote, SendRequest{To: "worker", Text: "hello", MessageID: "retry-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := core.Send(ctx, remote, SendRequest{To: "worker", Text: "hello", MessageID: "retry-1"})
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("retry of the same messageId: %+v %v", again, err)
+	}
+	if _, err := core.Send(ctx, remote, SendRequest{To: "worker", Text: "changed", MessageID: "retry-1"}); err == nil {
+		t.Fatal("same messageId with different text accepted")
+	}
+}
+
+func TestRemoteRoomPostsAndBoardValuesAreFramedOnRead(t *testing.T) {
+	core := testCore(t)
+	ctx := context.Background()
+	remote := Caller{Name: "chatgpt", Transport: "gateway", Remote: true}
+	local := Caller{Name: "bot", Transport: "mcp"}
+	for _, c := range []Caller{local, remote} {
+		if _, err := core.Register(ctx, alice, c.Name, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := core.Join(ctx, local, "team", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.Join(ctx, local, "team", "", []string{"chatgpt"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.Post(ctx, remote, "team", "do it"); err != nil {
+		t.Fatal(err)
+	}
+	_, posts, err := core.RoomRead(local, "team", "", 0)
+	if err != nil || len(posts) != 1 || !strings.HasPrefix(posts[0].Text, "[untrusted ") {
+		t.Fatalf("room read: %+v %v", posts, err)
+	}
+	inbox, _ := core.Inbox(local, "", 0, false)
+	if len(inbox.Messages) != 1 || !strings.HasPrefix(inbox.Messages[0].Text, "[untrusted ") {
+		t.Fatalf("room fan-out to an inbox: %+v", inbox.Messages)
+	}
+	if _, err := core.BoardPut(remote, "", "k", "v", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.BoardPut(remote, "", "k", "v2", 1, false); err != nil {
+		t.Fatalf("compare-and-set on a remote value: %v", err)
+	}
+	entries, _ := core.BoardGet("", "k", "")
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Value, "[untrusted ") || !strings.Contains(entries[0].Value, "\nv2\n") {
+		t.Fatalf("board value: %+v", entries)
+	}
+	raw, _ := os.ReadFile(core.boardPath("main"))
+	if strings.Contains(string(raw), "[untrusted") {
+		t.Fatalf("board stored a frame: %s", raw)
+	}
+}

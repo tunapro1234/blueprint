@@ -2195,3 +2195,29 @@ func (q *Queue) Run(ctx context.Context, interval time.Duration, target Target, 
 		}
 	}
 }
+
+// Delivery states reported to remote senders (P2P, the HTTP API, A2A).
+const (
+	DeliveryAccepted   = "accepted"
+	DeliveryUnverified = "unverified"
+	DeliveryDelivered  = "delivered"
+	DeliveryFailed     = "failed"
+)
+
+// DeliveryState maps a queue record to the state every transport reports:
+// accepted while it waits, unverified when it was typed but not confirmed,
+// delivered, or failed (with the final status as the reason). One mapping
+// keeps P2P and HTTP statuses from diverging.
+func DeliveryState(m Message) (state, reason string) {
+	switch {
+	case m.Cleanup:
+		return DeliveryDelivered, m.Reason
+	case IsUnverifiedDelivery(m.Status):
+		return DeliveryUnverified, m.Reason
+	case IsVerifiedDelivery(m.Status):
+		return DeliveryDelivered, m.Reason
+	case m.Status != "":
+		return DeliveryFailed, m.Status
+	}
+	return DeliveryAccepted, m.Reason
+}

@@ -222,22 +222,20 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 		return PostResult{}, fmt.Errorf("%w: join room %s before posting", ErrForbidden, name)
 	}
 	post := RoomPost{ID: randomID("rp"), Room: name, From: caller.Label(), Author: caller.Name,
-		Text: c.frame(caller, text), TS: float64(c.now().UnixNano()) / 1e9, Untrusted: caller.Remote}
+		Text: text, TS: float64(c.now().UnixNano()) / 1e9, Untrusted: caller.Remote}
 	history := c.roomHistory(name)
 	if err := withLock(history, func() error { return appendJSONL(history, post) }); err != nil {
 		return PostResult{}, err
 	}
 	c.audit(Event{Kind: "room.post", Decision: "accepted", Transport: caller.Transport, Actor: caller.Label(), Target: name, ID: post.ID})
 	result := PostResult{Post: post, Deliveries: []SendResult{}}
-	// The post is already framed; the fan-out must not frame it again, so the
-	// deliveries are sent as a local caller carrying the original label.
-	fanout := caller
-	fanout.Remote = false
+	// Each member gets the raw post from the original caller, so a remote
+	// author's post stays untrusted on every delivery route.
 	for _, member := range room.Members {
 		if member == caller.Name {
 			continue
 		}
-		sent, err := c.Send(ctx, fanout, SendRequest{To: member, Text: post.Text, MessageID: post.ID, Room: name})
+		sent, err := c.Send(ctx, caller, SendRequest{To: member, Text: post.Text, MessageID: post.ID, Room: name})
 		if err != nil {
 			result.Errors = append(result.Errors, member+": "+err.Error())
 			continue
@@ -283,6 +281,9 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 		posts = posts[len(posts)-limit:]
 	} else if len(posts) > limit {
 		posts = posts[:limit]
+	}
+	for i := range posts {
+		posts[i].Text = c.render(posts[i].Untrusted, posts[i].From, posts[i].Text)
 	}
 	return room, posts, nil
 }

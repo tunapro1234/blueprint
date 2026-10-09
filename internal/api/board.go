@@ -105,16 +105,22 @@ func (c *Core) BoardGet(board, key, prefix string) ([]BoardEntry, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: key %q on board %s", ErrNotFound, key, board)
 		}
-		return []BoardEntry{entry}, nil
+		return []BoardEntry{c.renderEntry(entry)}, nil
 	}
 	out := []BoardEntry{}
 	for k, entry := range entries {
 		if strings.HasPrefix(k, prefix) {
-			out = append(out, entry)
+			out = append(out, c.renderEntry(entry))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out, nil
+}
+
+// renderEntry frames an untrusted value for the reader; values are stored raw.
+func (c *Core) renderEntry(entry BoardEntry) BoardEntry {
+	entry.Value = c.render(entry.Untrusted, entry.Author, entry.Value)
+	return entry
 }
 
 // BoardPut writes key. expect < 0 writes unconditionally; expect == 0
@@ -145,7 +151,6 @@ func (c *Core) boardPut(caller Caller, board, key, value string, expect int, del
 		if len(value) > maxValueBytes || messagetext.Validate(value) != nil {
 			return BoardEntry{}, invalid("value must be at most %d bytes of printable text", maxValueBytes)
 		}
-		value = c.frame(caller, value)
 	}
 	var out BoardEntry
 	path := c.boardPath(board)
@@ -194,6 +199,7 @@ func (c *Core) BoardHistory(board, key string, limit int) ([]BoardChange, error)
 	changes := []BoardChange{}
 	err = readJSONL(c.boardHistory(board), func(change BoardChange) bool {
 		if key == "" || change.Key == key {
+			change.BoardEntry = c.renderEntry(change.BoardEntry)
 			changes = append(changes, change)
 		}
 		return true

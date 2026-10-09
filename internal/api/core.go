@@ -61,11 +61,10 @@ const (
 
 // Delivery states, shared by every transport. They match the P2P states.
 const (
-	StateAccepted   = "accepted"   // stored; not yet delivered
-	StateDelivered  = "delivered"  // reached the agent (terminal: verified; inbox: read)
-	StateUnverified = "unverified" // reached the pane, not confirmed
-	StateFailed     = "failed"
-	StateCanceled   = "canceled"
+	StateAccepted   = msgq.DeliveryAccepted   // stored; not yet delivered
+	StateDelivered  = msgq.DeliveryDelivered  // reached the agent (terminal: verified; inbox: read)
+	StateUnverified = msgq.DeliveryUnverified // reached the pane, not confirmed
+	StateFailed     = msgq.DeliveryFailed     // final; Reason holds the queue status
 	StateUnknown    = "unknown"
 )
 
@@ -117,15 +116,19 @@ func (c *Core) audit(e Event) {
 	}
 }
 
-func (c *Core) frame(caller Caller, text string) string {
-	if !caller.Remote {
+// render frames stored text that crossed a trust boundary as it is handed
+// to an agent. Text is always stored raw and framed only here, at read time:
+// a frame carries a fresh nonce, and a stored frame would make a retried
+// send look like different content to the idempotency checks.
+func (c *Core) render(untrusted bool, source, text string) string {
+	if !untrusted || text == "" {
 		return text
 	}
 	frame := c.Frame
 	if frame == nil {
 		frame = InterimFrame
 	}
-	return frame(caller.Label(), text)
+	return frame(source, text)
 }
 
 // ErrNotFound reports an unknown agent, message, room or key.
@@ -296,7 +299,10 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	if err := messagetext.Sender(from); err != nil {
 		return SendResult{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	body := c.frame(caller, req.Text)
+	// Remote text is stored raw. Queue deliveries carry the untrusted origin
+	// (PeerAuthenticated false) for guard.Frame at delivery; inbox items are
+	// framed when they are read.
+	body := req.Text
 	messageID := req.MessageID
 	if messageID == "" {
 		messageID = randomID("m")
@@ -360,20 +366,9 @@ func (c *Core) loggedMessage(id string) (msgq.LogEntry, bool) {
 }
 
 func queueResult(m msgq.Message) SendResult {
-	result := SendResult{ID: m.ID, To: m.To, Route: "queue", State: StateAccepted, Reason: m.Reason}
-	switch {
-	case m.Cleanup:
-		result.State = StateDelivered
-	case msgq.IsUnverifiedDelivery(m.Status):
-		result.State = StateUnverified
-	case msgq.IsVerifiedDelivery(m.Status):
-		result.State = StateDelivered
-	case strings.HasPrefix(m.Status, "cancel"):
-		result.State, result.Reason = StateCanceled, m.Status
-	case m.Status != "":
-		result.State, result.Reason = StateFailed, m.Status
-	}
-	return result
+	// The same mapping as P2P, so both report one state for one record.
+	state, reason := msgq.DeliveryState(m)
+	return SendResult{ID: m.ID, To: m.To, Route: "queue", State: state, Reason: reason}
 }
 
 // Status reports the delivery state of a message id returned by Send.
@@ -492,6 +487,9 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 			ids[i] = item.ID
 		}
 		c.audit(Event{Kind: "inbox.read", Decision: "read", Transport: caller.Transport, Actor: caller.Label(), Target: agent, ID: strings.Join(ids, ",")})
+	}
+	for i := range items {
+		items[i].Text = c.render(items[i].Untrusted, items[i].From, items[i].Text)
 	}
 	return InboxResult{Agent: agent, Messages: items, Remaining: remaining}, nil
 }

@@ -123,9 +123,20 @@ call `bp_register`.
 ## Safety
 
 - **Framing.** Text from a remote caller (anything that comes through the
-  gateway) is wrapped in an `[untrusted …]` frame before any agent sees it.
-  This includes messages, room posts and board values. The frame is a
-  stand-in until `guard.Frame` (W6) lands.
+  gateway) is stored raw and marked untrusted. Framing happens only when the
+  text is handed to an agent, because a frame carries a fresh nonce: a
+  stored frame would make a retry of the same `messageId` look like
+  different content to the queue's idempotency check.
+  - Queue messages carry `Origin{Transport: "bp-api/gateway",
+    PeerAuthenticated: false}`, and delivery frames them (the `guard.Frame`
+    seam, W6).
+  - Inbox items, room posts and board values are framed with an
+    `[untrusted …]` frame when they are read. That frame is a stand-in until
+    `guard.Frame` lands.
+- **States.** Message states come from `msgq.DeliveryState`, the same
+  mapping P2P uses: accepted, unverified, delivered or failed. A canceled
+  message is failed with a `canceled …` reason, and A2A shows it as
+  CANCELED.
 - **Audit.** Every request, rejection and token operation is logged to
   `<state>/audit.jsonl` (kinds `api.*`; read them with `bp audit`).
 - **No slash commands.** Every delivered message starts with a sender

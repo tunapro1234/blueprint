@@ -25,7 +25,7 @@ function syncToggle(){ toggle.textContent = paused ? 'Play motion ▷' : 'Pause 
 syncToggle();
 const labels = ['coordinator','research','build','review','tests','design','docs'];
 const details = ['coordinator / Keeps the project hierarchy in view.','research / Shares findings with the rest of the team.','build / Works in its own persistent terminal session.','review / Receives handoffs through the message queue.'];
-const rgb = mode === 'signal' ? '64,107,78' : mode === 'orbit' ? '194,224,155' : '210,234,255';
+const rgb = '43,92,217';
 const positions = [];
 function size(){ const box=canvas.getBoundingClientRect(); w=box.width; h=box.height; const dpr=Math.min(devicePixelRatio||1,2); canvas.width=w*dpr; canvas.height=h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); draw(); }
 function line(a,b,alpha=.22){ctx.strokeStyle=`rgba(${rgb},${alpha})`;ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(a.x,a.y);if(mode==='blueprint'){ctx.lineTo((a.x+b.x)/2,a.y);ctx.lineTo((a.x+b.x)/2,b.y)}ctx.lineTo(b.x,b.y);ctx.stroke();}
@@ -38,10 +38,10 @@ for(let k=0;k<3;k++){ctx.strokeStyle=`rgba(${rgb},${.12+k*.035})`;ctx.lineWidth=
 positions.push({x:cx,y:cy});
 for(let i=1;i<7;i++){const a=i*Math.PI/3+time*.09;positions.push({x:cx+Math.cos(a)*R*(i%2?.97:.7),y:cy+Math.sin(a)*R*(i%2?.67:.95)})}
 }else if(mode==='blueprint'){
-const coords=[[.45,.4],[.13,.18],[.78,.31],[.77,.65],[.43,.76],[.12,.61],[.76,.06]];
+const coords=w>700?[[.5,.22],[.12,.55],[.38,.55],[.65,.55],[.87,.8],[.12,.06],[.87,.06]]:[[.45,.4],[.13,.18],[.78,.31],[.77,.65],[.43,.76],[.12,.61],[.76,.06]];
 coords.forEach(([x,y])=>positions.push({x:w*x,y:h*(.13+y*.78)}));
 }else{
-for(let i=0;i<20;i++){const a=i*2.39996+time*.012;const r=R*Math.sqrt((i+.8)/20);positions.push({x:cx+Math.cos(a)*r+Math.sin(time*.28+i)*10,y:cy+Math.sin(a)*r+Math.cos(time*.22+i)*9})}
+for(let i=0;i<20;i++){const a=i*2.39996+time*.012;const r=R*Math.sqrt((i+.8)/20);positions.push({x:w>700?w*.5+Math.cos(a)*w*.41:w*.48+Math.cos(a)*r,y:cy+Math.sin(a)*r+Math.cos(time*.22+i)*9})}
 }
 for(let i=1;i<positions.length;i++){
 const a=positions[mode==='signal'?Math.max(0,i-3):0],b=positions[i];line(a,b,selected===i?.65:.21);

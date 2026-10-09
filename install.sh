@@ -4,6 +4,9 @@ set -eu
 SERVER_ROOT=/srv/blueprint
 INSTALL_MODE=${BP_INSTALL_MODE:-}
 YES=${BP_YES:-0}
+# Opt-in only: modules to enable and whether to start the guided coordinator.
+ENABLE=${BP_ENABLE:-}
+ONBOARD=${BP_ONBOARD:-no}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -11,6 +14,13 @@ while [ "$#" -gt 0 ]; do
         --local) INSTALL_MODE=local ;;
         --server) INSTALL_MODE=server ;;
         --client) INSTALL_MODE=client ;;
+        --onboard) ONBOARD=yes ;;
+        --enable)
+            [ "$#" -gt 1 ] || { printf 'error: --enable needs a module list, e.g. sessions,bar\n' >&2; exit 1; }
+            shift
+            ENABLE=${ENABLE:+$ENABLE,}$1
+            ;;
+        --enable=*) ENABLE=${ENABLE:+$ENABLE,}${1#--enable=} ;;
         *) printf 'error: unknown option: %s\n' "$1" >&2; exit 1 ;;
     esac
     shift
@@ -37,6 +47,10 @@ link_server_binary() {
         make -C "$SERVER_ROOT" build
     fi
 
+    link_existed=no
+    [ -e "$target_binary" ] || [ -L "$target_binary" ] && link_existed=yes
+    home_existed=no
+    [ -e /etc/blueprint/home ] && home_existed=yes
     if [ -w /usr/local/bin ]; then
         ln -sfn "$source_binary" "$target_binary"
     elif command -v sudo >/dev/null 2>&1; then
@@ -52,6 +66,13 @@ link_server_binary() {
     else
         sudo mkdir -p /etc/blueprint
         printf '%s\n' "$SERVER_ROOT" | sudo tee /etc/blueprint/home >/dev/null
+    fi
+    RECORD_BP=$source_binary
+    if [ "$link_existed" = no ]; then
+        record_install link "$target_binary" "$source_binary"
+    fi
+    if [ "$home_existed" = no ]; then
+        record_install file /etc/blueprint/home "$SERVER_ROOT"
     fi
     say "installed $target_binary -> $source_binary"
 }
@@ -110,6 +131,8 @@ configure_remote() {
 }
 
 install_client_binary() {
+    check_home_owner
+    backup_binary=
     fetch_verified_release
     configure_remote
     install_dir="$HOME/.local/bin"
@@ -122,7 +145,11 @@ install_client_binary() {
     cp "$local_tmp/bp" "$candidate_binary"
     chmod 755 "$candidate_binary"
     mv "$candidate_binary" "$install_dir/bp"
-    say "installed $install_dir/bp (signature and SHA-256 verified)"
+    RECORD_BP=$install_dir/bp
+    if [ -z "${backup_binary:-}" ]; then
+        record_install binary "$install_dir/bp"
+    fi
+    say "installed $install_dir/bp ($release_verified)"
 }
 
 fetch_verified_release() {
@@ -131,7 +158,9 @@ fetch_verified_release() {
     trap 'rm -rf "$local_tmp"' EXIT HUP INT TERM
     if [ -n "${BP_LOCAL_BINARY:-}" ]; then
         cp "$BP_LOCAL_BINARY" "$local_tmp/bp"
+        release_verified="from BP_LOCAL_BINARY; not signature-checked"
     else
+        release_verified="signature and SHA-256 verified"
         command -v curl >/dev/null 2>&1 || { say "error: curl is required"; exit 1; }
         local_base=https://bp.tunapro.xyz
         local_version=${BP_VERSION:-$(curl --proto '=https' --proto-redir '=https' -fsSL "$local_base/latest.version")}
@@ -168,18 +197,17 @@ BP_RELEASE_PUBLIC_KEY
     esac
 }
 
-# Local mode installs no daemon or remote peer and does not edit tmux options.
-install_local() {
-    BP_HOME=${BP_HOME:-$HOME/.blueprint}
-    export BP_HOME
-    local_existing=no
-    if [ -e "$HOME/.local/bin/bp" ] || [ -f "$BP_HOME/agentbook.json" ]; then
-        local_existing=yes
-    fi
-    client_platform
+# needs_tmux reports whether an opt-in the user chose runs agents in tmux.
+needs_tmux() {
+    case "$ONBOARD" in yes|1|true|auto) return 0 ;; esac
+    case ",$ENABLE," in *,sessions,*|*,bar,*) return 0 ;; esac
+    return 1
+}
+
+ensure_tmux() {
     if ! command -v tmux >/dev/null 2>&1; then
         if [ "$YES" != 1 ]; then
-            say "error: tmux is required; install it with your package manager, or rerun with --yes to allow dependency installation"
+            say "error: tmux is required for the sessions/bar modules and onboarding; install it with your package manager, or rerun with --yes to allow dependency installation"
             exit 1
         fi
         case "$(uname -s)" in
@@ -199,8 +227,42 @@ install_local() {
                 ;;
         esac
     fi
+}
+
+# Local mode changes nothing outside bp's own files: it installs the binary,
+# bp's config and book under ~/.blueprint and a short skill that tells the
+# user's agents bp exists. It does not install tmux, edit shell rc files or
+# tmux options, start services or open an agent. Each of those is an opt-in
+# module (bp modules, bp enable <module>).
+# check_home_owner refuses a run as another user than the owner of $HOME
+# (typically sudo with HOME kept), which would leave root-owned files there.
+check_home_owner() {
+    home_uid=$(stat -c %u "$HOME" 2>/dev/null || stat -f %u "$HOME" 2>/dev/null || echo "")
+    if [ -n "$home_uid" ] && [ "$home_uid" != "$(id -u)" ] && [ "${BP_ALLOW_FOREIGN_HOME:-}" != 1 ]; then
+        say "error: running as uid $(id -u) but $HOME belongs to uid $home_uid; run the installer as that user (or set BP_ALLOW_FOREIGN_HOME=1 if you mean it)"
+        exit 1
+    fi
+}
+
+install_local() {
+    check_home_owner
+    BP_HOME=${BP_HOME:-$HOME/.blueprint}
+    export BP_HOME
+    local_existing=no
+    if [ -e "$HOME/.local/bin/bp" ] || [ -f "$BP_HOME/agentbook.json" ]; then
+        local_existing=yes
+    fi
+    client_platform
+    if needs_tmux; then
+        ensure_tmux
+    fi
     fetch_verified_release
-    "$local_tmp/bp" setup --check || { say "error: installation preflight failed; existing binary preserved"; exit 1; }
+    if [ -n "$ENABLE" ]; then
+        set -- --enable "$ENABLE"
+    else
+        set --
+    fi
+    "$local_tmp/bp" setup --check "$@" || { say "error: installation preflight failed; existing binary preserved"; exit 1; }
     local_bin="$HOME/.local/bin"
     local_backup=
     mkdir -p "$local_bin"
@@ -225,11 +287,48 @@ install_local() {
         fi
         exit 1
     fi
-    say "installed $local_bin/bp; no remote setup required"
+    if [ -z "$local_backup" ]; then
+        "$local_bin/bp" _install-record binary "$local_bin/bp" || true
+    fi
+    say "installed $local_bin/bp"
     [ -z "$local_backup" ] || say "previous binary backup: $local_backup"
-    if [ "${BP_ONBOARD:-auto}" = skip ]; then
-        say "onboarding skipped; run bp onboard when ready"
-    elif [ "$local_existing" = yes ]; then
+    case ":${PATH:-}:" in
+        *":$local_bin:"*) ;;
+        *) say "note: $local_bin is not on your PATH; add it, or run $local_bin/bp" ;;
+    esac
+    enable_modules "$local_bin/bp"
+    if [ -z "$ENABLE" ]; then
+        say "Nothing else on this machine was changed. Your agents can now use bp:"
+    else
+        say "Your agents can now use bp:"
+    fi
+    say "  bp status, bp msg <agent> <text>, bp help"
+    say "Optional modules (tmux sessions, status bar, accounts, WhatsApp, web UI): bp modules"
+    say "Remove everything bp added: bp uninstall"
+    case "$ONBOARD" in
+        yes|1|true|auto) onboard_local ;;
+        *) say "Guided setup with a coordinator agent: bp onboard" ;;
+    esac
+}
+
+# enable_modules runs bp enable for each module the user asked for with
+# --enable or BP_ENABLE (comma separated). Nothing is enabled otherwise.
+enable_modules() {
+    [ -n "$ENABLE" ] || return 0
+    old_ifs=$IFS
+    IFS=,
+    for module in $ENABLE; do
+        IFS=$old_ifs
+        [ -n "$module" ] || continue
+        "$1" enable "$module" || say "warning: bp enable $module failed; run it again after fixing the reason above"
+    done
+    IFS=$old_ifs
+}
+
+# onboard_local starts the guided coordinator only when asked (--onboard or
+# BP_ONBOARD=yes) and only on a fresh installation with a real terminal.
+onboard_local() {
+    if [ "$local_existing" = yes ]; then
         say "existing installation preserved; run bp onboard explicitly if you want to configure a main agent"
     elif [ ! -f "$BP_HOME/main/onboarding.json" ]; then
         # tmux needs the actual terminal device name, not the /dev/tty alias.
@@ -266,6 +365,15 @@ append_tmux_line() {
     tmux_line=$1
     if ! grep -Fqx "$tmux_line" "$HOME/.tmux.conf" 2>/dev/null; then
         printf '%s\n' "$tmux_line" >>"$HOME/.tmux.conf"
+        record_install line "$HOME/.tmux.conf" "$tmux_line"
+    fi
+}
+
+# record_install tells bp what the installer changed so bp uninstall can undo
+# exactly that. Older binaries without the command are ignored.
+record_install() {
+    if [ -n "${RECORD_BP:-}" ] && [ -x "$RECORD_BP" ]; then
+        "$RECORD_BP" _install-record "$@" >/dev/null 2>&1 || true
     fi
 }
 
@@ -294,6 +402,7 @@ configure_tmux() {
     touch "$HOME/.tmux.conf"
     if ! grep -Fqx "# blueprint: clipboard, scroll, and mosh integration" "$HOME/.tmux.conf"; then
         printf '\n# blueprint: clipboard, scroll, and mosh integration\n' >>"$HOME/.tmux.conf"
+        record_install line "$HOME/.tmux.conf" "# blueprint: clipboard, scroll, and mosh integration"
     fi
     append_tmux_line "set -g mouse on"
     append_tmux_line "set -g history-limit 100000"

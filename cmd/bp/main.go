@@ -130,6 +130,8 @@ bp dash [--port N]
 bp serve --api [--listen 127.0.0.1:PORT] [--no-socket]   # local HTTP API (A2A, MCP, REST)
 bp mcp [--as <name>]          # MCP server on stdio for any agent harness
 bp api token [--path] | bp api config <client> [--http]
+bp room list|join|post|read|leave   # shared threads: a post reaches every member's queue
+bp board list|get|put|history       # shared versioned key/value state for agents
 bp fed status|ping|token|log [n]
 bp daemon`
 
@@ -536,6 +538,10 @@ func (a *app) run(args []string) error {
 		return a.mcp(args[1:])
 	case "api":
 		return a.apiCommand(args[1:])
+	case "room":
+		return a.roomCommand(args[1:])
+	case "board":
+		return a.boardCommand(args[1:])
 	case "audit":
 		return a.auditCommand(args[1:])
 	case "messages":

@@ -69,7 +69,7 @@ type keepMember struct {
 type phasePlan struct {
 	step   time.Duration
 	anchor time.Time
-	start map[int]time.Time
+	start  map[int]time.Time
 	// idle is the total time the plan leaves accounts without a window.
 	idle time.Duration
 }
@@ -446,8 +446,8 @@ type KeepAliveSlotView struct {
 type KeepAliveResult struct {
 	Step   time.Duration       `json:"step"`
 	Anchor time.Time           `json:"anchor,omitempty"`
-	Idle  time.Duration       `json:"idle"`
-	Slots []KeepAliveSlotView `json:"slots"`
+	Idle   time.Duration       `json:"idle"`
+	Slots  []KeepAliveSlotView `json:"slots"`
 }
 
 type keepAliveJob struct {

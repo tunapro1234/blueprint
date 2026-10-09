@@ -63,6 +63,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if viaSocket {
 		transport = "socket"
 	} else {
+		// The listener is loopback-only; this keeps it so if one is ever
+		// handed another listener. Local transports (bp-api/http) must never
+		// carry a caller from off this machine.
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !net.ParseIP(host).IsLoopback() {
+			s.reject(w, r, transport, http.StatusForbidden, "only loopback callers")
+			return
+		}
 		if !loopbackHost(r.Host) {
 			// DNS rebinding: a page on evil.example resolving to 127.0.0.1
 			// arrives with its own Host.

@@ -266,3 +266,16 @@ func TestUnixSocketNeedsNoTokenAndChecksUID(t *testing.T) {
 		t.Fatalf("socket request %d", resp.StatusCode)
 	}
 }
+
+func TestHTTPRefusesNonLoopbackPeer(t *testing.T) {
+	core, _, token := testServer(t, "worker")
+	server := &Server{Core: core, Token: token}
+	req := httptest.NewRequest("GET", "http://127.0.0.1/v1/agents", nil)
+	req.RemoteAddr = "192.0.2.7:40000"
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	server.HTTPServer().Handler.ServeHTTP(rec, req)
+	if rec.Code != 403 {
+		t.Fatalf("non-loopback peer got %d", rec.Code)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -233,5 +234,28 @@ func TestMachineSelectorIsExplicitAndBPHomeWins(t *testing.T) {
 				t.Fatalf("%+v %v", cfg, err)
 			}
 		})
+	}
+}
+
+func TestGuardHooksConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BP_HOME", home)
+	write := func(text string) (Config, error) {
+		if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load()
+	}
+	cfg, err := write("guardHooks:\n  mode: ask\n  canaries: [\"~/canary/token.txt\"]\n")
+	if err != nil || cfg.GuardHooks == nil || cfg.GuardHooks.Mode != "ask" || len(cfg.GuardHooks.Canaries) != 1 {
+		t.Fatalf("cfg = %+v, %v", cfg.GuardHooks, err)
+	}
+	if cfg, err := write("updateCheck: false\n"); err != nil || cfg.GuardHooks != nil {
+		t.Fatalf("absent guardHooks = %+v, %v", cfg.GuardHooks, err)
+	}
+	for _, bad := range []string{"guardHooks:\n  mode: deny\n", "guardHooks:\n  canaries: [\"  \"]\n"} {
+		if _, err := write(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
 	}
 }

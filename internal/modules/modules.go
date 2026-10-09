@@ -31,6 +31,8 @@ const (
 	WA       = "wa"
 	UI       = "ui"
 	Monitor  = "monitor"
+	// GuardHooks is the tool-call tripwire (docs/security/guard-hooks-module.md).
+	GuardHooks = "guard-hooks"
 )
 
 // Module describes one opt-in feature.
@@ -85,6 +87,13 @@ var registry = []Module{
 		Name:        Monitor,
 		Description: "server monitoring jobs: usage pulse and watch, model radar, Hermes usage, reset watch, sanity alarms to the coordinator",
 		Owns:        []string{"usageBin"},
+	},
+	{
+		Name:        GuardHooks,
+		Description: "tool-call tripwire for Claude agents: alert when an agent that recently received outside text touches secrets or canary files",
+		Owns:        []string{"guardHooks"},
+		Conflict:    guardHooksConflicts,
+		Notes:       "applies to Claude agents opened from now on; running agents keep their settings until reopened; alerts: bp audit --kind guard.reach",
 	},
 }
 

@@ -132,3 +132,40 @@ func truncate(value string, limit int) string {
 	}
 	return value[:limit] + "…"
 }
+
+// managedClaudeSettings is Claude Code's system policy file; tests replace it.
+var managedClaudeSettings = "/etc/claude-code/managed-settings.json"
+
+// guardHooksConflicts reports setups where the tripwire would be installed
+// but never run, which is worse than not having it: the owner would believe
+// agents are watched.
+func guardHooksConflicts(env Env) []string {
+	var conflicts []string
+	if !env.Config.LocalObservation {
+		conflicts = append(conflicts, "localObservation is off; the guard hook is installed through bp's per-agent Claude settings layer, which only exists with localObservation on")
+	}
+	if claudeHooksDisabled(managedClaudeSettings, true) {
+		conflicts = append(conflicts, managedClaudeSettings+" disables or restricts hooks (disableAllHooks or allowManagedHooksOnly); the guard hook would never run")
+	}
+	if env.UserHome != "" && claudeHooksDisabled(filepath.Join(env.UserHome, ".claude", "settings.json"), false) {
+		conflicts = append(conflicts, "~/.claude/settings.json sets disableAllHooks; the guard hook would never run")
+	}
+	return conflicts
+}
+
+// claudeHooksDisabled reads one Claude settings file. A missing or unreadable
+// file disables nothing.
+func claudeHooksDisabled(path string, managed bool) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var settings struct {
+		DisableAllHooks       bool `json:"disableAllHooks"`
+		AllowManagedHooksOnly bool `json:"allowManagedHooksOnly"`
+	}
+	if json.Unmarshal(data, &settings) != nil {
+		return false
+	}
+	return settings.DisableAllHooks || (managed && settings.AllowManagedHooksOnly)
+}

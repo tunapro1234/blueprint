@@ -97,3 +97,23 @@ func parseGuardHookArgs(args []string) (guard.HookConfig, error) {
 	}
 	return cfg, nil
 }
+
+// guardHookMatcher lists the Claude tools whose input can name a file, a
+// command or a URL; other tools never reach the hook.
+const guardHookMatcher = "Read|Bash|Grep|Glob|Edit|Write|WebFetch"
+
+// guardHookGroup is the PreToolUse group the guard-hooks module adds to bp's
+// per-agent Claude settings layer. The mode and canaries go on the command
+// line, so the hook never reads bp's config on a miss.
+func guardHookGroup(self string, cfg *bpconfig.GuardHooksConfig) map[string]any {
+	command := quoteShell(self) + " guard hook claude"
+	if cfg != nil {
+		if cfg.Mode == string(guard.HookAsk) {
+			command += " --ask"
+		}
+		for _, canary := range cfg.Canaries {
+			command += " --canary " + quoteShell(canary)
+		}
+	}
+	return map[string]any{"matcher": guardHookMatcher, "hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 5}}}
+}

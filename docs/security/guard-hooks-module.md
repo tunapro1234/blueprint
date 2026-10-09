@@ -90,11 +90,21 @@ otherwise. guard consumes it; it does not install anything itself.
 Runtime implemented on feat/guard: `internal/guard/hook.go` (`ParseHook`,
 `Flatten`, `MatchCanary`, `TaintFrom`, `HookConfig.Match`/`Evaluate`) and
 `cmd/bp/guard_hook.go` (`bp guard hook claude`, run before normal startup;
-config and identity load only after a match). The module is not wired yet,
-so no live agent runs the hook. The registry entry, the `guardHooks` config
-and the PreToolUse group in the settings layer are built on feat/guard once
-feat/modules is on dev. Enabling it on the live install is the owner's
-call.
+config and identity load only after a match).
+
+Module wired: `guard-hooks` is in the registry
+(`internal/modules/modules.go`). It is off by default and owns
+`guardHooks {mode, canaries}`, validated in `internal/config`. `Apply` is
+nil. When the module is on, `prepareLocalObservation` adds one PreToolUse
+group (`guardHookGroup` in `cmd/bp/guard_hook.go`) to the per-agent settings
+layer. The layer exists only while `localObservation` is on.
+`guardHooksConflicts` refuses to enable the module when the hook would never
+run: `localObservation` is off, the managed settings set `disableAllHooks` or
+`allowManagedHooksOnly`, or the user settings set `disableAllHooks`.
+`Detect` turns the module on only for a config that already has
+`guardHooks`; the legacy server fixture asserts it stays off. Enabling it on
+the live install is the owner's call: `bp enable guard-hooks`, then reopen
+the agents.
 
 ## Tests
 
@@ -113,8 +123,9 @@ call.
   per-agent settings layer at launch, gated on
   `modules.EnabledIn(cfg, "guard-hooks")`. Disabling then drops the group at
   the next launch.
-- `Conflict` (read-only) reports a user PreToolUse hook that the group would
-  shadow.
+- `Conflict` (read-only): Claude merges hook arrays across settings layers,
+  so a user PreToolUse hook is never shadowed. The real conflicts are setups
+  where the hook would silently never run (see Status).
 - `Notes`: "applies to agents opened from now on; running agents keep their
   settings until reopened; alerts: bp audit --kind guard.reach".
 - `Detect`: enable the module only when `cfg.GuardHooks` is already set.

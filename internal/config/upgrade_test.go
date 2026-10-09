@@ -86,6 +86,8 @@ var serverGates = map[string]bool{
 	modules.WA:       true, // legacy default waBridge with /srv/whatsapp/outbox
 	modules.UI:       true, // dash-server always ran
 	modules.Monitor:  true, // /srv/monitor jobs always ran
+	// New with modules: the owner server must not gain the tool-call hook.
+	modules.GuardHooks: false,
 }
 
 func TestUpgradeOfServerInstallChangesNothing(t *testing.T) {

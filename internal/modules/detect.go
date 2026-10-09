@@ -41,6 +41,10 @@ func Detect(cfg config.Config, env Env) map[string]bool {
 	if cfg.Legacy || daemon {
 		found[Monitor] = true
 	}
+	// New with modules: only a config that already asks for it. Never Legacy.
+	if cfg.GuardHooks != nil {
+		found[GuardHooks] = true
+	}
 	return found
 }
 

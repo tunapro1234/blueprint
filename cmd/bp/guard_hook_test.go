@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"blueprint/internal/audit"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/guard"
+	"blueprint/internal/modules"
 )
 
 func TestGuardHookArgs(t *testing.T) {
@@ -68,5 +72,64 @@ func TestGuardHookCanaryWritesAlert(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Severity != audit.Alert || !strings.Contains(events[0].Reason, "token.txt") {
 		t.Fatalf("events = %+v (stderr %q)", events, errOut.String())
+	}
+}
+
+// The guard-hooks module adds exactly one PreToolUse group to bp's per-agent
+// settings layer, carrying mode and canaries on the command line; with the
+// module off the layer has no PreToolUse group at all.
+func TestLocalObservationGuardHookFollowsModule(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	layer := func(cfg bpconfig.Config) map[string][]struct {
+		Matcher string
+		Hooks   []struct{ Command string }
+	} {
+		t.Helper()
+		a := &app{config: cfg}
+		args, _, err := a.prepareLocalObservation("claude", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var settings struct {
+			Hooks map[string][]struct {
+				Matcher string
+				Hooks   []struct{ Command string }
+			}
+		}
+		if err := json.Unmarshal(data, &settings); err != nil {
+			t.Fatal(err)
+		}
+		return settings.Hooks
+	}
+	base := bpconfig.Config{LocalObservation: true, StateDir: filepath.Join(home, "state"), ModulesSet: true, Modules: map[string]bool{}}
+	if hooks := layer(base); len(hooks["PreToolUse"]) != 0 {
+		t.Fatalf("module off but PreToolUse = %+v", hooks["PreToolUse"])
+	}
+	on := base
+	on.Modules = map[string]bool{modules.GuardHooks: true}
+	on.GuardHooks = &bpconfig.GuardHooksConfig{Mode: "ask", Canaries: []string{"~/canary/it's.txt"}}
+	groups := layer(on)["PreToolUse"]
+	if len(groups) != 1 || groups[0].Matcher != guardHookMatcher || len(groups[0].Hooks) != 1 {
+		t.Fatalf("PreToolUse = %+v", groups)
+	}
+	command := groups[0].Hooks[0].Command
+	if !strings.Contains(command, " guard hook claude --ask --canary '~/canary/it'\\''s.txt'") {
+		t.Fatalf("command = %q", command)
+	}
+	// The command line parses back to the same configuration.
+	words := strings.Fields(strings.SplitN(command, " guard ", 2)[1])
+	cfg, err := parseGuardHookArgs(append(words[:3], "--canary", "~/canary/it's.txt"))
+	if err != nil || cfg.Mode != guard.HookAsk || len(cfg.Canaries) != 1 || cfg.Canaries[0] != "~/canary/it's.txt" {
+		t.Fatalf("parsed %+v, %v", cfg, err)
+	}
+	on.GuardHooks = nil
+	if command := layer(on)["PreToolUse"][0].Hooks[0].Command; !strings.HasSuffix(command, " guard hook claude") {
+		t.Fatalf("default command = %q", command)
 	}
 }

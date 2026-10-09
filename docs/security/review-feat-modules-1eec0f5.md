@@ -95,3 +95,38 @@ modules ship.
 The `AddJSONEntry` / journal API is what guard-hooks needs. U4 (pre-existing
 entry), U3 (hash, not marker) and U7 (lost update on `settings.json`, owner)
 must be fixed before guard-hooks is built on it.
+
+## Follow-up: 6793199, 2f7ac62, 64c5490, 6783fd6
+
+U1-U7 are fixed. Verified in code:
+
+- U1: `_install-record` accepts only `~/.local/bin/bp` (must hold the bp
+  marker; recorded with its SHA-256), `/etc/blueprint/home` with matching
+  content, the 8 fixed tmux lines in `~/.tmux.conf`, and a
+  `/usr/local/bin/bp` link whose actual target equals the absolute `.../bp`
+  argument.
+- U2: purge needs the `.bp-home` sentinel, refuses relative homes, `/` and
+  `$HOME`, lists the targets, and asks on `/dev/tty` unless `--yes`.
+- U3/U4: file undo compares a SHA-256; `AddJSONEntry` returns nil when a
+  deep-equal entry existed; `Created` is in the dedup key.
+- U7: `internal/safefile` re-checks identity, size and mtime before writing
+  and before renaming, writes hard-linked files in place, keeps owner when
+  root (directory owner for new files), refuses dangling symlinks;
+  `CheckOwner` refuses a foreign `$HOME` unless `BP_ALLOW_FOREIGN_HOME=1`.
+
+Remaining, low:
+
+- A caller can still record one of the 8 generic tmux lines that the user
+  wrote themselves (for example `set -g mouse on`); uninstall then removes
+  that user line. Only cosmetic config is affected. If install.sh writes its
+  block under the `# blueprint:` header, record and remove the block as one
+  unit instead of single lines.
+- `AddJSONEntry` returns a non-nil `*Change` together with a `Replace`
+  error (jsonentry.go:53, 77, 105). Callers must record only when the error
+  is nil; return `nil, err` to make that impossible to get wrong.
+- Journal entries written before 6793199 have no SHA-256 and still use the
+  marker rule. Acceptable for migration; the next enable rewrites them.
+- Rename still drops ACLs and xattrs (accepted, documented by bp-modules).
+- HINT.md:11 wording is with blueprint.
+
+guard-hooks can now be built on `AddJSONEntry` and the journal.

@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"blueprint/internal/harness"
 	"strings"
 )
 
@@ -24,11 +25,11 @@ import (
 //
 // Matched with dim segments PRESERVED (only ANSI colour is stripped): the footer
 // is usually dim-rendered and StripDim would delete the very line we look for.
-var composerStatusMarkers = []string{"-- INSERT --", "-- NORMAL --", "bypass permissions"}
+var composerStatusMarkers = harness.ClaudeScreen.ComposerFooter
 
 // composerBorderRunes are the two horizontal rules Claude Code draws its composer
 // box with.
-const composerBorderRunes = "─━"
+var composerBorderRunes = harness.ClaudeScreen.ComposerBorder
 
 // composerBorderMin is how many border characters a row must carry before this
 // package will call it a composer border.
@@ -89,7 +90,7 @@ func isComposerBoxBorder(line string) bool {
 // the bottom line read "Enter to select · Tab/Arrow keys to navigate · Esc to
 // cancel". Such a pane must read as "no box", so every caller falls back to
 // treating it as in use and nothing is ever typed into it.
-var composerDialogMarkers = []string{"Enter to select", "Esc to cancel"}
+var composerDialogMarkers = harness.ClaudeScreen.DialogFooter
 
 // composerBoxMaxRows bounds the upward search for the box's top border. A real
 // composer never grows anywhere near this tall; the bound exists so a stray

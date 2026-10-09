@@ -22,6 +22,8 @@ import (
 	"blueprint/internal/codexrpc"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/audit"
+	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/lowprio"
 	"blueprint/internal/msgq"
@@ -67,6 +69,25 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	queue.RuntimeBlock = book.RuntimeBlockProbe(cfg.Agentbooks)
 	queue.Binding = book.DeliveryBindingProbe(cfg.Agentbooks)
+	// Messages that crossed a trust boundary are pasted wrapped in an
+	// untrusted-input frame. The framer key lives under StateDir so the daemon
+	// and a synchronous bp msg frame a record identically; without a StateDir, or
+	// if the key cannot be loaded, delivery runs unframed and says so loudly
+	// rather than refusing to start.
+	if cfg.StateDir != "" {
+		queue.FrameExternal = delivery.External
+		if render, err := delivery.Renderer(cfg.StateDir); err != nil {
+			// Fail CLOSED: hold external records instead of pasting them raw, and
+			// record the gap in the audit log the owner reads. (bp-guard D2.)
+			queue.Render = delivery.FailClosedRenderer()
+			logger.Printf("WARNING: inbound framing unavailable: %v; external messages are HELD, not delivered unframed", err)
+			if auditErr := audit.Append(cfg.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+				logger.Printf("WARNING: could not record guard.frame.unavailable: %v", auditErr)
+			}
+		} else {
+			queue.Render = render
+		}
+	}
 	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 	return service
 }

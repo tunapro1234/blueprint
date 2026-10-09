@@ -646,7 +646,13 @@ class LocalCLITest(unittest.TestCase):
             self.assertEqual(state()["state"], "delivered", state())
             messages = [json.loads(line) for line in received.read_text().splitlines()]
             self.assertEqual(len(messages), 1, messages)
-            self.assertTrue(messages[0].endswith("p2p busy receiver exact-once fixture"))
+            # A message from a P2P peer crossed a trust boundary, so it is
+            # delivered wrapped in the guard untrusted-input frame (direction
+            # principle 6): the raw body survives as a framed body line and the
+            # frame carries the "untrusted data" notice. It therefore no longer
+            # ends with the raw text.
+            self.assertIn("p2p busy receiver exact-once fixture", messages[0], messages[0])
+            self.assertIn("untrusted data", messages[0], messages[0])
         finally:
             for env in reversed(started):
                 subprocess.run([self.binary, "p2p", "stop"], env=env, capture_output=True, timeout=20)

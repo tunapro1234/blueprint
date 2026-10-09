@@ -97,7 +97,7 @@ modules on this machine or server.
 - identity and addressing (`agent@peer`);
 - delivery: a queue that never interrupts a busy agent, plus delivery
   confirmation;
-- the P2P network with relay, so no open ports or public IP are needed;
+- the P2P network with relay, so in most networks no open ports or public IP are needed;
 - expose lists;
 - hierarchy data;
 - the protocol and its safety rules;

@@ -1,0 +1,101 @@
+name: Bug report
+description: Something in bp does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not report security vulnerabilities here; follow SECURITY.md instead.
+        Before you paste any output, remove tokens, private keys, transcripts and private conversation content.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what bp did, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran, in order. A minimal reproduction helps most.
+      placeholder: |
+        1. bp run --name alice claude
+        2. bp msg alice 'hello'
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: bp version
+      description: Output of `bp version`.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: macOS 26 arm64, Ubuntu 24.04 amd64, ...
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How bp was installed
+      options:
+        - install.sh
+        - npm
+        - built from source
+        - other
+    validations:
+      required: true
+  - type: input
+    id: harness
+    attributes:
+      label: Agent CLIs involved, with versions
+      placeholder: Claude Code 2.1.295, Codex CLI 0.162.0, tmux 3.5
+  - type: input
+    id: modules
+    attributes:
+      label: Enabled modules
+      description: The modules marked "on" in `bp modules`.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - message delivery (bp msg, queue, receipts)
+        - running agents (bp run, bp open, bp attach)
+        - API, MCP, rooms or board
+        - P2P between machines
+        - install, update or uninstall
+        - a module (sessions, bar, accounts, wa, ui, monitor, guard-hooks)
+        - documentation
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: delivery
+    attributes:
+      label: For a delivery problem
+      description: |
+        The channel ID, `bp qstat <channel-id> --json` and `bp doctor --agent <name> --json` output.
+        Say whether the message went in by itself or only after someone pressed Enter.
+        Please do not paste `bp book --json`: it can contain arguments you passed on the command line.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Other output
+      description: Error messages, `bp status --json` or `bp audit` lines that matter.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed tokens, keys, transcripts and private conversation content from everything above.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true

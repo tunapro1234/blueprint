@@ -18,3 +18,8 @@
 # Git keeps only the signed manifests and checksums.
 /site/bp-*
 /site/releases/*/bp-*
+
+# Rust build output and host-only Claude Code settings.
+/target/
+/.claude/
+*.profraw

@@ -37,6 +37,7 @@ import (
 	"blueprint/internal/dashboard"
 	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
+	"blueprint/internal/guard"
 	"blueprint/internal/identity"
 	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
@@ -150,6 +151,14 @@ type app struct {
 	queue       *msgq.Queue
 	out         *os.File
 	err         *os.File
+
+	// guardWatchInst is the single taint tracker for this process, shared by
+	// every api.Core (server, gateway, room, mcp) and, when co-hosted, the P2P
+	// node, so untrusted input observed on one transport taints the agent for
+	// the others. Built lazily on first use; see (a *app) guardWatch(). Callers
+	// run sequentially during command startup, so no lock is needed (and app is
+	// copied by value elsewhere, which forbids embedding a sync.Once/Mutex).
+	guardWatchInst *guard.Watch
 
 	loadFleet       func() (book.Fleet, map[string]book.State, error)
 	loadCodex       func() []codexrpc.Thread

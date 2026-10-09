@@ -17,6 +17,7 @@ import (
 	"blueprint/internal/delivery"
 	"blueprint/internal/guard"
 	"blueprint/internal/identity"
+	"blueprint/internal/msgq"
 )
 
 // apiCore builds the API core over this bp's queue and agentbooks.
@@ -36,7 +37,28 @@ func (a *app) apiCore() *api.Core {
 			core.Render = render
 		}
 	}
+	core.Watch = a.guardWatch()
 	return core
+}
+
+// guardWatch returns this process's single taint tracker, built once and shared
+// by every api.Core (server, gateway, room, mcp), so a reach that spans two of
+// them in one process (e.g. untrusted input on the gateway, then an action the
+// local API sees) is not missed because each built its own Watch. bp p2p serve
+// and bp api serve run as separate processes, so the TaintSource
+// (MessageLogTaint on the msgq log) carries taint across processes: it is the
+// same messages.jsonl the P2P node's default Watch and the tool-call hook read.
+func (a *app) guardWatch() *guard.Watch {
+	if a.guardWatchInst == nil {
+		errw := a.err
+		if errw == nil {
+			errw = os.Stderr
+		}
+		a.guardWatchInst = guard.NewWatch(
+			guard.WatchConfig{TaintSource: guard.MessageLogTaint(msgq.MessageLogPath(a.config.MsgqRoot))},
+			guard.AuditSink{StateDir: a.config.StateDir, Errors: errw})
+	}
+	return a.guardWatchInst
 }
 
 // apiDirectory lists the agentbook agents with their live state.

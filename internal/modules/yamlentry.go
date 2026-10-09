@@ -3,7 +3,9 @@ package modules
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -44,7 +46,7 @@ func AddYAMLEntry(path, dotted string, entry map[string]any) (*Change, error) {
 	}
 	var document yaml.Node
 	if snap.Exists && len(bytes.TrimSpace(data)) > 0 {
-		if err := yaml.Unmarshal(data, &document); err != nil {
+		if document, err = decodeOneYAMLDocument(data); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
@@ -118,8 +120,8 @@ func undoYAMLEntry(change Change) (string, error) {
 	if !snap.Exists || len(bytes.TrimSpace(data)) == 0 {
 		return "", nil
 	}
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
+	document, err := decodeOneYAMLDocument(data)
+	if err != nil {
 		return "", errModified
 	}
 	if document.Kind != yaml.DocumentNode || len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
@@ -190,6 +192,28 @@ func undoYAMLEntry(change Change) (string, error) {
 func decodeYAMLAny(node *yaml.Node, out *map[string]any) map[string]any {
 	_ = node.Decode(out)
 	return *out
+}
+
+// decodeOneYAMLDocument parses data as exactly one YAML document.
+// yaml.Unmarshal reads only the first document of a stream, and re-encoding
+// that one would silently drop every document after a "---".
+func decodeOneYAMLDocument(data []byte) (yaml.Node, error) {
+	var document, extra yaml.Node
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&document); err != nil {
+		if errors.Is(err, io.EOF) {
+			// Only comments or whitespace: no document yet.
+			return yaml.Node{}, nil
+		}
+		return yaml.Node{}, err
+	}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("more than one YAML document; bp edits only single-document files")
+		}
+		return yaml.Node{}, err
+	}
+	return document, nil
 }
 
 func findMapKey(node *yaml.Node, key string) *yaml.Node {

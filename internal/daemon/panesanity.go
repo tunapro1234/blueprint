@@ -250,15 +250,69 @@ func procCmdline(pid int) []string {
 	return argv
 }
 
+// sessionFileFindingSessions is the set of sessions whose paneSanityFindings
+// entry is the SESSION-FILE class: a live Claude pane for which bp resolved no
+// transcript. It mirrors the condition in paneSanityFindings exactly, so the two
+// cannot drift, and exists because only this class is debounced — its input is a
+// file read that can blip, unlike the recognition class, which reads the screen
+// the same sweep already captured.
+func sessionFileFindingSessions(observations []paneObservation) map[string]bool {
+	out := make(map[string]bool)
+	for _, o := range observations {
+		if !o.Open || !o.IsAgent {
+			continue
+		}
+		if o.ClaudePane && !o.SessionFound {
+			out[o.Session] = true
+		}
+	}
+	return out
+}
+
+// debounceSessionFileFindings holds back the session-file class of finding until
+// it has been seen on two consecutive sweeps. A live Claude pane's transcript can
+// be momentarily unreadable — a compacting or concurrently-written 96 MB+ file,
+// or fd pressure under late-night fleet load — and resolve on the very next
+// sweep, so one bad sample is a transient, not a contradiction worth an alarm. A
+// genuine misconfiguration (a wrong folder field, a truly missing file) stays
+// unreadable every sweep and still alarms, one beat later. pending carries the
+// sessions seen once and not yet confirmed, and is updated in place; a cleared
+// finding is forgotten so its next occurrence debounces afresh. Every other
+// finding class passes through untouched, so a drifted-TUI alarm is never
+// delayed.
+func debounceSessionFileFindings(findings map[string]string, sessionFile map[string]bool, pending map[string]string, now time.Time) map[string]string {
+	out := make(map[string]string, len(findings))
+	for session, message := range findings {
+		if sessionFile[session] {
+			if _, confirmed := pending[session]; !confirmed {
+				pending[session] = now.UTC().Format(time.RFC3339)
+				continue
+			}
+		}
+		out[session] = message
+	}
+	for session := range pending {
+		if !sessionFile[session] {
+			delete(pending, session)
+		}
+	}
+	return out
+}
+
 // paneSanityScan turns one sweep's observations into alarms. Like the other two
 // watchdogs on this beat it swallows nothing but its own noise: findings go to
-// the log and to the coordinator (alarm), and the state it keeps is only the
-// cooldown.
+// the log and to the coordinator (alarm), and the state it keeps is the cooldown
+// plus the one-sweep debounce for the session-file class.
 func (s *Service) paneSanityScan(observations []paneObservation, state *busySanityState, now time.Time) {
 	if state.PaneSanityReported == nil {
 		state.PaneSanityReported = make(map[string]string)
 	}
-	for _, message := range dueFindings(paneSanityFindings(observations), state.PaneSanityReported, now) {
+	if state.PaneSanityPending == nil {
+		state.PaneSanityPending = make(map[string]string)
+	}
+	findings := debounceSessionFileFindings(paneSanityFindings(observations),
+		sessionFileFindingSessions(observations), state.PaneSanityPending, now)
+	for _, message := range dueFindings(findings, state.PaneSanityReported, now) {
 		s.alarm("pane-sanity", message)
 	}
 }

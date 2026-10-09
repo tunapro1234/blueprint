@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"blueprint/internal/modules"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,14 +16,17 @@ import (
 	"syscall"
 	"time"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
 	"blueprint/internal/cache"
 	"blueprint/internal/codexrpc"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/lowprio"
+	"blueprint/internal/modules"
 	"blueprint/internal/msgq"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
@@ -68,6 +70,25 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	queue.RuntimeBlock = book.RuntimeBlockProbe(cfg.Agentbooks)
 	queue.Binding = book.DeliveryBindingProbe(cfg.Agentbooks)
+	// Messages that crossed a trust boundary are pasted wrapped in an
+	// untrusted-input frame. The framer key lives under StateDir so the daemon
+	// and a synchronous bp msg frame a record identically; without a StateDir, or
+	// if the key cannot be loaded, delivery runs unframed and says so loudly
+	// rather than refusing to start.
+	if cfg.StateDir != "" {
+		queue.FrameExternal = delivery.External
+		if render, err := delivery.Renderer(cfg.StateDir); err != nil {
+			// Fail CLOSED: hold external records instead of pasting them raw, and
+			// record the gap in the audit log the owner reads. (bp-guard D2.)
+			queue.Render = delivery.FailClosedRenderer()
+			logger.Printf("WARNING: inbound framing unavailable: %v; external messages are HELD, not delivered unframed", err)
+			if auditErr := audit.Append(cfg.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+				logger.Printf("WARNING: could not record guard.frame.unavailable: %v", auditErr)
+			}
+		} else {
+			queue.Render = render
+		}
+	}
 	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
 	return service
 }
@@ -718,6 +739,10 @@ type busySanityState struct {
 	// contradiction was last reported (see panesanity.go). An entry is dropped
 	// as soon as the contradiction clears, so a relapse alarms again.
 	PaneSanityReported map[string]string `json:"pane_sanity_reported,omitempty"`
+	// BlockedQueueReported maps an agent to the moment its stuck-queue block was
+	// last reported (see blockedqueue.go). Dropped as soon as the queue drains, so
+	// a new block alarms again.
+	BlockedQueueReported map[string]string `json:"blocked_queue_reported,omitempty"`
 }
 
 // busySanity runs one sweep. Errors from a single pane are never fatal: a session
@@ -742,6 +767,9 @@ func (s *Service) busySanity(ctx context.Context) error {
 	projects := bptmux.ClaudeProjectsRoot()
 	hashes := make(map[string]string, len(sessions))
 	observations := make([]paneObservation, 0, len(sessions))
+	// busyBy carries each agent pane's busy verdict out of the sweep for the
+	// blocked-queue watchdog, which only alarms on an IDLE agent.
+	busyBy := make(map[string]bool, len(sessions))
 	busy, moved, agreed := false, false, false
 	samples := 0
 	for _, session := range sessions {
@@ -788,6 +816,7 @@ func (s *Service) busySanity(ctx context.Context) error {
 		hash := paneHash(pane)
 		hashes[session] = hash
 		screen := bptmux.Busy(pane)
+		busyBy[session] = screen
 		if screen {
 			busy = true
 		}
@@ -836,6 +865,11 @@ func (s *Service) busySanity(ctx context.Context) error {
 	// it is supposed to be talking to. Run after the others for the same reason —
 	// a failure here must not cost the sweep its bookkeeping.
 	s.paneSanityScan(observations, &state, now)
+	// The fourth watchdog on the same beat: whether a message is stuck in the
+	// queue at an idle agent because the composer is not free. Run last, after the
+	// bookkeeping the busy verdict needs, for the same reason as the others — a
+	// failure here must not cost the sweep its state.
+	s.blockedQueueScan(observations, busyBy, &state, now)
 	return writeBusySanity(path, state)
 }
 

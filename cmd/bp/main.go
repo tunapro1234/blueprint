@@ -25,6 +25,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
 	bpcache "blueprint/internal/cache"
@@ -34,6 +35,7 @@ import (
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/identity"
 	"blueprint/internal/monitorcli"
@@ -125,9 +127,13 @@ bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent
 bp p2p resume <peer> [agent] | pauses [--json]   # lift loop-cap pauses
 bp messages reindex                               # add done/ history to messages.jsonl
 bp audit [--since <dur>] [--kind <prefix>] [--severity info|warn|alert] [--peer <alias>] [-n N] [--json]
+bp guard hook claude [--ask] [--canary <path>]...  # PreToolUse tripwire (stdin)
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
+bp serve --api [--listen 127.0.0.1:PORT] [--no-socket]   # local HTTP API (A2A, MCP, REST)
+bp mcp [--as <name>]          # MCP server on stdio for any agent harness
+bp api token [--path] | bp api config <client> [--http]
 bp fed status|ping|token|log [n]
 bp daemon`
 
@@ -246,6 +252,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "guard" {
+		guardHookMain(os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "_observe" {
@@ -407,6 +417,8 @@ func (a *app) run(args []string) error {
 		return a.localWorker(args[1:])
 	case "_workflow-run":
 		return a.workflowRun(args[1:])
+	case "_hook":
+		return a.hookCommand(args[1:])
 	case "whoami":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp whoami")
@@ -534,6 +546,12 @@ func (a *app) run(args []string) error {
 		return a.dashboard(args[1:])
 	case "p2p":
 		return a.p2pCommand(args[1:])
+	case "serve":
+		return a.serve(args[1:])
+	case "mcp":
+		return a.mcp(args[1:])
+	case "api":
+		return a.apiCommand(args[1:])
 	case "audit":
 		return a.auditCommand(args[1:])
 	case "messages":
@@ -2615,6 +2633,7 @@ func (a *app) prepareDispatch() {
 			a.queue.NoticeOwner = fleet.Root
 		}
 		a.queue.CanWitness = book.CanWitness
+		a.wireFraming()
 		if len(a.config.Agentbooks) > 0 {
 			projects := bptmux.ClaudeProjectsRoot()
 			a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
@@ -2625,6 +2644,31 @@ func (a *app) prepareDispatch() {
 			a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
 		}
 	})
+}
+
+// wireFraming installs the untrusted-input framer on a.queue so a record from
+// outside this machine is delivered wrapped in a guard frame, while a local
+// record is delivered unchanged. The same framer key (under StateDir) backs the
+// daemon, so a record the daemon, a synchronous bp msg and the hook path all
+// touch frames to identical bytes. It needs only StateDir — no tmux — so the
+// Claude hook delivery path (an agent outside any pane) frames exactly as
+// terminal dispatch does. On a framer-load error it fails CLOSED: external
+// records are HELD, not pasted raw, and the gap is written to the audit log the
+// owner reads. (bp-guard D2.) Safe to call repeatedly.
+func (a *app) wireFraming() {
+	if a.queue == nil || a.config.StateDir == "" {
+		return
+	}
+	a.queue.FrameExternal = delivery.External
+	if render, err := delivery.Renderer(a.config.StateDir); err != nil {
+		a.queue.Render = delivery.FailClosedRenderer()
+		fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
+		if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+			fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
+		}
+	} else {
+		a.queue.Render = render
+	}
 }
 
 // dedupWindow is how long an identical message to the same target counts as still
@@ -4099,6 +4143,7 @@ func (a *app) daemon(args []string) error {
 	defer stop()
 	logger := log.New(a.err, "blueprint: ", log.LstdFlags)
 	service := daemon.New(logger, a.config)
+	a.startDaemonAPI(ctx, logger)
 	rendererDone := make(chan struct{})
 	if a.moduleEnabled(modules.Bar) {
 		renderer := newBarRenderer(a, logger)

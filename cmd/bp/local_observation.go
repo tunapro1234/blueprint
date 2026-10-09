@@ -61,6 +61,12 @@ func (a *app) prepareLocalObservation(harness string, args []string) ([]string, 
 	}
 	groups, _ := hooks["SessionStart"].([]any)
 	hooks["SessionStart"] = append(groups, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "timeout": 5}}})
+	// The hook delivery path: queued messages reach the agent at its own turn
+	// boundaries, and its identity is restated after /compact (cmd/bp/hook.go).
+	for event, added := range claudeHookGroups(quoteShell(self) + " _hook claude") {
+		existing, _ := hooks[event].([]any)
+		hooks[event] = append(existing, added.([]any)...)
+	}
 	settings["hooks"] = hooks
 	// Preserve an existing status-line command and its output, while recording
 	// only its structured model/context input. Other status-line options survive.

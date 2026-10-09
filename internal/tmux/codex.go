@@ -1,7 +1,7 @@
 package tmux
 
 import (
-	"regexp"
+	"blueprint/internal/harness"
 	"strings"
 	"unicode"
 )
@@ -29,18 +29,18 @@ const (
 	// codexIdleText is the composer placeholder. "Ask Codex" is the two-word
 	// core; the rest of the sentence is left out because a placeholder's tail is
 	// the part builds like to reword.
-	codexIdleText = "Ask Codex"
+	codexIdleText = harness.CodexIdleText
 )
 
 // codexPlaceholder matches the idle composer: a prompt marker, then the
 // placeholder. Anchored at the row start so a transcript QUOTING the sentence
 // cannot match.
-var codexPlaceholder = regexp.MustCompile(`^[›❯]\s+` + regexp.QuoteMeta(codexIdleText))
+var codexPlaceholder = harness.CodexScreen.Placeholder
 
 // codexWorking matches the busy row Codex draws above its composer. The bullet
 // is part of the signature: "Working" on its own is a word any program may
 // print, while "• Working (…)" at a row start is this TUI's own affordance.
-var codexWorking = regexp.MustCompile(`^[•·◦]\s+Working\b`)
+var codexWorking = harness.CodexScreen.Working
 
 // codexFooter matches the status line under the composer: the model, its
 // settings, then " · " and an ABSOLUTE PATH (the session's cwd). It is the only
@@ -54,7 +54,7 @@ var codexWorking = regexp.MustCompile(`^[•·◦]\s+Working\b`)
 // lowercase-only pattern made every GPT-6 pane with text in its composer read
 // as a non-Codex pane, so bp could neither see its own paste nor submit it
 // (issue #16, reproduced live 2026-09-24 on 1.8.7).
-var codexFooter = regexp.MustCompile(`^(?i:gpt-|o[1-9])\S*(?:\s+[^·]+)?\s+·\s+/\S`)
+var codexFooter = harness.CodexScreen.Footer
 
 // IsCodexCommand reports whether cmd COULD be a Codex pane. Like
 // IsHermesCommand it is not a whitelist: "node" is shared with half the
@@ -226,7 +226,7 @@ func Dialog(pane string) bool { return paneDialog(pane) }
 // This navigation menu has no "enter to confirm / esc to cancel" footer.
 // Enter selects a destination, so a disappearing draft here is not delivery.
 func codexNavigationMenu(pane string) bool {
-	choices := []string{"1. new chat", "2. agent command center", "3. resume another chat"}
+	choices := harness.CodexScreen.NavigationMenu
 	next := 0
 	for _, line := range hermesRegion(pane) {
 		text := strings.ToLower(strings.Trim(strings.TrimSpace(line), "›❯> "))
@@ -264,6 +264,6 @@ func codexSearchActive(pane string) bool {
 // (started with -c overrides) draws a right-aligned "⚠ 1 warning · f2 to view"
 // on the same row, so only the hint itself is compared, up to a space.
 func codexShortcutHint(row string) bool {
-	rest, ok := strings.CutPrefix(row, "? for shortcuts")
+	rest, ok := strings.CutPrefix(row, harness.CodexScreen.SearchShortcuts)
 	return ok && (rest == "" || unicode.IsSpace([]rune(rest)[0]))
 }

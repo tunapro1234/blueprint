@@ -42,6 +42,7 @@ type Config struct {
 	Ntfy             *ntfy.Config            `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
 	Fed              *FedConfig              `json:"fed,omitempty" yaml:"fed,omitempty"`
 	P2P              *p2p.Config             `json:"p2p,omitempty" yaml:"p2p,omitempty"`
+	API              *APIConfig              `json:"api,omitempty" yaml:"api,omitempty"`
 	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
 	CLIUpdates       map[string][]string     `json:"cliUpdates,omitempty" yaml:"cliUpdates,omitempty"`
 	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
@@ -171,6 +172,7 @@ type overrides struct {
 	Ntfy             *ntfy.Config             `json:"ntfy" yaml:"ntfy"`
 	Fed              *FedConfig               `json:"fed" yaml:"fed"`
 	P2P              *p2p.Config              `json:"p2p" yaml:"p2p"`
+	API              *APIConfig               `json:"api" yaml:"api"`
 	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
 	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
 	CLIUpdates       *map[string][]string     `json:"cliUpdates" yaml:"cliUpdates"`
@@ -325,6 +327,9 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 		if err := result.P2P.Validate(); err != nil {
 			return Config{}, fmt.Errorf("parse %s: p2p: %w", path, err)
 		}
+	}
+	if err := validateAPI(result.API); err != nil {
+		return Config{}, fmt.Errorf("parse %s: api: %w", path, err)
 	}
 	if err := validateRemotes(result.Remotes); err != nil {
 		return Config{}, fmt.Errorf("parse %s: remotes: %w", path, err)
@@ -496,6 +501,10 @@ func apply(result *Config, values overrides) {
 	if values.P2P != nil {
 		value := *values.P2P
 		result.P2P = &value
+	}
+	if values.API != nil {
+		value := *values.API
+		result.API = &value
 	}
 	if values.Codex != nil {
 		value := *values.Codex

@@ -1,7 +1,7 @@
 package tmux
 
 import (
-	"regexp"
+	"blueprint/internal/harness"
 	"strings"
 )
 
@@ -43,35 +43,35 @@ import (
 
 // openCodeIdleText is the composer placeholder. Only the stable opening is
 // matched: the sentence continues with a rotating example question.
-const openCodeIdleText = "Ask anything..."
+var openCodeIdleText = harness.OpenCodeScreen.IdleText
 
 var (
 	// openCodeRail is the left edge opencode draws down its composer.
-	openCodeRail = regexp.MustCompile(`^┃`)
+	openCodeRail = harness.OpenCodeScreen.Rail
 	// openCodeBottom is the composer's bottom edge: the corner glyph followed by
 	// a run of upper-half blocks. This is the anchor, because the transcript
 	// above the composer reuses the rail but never draws this.
-	openCodeBottom = regexp.MustCompile(`^╹▀+`)
+	openCodeBottom = harness.OpenCodeScreen.Bottom
 	// openCodeMode is the row inside the composer naming the mode, model and
 	// provider ("Build · Ox Alpha (stealth) OpenRouter"). It sits between the
 	// text and the bottom edge in every state, which makes it both a signature
 	// and the end of the composer's content.
-	openCodeMode = regexp.MustCompile(`^┃\s+\S+\s+·\s+\S`)
+	openCodeMode = harness.OpenCodeScreen.Mode
 	// openCodeHints is the affordance row under the composer.
-	openCodeHints = regexp.MustCompile(`tab agents\s+ctrl\+p commands`)
+	openCodeHints = harness.OpenCodeScreen.Hints
 	// openCodeFooter is the bottom status row: the session's cwd and git branch,
 	// then the version. The cwd wraps to a second row on a narrow pane, so the
 	// version is not required to be on the same row as the path.
-	openCodeFooter = regexp.MustCompile(`^/\S*:\S+`)
+	openCodeFooter = harness.OpenCodeScreen.Footer
 	// openCodeChip stands in for a multi-line paste whose text is not rendered.
 	// The count is approximate in opencode's own wording ("~3 lines"), so it is
 	// matched as a shape and never compared to the message.
-	openCodeChip = regexp.MustCompile(`\[Pasted\s+~?\d+\s+lines?\]`)
+	openCodeChip = harness.OpenCodeScreen.PasteChip
 	// openCodeBusyRow is the working signature: the progress dots and the
 	// interrupt affordance opencode draws while a turn runs. "esc interrupt" —
 	// note NOT Claude's "esc to interrupt", which is why the existing busy
 	// branches all read this pane as idle.
-	openCodeBusyRow = regexp.MustCompile(`esc\s+interrupt`)
+	openCodeBusyRow = harness.OpenCodeScreen.BusyRow
 )
 
 // IsOpenCodeCommand reports whether cmd could be an opencode pane.

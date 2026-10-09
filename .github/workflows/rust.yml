@@ -1,0 +1,28 @@
+name: Rust
+on:
+  push:
+    branches: [dev-rs]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BP_NO_UPDATE_CHECK: '1'
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: sudo apt-get update && sudo apt-get install -y tmux zsh curl
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --release -p bp-cli
+      - run: BP_TEST_IMPL=rust BP_TEST_BINARY=target/release/bp python3 -m unittest scripts.test_local_cli

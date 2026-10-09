@@ -1,0 +1,16 @@
+[package]
+name = "bp-cli"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "bp"
+path = "src/main.rs"
+
+[dependencies]

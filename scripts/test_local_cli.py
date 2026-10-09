@@ -224,18 +224,43 @@ if cli == "claude":
 """
 
 
+# BP_TEST_BINARY selects a prebuilt bp instead of building ./cmd/bp. Go still
+# builds the fake TUI fixture. With BP_TEST_IMPL=rust, tests listed in
+# scripts/rs_e2e_pending.txt are expected to fail; an unexpected pass fails the
+# run so the list only shrinks.
+TEST_BINARY = os.environ.get("BP_TEST_BINARY")
+TEST_IMPL = os.environ.get("BP_TEST_IMPL", "go")
+
+
+def pending_for_impl():
+    if TEST_IMPL != "rust":
+        return set()
+    path = REPO / "scripts" / "rs_e2e_pending.txt"
+    names = set()
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            names.add(line)
+    return names
+
+
 @unittest.skipUnless(shutil.which("tmux") and shutil.which("go"), "tmux and Go required")
 class LocalCLITest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.build = tempfile.TemporaryDirectory(prefix="bp-test-build-")
-        cls.binary = str(Path(cls.build.name) / "bp")
-        cls.coverage_dir = os.environ.get("BP_TEST_COVERAGE_DIR")
-        build_flags = []
-        if cls.coverage_dir:
-            Path(cls.coverage_dir).mkdir(parents=True, exist_ok=True)
-            build_flags = ["-cover", "-coverpkg=blueprint/..."]
-        subprocess.run(["go", "build", *build_flags, "-o", cls.binary, "./cmd/bp"], cwd=REPO, check=True)
+        cls.coverage_dir = None
+        if TEST_BINARY:
+            # A prebuilt binary (the Rust port) runs the same suite unchanged.
+            cls.binary = str(Path(TEST_BINARY).resolve())
+        else:
+            cls.binary = str(Path(cls.build.name) / "bp")
+            cls.coverage_dir = os.environ.get("BP_TEST_COVERAGE_DIR")
+            build_flags = []
+            if cls.coverage_dir:
+                Path(cls.coverage_dir).mkdir(parents=True, exist_ok=True)
+                build_flags = ["-cover", "-coverpkg=blueprint/..."]
+            subprocess.run(["go", "build", *build_flags, "-o", cls.binary, "./cmd/bp"], cwd=REPO, check=True)
         source = Path(cls.build.name) / "fake.go"
         source.write_text(FAKE_TUI)
         cls.fake_tui = str(Path(cls.build.name) / "codex")
@@ -1876,6 +1901,18 @@ class LocalCLITest(unittest.TestCase):
         result = subprocess.run([self.tmux, "-S", self.socket, "list-sessions"], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         os.write(fd, b"done\r")
+
+
+def _mark_pending():
+    pending = pending_for_impl()
+    unknown = sorted(pending - {name for name in dir(LocalCLITest) if name.startswith("test_")})
+    if unknown:
+        raise RuntimeError("rs_e2e_pending.txt names unknown tests: " + ", ".join(unknown))
+    for name in pending:
+        setattr(LocalCLITest, name, unittest.expectedFailure(getattr(LocalCLITest, name)))
+
+
+_mark_pending()
 
 
 if __name__ == "__main__":

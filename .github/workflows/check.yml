@@ -1,7 +1,7 @@
 name: Check
 on:
   push:
-    branches: [dev, dev-p2p]
+    branches: [dev, dev-p2p, dev-rs]
   pull_request:
 permissions:
   contents: read

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Run cargo for the Rust port at low priority with a bounded job count, after
+# waiting for the CPU package temperature to drop below BP_HEAT_LIMIT (°C).
+# Hosts without lm-sensors skip the wait.
+limit=${BP_HEAT_LIMIT:-78}
+if command -v sensors >/dev/null 2>&1; then
+	while :; do
+		temp=$(sensors 2>/dev/null | awk '/^Package id 0:/ { gsub(/[^0-9.]/, "", $4); print int($4); exit }')
+		[ -z "$temp" ] && break
+		[ "$temp" -lt "$limit" ] && break
+		echo "rs-cargo: package at ${temp}C, waiting for <${limit}C" >&2
+		sleep 10
+	done
+fi
+CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4} exec nice -n 10 "${CARGO:-cargo}" "$@"

@@ -122,9 +122,9 @@ var _ = register(&Descriptor{
 		BResume:             {Partial, "", "launch only; no session pin"},
 		BReportUsage:        {Partial, "", "external usage snapshot script"},
 		BRenameTitle:        {Unknown, "", ""},
-		BIdentityAfterReset: {Planned, PathHooks, "pre_llm_call hook restates identity when the session id rotates"},
+		BIdentityAfterReset: {Partial, PathHooks, "compaction-hooks module (opt-in, off by default): a pre_llm_call shell hook restates identity on the first turn of a session with a parent_session_id (a compression fork); in-place compression (no rotation) has no signal a shell hook can see"},
 	},
-	Sources: []string{"hermes --version", "/usr/local/lib/hermes-agent/website/docs/user-guide/features/hooks.md", "internal/tmux/hermes.go"},
+	Sources: []string{"hermes --version", "/usr/local/lib/hermes-agent/website/docs/user-guide/features/hooks.md", "internal/tmux/hermes.go", "hermes_state.py (parent_session_id set on a compression fork)"},
 })
 
 var _ = register(&Descriptor{
@@ -159,7 +159,7 @@ var _ = register(&Descriptor{
 		BResume:             {Partial, "", ""},
 		BReportUsage:        {Unknown, "", ""},
 		BRenameTitle:        {Unknown, "", ""},
-		BIdentityAfterReset: {Planned, PathHooks, "plugin: experimental.session.compacting adds the bp identity to the summary"},
+		BIdentityAfterReset: {Partial, PathHooks, "compaction-hooks module (opt-in, off by default): a plugin's event hook watches session.compacted and calls client.session.promptAsync (noReply) with the bp identity note"},
 	},
-	Sources: []string{"opencode --help (1.18.32)", "https://opencode.ai/docs/plugins", "https://opencode.ai/docs/server", "internal/tmux/opencode.go"},
+	Sources: []string{"opencode --help (1.18.32)", "https://opencode.ai/docs/plugins", "https://opencode.ai/docs/server", "internal/tmux/opencode.go", "@opencode-ai/plugin and @opencode-ai/sdk installed type definitions (EventSessionCompacted, Session.promptAsync)"},
 })

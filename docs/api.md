@@ -122,17 +122,21 @@ call `bp_register`.
 
 ## Safety
 
-- **Framing.** Text from a remote caller (anything that comes through the
-  gateway) is stored raw and marked untrusted. Framing happens only when the
-  text is handed to an agent, because a frame carries a fresh nonce: a
-  stored frame would make a retry of the same `messageId` look like
-  different content to the queue's idempotency check.
-  - Queue messages carry `Origin{Transport: "bp-api/gateway",
-    PeerAuthenticated: false}`, and delivery frames them (the `guard.Frame`
-    seam, W6).
-  - Inbox items, room posts and board values are framed with an
-    `[untrusted …]` frame when they are read. That frame is a stand-in until
-    `guard.Frame` lands.
+- **Framing.** Text is always stored raw and never framed before
+  `EnqueueOnceOrigin`; a frame differs on every call and would break the
+  queue's replay check for a retried `messageId`.
+  - A remote (gateway) caller is external, using the P2P inbound pattern.
+    Its sender is `external:<client>@gateway`, and the queue Origin is
+    `{Transport: "mcp", PeerAlias: "gateway", AgentClaim: <client>,
+    AgentVerified: false}`.
+  - Local callers get `Transport: "http"` (REST, A2A) or `"mcp"`.
+  - The shared delivery-time frame (`guard.Frame`, W6) applies to queue
+    deliveries.
+  - Inbox items, room posts and board values are read directly rather than
+    delivered, so the same `Framer` (`Frame(source, text string) string`)
+    is applied when they are read.
+  - Until bp-guard's implementation is wired in, the framer is a
+    passthrough (TODO W6).
 - **States.** Message states come from `msgq.DeliveryState`, the same
   mapping P2P uses: accepted, unverified, delivered or failed. A canceled
   message is failed with a `canceled …` reason, and A2A shows it as

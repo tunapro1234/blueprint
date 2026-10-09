@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/identity"
 )
 
@@ -98,7 +99,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reject(w http.ResponseWriter, r *http.Request, transport string, code int, why string) {
-	s.Core.audit(Event{Kind: "auth", Decision: "rejected", Transport: transport, Detail: why + " " + r.Method + " " + r.URL.Path})
+	s.Core.audit(audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: why + " " + r.Method + " " + r.URL.Path,
+		Fields: map[string]string{"transport": transport}})
 	writeStatusError(w, code, http.StatusText(code), why, "")
 }
 

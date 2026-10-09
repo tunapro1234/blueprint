@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"blueprint/internal/audit"
 )
 
 // The remote gateway lets web chat apps (Claude.ai custom connectors,
@@ -193,7 +195,7 @@ func (g *Gateway) IssueStaticToken(profile string) (string, error) {
 		s.Tokens[hashSecret(token)] = tokenGrant{Profile: profile, Kind: "static", Created: g.Core.now().Unix()}
 		return nil
 	})
-	g.Core.audit(Event{Kind: "gateway.token", Decision: "accepted", Transport: "gateway", Actor: "owner", Target: profile, Detail: "static token issued"})
+	g.Core.audit(audit.Event{Kind: "api.gateway.token.accepted", Actor: "owner", Target: profile, Reason: "static token issued", Fields: map[string]string{"transport": "gateway"}})
 	return token, err
 }
 
@@ -213,7 +215,7 @@ func (g *Gateway) Pair(profile string) (string, error) {
 		s.Pairings[hashSecret(code)] = pairing{Profile: profile, Expires: g.Core.now().Add(pairTTL).Unix()}
 		return nil
 	})
-	g.Core.audit(Event{Kind: "gateway.pair", Decision: "accepted", Transport: "gateway", Actor: "owner", Target: profile})
+	g.Core.audit(audit.Event{Kind: "api.gateway.pair.accepted", Actor: "owner", Target: profile, Fields: map[string]string{"transport": "gateway"}})
 	return code, err
 }
 
@@ -229,7 +231,7 @@ func (g *Gateway) Revoke(profile string) (int, error) {
 		}
 		return nil
 	})
-	g.Core.audit(Event{Kind: "gateway.revoke", Decision: "accepted", Transport: "gateway", Actor: "owner", Target: profile, Detail: fmt.Sprintf("%d tokens", removed)})
+	g.Core.audit(audit.Event{Kind: "api.gateway.revoke.accepted", Actor: "owner", Target: profile, Reason: fmt.Sprintf("%d tokens", removed), Fields: map[string]string{"transport": "gateway"}})
 	return removed, err
 }
 
@@ -318,7 +320,7 @@ func (g *Gateway) serverMetadata(w http.ResponseWriter) {
 }
 
 func (g *Gateway) unauthorized(w http.ResponseWriter, r *http.Request, why string) {
-	g.Core.audit(Event{Kind: "auth", Decision: "rejected", Transport: "gateway", Detail: why + " " + clientIP(r)})
+	g.Core.audit(audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: why + " " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
 	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata=%q, scope="bp"`, g.issuer()+"/.well-known/oauth-protected-resource"+g.mcpPath()))
 	writeStatusError(w, http.StatusUnauthorized, "UNAUTHENTICATED", why, "")
 }
@@ -400,7 +402,7 @@ func (g *Gateway) originAllowed(origin string) bool {
 
 func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if !g.originAllowed(r.Header.Get("Origin")) {
-		g.Core.audit(Event{Kind: "auth", Decision: "rejected", Transport: "gateway", Detail: "origin " + r.Header.Get("Origin")})
+		g.Core.audit(audit.Event{Kind: "api.auth.rejected", Severity: audit.Warn, Reason: "origin " + r.Header.Get("Origin"), Fields: map[string]string{"transport": "gateway"}})
 		writeStatusError(w, http.StatusForbidden, "PERMISSION_DENIED", "origin not allowed", "")
 		return
 	}
@@ -410,7 +412,7 @@ func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !g.allow(key) {
-		g.Core.audit(Event{Kind: "rate", Decision: "rejected", Transport: "gateway", Actor: grant.Profile, Detail: "rate limit"})
+		g.Core.audit(audit.Event{Kind: "api.rate.rejected", Severity: audit.Warn, Actor: grant.Profile, Reason: "rate limit", Fields: map[string]string{"transport": "gateway"}})
 		w.Header().Set("Retry-After", "30")
 		writeStatusError(w, http.StatusTooManyRequests, "RESOURCE_EXHAUSTED", "rate limit", "")
 		return
@@ -424,7 +426,7 @@ func (g *Gateway) serveMCP(w http.ResponseWriter, r *http.Request) {
 	policy := profile.Policy
 	session := NewMCPSession(g.Core, caller, &policy)
 	session.Instructions = gatewayInstructions
-	g.Core.audit(Event{Kind: "gateway.request", Decision: "accepted", Transport: "gateway", Actor: caller.Label(), Detail: r.Header.Get("Mcp-Method")})
+	g.Core.audit(audit.Event{Kind: "api.gateway.request.accepted", Actor: caller.Label(), Reason: r.Header.Get("Mcp-Method"), Fields: map[string]string{"transport": "gateway"}})
 	serveMCPRequest(w, r, session)
 }
 
@@ -502,7 +504,7 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_client_metadata", err.Error())
 		return
 	}
-	g.Core.audit(Event{Kind: "gateway.register", Decision: "accepted", Transport: "gateway", ID: id, Detail: name + " " + clientIP(r)})
+	g.Core.audit(audit.Event{Kind: "api.gateway.register.accepted", ID: id, Reason: name + " " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
 	writeJSONResponse(w, http.StatusCreated, map[string]any{
 		"client_id": id, "client_name": name, "redirect_uris": req.RedirectURIs,
 		"token_endpoint_auth_method": "none", "grant_types": []string{"authorization_code", "refresh_token"},
@@ -609,14 +611,14 @@ func (g *Gateway) authorize(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		g.Core.audit(Event{Kind: "gateway.authorize", Decision: "rejected", Transport: "gateway", ID: clientID, Detail: "bad pairing code " + clientIP(r)})
+		g.Core.audit(audit.Event{Kind: "api.gateway.authorize.rejected", Severity: audit.Warn, ID: clientID, Reason: "bad pairing code " + clientIP(r), Fields: map[string]string{"transport": "gateway"}})
 		page.Error = "That code is wrong or expired."
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
 		authorizePage.Execute(w, page)
 		return
 	}
-	g.Core.audit(Event{Kind: "gateway.authorize", Decision: "accepted", Transport: "gateway", Target: profile, ID: clientID})
+	g.Core.audit(audit.Event{Kind: "api.gateway.authorize.accepted", Target: profile, ID: clientID, Fields: map[string]string{"transport": "gateway"}})
 	u, _ := url.Parse(redirect)
 	values := u.Query()
 	values.Set("code", authCodeValue)
@@ -655,7 +657,7 @@ func (g *Gateway) token(w http.ResponseWriter, r *http.Request) {
 		challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 		if code.ClientID != form.Get("client_id") || code.RedirectURI != form.Get("redirect_uri") ||
 			subtle.ConstantTimeCompare([]byte(challenge), []byte(code.Challenge)) != 1 {
-			g.Core.audit(Event{Kind: "gateway.token", Decision: "rejected", Transport: "gateway", ID: form.Get("client_id"), Detail: "code exchange mismatch"})
+			g.Core.audit(audit.Event{Kind: "api.gateway.token.rejected", Severity: audit.Warn, ID: form.Get("client_id"), Reason: "code exchange mismatch", Fields: map[string]string{"transport": "gateway"}})
 			oauthError(w, 400, "invalid_grant", "client, redirect_uri or code_verifier does not match")
 			return
 		}
@@ -704,7 +706,7 @@ func (g *Gateway) token(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, 400, "invalid_grant", err.Error())
 		return
 	}
-	g.Core.audit(Event{Kind: "gateway.token", Decision: "accepted", Transport: "gateway", Target: grant.Profile, ID: grant.ClientID, Detail: form.Get("grant_type")})
+	g.Core.audit(audit.Event{Kind: "api.gateway.token.accepted", Target: grant.Profile, ID: grant.ClientID, Reason: form.Get("grant_type"), Fields: map[string]string{"transport": "gateway"}})
 	w.Header().Set("Pragma", "no-cache")
 	writeJSONResponse(w, http.StatusOK, map[string]any{
 		"access_token": access, "token_type": "Bearer", "expires_in": int(accessTTL.Seconds()),

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/identity"
 )
 
@@ -227,7 +228,7 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 	if err := withLock(history, func() error { return appendJSONL(history, post) }); err != nil {
 		return PostResult{}, err
 	}
-	c.audit(Event{Kind: "room.post", Decision: "accepted", Transport: caller.Transport, Actor: caller.Label(), Target: name, ID: post.ID})
+	c.audit(audit.Event{Kind: "api.room.post.accepted", Actor: caller.Label(), Target: name, ID: post.ID, Fields: map[string]string{"transport": caller.Transport}})
 	result := PostResult{Post: post, Deliveries: []SendResult{}}
 	// Each member gets the raw post from the original caller, so a remote
 	// author's post stays untrusted on every delivery route.
@@ -294,7 +295,7 @@ func (c *Core) auditResult(caller Caller, kind, target, detail string, err error
 		decision = "rejected"
 		detail = strings.TrimSpace(detail + " " + err.Error())
 	}
-	c.audit(Event{Kind: kind, Decision: decision, Transport: caller.Transport, Actor: caller.Label(), Target: target, Detail: detail})
+	c.audit(audit.Event{Kind: "api." + kind + "." + decision, Severity: severity(decision), Actor: caller.Label(), Target: target, Reason: detail, Fields: map[string]string{"transport": caller.Transport}})
 }
 
 func validateTextAllowEmpty(text string) error {

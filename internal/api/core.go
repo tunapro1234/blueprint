@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/identity"
 	"blueprint/internal/messagetext"
 	"blueprint/internal/msgq"
@@ -30,14 +31,18 @@ type Caller struct {
 	Verified bool
 	// Transport is http, socket, mcp or gateway.
 	Transport string
-	// Remote means the request crossed a trust boundary (the remote gateway):
-	// its text is framed as untrusted before any agent sees it.
+	// Remote means the request crossed a trust boundary (the remote gateway).
+	// Like P2P inbound, the caller is external: its label is
+	// external:<name>@<transport> and the shared delivery-time frame applies.
 	Remote bool
 }
 
 // Label is the sender label stored with the message and shown in its
 // envelope. An unverified caller is visibly marked by its transport.
 func (c Caller) Label() string {
+	if c.Remote {
+		return "external:" + c.Name + "@" + c.Transport
+	}
 	if c.Verified {
 		return c.Name
 	}
@@ -80,8 +85,9 @@ type Core struct {
 	Directory func(context.Context) ([]AgentInfo, error)
 	// Kick, when set, asks for a delivery pass for one target right away
 	// instead of waiting for the daemon's next tick.
-	Kick  func(target string)
-	Audit func(Event)
+	Kick func(target string)
+	// Audit records decisions; the default appends to <state>/audit.jsonl.
+	Audit func(audit.Event)
 	Frame Framer
 	Now   func() time.Time
 
@@ -93,7 +99,8 @@ type Core struct {
 // NewCore returns a Core with default audit and framing for stateDir.
 func NewCore(stateDir string, queue *msgq.Queue, directory func(context.Context) ([]AgentInfo, error)) *Core {
 	return &Core{StateDir: stateDir, Queue: queue, Directory: directory,
-		Audit: DefaultAudit(stateDir), Frame: InterimFrame, Now: time.Now}
+		Audit: func(ev audit.Event) { _ = audit.Append(stateDir, ev) },
+		Frame: PassthroughFramer{}, Now: time.Now}
 }
 
 func (c *Core) now() time.Time {
@@ -107,28 +114,35 @@ func (c *Core) dir() string { return filepath.Join(c.StateDir, "api") }
 
 func (c *Core) inbox() inboxStore { return inboxStore{dir: c.dir(), now: c.now} }
 
-func (c *Core) audit(e Event) {
+func (c *Core) audit(ev audit.Event) {
 	if c.Audit != nil {
-		if e.TS == "" {
-			e.TS = c.now().UTC().Format(time.RFC3339Nano)
+		if ev.Time.IsZero() {
+			ev.Time = c.now().UTC()
 		}
-		c.Audit(e)
+		if ev.Severity == "" {
+			ev.Severity = audit.Info
+		}
+		c.Audit(ev)
 	}
 }
 
-// render frames stored text that crossed a trust boundary as it is handed
-// to an agent. Text is always stored raw and framed only here, at read time:
-// a frame carries a fresh nonce, and a stored frame would make a retried
-// send look like different content to the idempotency checks.
+// originTransport is the msgq Origin transport for an API caller: mcp for
+// MCP sessions (stdio, /mcp and the gateway), http for REST and A2A.
+func originTransport(transport string) string {
+	if transport == "mcp" || transport == "gateway" {
+		return "mcp"
+	}
+	return "http"
+}
+
+// render applies the shared Framer to stored external text as an inbox,
+// room or board read hands it to an agent: these stores are read directly,
+// not delivered through the queue. Text is always stored raw.
 func (c *Core) render(untrusted bool, source, text string) string {
-	if !untrusted || text == "" {
+	if !untrusted || text == "" || c.Frame == nil {
 		return text
 	}
-	frame := c.Frame
-	if frame == nil {
-		frame = InterimFrame
-	}
-	return frame(source, text)
+	return c.Frame.Frame(source, text)
 }
 
 // ErrNotFound reports an unknown agent, message, room or key.
@@ -259,14 +273,16 @@ type SendResult struct {
 // agent, delivery confirmed by the transcript), the inbox for an inbox agent.
 func (c *Core) Send(ctx context.Context, caller Caller, req SendRequest) (SendResult, error) {
 	result, err := c.send(ctx, caller, req)
-	event := Event{Kind: "send", Transport: caller.Transport, Actor: caller.Label(), Target: req.To, ID: result.ID}
+	kind, reason := "api.send.", ""
 	if req.Room != "" {
-		event.Kind, event.Detail = "room.deliver", "room "+req.Room
+		kind, reason = "api.room.deliver.", "room "+req.Room
 	}
+	event := audit.Event{Actor: caller.Label(), Target: req.To, ID: result.ID,
+		Fields: map[string]string{"transport": caller.Transport, "route": result.Route}}
 	if err != nil {
-		event.Decision, event.Detail = "rejected", strings.TrimSpace(event.Detail+" "+err.Error())
+		event.Kind, event.Severity, event.Reason = kind+"rejected", audit.Warn, strings.TrimSpace(reason+" "+err.Error())
 	} else {
-		event.Decision = result.State
+		event.Kind, event.Reason = kind+result.State, reason
 	}
 	c.audit(event)
 	return result, err
@@ -299,9 +315,8 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	if err := messagetext.Sender(from); err != nil {
 		return SendResult{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	// Remote text is stored raw. Queue deliveries carry the untrusted origin
-	// (PeerAuthenticated false) for guard.Frame at delivery; inbox items are
-	// framed when they are read.
+	// Text is stored raw, never framed here: a frame differs on every call
+	// and would break the queue's replay check for a retried messageId.
 	body := req.Text
 	messageID := req.MessageID
 	if messageID == "" {
@@ -326,8 +341,15 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	if req.Room != "" {
 		envelope = "[room " + req.Room + "] " + envelope
 	}
-	origin := &msgq.Origin{Transport: "bp-api/" + caller.Transport, ChannelID: messageID,
-		AgentClaim: caller.Name, AgentVerified: caller.Verified, PeerAuthenticated: !caller.Remote}
+	// The P2P inbound pattern: text is stored raw and the Origin says where
+	// it came from, so the shared frame applies at delivery. A remote caller
+	// is external, with its gateway as the peer alias. It is token-
+	// authenticated, but its name is never verified.
+	origin := &msgq.Origin{Transport: originTransport(caller.Transport), ChannelID: messageID,
+		AgentClaim: caller.Name, AgentVerified: caller.Verified && !caller.Remote, PeerAuthenticated: true}
+	if caller.Remote {
+		origin.PeerAlias = caller.Transport
+	}
 	if c.Queue == nil {
 		return SendResult{}, errors.New("message queue unavailable")
 	}
@@ -413,7 +435,7 @@ func (c *Core) Register(ctx context.Context, caller Caller, name, description st
 	if err != nil {
 		decision, detail = "rejected", err.Error()
 	}
-	c.audit(Event{Kind: "agent.register", Decision: decision, Transport: caller.Transport, Actor: caller.Label(), Target: name, Detail: detail})
+	c.audit(audit.Event{Kind: "api.agent.register." + decision, Severity: severity(decision), Actor: caller.Label(), Target: name, Reason: detail, Fields: map[string]string{"transport": caller.Transport}})
 	return reg, err
 }
 
@@ -447,7 +469,7 @@ func (c *Core) Unregister(caller Caller, name string) error {
 	if err != nil {
 		decision, detail = "rejected", err.Error()
 	}
-	c.audit(Event{Kind: "agent.unregister", Decision: decision, Transport: caller.Transport, Actor: caller.Label(), Target: name, Detail: detail})
+	c.audit(audit.Event{Kind: "api.agent.unregister." + decision, Severity: severity(decision), Actor: caller.Label(), Target: name, Reason: detail, Fields: map[string]string{"transport": caller.Transport}})
 	return err
 }
 
@@ -468,7 +490,7 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 		agent = caller.Name
 	}
 	if agent != caller.Name {
-		c.audit(Event{Kind: "inbox.read", Decision: "rejected", Transport: caller.Transport, Actor: caller.Label(), Target: agent, Detail: "not the inbox owner"})
+		c.audit(audit.Event{Kind: "api.inbox.read.rejected", Severity: audit.Warn, Actor: caller.Label(), Target: agent, Reason: "not the inbox owner", Fields: map[string]string{"transport": caller.Transport}})
 		return InboxResult{}, fmt.Errorf("%w: only %s may read its inbox", ErrForbidden, agent)
 	}
 	if !identity.ValidName(agent) {
@@ -486,7 +508,7 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 		for i, item := range items {
 			ids[i] = item.ID
 		}
-		c.audit(Event{Kind: "inbox.read", Decision: "read", Transport: caller.Transport, Actor: caller.Label(), Target: agent, ID: strings.Join(ids, ",")})
+		c.audit(audit.Event{Kind: "api.inbox.read", Actor: caller.Label(), Target: agent, ID: strings.Join(ids, ","), Fields: map[string]string{"transport": caller.Transport}})
 	}
 	for i := range items {
 		items[i].Text = c.render(items[i].Untrusted, items[i].From, items[i].Text)

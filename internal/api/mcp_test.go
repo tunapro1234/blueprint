@@ -142,8 +142,8 @@ func TestMCPPolicyLimitsWhatASessionSees(t *testing.T) {
 		t.Fatal("could not read a read-only board")
 	}
 	pending, _ := core.Queue.List()
-	if len(pending) != 1 || strings.Contains(pending[0].Msg, "[untrusted ") || pending[0].Origin == nil || pending[0].Origin.PeerAuthenticated {
-		t.Fatalf("gateway text must be stored raw with an untrusted origin: %+v", pending)
+	if len(pending) != 1 || !strings.HasPrefix(pending[0].From, "external:") || pending[0].Origin == nil || pending[0].Origin.PeerAlias == "" {
+		t.Fatalf("gateway text must be stored raw with an external origin: %+v", pending)
 	}
 }
 

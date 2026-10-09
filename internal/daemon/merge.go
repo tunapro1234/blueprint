@@ -132,7 +132,7 @@ func mergedShape(text string, known map[string]bool) string {
 var quoteSeparator = regexp.MustCompile(`^\s*(?:[-=]{3,}|>)|---.+---`)
 
 // mergeScan reads the last day of deliveries for every open agent and reports each
-// damaged record ONCE, to the log and to server-main.
+// damaged record ONCE, to the log and to the coordinator (alarm).
 //
 // Errors are swallowed by design: this is a watchdog, and an agent whose transcript
 // cannot be resolved (a Codex pane has none) or whose folder is unknown proves
@@ -198,13 +198,7 @@ func (s *Service) mergeScan(sessions []string, state *busySanityState, now time.
 				continue
 			}
 			notices++
-			message := mergeMessage(session, record.Timestamp, shape)
-			s.log.Print(message)
-			if s.queue != nil {
-				if _, err := s.queue.Enqueue("server-main", "bp", message); err != nil {
-					s.log.Printf("merge-sanity: alarm could not be queued: %v", err)
-				}
-			}
+			s.alarm("merge-sanity", mergeMessage(session, record.Timestamp, shape))
 		}
 	}
 }

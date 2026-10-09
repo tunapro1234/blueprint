@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -179,6 +180,7 @@ func Format(agent, text string) string {
 }
 
 type Incoming struct {
+	ChatJid    string `json:"chatJid"`
 	ChatName   string `json:"chatName"`
 	SenderName string `json:"senderName"`
 	Text       string `json:"text"`
@@ -218,9 +220,17 @@ func Read(store, who string, count int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A chat is its JID: a group renamed later still shows its older rows
+	// when asked for by either name.
+	chats := map[string]bool{}
+	for _, row := range all {
+		if row.ChatJid != "" && strings.EqualFold(row.ChatName, who) {
+			chats[row.ChatJid] = true
+		}
+	}
 	var matched []Incoming
 	for _, row := range all {
-		if strings.EqualFold(row.ChatName, who) || strings.EqualFold(row.SenderName, who) {
+		if chats[row.ChatJid] || strings.EqualFold(row.ChatName, who) || strings.EqualFold(row.SenderName, who) {
 			matched = append(matched, row)
 		}
 	}
@@ -239,21 +249,39 @@ func Chats(store string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	order := make([]string, 0)
-	seen := map[string]string{}
-	for _, row := range all {
-		name := fallback(row.ChatName, "?")
-		if _, ok := seen[name]; !ok {
-			order = append(order, name)
+	// Chats are keyed by JID and shown under their latest name, most
+	// recently active last.
+	type chat struct {
+		name, at string
+		last     int
+	}
+	seen := map[string]*chat{}
+	for i, row := range all {
+		key := row.ChatJid
+		if key == "" {
+			key = "name:" + fallback(row.ChatName, "?")
 		}
-		seen[name] = clock(row.TS)
+		c := seen[key]
+		if c == nil {
+			c = &chat{}
+			seen[key] = c
+		}
+		if row.ChatName != "" || c.name == "" {
+			c.name = fallback(row.ChatName, "?")
+		}
+		c.at, c.last = clock(row.TS), i
 	}
-	if len(order) > 20 {
-		order = order[len(order)-20:]
+	list := make([]*chat, 0, len(seen))
+	for _, c := range seen {
+		list = append(list, c)
 	}
-	result := make([]string, 0, len(order))
-	for _, name := range order {
-		result = append(result, fmt.Sprintf("%s %s", seen[name], name))
+	sort.Slice(list, func(i, j int) bool { return list[i].last < list[j].last })
+	if len(list) > 20 {
+		list = list[len(list)-20:]
+	}
+	result := make([]string, 0, len(list))
+	for _, c := range list {
+		result = append(result, fmt.Sprintf("%s %s", c.at, c.name))
 	}
 	return result, nil
 }

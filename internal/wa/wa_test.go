@@ -238,3 +238,25 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 		})
 	}
 }
+
+func TestReadAndChatsFollowRenamedGroupsByJid(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "messages.jsonl")
+	rows := strings.Join([]string{
+		`{"ts":"2026-10-01T09:00:00Z","chatJid":"1@g.us","chatName":"Old name","senderName":"Ada","text":"before"}`,
+		`{"ts":"2026-10-01T09:05:00Z","chatJid":"2@g.us","chatName":"Other","senderName":"Bo","text":"x"}`,
+		`{"ts":"2026-10-02T10:00:00Z","chatJid":"1@g.us","chatName":"New name","senderName":"Ada","text":"after"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(store, []byte(rows), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []string{"New name", "old name"} {
+		got, err := Read(store, who, 10)
+		if err != nil || len(got) != 2 || !strings.HasSuffix(got[0], "before") || !strings.HasSuffix(got[1], "after") {
+			t.Fatalf("Read(%q) = %q %v", who, got, err)
+		}
+	}
+	chats, err := Chats(store)
+	if err != nil || len(chats) != 2 || chats[0] != "09:05 Other" || chats[1] != "10:00 New name" {
+		t.Fatalf("Chats = %q %v", chats, err)
+	}
+}

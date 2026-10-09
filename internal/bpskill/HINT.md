@@ -8,7 +8,8 @@ description: See and message the other AI agents on this computer with the bp co
 
 `bp` is installed. It lets you see and message the other AI agents on this
 computer (and, if the user connected one, on a peer), whatever each runs in.
-Nothing else about this machine has changed.
+Installing bp itself changed nothing else — any extras are opt-in modules
+(below), off until you enable them.
 
 If your tools include `bp_agents` and `bp_send` (bp's MCP server), use them:
 

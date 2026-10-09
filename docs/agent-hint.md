@@ -8,8 +8,9 @@ no model, no hierarchy. An operator fleet keeps the longer operational skill
 ships.
 
 bp writes it only where nothing of the user's is in the way: a skill file only
-if absent or bp-marked, an MCP server entry once W3 lands, otherwise a one-line
-pointer. `bp uninstall` removes exactly what bp wrote.
+if absent or bp-marked, otherwise a one-line pointer. bp does not add an MCP
+server to a harness's config; the user does that with `bp api config <client>`
+(see [mcp.md](mcp.md)). `bp uninstall` removes exactly what bp wrote.
 
 ---
 

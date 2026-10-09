@@ -42,12 +42,17 @@ type Change struct {
 	Value    string `json:"value,omitempty"`
 	Previous string `json:"previous,omitempty"`
 	Unset    bool   `json:"unset,omitempty"`
+	Created  string `json:"created,omitempty"`
 	Text     string `json:"text,omitempty"`
 	At       string `json:"at,omitempty"`
 }
 
 func (c Change) key() string {
-	return strings.Join([]string{c.Kind, c.Path, c.Line, c.Target, c.Option, c.Text}, "\x00")
+	parts := []string{c.Kind, c.Path, c.Line, c.Target, c.Option, c.Text}
+	if c.Kind == KindJSONEntry {
+		parts = append(parts, c.Value)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func (c Change) String() string {
@@ -66,6 +71,8 @@ func (c Change) String() string {
 		return fmt.Sprintf("tmux option %s (%s) = %s", c.Option, target, c.Value)
 	case KindNote:
 		return "note: " + c.Text
+	case KindJSONEntry:
+		return fmt.Sprintf("entry in %s %s: %s", c.Path, c.Option, c.Value)
 	}
 	return c.Kind
 }
@@ -254,6 +261,8 @@ func undo(env Env, change Change) (string, error) {
 			return "", err
 		}
 		return "restored tmux option " + change.Option, nil
+	case KindJSONEntry:
+		return undoJSONEntry(change)
 	case KindNote:
 		return "", errors.New(change.Text)
 	}

@@ -1,0 +1,146 @@
+[
+ {
+  "command": "claude",
+  "isAgentCommand": true,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "codex",
+  "isAgentCommand": true,
+  "isShellCommand": false,
+  "isCodexCommand": true,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "bwrap",
+  "isAgentCommand": true,
+  "isShellCommand": false,
+  "isCodexCommand": true,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "node",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": true,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "python3",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": true,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "hermes",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": true,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "opencode",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": true
+ },
+ {
+  "command": "zsh",
+  "isAgentCommand": false,
+  "isShellCommand": true,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "bash",
+  "isAgentCommand": false,
+  "isShellCommand": true,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "sh",
+  "isAgentCommand": false,
+  "isShellCommand": true,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "dash",
+  "isAgentCommand": false,
+  "isShellCommand": true,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "fish",
+  "isAgentCommand": false,
+  "isShellCommand": true,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "tmux",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "vim",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "python",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": true,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "hermes-agent",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ },
+ {
+  "command": "Codex",
+  "isAgentCommand": false,
+  "isShellCommand": false,
+  "isCodexCommand": false,
+  "isHermesCommand": false,
+  "isOpenCodeCommand": false
+ }
+]

@@ -1,0 +1,54 @@
+[
+ {
+  "options": {},
+  "claudeConfigPrefix": ""
+ },
+ {
+  "options": {
+   "claudeConfigDir": "/home/u/.claude-b"
+  },
+  "claudeConfigPrefix": "CLAUDE_CONFIG_DIR='/home/u/.claude-b' "
+ },
+ {
+  "options": {
+   "claudeConfigDir": "/home/u/it's here"
+  },
+  "claudeConfigPrefix": "CLAUDE_CONFIG_DIR='/home/u/it'\\''s here' "
+ },
+ {
+  "options": {
+   "codex": true,
+   "claudeConfigDir": "/x"
+  },
+  "claudeConfigPrefix": ""
+ },
+ {
+  "options": {
+   "hermes": true,
+   "claudeConfigDir": "/x"
+  },
+  "claudeConfigPrefix": ""
+ },
+ {
+  "options": {
+   "opencode": true,
+   "claudeConfigDir": "/x"
+  },
+  "claudeConfigPrefix": ""
+ },
+ {
+  "options": {
+   "resume": true,
+   "resumeId": "019a0d02-a847-76d1-ba01-8b67fbe755c1",
+   "codex": true,
+   "remote": "unix://",
+   "noSandbox": true,
+   "args": [
+    "-m",
+    "x"
+   ],
+   "claudeAccount": "b"
+  },
+  "claudeConfigPrefix": ""
+ }
+]

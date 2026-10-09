@@ -1,0 +1,27 @@
+[
+ {
+  "home": "/home/u",
+  "endpoint": "unix://",
+  "socket": "/home/u/app-server-control/app-server-control.sock"
+ },
+ {
+  "home": "/home/u",
+  "endpoint": "unix:///run/x.sock",
+  "socket": "/run/x.sock"
+ },
+ {
+  "home": "/home/u",
+  "endpoint": "unix://rel",
+  "socket": ""
+ },
+ {
+  "home": "/home/u",
+  "endpoint": "tcp://x",
+  "socket": ""
+ },
+ {
+  "home": "/home/u",
+  "endpoint": "",
+  "socket": ""
+ }
+]

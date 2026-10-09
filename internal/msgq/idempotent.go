@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"blueprint/internal/guard"
 	"blueprint/internal/messagetext"
 )
 
@@ -58,7 +59,10 @@ func (q *Queue) EnqueueOnceOrigin(key, to, from, text string, origin *Origin) (M
 		if origin != nil && old.Origin != nil {
 			a, b := *origin, *old.Origin
 			a.PeerAlias, b.PeerAlias = "", ""
-			same = a == b && old.To == to && strings.TrimPrefix(oldText, "["+old.From+"] ") == strings.TrimPrefix(text, "["+from+"] ")
+			// The frame header (nonce, alias, guard flags) may differ between
+			// guard versions or from a record stored before framing; the
+			// framed body may not.
+			same = a == b && old.To == to && guard.Body(strings.TrimPrefix(oldText, "["+old.From+"] ")) == guard.Body(strings.TrimPrefix(text, "["+from+"] "))
 		}
 		if !same {
 			return Message{}, fmt.Errorf("idempotency key reused with different content")

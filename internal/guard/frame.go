@@ -7,9 +7,14 @@
 package guard
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -64,23 +69,108 @@ func newNonce() (string, error) {
 	return strings.ToLower(nonceEncoding.EncodeToString(b)), nil
 }
 
-// Frame wraps untrusted text for delivery. The result starts with the open
-// marker on the first line, so a caller that prepends a "[sender] " envelope
-// keeps the marker on the envelope line.
+// Frame wraps untrusted text for delivery with a random nonce. Transports
+// that retry a channel use a Framer so the same channel frames identically.
+func Frame(src Source, text string) (Framed, error) {
+	return frame(src, text, func(int) (string, error) { return newNonce() })
+}
+
+// Framer derives the nonce from the channel with an HMAC keyed by a local
+// secret: a retried channel frames to the same text, and a sender that does
+// not hold the key cannot predict the nonce.
+type Framer struct{ key []byte }
+
+// NewFramer uses key (at least 16 bytes) as the HMAC secret.
+func NewFramer(key []byte) (*Framer, error) {
+	if len(key) < 16 {
+		return nil, errors.New("guard: frame key too short")
+	}
+	return &Framer{key: append([]byte(nil), key...)}, nil
+}
+
+// LoadFramer reads <stateDir>/guard/frame.key, creating it (0600, 32 random
+// bytes) on first use. The key never leaves this machine.
+func LoadFramer(stateDir string) (*Framer, error) {
+	if stateDir == "" {
+		return nil, errors.New("guard: no state directory")
+	}
+	path := filepath.Join(stateDir, "guard", "frame.key")
+	key, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := createKey(path); err != nil {
+			return nil, err
+		}
+		// Another process may have won the create; everyone uses the file.
+		key, err = os.ReadFile(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return NewFramer(key)
+}
+
+func createKey(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	fresh := make([]byte, 32)
+	if _, err := randRead(fresh); err != nil {
+		return err
+	}
+	// Write a complete temp file, then link it into place: a concurrent
+	// reader never sees a short key, and an existing key is never replaced.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".frame-key-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(fresh)
+	if serr := tmp.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Link(tmp.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return nil
+}
+
+// Frame wraps text. With src.PeerID and src.Channel set the result is a
+// pure function of (key, source, text); otherwise the nonce is random.
+func (f *Framer) Frame(src Source, text string) (Framed, error) {
+	if f == nil || src.Channel == "" {
+		return Frame(src, text)
+	}
+	return frame(src, text, func(attempt int) (string, error) {
+		m := hmac.New(sha256.New, f.key)
+		fmt.Fprintf(m, "bp-frame-v1\x00%s\x00%s\x00%s\x00%d", src.Transport, src.PeerID, src.Channel, attempt)
+		return strings.ToLower(nonceEncoding.EncodeToString(m.Sum(nil)[:10])), nil
+	})
+}
+
+// frame builds the framed text. The result starts with the open marker on
+// the first line, so a caller that prepends a "[sender] " envelope keeps the
+// marker on the envelope line.
 //
 // Boundaries are unforgeable twice over: every body line carries BodyPrefix,
-// and the markers carry a random per-message nonce that does not occur in
-// the body. Control and line-separator characters in the body are shown as
+// and the markers carry a per-message nonce that does not occur in the
+// body. Control and line-separator characters in the body are shown as
 // escapes instead of being interpreted.
-func Frame(src Source, text string) (Framed, error) {
+func frame(src Source, text string, nonceFor func(attempt int) (string, error)) (Framed, error) {
 	body := splitLines(text)
+	lower := strings.ToLower(text)
 	var nonce string
 	for attempt := 0; ; attempt++ {
-		n, err := newNonce()
+		n, err := nonceFor(attempt)
 		if err != nil {
 			return Framed{}, fmt.Errorf("guard: frame nonce: %w", err)
 		}
-		if !strings.Contains(strings.ToLower(text), n) {
+		if !strings.Contains(lower, n) {
 			nonce = n
 			break
 		}
@@ -105,6 +195,34 @@ func Frame(src Source, text string) (Framed, error) {
 	}
 	fmt.Fprintf(&b, "%s %s>>>", closeMarker, nonce)
 	return Framed{Text: b.String(), Nonce: nonce, Findings: findings}, nil
+}
+
+// Body returns the canonical body of text for replay comparison: for a
+// framed text the body lines without the frame, header, nonce or scan
+// flags; for plain text the same line normalisation Frame applies. A frame
+// produced by any guard version, alias or nonce compares equal to the plain
+// text it wraps, so records stored before framing still match retries.
+func Body(text string) string {
+	if !strings.HasPrefix(text, openMarker+" ") {
+		return strings.Join(splitLines(text), "\n")
+	}
+	lines := strings.Split(text, "\n")
+	head := strings.Fields(lines[0])
+	if len(head) < 2 {
+		return strings.Join(splitLines(text), "\n")
+	}
+	end := closeMarker + " " + head[1] + ">>>"
+	var body []string
+	for _, l := range lines[1:] {
+		if l == end {
+			return strings.Join(body, "\n")
+		}
+		if rest, ok := strings.CutPrefix(l, BodyPrefix); ok {
+			body = append(body, rest)
+		}
+	}
+	// Unterminated: not a frame this package produced.
+	return strings.Join(splitLines(text), "\n")
 }
 
 // describe prints provenance. Values are sanitised to one token each so a
@@ -186,6 +304,9 @@ func splitLines(text string) []string {
 func isBidi(r rune) bool {
 	return r == '\u061c' || r == '\u200e' || r == '\u200f' || (r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u2069')
 }
+
+// Summary lists the distinct finding kinds, for headers and audit fields.
+func Summary(fs []Finding) string { return summarize(fs) }
 
 func summarize(fs []Finding) string {
 	seen := map[Kind]bool{}

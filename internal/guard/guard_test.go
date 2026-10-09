@@ -320,3 +320,51 @@ func TestSensitive(t *testing.T) {
 		}
 	}
 }
+
+func TestFramerDeterministicPerChannel(t *testing.T) {
+	f, err := NewFramer([]byte("0123456789abcdef0123"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := src()
+	x, _ := f.Frame(s, "hello")
+	y, _ := f.Frame(s, "hello")
+	if x.Text != y.Text {
+		t.Fatal("same channel framed differently")
+	}
+	s.Channel = "p2"
+	z, _ := f.Frame(s, "hello")
+	if z.Nonce == x.Nonce {
+		t.Fatal("nonce does not depend on the channel")
+	}
+	other, _ := NewFramer([]byte("another-key-0123456789"))
+	w, _ := other.Frame(src(), "hello")
+	if w.Nonce == x.Nonce {
+		t.Fatal("nonce does not depend on the key")
+	}
+	// A body containing the derived nonce forces the next attempt.
+	c, _ := f.Frame(src(), "guess "+x.Nonce)
+	if c.Nonce == x.Nonce || strings.Count(c.Text, c.Nonce) != 2 {
+		t.Fatal("collision not avoided")
+	}
+	if _, err := NewFramer([]byte("short")); err == nil {
+		t.Fatal("short key accepted")
+	}
+}
+
+func TestBodyCanonical(t *testing.T) {
+	text := "line one\r\nline two three\t[x] y"
+	f, _ := Frame(src(), text)
+	s := src()
+	s.Peer = "renamed"
+	g, _ := Frame(s, text)
+	if Body(f.Text) != Body(g.Text) || Body(f.Text) != Body(text) {
+		t.Fatalf("Body differs: %q %q %q", Body(f.Text), Body(g.Text), Body(text))
+	}
+	if Body(f.Text) == Body(text+"!") {
+		t.Fatal("different text has equal body")
+	}
+	if Body("<<<bp-untrusted abc\n| x") != Body("<<<bp-untrusted abc\n| x") || Body("<<<bp-untrusted abc\n| x") == "x" {
+		t.Fatal("unterminated frame treated as a frame")
+	}
+}

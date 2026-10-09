@@ -6,10 +6,12 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"blueprint/internal/guard"
 	"blueprint/internal/msgq"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -300,8 +302,9 @@ func TestOutboxOrderAndCorruption(t *testing.T) {
 	if e != nil || len(list) != 3 {
 		t.Fatalf("list=%v %v", list, e)
 	}
-	for i, want := range []string{"[external:sender@a] first", "[external:sender@a] second", "[external:sender@a] third"} {
-		if list[i].Msg != want {
+	for i, want := range []string{"first", "second", "third"} {
+		body, ok := strings.CutPrefix(list[i].Msg, "[external:sender@a] ")
+		if !ok || guard.Body(body) != want {
 			t.Fatalf("out of order: %v", list)
 		}
 	}

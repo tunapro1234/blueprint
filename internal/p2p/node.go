@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/guard"
 	"blueprint/internal/messagetext"
 	"blueprint/internal/msgq"
 	"github.com/libp2p/go-libp2p"
@@ -48,6 +49,8 @@ type Node struct {
 	inboundRetry  time.Duration
 	ResolveLookup func(string) LookupResponse
 	limits        *limiter
+	framer        *guard.Framer
+	watch         *guard.Watch
 }
 
 func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, error) {
@@ -57,6 +60,12 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 	lock, err := Lock(root)
 	if err != nil {
 		return nil, err
+	}
+	// Inbound text is never delivered unframed: no frame key, no node.
+	framer, err := guard.LoadFramer(root)
+	if err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("p2p: frame key: %w", err)
 	}
 	key, err := Identity(root)
 	if err != nil {
@@ -85,7 +94,8 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 		return nil, err
 	}
 	n := &Node{Host: h, Root: root, Config: cfg, Queue: q, Log: os.Stderr, lock: lock, discovery: map[peer.ID]presence{}, ctx: ctx,
-		inbound: make(chan struct{}, 1), inboundRetry: 30 * time.Second, limits: newLimiter()}
+		inbound: make(chan struct{}, 1), inboundRetry: 30 * time.Second, limits: newLimiter(), framer: framer,
+		watch: guard.NewWatch(guard.WatchConfig{}, guard.AuditSink{StateDir: root, Errors: os.Stderr})}
 	if cfg.Relay {
 		r := relay.DefaultResources()
 		r.MaxReservations = 128
@@ -210,6 +220,7 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 				// sign of a peer reaching for what it was not given.
 				res.Error = "target is not exposed to this peer"
 				n.reject(remote, alias, req, p, res.Error, audit.Alert)
+				n.watch.Observe(guard.Event{Kind: guard.EvDenied, Peer: alias, Target: req.To, Channel: req.ID, Detail: "not-exposed"})
 				break
 			}
 			if !ValidName(req.To) || len(req.From) > 256 || len(req.Text) > MaxMessageBytes || strings.TrimSpace(req.Text) == "" {
@@ -232,7 +243,9 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 				n.reject(remote, alias, req, p, res.Error, audit.Warn)
 				break
 			}
-			if _, missing := n.Queue.Record(queueID(remote, req.ID)); missing != nil {
+			_, missing := n.Queue.Record(queueID(remote, req.ID))
+			fresh := missing != nil
+			if fresh {
 				if err = n.admit(remote, alias, policy, req); err != nil {
 					res.Error = err.Error()
 					break
@@ -242,9 +255,16 @@ func (n *Node) handle(s network.Stream, p protocol.ID) {
 			origin := &msgq.Origin{Transport: "libp2p", PeerID: remote.String(), PeerAlias: alias, ChannelID: req.ID,
 				PeerAuthenticated: true, AgentClaim: req.From, AgentVerified: false,
 				ReportedThread: req.Sender.Thread, ReportedSource: req.Sender.Source, ReportedCertain: req.Sender.Certain}
-			m, err = n.Queue.EnqueueOnceOrigin(queueKey(remote, req.ID), req.To, from, "["+from+"] "+req.Text, origin)
-			if err == nil {
-				n.auditAccepted(remote, alias, req, m.ID)
+			var framed guard.Framed
+			framed, err = n.framer.Frame(guard.Source{Transport: "p2p", Peer: alias, PeerID: remote.String(), AgentClaim: req.From, Channel: req.ID}, req.Text)
+			if err != nil {
+				res.Error = "could not frame message"
+				n.reject(remote, alias, req, p, err.Error(), audit.Warn)
+				break
+			}
+			m, err = n.Queue.EnqueueOnceOrigin(queueKey(remote, req.ID), req.To, from, "["+from+"] "+framed.Text, origin)
+			if err == nil && fresh {
+				n.auditAccepted(remote, alias, req, m.ID, framed.Findings)
 			}
 		} else {
 			m, err = n.Queue.Record(queueID(remote, req.ID))
@@ -290,6 +310,7 @@ func (n *Node) handleLookup(s network.Stream) {
 		_ = s.Reset()
 		return
 	}
+	n.watch.Observe(guard.Event{Kind: guard.EvLookup, Peer: alias, Target: req.Find})
 	result := LookupResponse{}
 	if n.ResolveLookup != nil {
 		result = n.ResolveLookup(req.Find)
@@ -591,7 +612,19 @@ func (n *Node) reject(remote peer.ID, alias string, req request, p protocol.ID, 
 	_ = audit.Append(n.Root, audit.Event{Kind: kind, Severity: severity, Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID, Reason: reason})
 }
 
-func (n *Node) auditAccepted(remote peer.ID, alias string, req request, queueID string) {
-	_ = audit.Append(n.Root, audit.Event{Kind: "p2p.msg.accepted", Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID,
-		Fields: map[string]string{"queue": queueID, "bytes": fmt.Sprint(len(req.Text))}})
+// auditAccepted records a new inbound message once, with the guard flags
+// its body raised. Flags never block delivery; a high flag raises the
+// event to warn so the owner can find it.
+func (n *Node) auditAccepted(remote peer.ID, alias string, req request, queueID string, findings []guard.Finding) {
+	fields := map[string]string{"queue": queueID, "bytes": fmt.Sprint(len(req.Text))}
+	severity := audit.Info
+	if len(findings) > 0 {
+		fields["guard.flags"] = guard.Summary(findings)
+		fields["guard.severity"] = string(guard.MaxSeverity(findings))
+		if guard.MaxSeverity(findings) == guard.High {
+			severity = audit.Warn
+		}
+	}
+	_ = audit.Append(n.Root, audit.Event{Kind: "p2p.msg.accepted", Severity: severity, Peer: alias, PeerID: remote.String(), Actor: req.From, Target: req.To, ID: req.ID,
+		Fields: fields})
 }

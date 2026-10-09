@@ -1,0 +1,4425 @@
+[
+ {
+  "name": "case00",
+  "file": "",
+  "body": "",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case01",
+  "file": "config.yaml",
+  "body": "",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case02",
+  "file": "config.yaml",
+  "body": "IyBvbmx5IGEgY29tbWVudAo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case03",
+  "file": "config.yaml",
+  "body": "e30=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case04",
+  "file": "config.yaml",
+  "body": "LS0tCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case05",
+  "file": "config.yaml",
+  "body": "fgo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case06",
+  "file": "config.yaml",
+  "body": "IyBicCBzZXR0aW5ncyDigJQgY2hhbmdlcyBhcmUgcmVhZCBieSB0aGUgbmV4dCBicCBjb21tYW5kLgojIEZpbGU6IH4vLmJsdWVwcmludC9jb25maWcueWFtbCAob3IgdGhhdCBkaXJlY3Rvcnkgd2hlbiBCUF9IT01FIGlzIHNldCkuCiMgUmVsYXRpdmUgcGF0aHMgYXJlIHJlc29sdmVkIGZyb20gdGhpcyBmaWxlJ3MgZGlyZWN0b3J5OyB+LyBpcyB0aGUgaG9tZSBkaXJlY3RvcnkuCiMgRG8gbm90IHVzZSB0aGlzIHRvZ2V0aGVyIHdpdGggY29uZmlnLmpzb24gb3IgY29uZmlnLnltbDsgc2VsZWN0IG9uZSBhY3RpdmUgZmlsZS4KCmFnZW50Ym9va3M6IFthZ2VudGJvb2suanNvbl0KbXNncVJvb3Q6IG1zZ3EKc3RhdGVEaXI6IHN0YXRlCgojIExvY2FsIENMSSBzZXNzaW9uL21vZGVsL2NvbnRleHQgb2JzZXJ2YXRpb24uIENvbnZlcnNhdGlvbnMgc3RheSBpbiB0aGVpciBuYXRpdmUgQ0xJIGRpcmVjdG9yeS4KbG9jYWxPYnNlcnZhdGlvbjogdHJ1ZQoKIyBNb3VzZSBzY3JvbGxpbmcgYW5kIHNlbGVjdGlvbiBpbiBsb2NhbCBicCB0bXV4IHNlc3Npb25zLgpsb2NhbE1vdXNlOiB0cnVlCgojIFRocm93YXdheSBhZ2VudHMgbGF1bmNoZWQgdGhyb3VnaCBicCBydW4gYXJlIGFyY2hpdmVkIGFmdGVyIHRoZXkgY2xvc2UuCiMgYnAgb3BlbiByZW1haW5zIHBlcnNpc3RlbnQgdW5sZXNzIC0tZXBoZW1lcmFsIGlzIHN1cHBsaWVkLgpsaWZlY3ljbGU6CiAgZXBoZW1lcmFsRGVmYXVsdDogdHJ1ZQogIGFyY2hpdmVPbkNsb3NlOiB0cnVlCgojIEJvdHRvbSBiYXI6IGxpc3Qgb3JkZXIgaXMgZGlzcGxheSBvcmRlci4gW10gaGlkZXMgZXZlcnkgd2lkZ2V0LgojIGN0eDogY29udGV4dCwgdGVtcDogY2FjaGUgZXN0aW1hdGUvbWVhc3VyZW1lbnQgYWdlLCBxdWV1ZTogd2FpdGluZyBtZXNzYWdlcywKIyBtb2RlbDogbW9kZWwvZWZmb3J0LCBxdW90YTogcXVvdGEgdXNlZCwgdGFsazogbGF0ZXN0LW1lc3NhZ2UgYWdlLCBjbG9jazogdGltZS4KYmFyOgogICMgZGVmYXVsdENvbG9yOiBwdXJwbGUgIyBjb21wdXRlciBkZWZhdWx0OyBwZXItYWdlbnQgYnAgY29sb3IgdGFrZXMgcHJlY2VkZW5jZQogIGNvbnRleHQ6IHVzZWQgIyBjb250ZXh0IHVzZWQ7IHNlbGVjdCByZW1haW5pbmcgZm9yIHRoZSBhbW91bnQgbGVmdAogIHdpZGdldHM6IFtjdHgsIHRlbXAsIHF1ZXVlLCBtb2RlbCwgcXVvdGFdCgojIE9wdGlvbmFsIGludGVncmF0aW9ucyBhcmUgZGlzYWJsZWQgYnkgZGVmYXVsdC4KCiMgRXhwbGljaXQgY29sb3IgdXNlZCB3aGVuIGEgd2F0Y2hlZCB3aW5kb3cgbm8gbG9uZ2VyIGJlbG9uZ3MgdG8gYW4gYWdlbnQuCndpbmRvd3M6CiAgcmVzZXRDb2xvcjogd2hpdGUKCndhQnJpZGdlOiBmYWxzZQojIHVzYWdlSGlzdG9yeTogfi91c2FnZS9oaXN0b3J5Lmpzb25sCiMgY29kZXg6CiMgICBzb2NrZXRzOiBbfi8uY29kZXgvYXBwLXNlcnZlci1jb250cm9sL2FwcC1zZXJ2ZXItY29udHJvbC5zb2NrXQojICAgZGlzYWJsZWQ6IGZhbHNlICAgIyB0cnVlOiBicCBvcGVucyBubyBuZXcgQ29kZXggc2Vzc2lvbnMgd2l0aG91dCAtLWFsbG93LWNvZGV4CiMgbnRmeToKIyAgIHVybDogaHR0cHM6Ly9udGZ5LmV4YW1wbGUuY29tCiMgICB0b3BpYzogYnAKIyAgIHRva2VuOiAiIgoKIyBWYWxpZGF0ZTogYnAgY29uZmlnIGNoZWNrCiMgQWN0aXZlIGZpbGU6IGJwIGNvbmZpZyBwYXRoCgojIENoZWNrIHNpZ25lZCByZWxlYXNlcyBpbiB0aGUgYmFja2dyb3VuZCBhdCBtb3N0IGRhaWx5OyBuZXZlciBzdGFydHMgYSBtb2RlbCB0dXJuLgp1cGRhdGVDaGVjazogdHJ1ZQoKIyBOYXRpdmUgQ0xJIHVwZGF0ZXIgYXJndiB1c2VkIGJ5IGJwIHVwZGF0ZSAtLWNsaXMuIFZhbHVlcyBhcmUgbm90IHNoZWxsIHN0cmluZ3MuCiMgY2xpVXBkYXRlczoKIyAgIGNsYXVkZTogW2NsYXVkZSwgdXBkYXRlXQojICAgY29kZXg6IFtucG0sIGluc3RhbGwsIC1nLCAiQG9wZW5haS9jb2RleEBsYXRlc3QiXQojICAgb3BlbmNvZGU6IFtvcGVuY29kZSwgdXBncmFkZV0KIyAgIGhlcm1lczogW2hlcm1lcywgdXBkYXRlXQoKIyBQMlAgaXMgb3B0LWluLiBGaXJzdCBwcmludCB0aGlzIG1hY2hpbmUncyBwdWJsaWMgaWRlbnRpdHk6IGJwIHAycCBpZAojIFNlZSBkb2NzL3AycC5tZCBmb3IgcGVlciBhbGxvd2xpc3RzIGFuZCByZW5kZXp2b3VzIGNvbmZpZ3VyYXRpb24uCiMgcDJwOgojICAgZW5hYmxlZDogdHJ1ZQojICAgbWRuczogZmFsc2UKIyAgIHJlbmRlenZvdXM6IFsvZG5zNC95b3VyLXJlbGF5LmV4YW1wbGUvdGNwLzQ0My93c3MvcDJwL1JFTEFZX1BFRVJfSURdCiMgICBwZWVyczoKIyAgICAgbGFwdG9wOgojICAgICAgIGlkOiBMQVBUT1BfUEVFUl9JRAojICAgICAgIGV4cG9zZTogW21haW5dICMgb25seSB0aGVzZSBMT0NBTCBhZ2VudHMgbWF5IHJlY2VpdmUgZnJvbSBsYXB0b3AKCiMgQ2xhdWRlIGFjY291bnQgcm90YXRpb24uIEFjY291bnRzIGFyZSBjYXB0dXJlZCB3aXRoIGJwIGFjY291bnQgYWRkOyB0aGUKIyBkYWVtb24gc3dpdGNoZXMgb25seSB3aGVuIGF1dG9Td2l0Y2ggaXMgdHJ1ZS4gdGhyZXNob2xkIGlzIGEgNWgvN2QKIyB1dGlsaXphdGlvbiBwZXJjZW50YWdlLgojIGNsYXVkZUFjY291bnRzOgojICAgYXV0b1N3aXRjaDogZmFsc2UKIyAgIHRocmVzaG9sZDogOTAKIyAgIGNvb2xkb3duTWludXRlczogNQojICAgcG9sbE1pbnV0ZXM6IDUKCiMgSW50ZXJhY3RpdmUgcmVtb3RlIHRlcm1pbmFscyBhcmUgc2VwYXJhdGUgZnJvbSBQMlAgbWVzc2FnZSBwZWVycy4KIyByZW1vdGVzOgojICAgc2VydmVyOgojICAgICBob3N0OiBzZXJ2ZXIuZXhhbXBsZQojICAgICBwb3J0OiAyMgojICAgICB1c2VyOiB0dW5hCiMgICAgIGlkZW50aXR5OiB+Ly5zc2gvc2VydmVyCiMgICAgIHRyYW5zcG9ydDogbW9zaCAjIG1vc2ggb3Igc3NoCiMgICAgIG1vc2hQb3J0czogNjAwMDA6NjEwMDAKIyAgICAgZWxldmF0ZTogc3VkbyAtaQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case07",
+  "file": "config.yaml",
+  "body": "dXBkYXRlQ2hlY2s6IGZhbHNlCmxvY2FsTW91c2U6IG5vCmxvY2FsT2JzZXJ2YXRpb246IG9mZgp3YUJyaWRnZTogeWVzCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": false,
+   "localObservation": false,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": false,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": true,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case08",
+  "file": "config.yaml",
+  "body": "d2FCcmlkZ2U6ICJ5ZXMiCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": true,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case09",
+  "file": "config.yaml",
+  "body": "d2FCcmlkZ2U6ICJ0cnVlIgo=",
+  "error": true
+ },
+ {
+  "name": "case10",
+  "file": "config.yaml",
+  "body": "d2FCcmlkZ2U6IFRydWUK",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": true,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case11",
+  "file": "config.yaml",
+  "body": "bXNncVJvb3Q6IC9hYnMvL3EvCnN0YXRlRGlyOiByZWwvLi9zdGF0ZQp3YU91dGJveDogfi9vdXQKd2FTdG9yZTogfgp1c2FnZUJpbjogIiIKY2xpcGJvYXJkRGlyOiAuLi9jbGlwcwo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "/tmp/clips",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "/abs/q",
+   "stateDir": "$HOME/rel/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "/home/golden/out",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case12",
+  "file": "config.yaml",
+  "body": "YWdlbnRib29rczogW2EuanNvbiwgL2IuanNvbiwgfi9jLmpzb25dCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/a.json",
+    "/b.json",
+    "/home/golden/c.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/a.json",
+    "/b.json",
+    "/home/golden/c.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case13",
+  "file": "config.yaml",
+  "body": "YWdlbnRib29rczogW2EuanNvbl0KdG9rZW5BZ2VudGJvb2tzOiBbdC5qc29uXQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/a.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/t.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case14",
+  "file": "config.yaml",
+  "body": "dG9rZW5BZ2VudGJvb2tzOiBbXQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": null,
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case15",
+  "file": "config.yaml",
+  "body": "YWdlbnRib29rczogfgo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case16",
+  "file": "config.yaml",
+  "body": "YmFyOgogIGRlZmF1bHRDb2xvcjogUHVycGxlCiAgY29udGV4dDogcmVtYWluaW5nCiAgd2lkZ2V0czogW2Nsb2NrLCB0YWxrXQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "remaining",
+    "defaultColor": "Purple",
+    "widgets": [
+     "clock",
+     "talk"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case17",
+  "file": "config.yaml",
+  "body": "YmFyOgogIGRlZmF1bHRDb2xvcjogMzAwCg==",
+  "error": true
+ },
+ {
+  "name": "case18",
+  "file": "config.yaml",
+  "body": "YmFyOgogIHdpZGdldHM6IFtjdHgsIG5vcGVdCg==",
+  "error": true
+ },
+ {
+  "name": "case19",
+  "file": "config.yaml",
+  "body": "d2luZG93czoge30K",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case20",
+  "file": "config.yaml",
+  "body": "d2luZG93czoKICByZXNldENvbG9yOiAnIDMzICcK",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": " 33 "
+   }
+  }
+ },
+ {
+  "name": "case21",
+  "file": "config.yaml",
+  "body": "d2luZG93czoKICByZXNldENvbG9yOiAyNTYK",
+  "error": true
+ },
+ {
+  "name": "case22",
+  "file": "config.yaml",
+  "body": "bGlmZWN5Y2xlOgogIGVwaGVtZXJhbERlZmF1bHQ6IGZhbHNlCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": false
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case23",
+  "file": "config.yaml",
+  "body": "bGlmZWN5Y2xlOiB+Cg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case24",
+  "file": "config.yaml",
+  "body": "Y29kZXg6CiAgc29ja2V0czogW2Euc29jaywgfi9iLnNvY2tdCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "codex": {
+    "disabled": false,
+    "sockets": [
+     "$HOME/a.sock",
+     "/home/golden/b.sock"
+    ]
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case25",
+  "file": "config.yaml",
+  "body": "Y29kZXg6CiAgZGlzYWJsZWQ6IHRydWUK",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "codex": {
+    "disabled": true,
+    "sockets": null
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case26",
+  "file": "config.yaml",
+  "body": "bnRmeToKICB1cmw6IGh0dHBzOi8vbi5leGFtcGxlCiAgdG9waWM6IHQK",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "ntfy": {
+    "topic": "t",
+    "url": "https://n.example"
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case27",
+  "file": "config.yaml",
+  "body": "bnRmeToKICB1cmw6IGh0dHBzOi8vbi5leGFtcGxlCiAgYm9ndXM6IDEK",
+  "error": true
+ },
+ {
+  "name": "case28",
+  "file": "config.yaml",
+  "body": "Y2xpVXBkYXRlczoKICBjbGF1ZGU6IFtdCiAgbmV3Y2xpOiBbeCwgeV0K",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": null,
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "newcli": [
+     "x",
+     "y"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case29",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICBzZXJ2ZXI6CiAgICBob3N0OiBzZXJ2ZXIuZXhhbXBsZQogICAgaWRlbnRpdHk6IH4vLnNzaC9pZAo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "remotes": {
+    "server": {
+     "host": "server.example",
+     "identity": "/home/golden/.ssh/id",
+     "transport": "ssh"
+    }
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case30",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICBzZXJ2ZXI6CiAgICBob3N0OiBoCiAgICBwb3J0OiAwCiAgICB0cmFuc3BvcnQ6IG1vc2gKICAgIG1vc2hQb3J0czogIjYwMDAxIgogICAgZWxldmF0ZTogc3VkbyAtaSAtdSByb290Cg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "remotes": {
+    "server": {
+     "elevate": "sudo -i -u root",
+     "host": "h",
+     "moshPorts": "60001",
+     "transport": "mosh"
+    }
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case31",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICAnYmFkIG5hbWUnOgogICAgaG9zdDogaAo=",
+  "error": true
+ },
+ {
+  "name": "case32",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICBzOgogICAgaG9zdDogaAogICAgdXNlcjogJ2EgYicK",
+  "error": true
+ },
+ {
+  "name": "case33",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICBzOgogICAgaG9zdDogaAogICAgbW9zaFBvcnRzOiAxOjI6Mwo=",
+  "error": true
+ },
+ {
+  "name": "case34",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICBzOgogICAgaG9zdDogaAogICAgcG9ydDogLTEK",
+  "error": true
+ },
+ {
+  "name": "case35",
+  "file": "config.yaml",
+  "body": "cmVtb3RlczoKICBzOiB7aG9zdDogaH0KICBzOiB7aG9zdDogZ30K",
+  "error": true
+ },
+ {
+  "name": "case36",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGh1YgogIGxpc3RlbjogMTI3LjAuMC4xOjc4NzcKICBwZWVyTmFtZTogaHViCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "fed": {
+    "listen": "127.0.0.1:7877",
+    "mode": "hub",
+    "peerName": "hub"
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case37",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGh1YgogIGxpc3RlbjogbG9jYWxob3N0Ojc4NzcKICBwZWVyTmFtZTogaHViCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "fed": {
+    "listen": "localhost:7877",
+    "mode": "hub",
+    "peerName": "hub"
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case38",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGh1YgogIGxpc3RlbjogJ1s6OjFdOjc4NzcnCiAgcGVlck5hbWU6IGh1Ygo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "fed": {
+    "listen": "[::1]:7877",
+    "mode": "hub",
+    "peerName": "hub"
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case39",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGh1YgogIGxpc3RlbjogMTI3LjAuMC4xCiAgcGVlck5hbWU6IGh1Ygo=",
+  "error": true
+ },
+ {
+  "name": "case40",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGh1YgogIGxpc3RlbjogMTI3LjAuMC4xOjEKICBwZWVyTmFtZTogJy4uJwo=",
+  "error": true
+ },
+ {
+  "name": "case41",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGNsaWVudAogIGh1YjogaHR0cDovLzEyNy4wLjAuMTo3ODc3CiAgcGVlck5hbWU6IGMKICB0b2tlbjogMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZgogIGV4cG9zZTogW2EsIGIuY10K",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "fed": {
+    "expose": [
+     "a",
+     "b.c"
+    ],
+    "hub": "http://127.0.0.1:7877",
+    "mode": "client",
+    "peerName": "c",
+    "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case42",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGNsaWVudAogIGh1YjogaHR0cDovL2h1Yi5leGFtcGxlCiAgcGVlck5hbWU6IGMKICB0b2tlbjogMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZgo=",
+  "error": true
+ },
+ {
+  "name": "case43",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGNsaWVudAogIGh1YjogSFRUUFM6Ly9IdWIuRXhhbXBsZTo4NDQzL3BhdGgKICBwZWVyTmFtZTogYwogIHRva2VuOiAwMTIzNDU2Nzg5QUJDREVGMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "fed": {
+    "hub": "HTTPS://Hub.Example:8443/path",
+    "mode": "client",
+    "peerName": "c",
+    "token": "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"
+   },
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case44",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGNsaWVudAogIGh1YjogaHR0cHM6Ly9odWIuZXhhbXBsZQogIHBlZXJOYW1lOiBjCiAgdG9rZW46IHh5ego=",
+  "error": true
+ },
+ {
+  "name": "case45",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGNsaWVudAogIGh1YjogZnRwOi8vaHViLmV4YW1wbGUKICBwZWVyTmFtZTogYwogIHRva2VuOiAwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmCg==",
+  "error": true
+ },
+ {
+  "name": "case46",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IGNsaWVudAogIGh1YjogaHR0cHM6Ly9odWIuZXhhbXBsZQogIHBlZXJOYW1lOiBjCiAgdG9rZW46IDAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYKICBleHBvc2U6IFsnYmFkIG5hbWUnXQo=",
+  "error": true
+ },
+ {
+  "name": "case47",
+  "file": "config.yaml",
+  "body": "ZmVkOgogIG1vZGU6IG90aGVyCiAgcGVlck5hbWU6IGMK",
+  "error": true
+ },
+ {
+  "name": "case48",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGVuYWJsZWQ6IHRydWUKICBsaXN0ZW46IFsvaXA0LzAuMC4wLjAvdGNwLzQwMDEsIC9pcDYvOjovdWRwLzQwMDEvcXVpYy12MV0KICBhZHZlcnRpc2U6IFsvZG5zNC9leGFtcGxlLmNvbS90Y3AvNDQzL3dzc10KICBtZG5zOiB0cnVlCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "p2p": {
+    "advertise": [
+     "/dns4/example.com/tcp/443/wss"
+    ],
+    "enabled": true,
+    "listen": [
+     "/ip4/0.0.0.0/tcp/4001",
+     "/ip6/::/udp/4001/quic-v1"
+    ],
+    "mdns": true
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case49",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGVuYWJsZWQ6IHRydWUKICByZW5kZXp2b3VzOiBbL2RuczQvcmVsYXkuZXhhbXBsZS90Y3AvNDQzL3dzcy9wMnAvMTJEM0tvb1dEM2Vja2lmV3BSbjl3UXBNRzlSOWhYM3NEMTU4ejdFcUhXbXdlUUFKVTVTQV0K",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "p2p": {
+    "enabled": true,
+    "rendezvous": [
+     "/dns4/relay.example/tcp/443/wss/p2p/12D3KooWD3eckifWpRn9wQpMG9R9hX3sD158z7EqHWmweQAJU5SA"
+    ]
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case50",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGVuYWJsZWQ6IHRydWUKICByZW5kZXp2b3VzOiBbL2RuczQvcmVsYXkuZXhhbXBsZS90Y3AvNDQzL3dzc10K",
+  "error": true
+ },
+ {
+  "name": "case51",
+  "file": "config.yaml",
+  "body": "cDJwOgogIHBlZXJzOgogICAgbGFwdG9wOgogICAgICBpZDogMTJEM0tvb1dEM2Vja2lmV3BSbjl3UXBNRzlSOWhYM3NEMTU4ejdFcUhXbXdlUUFKVTVTQQogICAgICBleHBvc2U6IFttYWluXQogICAgICBhZGRyZXNzZXM6IFsvaXA0LzEwLjAuMC4yL3RjcC80MDAxXQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "p2p": {
+    "enabled": false,
+    "peers": {
+     "laptop": {
+      "addresses": [
+       "/ip4/10.0.0.2/tcp/4001"
+      ],
+      "expose": [
+       "main"
+      ],
+      "id": "12D3KooWD3eckifWpRn9wQpMG9R9hX3sD158z7EqHWmweQAJU5SA"
+     }
+    }
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case52",
+  "file": "config.yaml",
+  "body": "cDJwOgogIHBlZXJzOgogICAgbGFwdG9wOgogICAgICBpZDogUW1ZeVFTbzFjMVltN29yV3hMWXZDck0yRW14RlRBTmY4d1htbUU3RFdqaHg1Tgo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "p2p": {
+    "enabled": false,
+    "peers": {
+     "laptop": {
+      "id": "QmYyQSo1c1Ym7orWxLYvCrM2EmxFTANf8wXmmE7DWjhx5N"
+     }
+    }
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case53",
+  "file": "config.yaml",
+  "body": "cDJwOgogIHBlZXJzOgogICAgbGFwdG9wOgogICAgICBpZDogYmFmemFhamFpYWVqY2J6ZGlibXh5emRqYnRheGtwaTJ0bXFibmR3bWZ6dTRueXVrdHQ3amt2d21rbW5mcHF2Zm8K",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "p2p": {
+    "enabled": false,
+    "peers": {
+     "laptop": {
+      "id": "bafzaajaiaejcbzdibmxyzdjbtaxkpi2tmqbndwmfzu4nyuktt7jkvwmkmnfpqvfo"
+     }
+    }
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case54",
+  "file": "config.yaml",
+  "body": "cDJwOgogIHBlZXJzOgogICAgYToKICAgICAgaWQ6IDEyRDNLb29XRDNlY2tpZldwUm45d1FwTUc5UjloWDNzRDE1OHo3RXFIV213ZVFBSlU1U0EKICAgIGI6CiAgICAgIGlkOiAxMkQzS29vV0QzZWNraWZXcFJuOXdRcE1HOVI5aFgzc0QxNTh6N0VxSFdtd2VRQUpVNVNBCg==",
+  "error": true
+ },
+ {
+  "name": "case55",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGxpc3RlbjogWy9pcDQvMS4yLjMvdGNwLzFdCg==",
+  "error": true
+ },
+ {
+  "name": "case56",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGxpc3RlbjogWy9pcDQvMS4yLjMuNC90Y3AvNjU1MzZdCg==",
+  "error": true
+ },
+ {
+  "name": "case57",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGxpc3RlbjogWy91bml4L3RtcC9zb2NrLCAvZG5zL2EuYi90Y3AvMS9odHRwLXBhdGgvJTJGeCwgL21lbW9yeS81LCAvaXA2em9uZS9ldGgwL2lwNi9mZTgwOjoxL3RjcC8xXQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "p2p": {
+    "enabled": false,
+    "listen": [
+     "/unix/tmp/sock",
+     "/dns/a.b/tcp/1/http-path/%2Fx",
+     "/memory/5",
+     "/ip6zone/eth0/ip6/fe80::1/tcp/1"
+    ]
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case58",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGxpc3RlbjogW2lwNC8xLjIuMy40XQo=",
+  "error": true
+ },
+ {
+  "name": "case59",
+  "file": "config.yaml",
+  "body": "cDJwOgogIGxpc3RlbjogWy9ub3BlLzFdCg==",
+  "error": true
+ },
+ {
+  "name": "case60",
+  "file": "config.yaml",
+  "body": "Y2xhdWRlQWNjb3VudHM6CiAgdGhyZXNob2xkOiA1MAogIGxpbWl0czoge2E6IDEsICcyJzogMTAwfQogIGtlZXBBbGl2ZU1vZGVsOiAnIG9wdXMgJwo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": " opus ",
+    "limits": {
+     "2": 100,
+     "a": 1
+    },
+    "pollMinutes": 5,
+    "threshold": 50
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case61",
+  "file": "config.yaml",
+  "body": "Y2xhdWRlQWNjb3VudHM6CiAgdGhyZXNob2xkOiA1MC4wCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 50
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case62",
+  "file": "config.yaml",
+  "body": "Y2xhdWRlQWNjb3VudHM6CiAgdGhyZXNob2xkOiAweDIwCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 32
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case63",
+  "file": "config.yaml",
+  "body": "Y2xhdWRlQWNjb3VudHM6CiAgdGhyZXNob2xkOiAnMjAnCg==",
+  "error": true
+ },
+ {
+  "name": "case64",
+  "file": "config.yaml",
+  "body": "c3RhdGVEaXI6IFthXQo=",
+  "error": true
+ },
+ {
+  "name": "case65",
+  "file": "config.yaml",
+  "body": "LSBhCi0gYgo=",
+  "error": true
+ },
+ {
+  "name": "case66",
+  "file": "config.yaml",
+  "body": "anVzdCBhIHN0cmluZwo=",
+  "error": true
+ },
+ {
+  "name": "case67",
+  "file": "config.yaml",
+  "body": "c3RhdGVEaXI6IDEyMwptc2dxUm9vdDogdHJ1ZQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/true",
+   "stateDir": "$HOME/123",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case68",
+  "file": "config.yaml",
+  "body": "YTogMQo=",
+  "error": true
+ },
+ {
+  "name": "case69",
+  "file": "config.yaml",
+  "body": "c3RhdGVEaXI6IHgKLi4uCg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yaml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/x",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case70",
+  "file": "config.yml",
+  "body": "c3RhdGVEaXI6IHltbC1zdGF0ZQo=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.yml",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/yml-state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case71",
+  "file": "config.json",
+  "body": "eyJzdGF0ZURpciI6Impzb24tc3RhdGUiLCJhZ2VudGJvb2tzIjpbInJlbC5qc29uIl0sImJhciI6eyJjb250ZXh0IjoiYm9ndXMiLCJ3aWRnZXRzIjpbIm5vcGUiXX19",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "rel.json"
+   ],
+   "bar": {
+    "context": "bogus",
+    "defaultColor": "",
+    "widgets": [
+     "nope"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "json-state",
+   "tokenAgentbooks": [
+    "rel.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case72",
+  "file": "config.json",
+  "body": "eyJTVEFURURJUiI6ImZvbGRlZCIsIldhQnJpZGdlIjp0cnVlLCJ1bmtub3duS2V5IjoxfQ==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "folded",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": true,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case73",
+  "file": "config.json",
+  "body": "eyJzdGF0ZURpciI6ImEiLCJzdGF0ZURpciI6ImIifQ==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "b",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case74",
+  "file": "config.json",
+  "body": "eyJsaWZlY3ljbGUiOnsiZXBoZW1lcmFsRGVmYXVsdCI6ZmFsc2V9LCJsaWZlY3ljbGUiOnsiYXJjaGl2ZU9uQ2xvc2UiOmZhbHNlfX0=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": false,
+    "ephemeralDefault": false
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case75",
+  "file": "config.json",
+  "body": "eyJ3YUJyaWRnZSI6InllcyJ9",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": true,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case76",
+  "file": "config.json",
+  "body": "eyJmZWQiOg==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": true,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case77",
+  "file": "config.json",
+  "body": "W10=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": true,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case78",
+  "file": "config.json",
+  "body": "bnVsbA==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case79",
+  "file": "config.json",
+  "body": "eyJzdGF0ZURpciI6bnVsbCwiYmFyIjpudWxsLCJ3aW5kb3dzIjp7InJlc2V0Q29sb3IiOiIifX0=",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case80",
+  "file": "config.json",
+  "body": "eyJ3aW5kb3dzIjp7InJlc2V0Q29sb3IiOiJub3BlIn19",
+  "error": true
+ },
+ {
+  "name": "case81",
+  "file": "config.json",
+  "body": "eyJyZW1vdGVzIjp7InMiOnsiaG9zdCI6ImgiLCJpZGVudGl0eSI6In4vaWQifX19",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "remotes": {
+    "s": {
+     "host": "h",
+     "identity": "~/id",
+     "transport": "ssh"
+    }
+   },
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case82",
+  "file": "config.json",
+  "body": "eyJzdGF0ZURpciI6ImJhZP91dGYifQ==",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": false,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "bad�utf",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ },
+ {
+  "name": "case83",
+  "file": "config.json",
+  "body": "eyJjbGF1ZGVBY2NvdW50cyI6eyJ0aHJlc2hvbGQiOjEuNX19",
+  "error": false,
+  "result": {
+   "Home": "$HOME",
+   "InvalidConfig": true,
+   "Legacy": false,
+   "Path": "$HOME/config.json",
+   "agentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "bar": {
+    "context": "used",
+    "defaultColor": "",
+    "widgets": [
+     "ctx",
+     "temp",
+     "queue",
+     "model",
+     "quota"
+    ]
+   },
+   "claudeAccounts": {
+    "autoSwitch": false,
+    "cooldownMinutes": 5,
+    "keepAlive": false,
+    "keepAliveModel": "haiku",
+    "pollMinutes": 5,
+    "threshold": 90
+   },
+   "cliUpdates": {
+    "claude": [
+     "claude",
+     "update"
+    ],
+    "codex": [
+     "npm",
+     "install",
+     "-g",
+     "@openai/codex@latest"
+    ],
+    "hermes": [
+     "hermes",
+     "update"
+    ],
+    "opencode": [
+     "opencode",
+     "upgrade"
+    ]
+   },
+   "clipboardDir": "",
+   "lifecycle": {
+    "archiveOnClose": true,
+    "ephemeralDefault": true
+   },
+   "localMouse": true,
+   "localObservation": true,
+   "msgqRoot": "$HOME/msgq",
+   "stateDir": "$HOME/state",
+   "tokenAgentbooks": [
+    "$HOME/agentbook.json"
+   ],
+   "updateCheck": true,
+   "usageBin": "",
+   "usageHistory": "",
+   "waBridge": false,
+   "waOutbox": "",
+   "waStore": "",
+   "windows": {
+    "resetColor": "white"
+   }
+  }
+ }
+]

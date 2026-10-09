@@ -1,0 +1,233 @@
+[
+ {
+  "in": "# keep this comment\nlocalMouse: false\n",
+  "name": "server",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "out": "# keep this comment\nlocalMouse: false\nremotes:\n  server:\n    host: server.example\n    identity: ~/.ssh/id\n    transport: ssh\n",
+  "json": false
+ },
+ {
+  "in": "# keep this comment\nlocalMouse: false\nremotes:\n  server:\n    host: server.example\n    identity: ~/.ssh/id\n    transport: ssh\n",
+  "name": "server",
+  "remote": null,
+  "out": "# keep this comment\nlocalMouse: false\n",
+  "json": false
+ },
+ {
+  "in": "",
+  "name": "server",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "out": "remotes:\n  server:\n    host: server.example\n    identity: ~/.ssh/id\n    transport: ssh\n",
+  "json": false
+ },
+ {
+  "in": "# only comment\n",
+  "name": "server",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "out": "remotes:\n  server:\n    host: server.example\n    identity: ~/.ssh/id\n    transport: ssh\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\n# trailing\n",
+  "name": "b",
+  "remote": {
+   "host": "h2",
+   "port": 2222,
+   "user": "tuna",
+   "identity": "/x # y",
+   "transport": "mosh",
+   "moshPorts": "60001",
+   "elevate": "sudo -i"
+  },
+  "out": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\n  b:\n    host: h2\n    port: 2222\n    user: tuna\n    identity: '/x # y'\n    transport: mosh\n    moshPorts: \"60001\"\n    elevate: sudo -i\n# trailing\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\n  b:\n    host: b\n    transport: ssh\nupdateCheck: true\n",
+  "name": "a",
+  "remote": null,
+  "out": "localMouse: false\nremotes:\n  b:\n    host: b\n    transport: ssh\nupdateCheck: true\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\nupdateCheck: true\n",
+  "name": "a",
+  "remote": {
+   "host": "h2",
+   "port": 2222,
+   "user": "tuna",
+   "identity": "/x # y",
+   "transport": "mosh",
+   "moshPorts": "60001",
+   "elevate": "sudo -i"
+  },
+  "out": "localMouse: false\nremotes:\n  a:\n    host: h2\n    port: 2222\n    user: tuna\n    identity: '/x # y'\n    transport: mosh\n    moshPorts: \"60001\"\n    elevate: sudo -i\nupdateCheck: true\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\nupdateCheck: true\n",
+  "name": "b",
+  "remote": {
+   "host": "10.0.0.1",
+   "identity": "~",
+   "moshPorts": "60000:61000"
+  },
+  "out": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\n  b:\n    host: 10.0.0.1\n    identity: \"~\"\n    transport: ssh\n    moshPorts: 60000:61000\nupdateCheck: true\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\n  b:\n    host: b\n    transport: ssh\n",
+  "name": "b",
+  "remote": {
+   "host": "h4",
+   "identity": "/keys/it's: here",
+   "elevate": "doas"
+  },
+  "out": "localMouse: false\nremotes:\n  a:\n    host: a\n    transport: ssh\n  b:\n    host: h4\n    identity: '/keys/it''s: here'\n    transport: ssh\n    elevate: doas\n",
+  "json": false
+ },
+ {
+  "in": "bar:\n  context: used # keep\n  widgets: [ctx, temp]\nremotes:\n  # head of a\n  a:\n    host: a # line\n    transport: ssh\n  z:\n    host: z\n    transport: ssh\n",
+  "name": "a",
+  "remote": null,
+  "out": "bar:\n  context: used # keep\n  widgets: [ctx, temp]\nremotes:\n  z:\n    host: z\n    transport: ssh\n",
+  "json": false
+ },
+ {
+  "in": "stateDir: state\n",
+  "name": "five",
+  "remote": {
+   "host": "true",
+   "user": "yes",
+   "identity": "123",
+   "elevate": "sudo -u null"
+  },
+  "out": "stateDir: state\nremotes:\n  five:\n    host: \"true\"\n    user: \"yes\"\n    identity: \"123\"\n    transport: ssh\n    elevate: sudo -u null\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\n",
+  "name": "b",
+  "remote": null,
+  "error": "unknown remote: b",
+  "out": "localMouse: false\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\n",
+  "name": "bad name",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "error": "invalid server name \"bad name\"",
+  "out": "localMouse: false\n",
+  "json": false
+ },
+ {
+  "in": "localMouse: false\n",
+  "name": "b",
+  "remote": {
+   "host": "-bad"
+  },
+  "error": "b.host must be one host name or address",
+  "out": "localMouse: false\n",
+  "json": false
+ },
+ {
+  "in": "- a\n",
+  "name": "b",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "error": "config must be a YAML mapping",
+  "out": "- a\n",
+  "json": false
+ },
+ {
+  "in": "remotes: [a]\n",
+  "name": "b",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "error": "remotes must be a mapping",
+  "out": "remotes: [a]\n",
+  "json": false
+ },
+ {
+  "in": "remotes:\n  a:\n    host: a\n    transport: ssh\n",
+  "name": "a",
+  "remote": null,
+  "out": "{}\n",
+  "json": false
+ },
+ {
+  "in": "{\"localMouse\":false,\"bar\":{\"widgets\":[\"model\"]}}",
+  "name": "server",
+  "remote": {
+   "host": "server.example",
+   "identity": "~/.ssh/id"
+  },
+  "out": "{\n  \"bar\": {\n    \"widgets\": [\n      \"model\"\n    ]\n  },\n  \"localMouse\": false,\n  \"remotes\": {\n    \"server\": {\n      \"host\": \"server.example\",\n      \"identity\": \"~/.ssh/id\",\n      \"transport\": \"ssh\"\n    }\n  }\n}\n",
+  "json": true
+ },
+ {
+  "in": "{\"remotes\":{\"a\":{\"host\":\"a\"},\"b\":{\"host\":\"b\",\"port\":22}},\"z\":1.50,\"a\":[1, 2]}",
+  "name": "a",
+  "remote": null,
+  "out": "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"remotes\": {\n    \"b\": {\n      \"host\": \"b\",\n      \"port\": 22\n    }\n  },\n  \"z\": 1.50\n}\n",
+  "json": true
+ },
+ {
+  "in": "{\"remotes\":{\"a\":{\"host\":\"a\"}}}",
+  "name": "a",
+  "remote": null,
+  "out": "{}\n",
+  "json": true
+ },
+ {
+  "in": "{\"remotes\":{\"a\":{\"host\":\"a\"}}}",
+  "name": "c",
+  "remote": null,
+  "error": "unknown remote: c",
+  "out": "{\"remotes\":{\"a\":{\"host\":\"a\"}}}",
+  "json": true
+ },
+ {
+  "in": "",
+  "name": "s",
+  "remote": {
+   "host": "h2",
+   "port": 2222,
+   "user": "tuna",
+   "identity": "/x # y",
+   "transport": "mosh",
+   "moshPorts": "60001",
+   "elevate": "sudo -i"
+  },
+  "out": "{\n  \"remotes\": {\n    \"s\": {\n      \"host\": \"h2\",\n      \"port\": 2222,\n      \"user\": \"tuna\",\n      \"identity\": \"/x # y\",\n      \"transport\": \"mosh\",\n      \"moshPorts\": \"60001\",\n      \"elevate\": \"sudo -i\"\n    }\n  }\n}\n",
+  "json": true
+ },
+ {
+  "in": "{\"html\":\"\u003c\u0026\u003e\"}",
+  "name": "s",
+  "remote": {
+   "host": "10.0.0.1",
+   "identity": "~",
+   "moshPorts": "60000:61000"
+  },
+  "out": "{\n  \"html\": \"\\u003c\\u0026\\u003e\",\n  \"remotes\": {\n    \"s\": {\n      \"host\": \"10.0.0.1\",\n      \"identity\": \"~\",\n      \"transport\": \"ssh\",\n      \"moshPorts\": \"60000:61000\"\n    }\n  }\n}\n",
+  "json": true
+ }
+]

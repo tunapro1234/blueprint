@@ -10,3 +10,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["raw_value", "float_roundtrip"] }
+serde_norway = "0.9.42"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"

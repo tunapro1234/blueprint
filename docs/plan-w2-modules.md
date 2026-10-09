@@ -118,7 +118,7 @@ replaces the current long skill.
 7. agent hint (after blueprint approves the text)
 
 Each step: commit, `bp msg blueprint` with commit and test commands.
-Tests: `flock /run/lock/bp-gotest.lock nice -n 10 go test ./...` after the heat
+Tests: `flock /run/lock/bp-gobuild.lock nice -n 10 go test ./...` after the heat
 check; temp roots only, `env -u TMUX -u TMUX_PANE`.
 
 ## Appendix: agent hint (done)

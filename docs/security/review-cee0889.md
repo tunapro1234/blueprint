@@ -67,3 +67,36 @@ this step; record it in the threat model as T-L2 partial.
   that floods again hours later leaves no new trace. Re-audit once per
   window with a suppressed count (same fix shape as R1).
 - R1 (audit flood from unconfigured identities) is still open.
+
+## Fixed on feat/guard (R1, R2, R3)
+
+- **R1:** every rejection event a remote request causes now goes through
+  `Node.auditRemote`. Each source may write `AuditBudgetPerMinute` (30)
+  events per minute. A configured peer is charged to its own budget. Every
+  unconfigured identity is charged to one shared budget, so a new identity
+  does not get a new budget. Events over the budget are counted, and each
+  finished window that suppressed events writes one `p2p.audit.suppressed`
+  event with `count`, `since` and `worst`. Its severity is `alert` when an
+  alert was suppressed. `Step` calls `FlushAudit`, so a flood that stopped
+  is still reported. The log stays append-only: nothing is deleted. The
+  budget map holds at most one entry per configured peer plus one shared
+  entry, so the limiter itself stays bounded.
+- **Lookup throttle audit:** the throttle is now audited at most once per
+  peer per minute (`onceEvery`), not once per process lifetime.
+  `p2p.lookup.hidden` is under the same budget.
+- **R2:** `Pause` and `Resume` read, modify and write `paused.json` under an
+  exclusive flock on `paused.json.lock`.
+- **R3:** lookup from a peer with nothing exposed skips `ResolveLookup`, so it
+  does no agentbook or tmux work. The lookup rate limit from d8afaf5 still
+  runs first.
+- **Tests:** `TestAuditBudgetCountsOverflow`,
+  `TestDeniedFloodIsCappedAndReported` (an end-to-end flood from an
+  unconfigured identity), `TestOnceEvery`,
+  `TestPauseResumeConcurrentNoLostUpdate` and
+  `TestLookupWithNoExposeSkipsResolve`.
+- **Open note (pre-existing, not changed here):**
+  `TestLostReplyConcurrentRetryAndRestart` flakes under load. Retries of the
+  same channel ID race the first enqueue: each one sees no queue record and
+  spends a rate token, so some get "rate limited". This is benign because
+  the client retries, but a per-channel lock around the check-and-admit
+  would remove the flake.

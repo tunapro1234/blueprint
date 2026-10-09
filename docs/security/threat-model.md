@@ -101,12 +101,12 @@ Status: **open** (no mitigation in code), **planned** (assigned, not in code),
 
 | Id | Threat | Attacker | Current behavior (code) | Mitigation | Owner | Status |
 |---|---|---|---|---|---|---|
-| T-L1 | **P2P inbound flood.** No per-peer message rate limit on `/bp/msg` (`node.go` `handle`); each accepted message is a durable queue record and, when delivered, a model turn. | A1, A2 | 16 KiB body (`p2p/store.go:21`), 128 KiB frame (`wire.go`), 12 s RPC timeout; relay circuits capped (`node.go:87-91`) | Per-peer rate limit and pending cap; audit `rate_limit` | W1 | partial (cee0889 rate limit; rejected messages bypass it, see review-cee0889.md R1) |
+| T-L1 | **P2P inbound flood.** No per-peer message rate limit on `/bp/msg` (`node.go` `handle`); each accepted message is a durable queue record and, when delivered, a model turn. | A1, A2 | 16 KiB body (`p2p/store.go:21`), 128 KiB frame (`wire.go`), 12 s RPC timeout; relay circuits capped (`node.go:87-91`) | Per-peer rate limit and pending cap; audit `rate_limit` | W1 | mitigated (cee0889 rate limit; rejection audit budget on feat/guard, review-cee0889.md R1) |
 | T-L2 | **Agent loop.** Two agents (local or across peers) reply to each other indefinitely. | A4 | Nothing; channels are independent per target (`node.go` `Step`) | Loop cap per conversation pair (hop/turn budget, cool-down, owner notice); audit `loop_cap` | W1 | partial (cee0889: inbound per peer and agent; local loops open) |
 | T-L3 | **Disk growth.** Channels and queue receipts are retained for replay protection (`docs/p2p.md`); fed logs rotate at 8 MiB (`hub.go` `maxAuditBytes`). | A1 | Partial rotation | Per-peer quotas; `audit.jsonl` rotation policy | W1 | open |
 | T-L4 | **Notice spam to the owner.** | A1, A4 | Notices go to sender homes (`msgq.go` `noticeHomes`); WhatsApp only through the bridge outbox | Guard alerts never auto-send WhatsApp (plan-w6-guard.md step 3) | W6 | planned |
 
-| T-L5 | **Audit flood.** Any libp2p identity can open `/bp/msg`; each rejected request with a new ID is one audit line, and audit files are never deleted (review-cee0889.md R1). | A1, any internet host reaching a relay | Dedupe per channel ID only | Per-source audit budget with suppressed-count summaries | W1 | open |
+| T-L5 | **Audit flood.** Any libp2p identity can open `/bp/msg`; each rejected request with a new ID is one audit line, and audit files are never deleted (review-cee0889.md R1). | A1, any internet host reaching a relay | Dedupe per channel ID only | Per-source audit budget with suppressed-count summaries | W1 | mitigated (feat/guard: per-source budget, shared budget for unconfigured identities, `p2p.audit.suppressed` summaries) |
 
 ### 5.4 Identity, secrets and transport
 

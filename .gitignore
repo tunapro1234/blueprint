@@ -13,3 +13,8 @@
 
 # This host keeps its agent instructions locally.
 /AGENTS.md
+
+# Release binaries are served from disk and attached to GitHub Releases;
+# Git keeps only the signed manifests and checksums.
+/site/bp-*
+/site/releases/*/bp-*

@@ -76,12 +76,14 @@ is not running in that terminal, bp also warns on stderr.
     `<state>/api/inbox/<name>.jsonl`.
   - A terminal agent's name cannot be registered.
 
-**Known gap: replies sent with `bp msg`.** `bp msg <name>` from the
-command line does not deliver to an inbox agent yet. It treats the name
-as a closed terminal agent and holds the message in the offline spool
-("queued for ... (offline; delivered when it opens)"). Agents that should
-reach an inbox agent use `bp_send` (bp's MCP tools) or `POST /v1/messages`
-(the HTTP API). This page will change when `bp msg` routes to inboxes.
+**Replies from the command line.** `bp msg <name> "<text>"` reaches an
+inbox agent too. It goes through the same path as `bp_send`. Its receipt
+says the message was accepted into the inbox, not delivered, and its last
+line is `RESULT=queued CHANNEL=ib... ROUTE=inbox`. `bp qstat <id>` shows
+"delivered" once the agent has read it with `bp_inbox`. `bp status` lists
+inbox agents under the terminal table, with their unread counts.
+A name that belongs to an agentbook agent always takes the terminal path,
+and `--force-busy` does not apply to an inbox agent.
 
 ## Tools
 

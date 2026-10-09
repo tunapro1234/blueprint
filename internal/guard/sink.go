@@ -32,6 +32,7 @@ var alertKinds = map[string]struct{ kind, severity string }{
 	"enumeration":           {"guard.reach.enumeration", audit.Alert},
 	"tainted-secret-access": {"guard.reach.secret", audit.Alert},
 	"tainted-relay":         {"guard.reach.relay", audit.Alert},
+	"canary-access":         {"guard.reach.canary", audit.Alert},
 }
 
 func (s AuditSink) Alert(a Alert) {

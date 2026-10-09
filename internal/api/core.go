@@ -93,10 +93,11 @@ type Core struct {
 	// Kick, when set, asks for a delivery pass for one target right away
 	// instead of waiting for the daemon's next tick.
 	Kick func(target string)
-	// DeliveryFramed is set once msgq frames non-local origins at delivery
-	// (Queue.Render, guard.NeedsFrame). The gateway refuses to serve before
-	// that.
-	DeliveryFramed bool
+	// Render is the queue renderer the dispatchers use (delivery.Renderer,
+	// set on msgq.Queue.Render by the daemon and by bp msg). The gateway
+	// proves with a probe record that it frames external origins before it
+	// serves.
+	Render func(msgq.Message) (string, error)
 	// Audit records decisions; the default appends to <state>/audit.jsonl.
 	Audit func(audit.Event)
 	Frame Framer

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/msgq"
 )
 
 // The remote gateway lets web chat apps (Claude.ai custom connectors,
@@ -70,8 +71,18 @@ func (g *Gateway) Ready() error {
 	if !RealFramer(g.Core.Frame) {
 		return errors.New("guard framing is not wired into the API (Core.Frame is the interim passthrough)")
 	}
-	if !g.Core.DeliveryFramed {
-		return errors.New("queue delivery does not frame external origins yet (msgq Render is not wired)")
+	const probe = "bp gateway framing probe"
+	if out, err := g.Core.Frame.Frame(FrameSource{Transport: "mcp", Peer: "gateway", PeerID: "gateway:probe", Channel: "ready-probe"}, probe); err != nil || out == probe {
+		return fmt.Errorf("the API framer does not frame external text (%v)", err)
+	}
+	if g.Core.Render == nil {
+		return errors.New("queue delivery does not frame external origins (no delivery renderer)")
+	}
+	// The same record a gateway send writes: it must come out framed.
+	record := msgq.Message{ID: "ready-probe", From: "external:probe@gateway", Msg: "[external:probe@gateway] " + probe,
+		Origin: &msgq.Origin{Transport: originTransport(Caller{Remote: true}), PeerAlias: "gateway", PeerID: "gateway:probe", AgentClaim: "probe"}}
+	if wire, err := g.Core.Render(record); err != nil || wire == record.Msg {
+		return fmt.Errorf("queue delivery does not frame external origins (%v)", err)
 	}
 	return nil
 }

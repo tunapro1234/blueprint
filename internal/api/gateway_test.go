@@ -15,12 +15,23 @@ import (
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/delivery"
+	"blueprint/internal/guard"
+	"blueprint/internal/msgq"
 )
+
+// testRender frames external records like delivery.Renderer, visibly.
+func testRender(m msgq.Message) (string, error) {
+	if m.Origin == nil || !guard.NeedsFrame(m.Origin.Transport) {
+		return m.Msg, nil
+	}
+	return "<<external>>" + m.Msg, nil
+}
 
 func testGateway(t *testing.T) (*Gateway, *httptest.Server) {
 	t.Helper()
 	core := testCore(t, "worker", "secret-agent")
-	core.Frame, core.DeliveryFramed = testFramer{}, true
+	core.Frame, core.Render = testFramer{}, testRender
 	g := &Gateway{Core: core, AllowedOrigins: []string{"https://claude.ai"},
 		Profiles: map[string]GatewayProfile{"phone": {Name: "phone",
 			Policy: Policy{Agents: []string{"worker"}, Rooms: []string{"team"}, ReadOnlyBoards: []string{"main"}}}}}
@@ -298,9 +309,30 @@ func TestGatewayFailsClosedWithoutFraming(t *testing.T) {
 	if code, _ := mcpCall(t, ts, token, "bp_agents", map[string]any{}); code != 503 {
 		t.Fatalf("served behind the passthrough framer: %d", code)
 	}
-	g.Core.Frame, g.Core.DeliveryFramed = testFramer{}, false
+	g.Core.Frame, g.Core.Render = testFramer{}, nil
 	if code, _ := mcpCall(t, ts, token, "bp_agents", map[string]any{}); code != 503 {
 		t.Fatalf("served without delivery framing: %d", code)
+	}
+	// A renderer that passes external records through is caught by the probe.
+	g.Core.Render = func(m msgq.Message) (string, error) { return m.Msg, nil }
+	if g.Ready() == nil {
+		t.Fatal("passthrough delivery renderer counted as ready")
+	}
+	// The real pair, as cmd/bp wires it, is ready.
+	framer, err := guard.LoadFramer(g.Core.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	render, err := delivery.Renderer(g.Core.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Core.Frame, g.Core.Render = GuardFramer{F: framer}, render
+	if err := g.Ready(); err != nil {
+		t.Fatalf("guard framer and delivery renderer not ready: %v", err)
+	}
+	if code, _ := mcpCall(t, ts, token, "bp_agents", map[string]any{}); code != 200 {
+		t.Fatalf("real framing still refused: %d", code)
 	}
 	g.Core.Frame = nil
 	if g.Ready() == nil {

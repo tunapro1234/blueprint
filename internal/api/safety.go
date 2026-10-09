@@ -1,10 +1,12 @@
 package api
 
 import (
+	"errors"
 	"sync"
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/guard"
 )
 
 // severity is the audit severity of a decision: rejections are warnings.
@@ -30,17 +32,30 @@ type FrameSource struct {
 
 // Framer frames external text as bp-api's own stores (inbox, rooms, board)
 // hand it to an agent. Queue records are framed by msgq at delivery, not
-// here. It is the one-method seam for guard.Framer (W6); blueprint wires the
-// concrete type into Core.Frame. On error the read fails: raw external text
-// is never returned in place of a frame.
+// here. GuardFramer is the real one; cmd/bp wires it into Core.Frame. On
+// error the read fails: raw external text is never returned in place of a
+// frame.
 type Framer interface {
 	Frame(src FrameSource, text string) (string, error)
 }
 
-// PassthroughFramer returns text unchanged.
-//
-// TODO(W6): replace with guard.Framer (guard.LoadFramer) once feat/guard
-// lands on dev.
+// GuardFramer frames with guard: the nonce is keyed by the framer key, the
+// peer and the stable record id, so a record reads the same every time.
+type GuardFramer struct{ F *guard.Framer }
+
+func (g GuardFramer) Frame(src FrameSource, text string) (string, error) {
+	if g.F == nil {
+		return "", errors.New("guard framer not loaded")
+	}
+	framed, err := g.F.Frame(guard.Source(src), text)
+	if err != nil {
+		return "", err
+	}
+	return framed.Text, nil
+}
+
+// PassthroughFramer returns text unchanged. It is the default until cmd/bp
+// loads the guard framer, and the gateway refuses to run behind it.
 type PassthroughFramer struct{}
 
 func (PassthroughFramer) Frame(_ FrameSource, text string) (string, error) { return text, nil }

@@ -146,8 +146,10 @@ call `bp_register`.
     `board/key@version`).
   - A framing error fails the read, and inbox items stay unread. Raw
     external text is never returned.
-  - Until guard's Framer is wired in, the framer is a passthrough (TODO W6),
-    which keeps the gateway off.
+  - `cmd/bp` wires `GuardFramer` (guard.Framer, keyed nonce, so a record
+    frames identically on every read). If the key cannot be loaded, the
+    framer stays a passthrough: local reads still work, and the gateway
+    stays off.
 - **States.** Message states come from `msgq.DeliveryState`, the same
   mapping P2P uses: accepted, unverified, delivered or failed. A canceled
   message is failed with a `canceled …` reason, and A2A shows it as
@@ -253,8 +255,12 @@ families is only alerted, never used to revoke others.
 `bp api gateway revoke <client|--all>`.
 
 **Fails closed.** The gateway will not start, and `/mcp` answers 503, until
-a real guard Framer is wired into the Core and msgq frames non-local origins
-at delivery (`Core.DeliveryFramed`). The passthrough framer is never enough.
+both framing paths prove they frame. `cmd/bp` loads guard's framer
+(`guard.LoadFramer`, the key under `<state>/guard/`) into `Core.Frame` and
+the dispatchers' renderer (`delivery.Renderer`, the same key) into
+`Core.Render`. `Gateway.Ready` frames a probe text and renders a probe
+record shaped like a gateway send; either one coming back unchanged, or an
+error, keeps the gateway off. The passthrough framer is never enough.
 
 **Audit budget.** Rejections before authentication are logged at most 20
 per minute per source; the rest are counted in one `api.audit.suppressed`

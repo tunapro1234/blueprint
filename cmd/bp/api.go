@@ -14,6 +14,8 @@ import (
 
 	"blueprint/internal/api"
 	"blueprint/internal/book"
+	"blueprint/internal/delivery"
+	"blueprint/internal/guard"
 	"blueprint/internal/identity"
 )
 
@@ -21,6 +23,19 @@ import (
 func (a *app) apiCore() *api.Core {
 	core := api.NewCore(a.config.StateDir, a.queue, a.apiDirectory)
 	core.Kick = a.apiKick()
+	// The same framer key frames the API's own stores at read time and queue
+	// records at delivery. Without it the local API still works (local
+	// callers are never framed) and the gateway refuses to start.
+	if a.config.StateDir != "" {
+		if framer, err := guard.LoadFramer(a.config.StateDir); err != nil {
+			fmt.Fprintf(a.err, "bp: api: guard framing unavailable: %v; the remote gateway stays off\n", err)
+		} else {
+			core.Frame = api.GuardFramer{F: framer}
+		}
+		if render, err := delivery.Renderer(a.config.StateDir); err == nil {
+			core.Render = render
+		}
+	}
 	return core
 }
 

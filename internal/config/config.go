@@ -50,7 +50,12 @@ type Config struct {
 	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
 	Windows          WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts   ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
-	InvalidConfig    string                  `json:"-" yaml:"-"`
+	// Modules records which opt-in modules are enabled (internal/modules).
+	// ModulesSet is false when the file has no modules key: an install from
+	// before modules existed, which internal/modules migrates.
+	Modules       map[string]bool `json:"modules,omitempty" yaml:"modules,omitempty"`
+	ModulesSet    bool            `json:"-" yaml:"-"`
+	InvalidConfig string          `json:"-" yaml:"-"`
 }
 
 // RemoteConfig describes an interactive bp host. It deliberately contains no
@@ -175,6 +180,7 @@ type overrides struct {
 	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
 	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts   *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Modules          *map[string]bool         `json:"modules" yaml:"modules"`
 }
 
 type claudeAccountsOverrides struct {
@@ -201,6 +207,22 @@ type barOverrides struct {
 // Load resolves BP_HOME and reads one optional config.yaml/config.yml/config.json.
 func Load() (Config, error) {
 	return loadWithWarning(os.Getenv, os.Stat, os.UserHomeDir, os.ReadFile, os.Stderr)
+}
+
+// LoadHome reads the config of the installation at home, ignoring BP_HOME and
+// /etc/blueprint/home. Code that re-reads a config it already has uses this so
+// it can never switch to another installation.
+func LoadHome(home string) (Config, error) {
+	if home == "" {
+		return Config{}, fmt.Errorf("no bp home")
+	}
+	getenv := func(key string) string {
+		if key == "BP_HOME" {
+			return home
+		}
+		return os.Getenv(key)
+	}
+	return loadWithWarning(getenv, os.Stat, os.UserHomeDir, os.ReadFile, os.Stderr)
 }
 
 func loadWith(getenv func(string) string, stat func(string) (os.FileInfo, error), userHome func() (string, error), readFile func(string) ([]byte, error)) (Config, error) {
@@ -410,6 +432,13 @@ func defaultCLIUpdates() map[string][]string {
 }
 
 func apply(result *Config, values overrides) {
+	if values.Modules != nil {
+		result.ModulesSet = true
+		result.Modules = make(map[string]bool, len(*values.Modules))
+		for name, enabled := range *values.Modules {
+			result.Modules[name] = enabled
+		}
+	}
 	if values.Lifecycle != nil && values.Lifecycle.EphemeralDefault != nil {
 		result.Lifecycle.EphemeralDefault = *values.Lifecycle.EphemeralDefault
 	}

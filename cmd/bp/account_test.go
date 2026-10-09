@@ -83,6 +83,9 @@ type accountEnv struct {
 	transcript strings.Builder
 	// pinged lists the slots keepalive prompted, in order.
 	pinged []int
+	// now, when set, pins every manager's clock so a test that reasons about the
+	// five-hour phase grid is not wall-clock dependent.
+	now time.Time
 }
 
 // newAccountEnv points HOME and CLAUDE_CONFIG_DIR at a temporary directory and
@@ -102,6 +105,11 @@ func newAccountEnv(t *testing.T) *accountEnv {
 		m.Client = &claudeacct.Client{TokenURL: e.api.server.URL + "/token", UsageURL: e.api.server.URL + "/usage"}
 		m.LockTimeout = 300 * time.Millisecond
 		m.LockTouch = 50 * time.Millisecond
+		if !e.now.IsZero() {
+			fixed := e.now
+			m.Now = func() time.Time { return fixed }
+			m.Client.Now = func() time.Time { return fixed }
+		}
 		// Never run the real claude binary: a prompt starts the fake window.
 		m.Pinger = func(ctx context.Context, req claudeacct.PingRequest) error {
 			e.api.mu.Lock()
@@ -139,7 +147,7 @@ func (e *accountEnv) login(n int) {
 func (e *accountEnv) app(cooldown int) *app {
 	cfg := bpconfig.DefaultClaudeAccounts()
 	cfg.CooldownMinutes = cooldown
-	return &app{ctx: context.Background(), config: bpconfig.Config{StateDir: e.state, ClaudeAccounts: cfg}}
+	return &app{ctx: context.Background(), config: bpconfig.Config{StateDir: e.state, ClaudeAccounts: cfg, ModulesSet: true, Modules: map[string]bool{"accounts": true}}}
 }
 
 // run executes one bp account command and returns stdout, stderr and the
@@ -317,6 +325,21 @@ func TestAccountCLIKeepAliveAndLimits(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "to slot 1") {
 		t.Fatalf("switch with a limit: code=%d %s", code, out)
 	}
+
+	// Pin the clock before reasoning about the phase grid. The active slot resets
+	// at a fixed 2099 instant while the idle slot's window is null (ready = now),
+	// so the offset between them — and thus whether the idle slot reads "due now"
+	// or "next start HH:MM" — was pure wall-clock noise. Choosing now on the same
+	// five-hour grid as that reset puts the idle slot at grid position 0 (due now)
+	// deterministically; staying within one period of the real clock keeps the
+	// six-hour login tokens fresh so no refresh path is taken.
+	reset := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	realNow := time.Now()
+	phase := reset.Sub(realNow) % claudeacct.KeepAlivePeriod
+	if phase < 0 {
+		phase += claudeacct.KeepAlivePeriod
+	}
+	e.now = realNow.Add(phase)
 
 	// The plan alone pings nothing; --once pings the idle slot 1.
 	out, code = e.run(a, "keepalive")

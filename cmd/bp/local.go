@@ -1,6 +1,7 @@
 package main
 
 import (
+	"blueprint/internal/modules"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -605,14 +606,47 @@ func (a *app) configureLocalBar(name string) error {
 	if a.config.LocalMouse {
 		mouse = "on"
 	}
-	for _, option := range [][2]string{
-		{"mouse", mouse},
+	options := [][2]string{{"mouse", mouse}}
+	// The status line is the bar module's; mouse belongs to the session.
+	if a.moduleEnabled(modules.Bar) {
+		options = append(options, localBarOptions(command)...)
+	}
+	for _, option := range options {
+		if err := a.tmux.SetOption(a.ctx, "="+name+":", option[0], option[1]); err != nil {
+			return fmt.Errorf("configure bp bar for %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func localBarOptions(command func(string) string) [][2]string {
+	return [][2]string{
 		{"status", "on"}, {"status-style", "bg=" + barGap + ",fg=colour231"},
 		{"status-left", localBarStatusFormat("name", command("name"))}, {"status-right", localBarStatusFormat("bar", command("bar"))},
 		{"status-left-length", "48"}, {"status-right-length", "120"}, {"status-interval", "2"},
-	} {
-		if err := a.tmux.SetOption(a.ctx, "="+name+":", option[0], option[1]); err != nil {
-			return fmt.Errorf("configure bp bar for %s: %w", name, err)
+	}
+}
+
+// clearLocalBars removes the bar from bp's own sessions after bp disable bar;
+// the sessions fall back to the user's global status line.
+func (a *app) clearLocalBars() error {
+	if a.tmux == nil {
+		return nil
+	}
+	fleet, err := book.LoadFleet(book.Paths(a.config.Agentbooks))
+	if err != nil {
+		return err
+	}
+	names := []string{"@bp-name", "@bp-bar"}
+	for _, option := range localBarOptions(func(string) string { return "" }) {
+		names = append(names, option[0])
+	}
+	for name, agent := range fleet.Agents {
+		if !a.tmux.HasSession(a.ctx, name) || (!a.config.Legacy && !a.ownsLocalSession(name, agent)) {
+			continue
+		}
+		for _, option := range names {
+			_ = a.tmux.UnsetOption(a.ctx, "="+name+":", option)
 		}
 	}
 	return nil

@@ -111,13 +111,21 @@ func paneSanityFindings(observations []paneObservation) map[string]string {
 	return findings
 }
 
-// dueFindings drops the findings already reported inside the cooldown, and
-// stamps the ones it lets through.
+// dueFindings drops the findings already reported inside paneSanityCooldown, and
+// stamps the ones it lets through. It is the cooldown the pane-recognition
+// watchdog uses; dueFindingsWithin lets a sibling watchdog pick its own.
 func dueFindings(findings map[string]string, reported map[string]string, now time.Time) []string {
+	return dueFindingsWithin(findings, reported, now, paneSanityCooldown)
+}
+
+// dueFindingsWithin is dueFindings with the cooldown named, so each watchdog on
+// the shared beat can repeat itself on its own schedule while keeping the same
+// "stamp when let through, forget once recovered" bookkeeping.
+func dueFindingsWithin(findings map[string]string, reported map[string]string, now time.Time, cooldown time.Duration) []string {
 	var due []string
 	for session, message := range findings {
 		if stamp, ok := reported[session]; ok {
-			if when, err := time.Parse(time.RFC3339, stamp); err == nil && now.Sub(when) < paneSanityCooldown {
+			if when, err := time.Parse(time.RFC3339, stamp); err == nil && now.Sub(when) < cooldown {
 				continue
 			}
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"blueprint/internal/modules"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,8 +78,15 @@ func (a *app) account(args []string) error {
 	if a.config.StateDir == "" {
 		return errors.New("bp account needs a state directory (stateDir in the bp config)")
 	}
-	manager := newAccountManager(a.config)
 	command, rest := args[0], args[1:]
+	switch command {
+	case "list", "ls", "status", "bindings":
+	default:
+		if !a.moduleEnabled(modules.Accounts) {
+			return errors.New("Claude account management is the accounts module: run bp enable accounts first")
+		}
+	}
+	manager := newAccountManager(a.config)
 	switch command {
 	case "add":
 		return a.accountAdd(manager, rest)

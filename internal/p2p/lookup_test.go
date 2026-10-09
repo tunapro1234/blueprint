@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"blueprint/internal/audit"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -73,6 +75,11 @@ func TestLookupProtocolRefusesUnknownPeersAndInvalidQueries(t *testing.T) {
 	delete(b.Config.Peers, "a")
 	if _, err := a.callLookup(context.Background(), b.Host.ID(), "worker"); err == nil {
 		t.Fatal("unauthorized peer received a lookup response")
+	}
+	// An unconfigured identity is reset before any audit write, so rotating
+	// identities cannot write lookup lines at all.
+	if ev, _ := audit.Read(b.Root, audit.Filter{}); len(ev) != 0 {
+		t.Fatalf("unconfigured lookup wrote audit lines: %+v", ev)
 	}
 	b.Config.Peers["a"] = Peer{ID: a.Host.ID().String()}
 	for _, query := range []string{"", "  ", "bad\nquery", "bad\x00query", strings.Repeat("x", MaxLookupQueryBytes+1)} {

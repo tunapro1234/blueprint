@@ -3,6 +3,10 @@
 # Relative paths are resolved from this file's directory; ~/ is the home directory.
 # Do not use this together with config.json or config.yml; select one active file.
 
+# Opt-in modules. Installing bp changes nothing; each module is enabled with
+# bp enable <module> and removed with bp disable <module>. See: bp modules
+modules: {}
+
 agentbooks: [agentbook.json]
 msgqRoot: msgq
 stateDir: state

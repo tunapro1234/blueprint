@@ -281,7 +281,7 @@ func (h *Hub) handleSend(writer http.ResponseWriter, request *http.Request, peer
 		return http.StatusTooManyRequests
 	}
 	from := input.From + "@" + peerName
-	id, err := h.Queue.Enqueue(input.To, from, "["+from+"] "+input.Msg)
+	id, err := enqueueInbound(h.Queue, input.To, from, input.Msg, hubOrigin(peerName, input.From))
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return http.StatusInternalServerError

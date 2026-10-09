@@ -66,3 +66,49 @@ keep every record visible to the dedup readers.
 - Daemon and CLI share one key under StateDir, so a record frames to the
   same bytes in both and across a restart.
 - The decision is `NeedsFrame(transport)`, not `PeerAuthenticated`.
+
+## Follow-up: 3576643
+
+D1, D2 and D3 are fixed. Verified in code:
+
+- D1: an external record's notice names only the peer alias and Peer ID
+  (both set by the operator or by crypto, never by the remote), omits the
+  claimed agent name, and withholds the body. `msgq` stays guard-free through
+  the `FrameExternal` predicate, which is the same decision `Renderer` makes.
+- D2: on a framer load error both dispatchers install `FailClosedRenderer`
+  (local records pass, external records are held) and write
+  `guard.frame.unavailable` at `alert`.
+- D3: a render error rides on the record; only `dispatchRecord` holds it, so
+  replay and duplicate scans still see the record.
+
+Two small notes:
+
+- The notice says "read the message with bp qstat <id>", but `Queue.Status`
+  prints only state, never the body. That is the safe behaviour; reword the
+  notice so the coordinator does not go looking (for example "the body is in
+  the queue record; the owner can read it").
+- cmd/bp writes `guard.frame.unavailable` from `prepareDispatch`, so while
+  the key is broken every bp command adds one alert line. Write it once per
+  hour (for example, a marker file's mtime under `<state>/guard/`).
+
+## Follow-up: hook delivery path (eea14fd) and API wiring (5ba3aef)
+
+- `claimForHook` calls `wireFraming()` before `Claim` and hands
+  `message.Wire()` to the harness; `Claim` stops at a record with a render
+  error and validates `Wire()`, as `dispatchRecord` does. Each claimed
+  external message is framed on its own, so concatenating up to 10 under
+  the `[bp] N messages arrived` header keeps every body inside its frame.
+  The digest part comes from the local pending spool (local senders only).
+  Verified.
+- `wireFraming()` fails closed with the same `guard.frame.unavailable`
+  alert. The once-per-hour throttle note above now applies to every hook
+  call as well (UserPromptSubmit and Stop run it on every turn).
+- API: `Core.Frame` is `GuardFramer` only when the key loads, and
+  `Core.Render` is the delivery renderer. `Gateway.Ready` probes both with a
+  real frame, so a passthrough can no longer pass. Verified.
+- Still open: one shared `guard.Watch` (api `NewCore` and the P2P node each
+  build their own). The tool-call hook (dd8b9c1) reads taint from
+  `messages.jsonl`, which covers both transports, so this only affects the
+  in-memory rules (probe, enumeration, relay).
+- The Wire() rule applies to the Codex, Hermes and OpenCode hook paths when
+  they land.

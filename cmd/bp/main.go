@@ -2,6 +2,7 @@ package main
 
 import (
 	"blueprint/internal/messagetext"
+	"blueprint/internal/modules"
 	"bufio"
 	"bytes"
 	"context"
@@ -24,6 +25,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
 	bpcache "blueprint/internal/cache"
@@ -33,7 +35,6 @@ import (
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
-	"blueprint/internal/audit"
 	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/identity"
@@ -58,8 +59,11 @@ bp windows [--json] | bp windows watch
 bp focus <agent>              # focus the agent's compositor window
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
-bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
-                              # --wrappers adds non-clobbering lush/rush helpers
+bp modules [--json]           # opt-in modules: sessions bar accounts wa ui monitor
+bp enable <module> [--force] [--dry-run] | bp disable <module> [--dry-run]
+                              # enable sessions [--shell bash|zsh] [--wrappers]
+bp setup [--check|--disable]  # bp's own config and book; changes nothing else
+bp uninstall [--purge [--yes]] [--dry-run] # remove what bp added; --purge also deletes its home
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
@@ -123,12 +127,15 @@ bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent
 bp p2p resume <peer> [agent] | pauses [--json]   # lift loop-cap pauses
 bp messages reindex                               # add done/ history to messages.jsonl
 bp audit [--since <dur>] [--kind <prefix>] [--severity info|warn|alert] [--peer <alias>] [-n N] [--json]
+bp guard hook claude [--ask] [--canary <path>]...  # PreToolUse tripwire (stdin)
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
 bp serve --api [--listen 127.0.0.1:PORT] [--no-socket]   # local HTTP API (A2A, MCP, REST)
 bp mcp [--as <name>]          # MCP server on stdio for any agent harness
 bp api token [--path] | bp api config <client> [--http]
+bp room list|join|post|read|leave   # shared threads: a post reaches every member's queue
+bp board list|get|put|history       # shared versioned key/value state for agents
 bp fed status|ping|token|log [n]
 bp daemon`
 
@@ -249,6 +256,10 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "guard" {
+		guardHookMain(os.Args[2:], os.Stdin, os.Stdout, os.Stderr)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "_observe" {
 		if err := observe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "bp observation:", err)
@@ -277,6 +288,8 @@ func main() {
 		}
 		os.Exit(1)
 	}
+	// Records the modules an install from before modules already uses.
+	config = modules.Init(config)
 	a := &app{ctx: ctx, config: config, tmux: bptmux.New(), queue: msgq.New(config.MsgqRoot), out: os.Stdout, err: os.Stderr}
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -406,6 +419,8 @@ func (a *app) run(args []string) error {
 		return a.localWorker(args[1:])
 	case "_workflow-run":
 		return a.workflowRun(args[1:])
+	case "_hook":
+		return a.hookCommand(args[1:])
 	case "whoami":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: bp whoami")
@@ -423,6 +438,16 @@ func (a *app) run(args []string) error {
 		return a.showBook(args[1:])
 	case "setup":
 		return a.localSetup(args[1:])
+	case "modules":
+		return a.modulesCommand(args[1:])
+	case "uninstall":
+		return a.uninstall(args[1:])
+	case "_install-record":
+		return a.installRecord(args[1:])
+	case "enable":
+		return a.moduleSwitch(true, args[1:])
+	case "disable":
+		return a.moduleSwitch(false, args[1:])
 	case "status":
 		return a.status(args[1:])
 	case "windows":
@@ -529,6 +554,10 @@ func (a *app) run(args []string) error {
 		return a.mcp(args[1:])
 	case "api":
 		return a.apiCommand(args[1:])
+	case "room":
+		return a.roomCommand(args[1:])
+	case "board":
+		return a.boardCommand(args[1:])
 	case "audit":
 		return a.auditCommand(args[1:])
 	case "messages":
@@ -2610,23 +2639,7 @@ func (a *app) prepareDispatch() {
 			a.queue.NoticeOwner = fleet.Root
 		}
 		a.queue.CanWitness = book.CanWitness
-		// Frame records from outside this machine with guard before they are
-		// pasted. The same framer key (under StateDir) backs the daemon, so a
-		// record the daemon and a synchronous bp msg both touch frames identically.
-		if a.config.StateDir != "" {
-			a.queue.FrameExternal = delivery.External
-			if render, err := delivery.Renderer(a.config.StateDir); err != nil {
-				// Fail CLOSED: hold external records instead of pasting them raw,
-				// and record the gap in the owner's audit log. (bp-guard D2.)
-				a.queue.Render = delivery.FailClosedRenderer()
-				fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
-				if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
-					fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
-				}
-			} else {
-				a.queue.Render = render
-			}
-		}
+		a.wireFraming()
 		if len(a.config.Agentbooks) > 0 {
 			projects := bptmux.ClaudeProjectsRoot()
 			a.queue.Witness = book.DeliveryWitness(a.config.Agentbooks, projects)
@@ -2637,6 +2650,31 @@ func (a *app) prepareDispatch() {
 			a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
 		}
 	})
+}
+
+// wireFraming installs the untrusted-input framer on a.queue so a record from
+// outside this machine is delivered wrapped in a guard frame, while a local
+// record is delivered unchanged. The same framer key (under StateDir) backs the
+// daemon, so a record the daemon, a synchronous bp msg and the hook path all
+// touch frames to identical bytes. It needs only StateDir — no tmux — so the
+// Claude hook delivery path (an agent outside any pane) frames exactly as
+// terminal dispatch does. On a framer-load error it fails CLOSED: external
+// records are HELD, not pasted raw, and the gap is written to the audit log the
+// owner reads. (bp-guard D2.) Safe to call repeatedly.
+func (a *app) wireFraming() {
+	if a.queue == nil || a.config.StateDir == "" {
+		return
+	}
+	a.queue.FrameExternal = delivery.External
+	if render, err := delivery.Renderer(a.config.StateDir); err != nil {
+		a.queue.Render = delivery.FailClosedRenderer()
+		fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
+		if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+			fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
+		}
+	} else {
+		a.queue.Render = render
+	}
 }
 
 // dedupWindow is how long an identical message to the same target counts as still
@@ -3660,6 +3698,9 @@ func (a *app) peek(args []string) error {
 }
 
 func (a *app) whatsapp(args []string) error {
+	if !a.moduleEnabled(modules.WA) {
+		return fmt.Errorf("WhatsApp is the wa module: run bp enable wa first")
+	}
 	if a.config.WAOutbox == "" {
 		return fmt.Errorf("wa is not configured on this machine")
 	}
@@ -4109,12 +4150,16 @@ func (a *app) daemon(args []string) error {
 	logger := log.New(a.err, "blueprint: ", log.LstdFlags)
 	service := daemon.New(logger, a.config)
 	a.startDaemonAPI(ctx, logger)
-	renderer := newBarRenderer(a, logger)
 	rendererDone := make(chan struct{})
-	go func() {
-		defer close(rendererDone)
-		renderer.run(ctx)
-	}()
+	if a.moduleEnabled(modules.Bar) {
+		renderer := newBarRenderer(a, logger)
+		go func() {
+			defer close(rendererDone)
+			renderer.run(ctx)
+		}()
+	} else {
+		close(rendererDone)
+	}
 	service.Run(ctx)
 	<-rendererDone
 	return nil

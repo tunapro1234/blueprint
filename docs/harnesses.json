@@ -57,7 +57,8 @@
           "http",
           "sse"
         ],
-        "add_command": "claude mcp add \u003cname\u003e -- \u003ccommand\u003e"
+        "add_command": "claude mcp add \u003cname\u003e -- \u003ccommand\u003e",
+        "bp_setup": "bp api config claude"
       },
       "hooks": {
         "config": "~/.claude/settings.json, .claude/settings.json, .claude/settings.local.json; per launch: --settings \u003cfile-or-json\u003e",
@@ -198,7 +199,8 @@
           "stdio",
           "streamable-http"
         ],
-        "add_command": "codex mcp add \u003cname\u003e -- \u003ccommand\u003e"
+        "add_command": "codex mcp add \u003cname\u003e -- \u003ccommand\u003e",
+        "bp_setup": "bp api config codex"
       },
       "hooks": {
         "config": "~/.codex/hooks.json, \u003crepo\u003e/.codex/hooks.json (trusted projects), [hooks] in config.toml, plugin hooks/hooks.json; on by default; each hook needs persisted trust (/hooks) or --dangerously-bypass-hook-trust",
@@ -338,7 +340,8 @@
         "transports": [
           "stdio",
           "http"
-        ]
+        ],
+        "bp_setup": "bp api config hermes"
       },
       "hooks": {
         "config": "~/.hermes/config.yaml hooks: (shell hooks); ~/.hermes/plugins/\u003cname\u003e/ (Python plugins)",
@@ -460,7 +463,8 @@
         "transports": [
           "local (stdio)",
           "remote (http)"
-        ]
+        ],
+        "bp_setup": "bp api config opencode"
       },
       "hooks": {
         "config": "JS/TS plugins in ~/.config/opencode/plugins/ or .opencode/plugins/",

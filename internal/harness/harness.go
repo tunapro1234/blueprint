@@ -151,6 +151,9 @@ type MCP struct {
 	Format     string   `json:"format,omitempty"`
 	Transports []string `json:"transports,omitempty"`
 	AddCommand string   `json:"add_command,omitempty"`
+	// BPSetup prints this harness's entry for bp's own MCP server (bp mcp);
+	// see docs/mcp.md. A test in internal/api keeps it a real client name.
+	BPSetup string `json:"bp_setup,omitempty"`
 }
 
 type Hooks struct {

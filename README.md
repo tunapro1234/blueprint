@@ -225,6 +225,7 @@ other, otherwise through a relay you run. Each side lists the other's Peer ID
 |---|---|
 | [docs/usage.md](docs/usage.md) | every command, by task |
 | [docs/api.md](docs/api.md) | HTTP, MCP, A2A, rooms, board, remote gateway |
+| [docs/mcp.md](docs/mcp.md) | connect an agent through bp's MCP tools |
 | [docs/message-delivery.md](docs/message-delivery.md) | queue states, receipts, edge cases |
 | [docs/configuration.md](docs/configuration.md) | `config.yaml` reference and platform limits |
 | [docs/p2p.md](docs/p2p.md) | machines, peers and relays |

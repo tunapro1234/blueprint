@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"blueprint/internal/harness"
 	"regexp"
 	"strings"
 )
@@ -62,19 +63,19 @@ import (
 // hermesBin is the program `bp open --hermes` launches. Plain, no flags: Hermes
 // has no permission/sandbox switch of the kind claude and codex are opened with,
 // and inventing one here would be a guess.
-const hermesBin = "hermes"
+var hermesBin = harness.HermesScreen.Binary
 
 // hermesCaduceus is U+2695 ⚕, the glyph Hermes prefixes its LIVE rows with (the
 // busy composer and the status row). It is the cheapest thing that says "this is
 // Hermes" and the anchor of every matcher below.
-const hermesCaduceus = "⚕"
+var hermesCaduceus = harness.HermesScreen.Caduceus
 
 // hermesPlaceholderText is the idle composer's placeholder, measured verbatim.
 // The trailing ellipsis (U+2026) is deliberately NOT part of the constant: it is
 // the single most likely character to change between builds, and matching the
 // sentence without it fails safe in the harmless direction (a placeholder we
 // still recognise) rather than the harmful one (an idle pane read as typed-in).
-const hermesPlaceholderText = "Ask anything, or type / for commands"
+var hermesPlaceholderText = harness.HermesScreen.PlaceholderText
 
 // hermesIdleComposer matches the idle composer row:
 //
@@ -82,7 +83,7 @@ const hermesPlaceholderText = "Ask anything, or type / for commands"
 //
 // The prompt marker must START the row (Hermes draws it at column 0, inside the
 // two rules), so a transcript line merely quoting the sentence does not match.
-var hermesIdleComposer = regexp.MustCompile(`^[❯›]\s+` + regexp.QuoteMeta(hermesPlaceholderText))
+var hermesIdleComposer = harness.HermesScreen.IdleComposer
 
 // hermesBusyComposer matches the BUSY composer row. The signature is the
 // CADUCEUS IN FRONT OF THE PROMPT MARKER, and getting to that took a correction
@@ -112,7 +113,7 @@ var hermesIdleComposer = regexp.MustCompile(`^[❯›]\s+` + regexp.QuoteMeta(he
 // NOT matched: they are indented decoration whose emoticon and verb rotate every
 // frame, the kind of thing this package has refused to enumerate since the 2026-
 // 08-15 rewrite of Busy.
-var hermesBusyComposer = regexp.MustCompile(`^` + hermesCaduceus + `\s*[❯›]`)
+var hermesBusyComposer = harness.HermesScreen.BusyComposer
 
 // hermesStatusRow matches the live status row Hermes draws just ABOVE its
 // composer (note: above, where Claude's footer is below):
@@ -161,13 +162,13 @@ var hermesStatusRow = regexp.MustCompile(`^` + hermesCaduceus + `\s+\S.*·\s*(?:
 // "Idle" and "blocked" look identical from outside and mean opposite things
 // (probot-outreach, who found this from the other side: three of their panes
 // were reported working-but-idle for minutes while they sat on this screen).
-var hermesDialogComposer = regexp.MustCompile(`^⚠\s*[❯›]`)
+var hermesDialogComposer = harness.HermesScreen.DialogComposer
 
 // hermesSelectAffordance is the second, independent signature of the same
 // state: the key hint Hermes draws under a selection list. It is textual and
 // therefore the more fragile of the two, which is why it is an OR rather than
 // a requirement — either marker is enough to refuse.
-var hermesSelectAffordance = regexp.MustCompile(`(?i)to select.*to confirm`)
+var hermesSelectAffordance = harness.HermesScreen.SelectAffordance
 
 // hermesDialog reports whether a Hermes pane is holding a modal the HUMAN must
 // answer (a permission prompt, a selection list).
@@ -193,7 +194,7 @@ func hermesDialog(pane string) bool {
 // three markers land within the last 6 rows of a capture (the status row, the top
 // rule, the composer, the bottom rule, and one or two trailing blanks); 14 is
 // generous room for a taller composer without reaching into the transcript.
-const hermesTailRows = 14
+var hermesTailRows = harness.HermesScreen.TailRows
 
 // hermesRegion returns the tail rows a live Hermes marker may appear in, with
 // ANSI colour removed but dim segments PRESERVED — the same rule as Busy(): the

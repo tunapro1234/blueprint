@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"blueprint/internal/harness"
 	"blueprint/internal/messagetext"
 	"bufio"
 	"bytes"
@@ -88,7 +89,7 @@ func composerContent(pane string) string {
 	return stripSpace(after)
 }
 
-var codexChip = regexp.MustCompile(`\[Pasted Content\s+\d+\s+chars\]`)
+var codexChip = harness.CodexScreen.PasteChip
 
 // codexPasteChip reports whether Codex's large-paste placeholder chip is present
 // in the composer. Codex replaces a large (>~1024 char) bracketed paste with a
@@ -126,7 +127,7 @@ func codexPasteChip(pane string) bool {
 // ("[Pasted text #1 +2 lines]"). Like the Codex chip it stands IN PLACE of the
 // literal message, so a composer showing it is holding OUR paste even though
 // composerContent can never equal the message.
-var claudeChip = regexp.MustCompile(`\[Pasted text[^\]]*\]`)
+var claudeChip = harness.ClaudeScreen.PasteChip
 
 // claudePasteChip reports whether the composer shows Claude's paste placeholder.
 // It is used only to CLASSIFY what the composer holds (classifyComposer), never
@@ -164,7 +165,7 @@ func composerTail(pane string) (string, bool) {
 // the composer: while a turn is running, Enter does NOT submit (it only expands
 // the paste chip) and the message must instead be pushed into Codex's OWN native
 // queue with Tab. The footer reads "tab to queue message".
-const codexBusyQueuePhrase = "tab to queue message"
+var codexBusyQueuePhrase = harness.CodexScreen.BusyQueuePhrase
 
 // codexBusyQueue reports whether the pane shows Codex's busy-composer queue
 // affordance, meaning submit() must press Tab (native-queue) rather than Enter.
@@ -354,7 +355,7 @@ func stripSpace(s string) string {
 	}, s)
 }
 
-var busyIndicator = regexp.MustCompile(`\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+(?:\.\d+)?s?\s*[·•]|⏵`)
+var busyIndicator = harness.ClaudeScreen.LegacyBusyCounter
 
 // busySpinner is the CURRENT generation of the "this pane is working" signature:
 // the animated status row Claude Code draws above its composer while a turn runs.
@@ -412,7 +413,7 @@ var busyIndicator = regexp.MustCompile(`\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+(?:\.\d+
 // phase, 11 of 11). The gap is also the mildest one: a composer typed into during
 // streaming QUEUES the text in the TUI instead of interrupting a tool call. Closing
 // it would take two frames and a clock, and Busy must stay a pure function of one.
-var busySpinner = regexp.MustCompile(`^[^\p{L}\p{N}\s] +[^\s()]*(?:…|\.\.\.) *(?:\((?:\d+h +)?(?:\d+m +)?\d+(?:\.\d+)?s[^()]*\))?$`)
+var busySpinner = harness.ClaudeScreen.BusySpinner
 
 // busySpinnerLookback is how far ABOVE the composer box's top border the live
 // spinner row is looked for, and busyTailRows the same window for a pane whose box
@@ -985,14 +986,14 @@ const (
 // Such a pane looks exactly like a healthy idle one to Typing/readyToSend — an
 // empty, stable composer — but it does not consume input, which is how a
 // 600-character brief was reported "sent" and never arrived.
-var authExpiredMarkers = []string{"login expired", "run /login"}
+var authExpiredMarkers = harness.ClaudeScreen.AuthExpired
 
-var usageLimitNotice = regexp.MustCompile(`(?i)^⚠(?:️)?\s+usage\s+limit\s+reached(?:\b|$)`)
-var usageLimitReset = regexp.MustCompile(`(?i)\blimit\s+resets?\s+([^·…]+)`)
+var usageLimitNotice = harness.ClaudeScreen.UsageLimit
+var usageLimitReset = harness.ClaudeScreen.UsageReset
 
 // authStatusBullet is the marker Claude Code prefixes its status banners with.
 // Requiring it keeps prose that merely mentions the words from matching.
-const authStatusBullet = "●"
+var authStatusBullet = harness.ClaudeScreen.StatusBullet
 
 // AuthExpired reports whether the pane's LIVE STATUS FOOTER shows the
 // expired-credentials state.
@@ -1188,10 +1189,15 @@ func shellQuote(s string) string {
 // falls into the menu instead of the prompt, so it must be dismissed (Enter =
 // Continue) before anything is sent.
 func RemoteControlMenu(pane string) bool {
-	if !strings.Contains(pane, "Enter to select") {
+	if !strings.Contains(pane, harness.ClaudeScreen.RemoteControlMenu) {
 		return false
 	}
-	return strings.Contains(pane, "Disconnect this session") || strings.Contains(pane, "Remote Control")
+	for _, item := range harness.ClaudeScreen.RemoteControlMenuItems {
+		if strings.Contains(pane, item) {
+			return true
+		}
+	}
+	return false
 }
 
 // RemoteControl is what a Claude pane last said about Remote Control.
@@ -1208,9 +1214,9 @@ const (
 )
 
 var (
-	remoteURLPattern    = regexp.MustCompile(`https://claude\.ai/code/\S+`)
-	remoteActiveLine    = regexp.MustCompile(`^\s*(?:⎿\s*)?/remote-control is active\b`)
-	remoteDisconnectRow = regexp.MustCompile(`^\s*●\s*Remote Control disconnected\b`)
+	remoteURLPattern    = harness.ClaudeScreen.RemoteControlURL
+	remoteActiveLine    = harness.ClaudeScreen.RemoteControlActive
+	remoteDisconnectRow = harness.ClaudeScreen.RemoteControlDisconnected
 )
 
 // RemoteControlStatus reads Claude Code's own status lines, newest last. Only

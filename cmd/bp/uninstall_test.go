@@ -197,3 +197,17 @@ func TestEnableRefusesConflictWithoutForce(t *testing.T) {
 		t.Fatal("still enabled")
 	}
 }
+
+func TestSetupCheckRequiresOnlyWhatRequestedModulesNeed(t *testing.T) {
+	f := newInstallFixture(t)
+	t.Setenv("SHELL", "/usr/bin/fish")
+	if err := f.app().run([]string{"setup", "--check"}); err != nil {
+		t.Fatalf("plain preflight refused fish: %v", err)
+	}
+	if err := f.app().run([]string{"setup", "--check", "--enable", "ui,sessions"}); err == nil || !strings.Contains(err.Error(), "bash and zsh") {
+		t.Fatalf("sessions preflight with fish = %v", err)
+	}
+	if err := f.app().run([]string{"setup", "--check", "--enable", "nope"}); err == nil || !strings.Contains(err.Error(), "unknown module") {
+		t.Fatalf("unknown module preflight = %v", err)
+	}
+}

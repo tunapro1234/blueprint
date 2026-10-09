@@ -1091,8 +1091,12 @@ class LocalCLITest(unittest.TestCase):
         target.parent.mkdir(parents=True)
         target.write_text("original-binary")
         env = dict(self.env, BP_LOCAL_BINARY=self.binary, BP_ONBOARD="skip", SHELL="/bin/fish")
-        result = subprocess.run(["sh", str(REPO / "install.sh"), "--local"], env=env, capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
+        # A plain install does not touch the shell, so fish is fine; asking for
+        # the sessions module (bash/zsh rc integration) must fail preflight
+        # before the existing binary is replaced.
+        result = subprocess.run(["sh", str(REPO / "install.sh"), "--local", "--enable", "sessions"], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("preflight failed", result.stdout)
         self.assertEqual(target.read_text(), "original-binary")
 
     def test_quit_closes_only_own_session_for_each_cli(self):
@@ -1118,6 +1122,8 @@ class LocalCLITest(unittest.TestCase):
         tmux("set-option", "-t", "=other:", "status-right", "USER_BAR")
         global_before = {key: tmux("show-options", "-g", "-v", key)
                          for key in ["status-style", "status-left", "status-right", "mouse", "prefix"]}
+        # The bar is an opt-in module; enabling it must not touch global options.
+        subprocess.run([self.binary, "enable", "bar"], env=self.env, check=True, capture_output=True)
         fd = self.start("codex")
         before_pid = tmux("display-message", "-p", "-t", "=codex-test:", "#{pane_pid}")
         self.assertEqual(tmux("show-options", "-t", "=codex-test:", "-v", "mouse"), "on")

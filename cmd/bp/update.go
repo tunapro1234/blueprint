@@ -13,6 +13,7 @@ import (
 
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
+	"blueprint/internal/modules"
 	"blueprint/internal/release"
 )
 
@@ -226,15 +227,37 @@ func updateCommand() string {
 	return "bp update"
 }
 
-func (a *app) setupCheck() error {
+// setupCheck is the installer's preflight. Installing bp itself needs neither
+// tmux nor a particular shell; the modules the installer was asked to enable
+// do, so their requirements are checked before a usable binary is replaced.
+func (a *app) setupCheck(enable ...string) error {
 	if a.config.Legacy {
 		return fmt.Errorf("local setup is not for a server installation")
 	}
 	if a.config.InvalidConfig != "" {
 		return fmt.Errorf("invalid configuration: %s", a.config.InvalidConfig)
 	}
-	// tmux and the shell matter only to the sessions and bar modules; their
-	// enable checks them. Installing bp needs neither.
+	wants := map[string]bool{}
+	for _, name := range enable {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := modules.Lookup(name); !ok {
+			return fmt.Errorf("unknown module %q (bp modules lists them)", name)
+		}
+		wants[name] = true
+	}
+	if wants[modules.Sessions] {
+		if shell := filepath.Base(os.Getenv("SHELL")); shell != "bash" && shell != "zsh" {
+			return fmt.Errorf("the sessions module supports bash and zsh, not %q; select bash or zsh, or install without --enable sessions", shell)
+		}
+	}
+	if wants[modules.Sessions] || wants[modules.Bar] {
+		if _, err := exec.LookPath(a.tmux.Bin); err != nil {
+			return fmt.Errorf("tmux is required for the sessions and bar modules: %w", err)
+		}
+	}
 	// Validate every existing book before replacing a usable binary.
 	for _, path := range book.Paths(a.config.Agentbooks) {
 		if _, err := os.Stat(path); os.IsNotExist(err) {

@@ -16,7 +16,13 @@ import (
 // --shell and --wrappers are the old way to ask for wrappers; they enable
 // sessions explicitly.
 func (a *app) localSetup(args []string) error {
-	if len(args) == 1 && args[0] == "--check" {
+	if len(args) >= 1 && args[0] == "--check" {
+		if len(args) == 3 && args[1] == "--enable" {
+			return a.setupCheck(strings.Split(args[2], ",")...)
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("usage: bp setup --check [--enable <module,...>]")
+		}
 		return a.setupCheck()
 	}
 	if len(args) == 1 && args[0] == "--disable" {

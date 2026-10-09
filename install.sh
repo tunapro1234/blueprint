@@ -243,7 +243,12 @@ install_local() {
         ensure_tmux
     fi
     fetch_verified_release
-    "$local_tmp/bp" setup --check || { say "error: installation preflight failed; existing binary preserved"; exit 1; }
+    if [ -n "$ENABLE" ]; then
+        set -- --enable "$ENABLE"
+    else
+        set --
+    fi
+    "$local_tmp/bp" setup --check "$@" || { say "error: installation preflight failed; existing binary preserved"; exit 1; }
     local_bin="$HOME/.local/bin"
     local_backup=
     mkdir -p "$local_bin"

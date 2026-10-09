@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-09-24T12:00:00Z","payload":{"id":"fixture-thread","cwd":"/workspace","source":"cli"}}
+{"type":"turn_context","timestamp":"2026-09-24T12:00:01Z","payload":{"model":"gpt-6-sol","effort":"high","service_tier":"flex"}}
+{"type":"event_msg","timestamp":"2026-09-24T12:00:02Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":12345},"model_context_window":200000}}}
+{"type":"response_item","timestamp":"2026-09-24T12:00:03Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"please inspect this rollout"}]}}
+{"type":"event_msg","timestamp":"2026-09-24T12:00:04Z","payload":{"type":"task_started"}}
+{"type":"event_msg","timestamp":"2026-09-24T12:00:05Z","payload":{"type":"task_complete"}}

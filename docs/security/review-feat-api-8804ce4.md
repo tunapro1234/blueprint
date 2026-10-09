@@ -168,3 +168,63 @@ func (g guardFramer) Frame(src api.FrameSource, text string) (string, error) {
     return framed.Text, err
 }
 ```
+
+## Follow-up: 3d37c99
+
+All High items and M1, M3-M6 are fixed; nothing below blocks merging.
+The gateway stays off by construction until both framing paths are wired.
+
+Verified:
+
+- H1: `Gateway.Ready()` needs a real Framer and `Core.DeliveryFramed`;
+  `startGateway` refuses and `/mcp` answers 503 until then. Nothing in
+  cmd/bp sets `DeliveryFramed` yet, so it cannot be enabled early.
+- H2: room fan-out skips members outside the caller's expose list; member
+  lists are filtered; joining unexposed agents reads as not-found; remote
+  callers may only remove themselves; remote readers see only posts from
+  after their own join (rooms without `Joined` read as empty, fail closed).
+- H3: remote callers cannot set a topic or register agents; remote board
+  keys are plain identifiers; posts and values are framed at read time.
+- M1: non-loopback `RemoteAddr` and proxy headers are refused.
+- M3: pairing codes are bound to a client id, and the page shows the id and
+  redirect host; a mismatched code is spent.
+- M4: gateway inboxes are owned by `bp-gateway`; a collision is refused.
+- M6: `authenticate` is read-only.
+- Lows: revoke clears codes and pairings, refresh reuse revokes the family
+  with an alert, `bp_status` is scoped to the sender, `contextId` is
+  validated, inbox reads are capped at 200, idle limiter buckets are swept.
+
+New findings:
+
+- **F1 (medium): skipped-delivery audit lines bypass the room rate limit.**
+  `Post` writes one `api.room.deliver.skipped` line per unexposed member
+  *before* the rate check, so a rate-limited remote post into a 63-member
+  room still writes 63 lines, at the token's 120 requests/min. Check the
+  rate first, and write one event per post with the skipped count and names.
+- **F2 (medium): legacy refresh reuse revokes every static token.** Static
+  tokens and refresh tokens issued before 3d37c99 have `Family: ""`. A
+  rotated legacy refresh token is recorded in `Spent` with family `""`;
+  presenting it again (a client retry is enough) deletes every token with
+  `Family == ""`, including all profiles' static tokens. Skip family
+  revocation when the family is empty (revoke by client id instead), and
+  never touch `Kind == "static"`.
+- **F3 (low): `DeliveryFramed` is a free bool.** Derive it from the queue
+  (`c.Queue != nil && c.Queue.Render != nil`) so it cannot be set while
+  Render is not.
+- **F4 (low): `after` across a history rotation.** When the `after` post id
+  is in a rotated file, `RoomRead` returns nothing forever. Fall back to the
+  join time (or the file start) when `after` is not found.
+- **F5 (low): registration lockout is shorter, not gone.** 200 unpaired
+  clients per hour still lock out new clients. Evict the oldest unpaired
+  client instead of refusing.
+- **F6 (low): a suppressed count is reported only when the same source
+  sends again after the window.** A flood that stops leaves no count. Flush
+  pending counts on the next event from any source, or on a timer.
+- **F7 (low): proxy header list.** Also refuse any `X-Forwarded-*`, and
+  `Cf-Connecting-Ip` and `True-Client-Ip` (cloudflared and CDNs).
+- History is rotated, never deleted, so the disk bound comes from the post
+  rates only; deletion is an owner decision.
+
+Pending on bp-api's side now that guard is on dev (76c2769): `guard.Scan` at
+intake, `guard.Redact` outbound, the `guard.Policy`/`Limiter`/`Watch` swap,
+and the M7 hop marker.

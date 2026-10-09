@@ -68,6 +68,12 @@ type WatchConfig struct {
 	Taint time.Duration
 	// Cooldown suppresses a repeated alert for the same rule and subject (default 10m).
 	Cooldown time.Duration
+	// TaintSource, when set, reports outside text that reached an agent through
+	// another process (P2P, fed and API inbound run in different processes).
+	// It is consulted only for secret-access and outbound events, and the newer
+	// of it and this Watch's own taint wins. MessageLogTaint is the standard
+	// source: the delivered Remote records in messages.jsonl.
+	TaintSource func(agent string, since time.Time) (Taint, bool)
 }
 
 // Watch correlates events into alerts:
@@ -180,7 +186,7 @@ func (w *Watch) observe(ev Event) []Alert {
 		}
 		w.taint[ev.Agent] = next
 	case EvSensitive:
-		if t, ok := w.tainted(ev.Agent, ev.Time); ok {
+		if t, ok := w.taintedAnywhere(ev.Agent, ev.Time); ok {
 			sev := Warn
 			if t.severity == High || ev.Time.Sub(t.t) < 5*time.Minute {
 				sev = High
@@ -189,7 +195,7 @@ func (w *Watch) observe(ev Event) []Alert {
 				Summary: "agent accessed " + quote(ev.Target) + " " + ev.Time.Sub(t.t).Round(time.Second).String() + " after untrusted input from " + quote(t.peer)}, ev.Agent)
 		}
 	case EvOutbound:
-		if t, ok := w.tainted(ev.Agent, ev.Time); ok && (ev.Peer != t.peer || ev.Detail == "redacted") {
+		if t, ok := w.taintedAnywhere(ev.Agent, ev.Time); ok && (ev.Peer != t.peer || ev.Detail == "redacted") {
 			emit(Alert{Rule: "tainted-relay", Severity: High, Peer: t.peer, Agent: ev.Agent, Channel: t.channel,
 				Summary: "agent sent to " + quote(ev.Peer) + " after untrusted input from " + quote(t.peer) + detailSuffix(ev.Detail)}, ev.Agent)
 		}
@@ -203,6 +209,33 @@ func (w *Watch) tainted(agent string, now time.Time) (taint, bool) {
 		return taint{}, false
 	}
 	return t, true
+}
+
+// taintedAnywhere is tainted plus the cross-process TaintSource. A record
+// from the source carries no scan severity; it counts as Warn.
+func (w *Watch) taintedAnywhere(agent string, now time.Time) (taint, bool) {
+	t, ok := w.tainted(agent, now)
+	if w.cfg.TaintSource == nil || agent == "" {
+		return t, ok
+	}
+	if d, found := w.cfg.TaintSource(agent, now.Add(-w.cfg.Taint)); found && !d.At.After(now) && (!ok || d.At.After(t.t)) {
+		severity := Warn
+		if ok && t.severity == High {
+			severity = High // a worse in-process finding is not laundered
+		}
+		return taint{d.At, d.Alias, d.ID, severity}, true
+	}
+	return t, ok
+}
+
+// MessageLogTaint is the standard Watch.TaintSource: the newest delivered
+// outside message to the agent in the message log at logPath. A read error
+// counts as no taint.
+func MessageLogTaint(logPath string) func(agent string, since time.Time) (Taint, bool) {
+	return func(agent string, since time.Time) (Taint, bool) {
+		t, found, err := TaintFrom(logPath, agent, since)
+		return t, found && err == nil
+	}
 }
 
 // push appends and drops entries older than the window; the slice is capped

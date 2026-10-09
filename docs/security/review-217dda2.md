@@ -106,20 +106,21 @@ Two small notes:
 - API: `Core.Frame` is `GuardFramer` only when the key loads, and
   `Core.Render` is the delivery renderer. `Gateway.Ready` probes both with a
   real frame, so a passthrough can no longer pass. Verified.
-- Closed (decision, 9 Oct): no shared `guard.Watch`. api `NewCore` and the
-  P2P node run in different processes, so sharing one `*Watch` in memory
-  would not unify them. Unifying them would need Watch state persisted
-  across processes, which is not worth it:
-  - Taint, the cross-transport signal, is already unified on disk. The
-    tool-call hook reads `messages.jsonl`, where p2p, fed and api records all
-    carry Remote.
-  - The in-memory rules (probe, enumeration, relay) key on a transport's own
-    peer identity (libp2p peer ID, or API token and gateway). Those
-    identities do not correlate across transports, so a merged window would
-    add nothing.
-  - Both Watches write to the same audit log through `AuditSink`, so the
-    owner already sees one timeline.
-
-  Revisit only if a rule needs to correlate one actor across transports.
+- Shared `guard.Watch`, corrected (9 Oct). The 61d789a reasoning was
+  wrong in one place. Probe and enumeration key on per-transport peer
+  identities, but taint and tainted-relay key on the LOCAL agent. So inbound
+  text through P2P or fed followed by an outbound send through the API is a
+  real cross-process pattern. Fix:
+  - In-process: blueprint's `a.guardWatch()` gives one Watch per process
+    (api, gateway, room and mcp in `bp api serve`, and the p2p node).
+  - Cross-process: `WatchConfig.TaintSource`, set to
+    `MessageLogTaint(<msgq>/messages.jsonl)`. It covers secret-access and
+    outbound events, and the newer of in-memory and on-disk taint wins.
+    `messages.jsonl` is the one canonical taint store, the same one the
+    tool-call hook reads, and it already holds every transport's delivered
+    Remote records. There is no separate taint file and no startup seeding:
+    a startup seed would miss input that arrives later in another process.
+  - Still open: the P2P service does not report `EvOutbound` for messages
+    agents send to peers, so a relay out through P2P is not seen.
 - The Wire() rule applies to the Codex, Hermes and OpenCode hook paths when
   they land.

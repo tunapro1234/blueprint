@@ -174,7 +174,7 @@ func (c *Client) PollAndEnqueue(ctx context.Context, stateDir string, queue *msg
 		from := sanitize(message.From)
 		text := sanitize(message.Msg)
 		if c.allowed(message.To) {
-			if _, err := queue.Enqueue(message.To, from, "["+from+"] "+text); err != nil {
+			if _, err := enqueueInbound(queue, message.To, from, text, clientOrigin(c.Hub, message.ID, from)); err != nil {
 				return 0, err
 			}
 			if err := Journal(stateDir, "in", message.ID, from, message.To, text); err != nil && c.Log != nil {

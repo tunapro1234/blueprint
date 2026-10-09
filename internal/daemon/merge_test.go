@@ -97,7 +97,8 @@ func mergeService(t *testing.T, agent, folder string, records ...string) (*Servi
 		t.Fatal(err)
 	}
 	bookPath := filepath.Join(t.TempDir(), "agentbook.json")
-	data, err := json.Marshal(book.File{Agents: []book.Agent{{Name: agent, Folder: folder, Status: "open"}}})
+	// Shaped like the owner's book: server-main coordinates and reads alarms.
+	data, err := json.Marshal(book.File{Orchestrator: "server-main", Agents: []book.Agent{{Name: "server-main", Folder: t.TempDir(), Status: "open"}, {Name: agent, Folder: folder, Status: "open"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

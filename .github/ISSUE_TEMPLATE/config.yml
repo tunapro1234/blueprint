@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/tunapro1234/blueprint/security/policy
+    about: Please do not open a public issue for a vulnerability; read SECURITY.md first.
+  - name: Documentation
+    url: https://github.com/tunapro1234/blueprint/tree/dev/docs
+    about: Command reference, API, configuration, message delivery and P2P docs.

@@ -86,7 +86,9 @@ func blockedQueueFindings(observations []blockedObservation) map[string]string {
 
 // blockedQueueScan turns one sweep's idle agents into alarms. Like the other
 // three watchdogs on this beat it never fails the sweep, keeps only its cooldown
-// state, and sends its findings to the log and to server-main. busy is the
+// state, and sends its findings to the log and to the coordinator (alarm). It is
+// the one watchdog that runs on every install: a stuck queue is a delivery
+// failure, not a monitoring concern. busy is the
 // per-session busy verdict read on the same sweep; an agent absent from it (not
 // an agent pane, or capture failed) is treated as not-idle and skipped, which is
 // the safe direction for a watchdog that must not guess.
@@ -130,9 +132,6 @@ func (s *Service) blockedQueueScan(observations []paneObservation, busy map[stri
 		})
 	}
 	for _, message := range dueFindingsWithin(blockedQueueFindings(gathered), state.BlockedQueueReported, now, blockedQueueCooldown) {
-		s.log.Print(message)
-		if _, err := s.queue.Enqueue("server-main", "bp", message); err != nil {
-			s.log.Printf("blocked-queue: alarm could not be queued: %v", err)
-		}
+		s.alarm("blocked-queue", message)
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // TokenPath is the per-user API token file.
@@ -62,8 +61,11 @@ func tokenEqual(got, want string) bool {
 }
 
 // ListenUnix opens the API socket: 0600 inside a 0700 directory, and every
-// connection is checked with SO_PEERCRED to come from this uid.
+// connection is checked to come from this uid (peercred_*.go).
 func ListenUnix(path string) (net.Listener, error) {
+	if err := peerCredSupported(); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
 		return nil, err
 	}
@@ -111,23 +113,4 @@ func (l *peerCredListener) Accept() (net.Conn, error) {
 		}
 		conn.Close()
 	}
-}
-
-func peerUID(conn net.Conn) (uint32, bool) {
-	unix, ok := conn.(*net.UnixConn)
-	if !ok {
-		return 0, false
-	}
-	raw, err := unix.SyscallConn()
-	if err != nil {
-		return 0, false
-	}
-	var cred *syscall.Ucred
-	var credErr error
-	if err := raw.Control(func(fd uintptr) {
-		cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-	}); err != nil || credErr != nil || cred == nil {
-		return 0, false
-	}
-	return cred.Uid, true
 }

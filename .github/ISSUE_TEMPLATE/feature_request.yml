@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a change or a new capability for bp.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        bp is a communication and hierarchy layer for AI agents. It is not an agent harness, and installing it changes nothing until a module is enabled. [docs/direction.md](https://github.com/tunapro1234/blueprint/blob/dev/docs/direction.md) explains the principles a proposal is weighed against.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should bp do? Commands, flags or API shapes are welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      multiple: true
+      options:
+        - CLI
+        - MCP server
+        - HTTP API (REST or A2A)
+        - rooms or board
+        - P2P between machines
+        - a module
+        - install, update or uninstall
+        - documentation
+        - other
+  - type: input
+    id: harness
+    attributes:
+      label: Agent CLIs involved
+      placeholder: Claude Code, Codex, Hermes, OpenCode, a script, ...
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use now, or other tools that solve part of it.
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and environment
+      description: Would this change anything outside bp's own files, accept text from outside the machine, or let one agent act on another? If so, how should the owner see and control it?

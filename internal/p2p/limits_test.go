@@ -130,3 +130,44 @@ func TestPeerLimitsValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestLookupRateLimited(t *testing.T) {
+	l := newLimiter()
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	p := Peer{Rate: 6} // burst = 3
+	for i := 0; i < 3; i++ {
+		if !l.admitLookup("peer", p, now) {
+			t.Fatalf("lookup %d denied in burst", i)
+		}
+	}
+	if l.admitLookup("peer", p, now) {
+		t.Fatal("4th lookup in the same instant should be denied")
+	}
+	// Lookups and messages use separate buckets.
+	if err := l.admit("peer", p, "agent", now, time.Time{}); err != nil {
+		t.Fatalf("message bucket consumed by lookups: %v", err)
+	}
+	// Refills over time.
+	if !l.admitLookup("peer", p, now.Add(11*time.Second)) {
+		t.Fatal("lookup not refilled after 11s")
+	}
+}
+
+func TestHandleLookupRateLimitAudited(t *testing.T) {
+	a, b := pair(t)
+	b.Config.Peers["a"] = Peer{ID: a.Host.ID().String(), Expose: []string{"worker"}, Rate: 6}
+	b.ResolveLookup = func(string) LookupResponse { return LookupResponse{} }
+	ok := 0
+	for i := 0; i < 6; i++ {
+		if _, err := a.callLookup(context.Background(), b.Host.ID(), "worker"); err == nil {
+			ok++
+		}
+	}
+	// Burst is 3; later queries are reset by the limiter (stream reset => error).
+	if ok > 3 {
+		t.Fatalf("rate limit let %d lookups through", ok)
+	}
+	if ev, _ := audit.Read(b.Root, audit.Filter{Kind: "p2p.lookup.rejected"}); len(ev) == 0 {
+		t.Fatal("rate-limited lookup not audited")
+	}
+}

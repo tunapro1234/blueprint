@@ -100,6 +100,36 @@ func (l *limiter) admit(peerID string, p Peer, agent string, now time.Time, paus
 	return nil
 }
 
+// admitLookup rate-limits lookup queries per peer, separately from messages,
+// so a peer cannot enumerate names by hammering lookup. It consumes from the
+// same per-peer token bucket keyed with a "lookup:" prefix.
+func (l *limiter) admitLookup(peerID string, p Peer, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	rate := float64(ratePerMinute(p))
+	burst := rate / 2
+	if burst < 3 {
+		burst = 3
+	}
+	key := "lookup:" + peerID
+	tokens, seen := l.tokens[key]
+	if !seen {
+		tokens = burst
+	} else {
+		tokens += now.Sub(l.refill[key]).Minutes() * rate
+		if tokens > burst {
+			tokens = burst
+		}
+	}
+	l.refill[key] = now
+	if tokens < 1 {
+		l.tokens[key] = tokens
+		return false
+	}
+	l.tokens[key] = tokens - 1
+	return true
+}
+
 // resetPair forgets a pair's history after the owner resumes it.
 func (l *limiter) resetPair(peerID, agent string) {
 	l.mu.Lock()

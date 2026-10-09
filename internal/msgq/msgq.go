@@ -1487,7 +1487,7 @@ func noticeText(message Message, stillHanging, stillTorn, external bool) string 
 				src = strings.TrimSpace(src + " " + message.Origin.PeerID)
 			}
 		}
-		return fmt.Sprintf("bp: %s (message %s to %s, from %s — external, body withheld). %s. Inspect with bp peek %s; read the message with bp qstat %s.",
+		return fmt.Sprintf("bp: %s (message %s to %s, from %s — external, body withheld). %s. Inspect with bp peek %s; check delivery with bp qstat %s.",
 			result, message.ID, message.To, src, state, message.To, message.ID)
 	}
 	return fmt.Sprintf("bp: %s (message %s to %s). %s. Inspect with bp peek %s. Start: %s",

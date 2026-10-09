@@ -586,3 +586,22 @@ func TestRemoteSendsUseTheGuardPolicy(t *testing.T) {
 		t.Fatalf("over the burst: %v", err)
 	}
 }
+
+func TestRemoteCallerReadsTopicsRedacted(t *testing.T) {
+	core := testCore(t, "public")
+	ctx := context.Background()
+	secret := "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+	local := Caller{Name: "public", Transport: "cli", Verified: true}
+	core.Register(ctx, alice, "chatgpt", "")
+	if _, err := core.Join(ctx, local, "r", "deploy with "+secret, []string{"public", "chatgpt"}); err != nil {
+		t.Fatal(err)
+	}
+	remote := Caller{Name: "chatgpt", Transport: "gateway", Remote: true, Policy: &Policy{Agents: []string{"public"}, Rooms: []string{"r"}}}
+	room, _, err := core.RoomRead(remote, "r", "", 0)
+	if err != nil || strings.Contains(room.Topic, secret) || !strings.HasPrefix(room.Topic, "deploy with") {
+		t.Fatalf("remote topic %q %v", room.Topic, err)
+	}
+	if room, _, _ := core.RoomRead(local, "r", "", 0); !strings.Contains(room.Topic, secret) {
+		t.Fatal("local reader got a redacted topic")
+	}
+}

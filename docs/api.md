@@ -164,7 +164,8 @@ call `bp_register`.
     `guard.flags` fields on the accepted event, and high flags also write a
     `guard.finding` alert.
   - *Redact outbound.* Local text a remote client reads (its inbox, room
-    posts, board values) passes `guard.Redact` with the client's `redact`
+    posts, room topics, board values, agent descriptions) passes
+    `guard.Redact` with the client's `redact`
     policy; each redaction is audited as `api.guard.redacted`.
   - *Watch.* Denials, lookups, untrusted input reaching an agent and local
     text leaving to a client feed a `guard.Watch`, which raises

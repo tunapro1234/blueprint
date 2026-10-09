@@ -31,8 +31,10 @@ type Room struct {
 }
 
 // roomFor is the room as caller may see it: a caller with a policy sees
-// only members it may reach, and itself.
-func roomFor(caller Caller, room Room) Room {
+// only members it may reach, and itself. A remote caller reads the topic,
+// which only local callers set, redacted.
+func (c *Core) roomFor(caller Caller, room Room) Room {
+	room.Topic = c.outbound(caller, "", false, room.Topic)
 	if caller.Policy == nil {
 		return room
 	}
@@ -214,7 +216,7 @@ func (c *Core) join(ctx context.Context, caller Caller, name, topic string, agen
 			return invalid("room %s would have %d members; the limit is %d", name, len(room.Members), maxRoomMembers)
 		}
 		sort.Strings(room.Members)
-		out = roomFor(caller, room)
+		out = c.roomFor(caller, room)
 		return writeJSON(c.roomPath(name), room)
 	})
 	return out, err
@@ -255,7 +257,7 @@ func (c *Core) Leave(caller Caller, name, agent string) (Room, error) {
 				}
 			}
 			room.Members = members
-			out = roomFor(caller, room)
+			out = c.roomFor(caller, room)
 			return writeJSON(c.roomPath(name), room)
 		})
 	}()
@@ -400,7 +402,7 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 		}
 		posts[i].Text = text
 	}
-	return roomFor(caller, room), posts, nil
+	return c.roomFor(caller, room), posts, nil
 }
 
 func (c *Core) auditResult(caller Caller, kind, target, detail string, err error) {

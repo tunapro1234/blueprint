@@ -371,6 +371,7 @@ func init() {
 							// The hierarchy is the owner's business.
 							agent.Parent, agent.Role = "", ""
 						}
+						agent.Description = s.Core.outbound(s.Caller(), "", false, agent.Description)
 						visible = append(visible, agent)
 					}
 				}
@@ -450,7 +451,9 @@ func init() {
 						s.Core.denied(s.Caller(), args.Agent, "not-exposed")
 						return nil, fmt.Errorf("%w: agent %s", ErrNotFound, args.Agent)
 					}
-					return s.Core.Lookup(ctx, args.Agent)
+					agent, err := s.Core.Lookup(ctx, args.Agent)
+					agent.Description = s.Core.outbound(s.Caller(), "", false, agent.Description)
+					return agent, err
 				}
 				if args.ID == "" {
 					return nil, invalid("give id or agent")
@@ -517,7 +520,7 @@ func init() {
 				visible := []Room{}
 				for _, room := range rooms {
 					if s.Policy.room(room.Name) {
-						visible = append(visible, roomFor(s.Caller(), room))
+						visible = append(visible, s.Core.roomFor(s.Caller(), room))
 					}
 				}
 				return map[string]any{"rooms": visible}, nil

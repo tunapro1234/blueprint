@@ -290,7 +290,7 @@ func (n *Node) handleLookup(s network.Stream) {
 	if !n.limits.admitLookup(remote.String(), policy, time.Now()) {
 		// One line per peer per minute while it keeps hitting the limit.
 		if n.limits.onceEvery("lookup-rate:"+remote.String(), auditWindow, time.Now()) {
-			n.auditRemote(remote.String(), audit.Event{Kind: "p2p.lookup.rejected", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Reason: "lookup rate limit"})
+			n.auditRemote(auditSource(remote, alias), audit.Event{Kind: "p2p.lookup.rejected", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Reason: "lookup rate limit"})
 		}
 		_ = s.Reset()
 		return
@@ -307,7 +307,7 @@ func (n *Node) handleLookup(s network.Stream) {
 	// A peer only learns about agents its owner exposed to it; anything else
 	// answers exactly like an unknown name, so lookup cannot enumerate.
 	if result.Found && !exposed(policy, result.Name) {
-		n.auditRemote(remote.String(), audit.Event{Kind: "p2p.lookup.hidden", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Target: result.Name, Reason: "lookup matched an agent that is not exposed to this peer"})
+		n.auditRemote(auditSource(remote, alias), audit.Event{Kind: "p2p.lookup.hidden", Severity: audit.Warn, Peer: alias, PeerID: remote.String(), Target: result.Name, Reason: "lookup matched an agent that is not exposed to this peer"})
 		result = LookupResponse{}
 	}
 	if err := writeFrame(s, result); err != nil {

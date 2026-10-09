@@ -456,3 +456,37 @@ func TestPersistedChannelRejectsMismatchedIDAndState(t *testing.T) {
 		}
 	}
 }
+
+// Concurrent sends of one new channel must spend one rate token, not one per
+// racer: before the per-channel lock every racer saw no record, each paid a
+// token, and the late ones got "rate limited" for a message that was accepted.
+func TestConcurrentRetriesSpendOneRateToken(t *testing.T) {
+	a, b := pair(t)
+	policy := b.Config.Peers["a"]
+	policy.Rate = 1 // burst floor: 3 tokens, refill 1 per minute
+	b.Config.Peers["a"] = policy
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, e := a.call(context.Background(), b.Host.ID(), MessageProtocol, request{ID: testID, To: "agent", From: "sender?", Text: "hello"})
+			if e != nil || r.State != "accepted" {
+				t.Errorf("concurrent send: %+v %v", r, e)
+			}
+		}()
+	}
+	wg.Wait()
+	// One token went to testID; exactly two are left.
+	for i, id := range []string{"p1123456789abcdef0123456789abcdef", "p2123456789abcdef0123456789abcdef"} {
+		if r := send(t, a, b, id, "next"); r.State != "accepted" {
+			t.Fatalf("send %d after the race: %+v", i, r)
+		}
+	}
+	if r := send(t, a, b, "p3123456789abcdef0123456789abcdef", "over"); r.Error == "" {
+		t.Fatalf("fourth channel admitted, so the race spent no tokens at all: %+v", r)
+	}
+	if len(b.channels) != 0 {
+		t.Fatalf("channel locks leaked: %d", len(b.channels))
+	}
+}

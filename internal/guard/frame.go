@@ -335,3 +335,19 @@ func summarize(fs []Finding) string {
 	}
 	return strings.Join(kinds, ", ")
 }
+
+// LocalTransports are msgq.Origin transports whose callers are on this
+// machine and inside the owner's trust domain (same as a local bp msg).
+// Every other non-empty transport is framed at delivery, so a new or
+// unknown transport is framed by default.
+var LocalTransports = map[string]bool{
+	"bp-api/http":   true,
+	"bp-api/socket": true,
+	"bp-api/mcp":    true,
+}
+
+// NeedsFrame reports whether a queue record with this origin transport must
+// be framed before it reaches an agent. Records without an origin are local.
+func NeedsFrame(transport string) bool {
+	return transport != "" && !LocalTransports[transport]
+}

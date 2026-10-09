@@ -411,3 +411,11 @@ func TestAuditSinkKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestNeedsFrame(t *testing.T) {
+	for transport, want := range map[string]bool{"": false, "bp-api/http": false, "bp-api/mcp": false, "libp2p": true, "fed": true, "bp-api/gateway": true, "bp-api/room": true, "something-new": true} {
+		if NeedsFrame(transport) != want {
+			t.Errorf("%q: want %v", transport, want)
+		}
+	}
+}

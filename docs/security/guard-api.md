@@ -17,6 +17,7 @@ func NewFramer(key []byte) (*Framer, error)
 func (f *Framer) Frame(src Source, text string) (Framed, error)   // nonce = HMAC(key, transport|peerID|channel|attempt)
 func (f *Framer) Envelope(from string, src Source, stored string) (Framed, error) // "[from] body" -> "[from] " + frame(body)
 func Body(text string) string                                    // canonical body of a frame or plain text
+func NeedsFrame(transport string) bool                           // false only for "" and LocalTransports (bp-api/http, bp-api/socket, bp-api/mcp)
 const Notice, BodyPrefix string
 ```
 
@@ -66,8 +67,8 @@ pane input, keyed off `Origin`:
 
    ```go
    q.Render = func(m msgq.Message) (string, error) {
-       if m.Origin == nil || m.Origin.Transport == "" {
-           return m.Msg, nil
+       if m.Origin == nil || !guard.NeedsFrame(m.Origin.Transport) {
+           return m.Msg, nil // local caller: same trust domain as bp msg
        }
        f, err := framer.Envelope(m.From, guard.Source{Transport: m.Origin.Transport,
            Peer: m.Origin.PeerAlias, PeerID: m.Origin.PeerID,
@@ -97,3 +98,15 @@ pane input, keyed off `Origin`:
 The render is deterministic per record (key + Peer ID + record ID), so a
 restart or a second dispatch pass produces the same pane text and the
 existing witness logic needs no other change.
+
+## Who frames what
+
+- Queue records: msgq at delivery through `Queue.Render` (blueprint wires
+  it); bp-term only writes the bytes it is given.
+- bp-api's own stores (API inbox, room history, board values): bp-api frames
+  at read time with `framer.Frame(Source{Transport, Peer, PeerID, AgentClaim,
+  Room, Channel: <stable record id>}, body)`; on error it returns an error,
+  never the raw body.
+- The decision is `guard.NeedsFrame(origin.Transport)`, not
+  `PeerAuthenticated`: an authenticated P2P peer is still outside this
+  machine.

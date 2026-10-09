@@ -9,6 +9,7 @@ import (
 	"time"
 
 	bpconfig "blueprint/internal/config"
+	"blueprint/internal/identity"
 	"blueprint/internal/msgq"
 	"blueprint/internal/pending"
 )
@@ -145,14 +146,54 @@ func TestClaudeHookCommandNeverFailsTheAgent(t *testing.T) {
 	devnull, _ := os.Open(os.DevNull)
 	defer devnull.Close()
 	a.out, a.err = devnull, devnull
+	a.runHook("claude", "worker", []byte("not json")) // must not panic or write
+	a.resolveSender = func() identity.Identity { return identity.Identity{Label: "worker", Certain: true} }
 	stdin := os.Stdin
 	defer func() { os.Stdin = stdin }()
 	r, w, _ := os.Pipe()
 	_, _ = w.WriteString("not json")
 	w.Close()
 	os.Stdin = r
-	if err := a.hookCommand([]string{"claude", "--agent", "worker"}); err != nil {
+	if err := a.hookCommand([]string{"claude"}); err != nil {
 		t.Fatalf("bad payload failed the hook: %v", err)
+	}
+}
+
+// `bp _hook <harness> --agent X` used to override the verified pane label, so
+// any process running as the user could claim X's queue: the messages counted
+// as delivered and never reached X. Outside a verified pane the hook must
+// answer nothing and leave the queue alone, whatever the arguments say.
+func TestHookIgnoresAgentArgument(t *testing.T) {
+	a := newHookTestApp(t)
+	// The caller is not in a verified pane: the resolver only guesses.
+	a.resolveSender = func() identity.Identity { return identity.Identity{Label: "intruder", Certain: false} }
+	if _, err := a.queue.Enqueue("worker", "alice", "secret for worker"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	a.out = out
+	for _, harness := range []string{"claude", "opencode", "hermes"} {
+		stdin := os.Stdin
+		r, w, _ := os.Pipe()
+		_, _ = w.WriteString(`{"hook_event_name":"UserPromptSubmit"}`)
+		w.Close()
+		os.Stdin = r
+		err := a.hookCommand([]string{harness, "--agent", "worker"})
+		os.Stdin = stdin
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if answer, _ := os.ReadFile(out.Name()); len(answer) != 0 {
+		t.Fatalf("hook answered for an unverified caller: %s", answer)
+	}
+	records, err := a.queue.List()
+	if err != nil || len(records) != 1 {
+		t.Fatalf("queue after --agent attempts = %+v, %v", records, err)
 	}
 }
 

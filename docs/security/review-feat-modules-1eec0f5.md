@@ -130,3 +130,7 @@ Remaining, low:
 - HINT.md:11 wording is with blueprint.
 
 guard-hooks can now be built on `AddJSONEntry` and the journal.
+
+2f759b2: tmux lines are recorded and removed only inside the `# blueprint:`
+block, and `AddJSONEntry` returns `nil, err` on any write failure. Verified;
+no open items remain on feat/modules from guard.

@@ -203,7 +203,10 @@ func undo(env Env, change Change) (string, error) {
 		if err := os.Remove(change.Path); err != nil {
 			return "", err
 		}
-		removeEmptyDir(filepath.Dir(change.Path))
+		// Only directories bp itself names (skills/blueprint, .config/bp).
+		if base := filepath.Base(filepath.Dir(change.Path)); base == "blueprint" || base == "bp" {
+			removeEmptyDir(filepath.Dir(change.Path))
+		}
 		return "removed " + change.Path, nil
 	case KindLine:
 		removed, err := removeLine(change.Path, change.Line)

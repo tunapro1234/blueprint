@@ -120,7 +120,10 @@ Two small notes:
     tool-call hook reads, and it already holds every transport's delivered
     Remote records. There is no separate taint file and no startup seeding:
     a startup seed would miss input that arrives later in another process.
-  - Still open: the P2P service does not report `EvOutbound` for messages
-    agents send to peers, so a relay out through P2P is not seen.
+  - P2P outbound: the node reports `EvOutbound` on a channel's first send
+    attempt, with the agent taken from the channel's sender label. Its
+    default Watch uses `MessageLogTaint`, so text that came in through fed,
+    the API or P2P and then goes out to a different P2P peer raises
+    `guard.reach.relay` (`TestOutboundAfterTaintAlertsRelay`).
 - The Wire() rule applies to the Codex, Hermes and OpenCode hook paths when
   they land.

@@ -88,7 +88,7 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 	}
 	n := &Node{Host: h, Root: root, Config: cfg, Queue: q, Log: os.Stderr, lock: lock, discovery: map[peer.ID]presence{}, ctx: ctx,
 		inbound: make(chan struct{}, 1), inboundRetry: 30 * time.Second, limits: newLimiter(),
-		watch: guard.NewWatch(guard.WatchConfig{}, guard.AuditSink{StateDir: root, Errors: os.Stderr})}
+		watch: guard.NewWatch(guard.WatchConfig{TaintSource: guard.MessageLogTaint(msgq.MessageLogPath(q.Root))}, guard.AuditSink{StateDir: root, Errors: os.Stderr})}
 	if cfg.Relay {
 		r := relay.DefaultResources()
 		r.MaxReservations = 128
@@ -505,6 +505,13 @@ func (n *Node) stepLane(ctx context.Context, channels []Channel) error {
 				req.From = c.From
 				req.Sender = c.Sender
 				req.Text = c.Text
+				if c.Attempts == 0 {
+					// The text leaves this machine now: a tainted agent sending
+					// to another peer is a relay (guard.Watch tainted-relay).
+					if agent := strings.TrimSuffix(c.From, "?"); ValidName(agent) {
+						n.watch.Observe(guard.Event{Kind: guard.EvOutbound, Peer: c.Peer, Agent: agent, Channel: c.ID})
+					}
+				}
 			}
 			res, e := n.call(ctx, id, proto, req)
 			c.Attempts++

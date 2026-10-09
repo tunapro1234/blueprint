@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/msgq"
 
 	"github.com/libp2p/go-libp2p/core/peerstore"
 )
@@ -308,4 +310,28 @@ func TestLookupWithNoExposeSkipsResolve(t *testing.T) {
 	if called.Load() {
 		t.Fatal("ResolveLookup ran for a peer with nothing exposed")
 	}
+}
+
+// An agent that received outside text (logged in messages.jsonl, possibly by
+// another process) and then sends to a different P2P peer is a tainted relay.
+func TestOutboundAfterTaintAlertsRelay(t *testing.T) {
+	a, b := pair(t)
+	line := fmt.Sprintf(`{"id":"qf1","to":"worker","from":"external:eve@yigit","ts":%d,"finished":%d,"status":"delivered","peer":"yigit","remote":true}`+"\n", time.Now().Unix(), time.Now().Unix())
+	if err := os.MkdirAll(a.Queue.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(msgq.MessageLogPath(a.Queue.Root), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(a.Root, a.Config, "b", "agent", "worker", "here is what eve asked for"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	alerts, _ := audit.Read(a.Root, audit.Filter{Kind: "guard.reach.relay"})
+	if len(alerts) != 1 || alerts[0].Peer != "yigit" {
+		t.Fatalf("relay alerts = %+v", alerts)
+	}
+	_ = b
 }

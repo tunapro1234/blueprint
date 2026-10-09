@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/messagetext"
 )
 
@@ -147,6 +148,13 @@ func (c *Core) BoardPut(caller Caller, board, key, value string, expect int, del
 	kind := "board.put"
 	if del {
 		kind = "board.delete"
+	}
+	if err == nil && !del {
+		if flags, _ := c.scanIntake(caller, "board value", board+"/"+key, fmt.Sprint(entry.Version), value); flags != nil {
+			flags["transport"] = caller.Transport
+			c.audit(audit.Event{Kind: "api." + kind + ".accepted", Actor: caller.Label(), Target: board, Reason: key, Fields: flags})
+			return entry, nil
+		}
 	}
 	c.auditResult(caller, kind, board, key, err)
 	return entry, err

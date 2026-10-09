@@ -117,7 +117,8 @@ func (l *limiter) size() int {
 // auditBudget bounds rejection events per source so a flood of bad requests
 // cannot flood the audit log. Over budget, events are counted, and one
 // api.audit.suppressed event per source reports the count once the window
-// has passed.
+// has passed. Any later call flushes every expired window, so a source that
+// never returns is still reported.
 type auditBudget struct {
 	mu      sync.Mutex
 	windows map[string]*auditWindow
@@ -131,30 +132,47 @@ type auditWindow struct {
 
 const auditPerMinute = 20
 
-// admit reports whether to write this event, and a pending suppressed count
-// to report first (0 if none).
-func (a *auditBudget) admit(source string, now time.Time) (bool, int) {
+// maxAuditWindows bounds the sources tracked at once.
+const maxAuditWindows = 10000
+
+// admit reports whether to write this event, and the suppressed counts of
+// expired windows (any source) to report first.
+func (a *auditBudget) admit(source string, now time.Time) (bool, map[string]int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.windows == nil {
 		a.windows = map[string]*auditWindow{}
 	}
+	var flushed map[string]int
+	for key, w := range a.windows {
+		if now.Sub(w.start) >= time.Minute {
+			if w.suppressed > 0 {
+				if flushed == nil {
+					flushed = map[string]int{}
+				}
+				flushed[key] = w.suppressed
+			}
+			delete(a.windows, key)
+		}
+	}
 	w, ok := a.windows[source]
-	if !ok || now.Sub(w.start) >= time.Minute {
-		pending := 0
-		if ok {
-			pending = w.suppressed
+	if !ok {
+		if len(a.windows) >= maxAuditWindows {
+			// Every window is live: count this one against a shared bucket.
+			source = "(overflow)"
+			if w, ok = a.windows[source]; !ok {
+				w = &auditWindow{start: now}
+				a.windows[source] = w
+			}
+		} else {
+			w = &auditWindow{start: now}
+			a.windows[source] = w
 		}
-		if len(a.windows) > 10000 {
-			a.windows = map[string]*auditWindow{}
-		}
-		a.windows[source] = &auditWindow{start: now, count: 1}
-		return true, pending
 	}
 	if w.count < auditPerMinute {
 		w.count++
-		return true, 0
+		return true, flushed
 	}
 	w.suppressed++
-	return false, 0
+	return false, flushed
 }

@@ -57,8 +57,25 @@ func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(s.serve)
 }
 
-// proxyHeaders mark a request that came through a proxy.
-var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP", "Via"}
+// proxyHeaders mark a request that came through a proxy, as does any
+// X-Forwarded-* header (see proxiedBy).
+var proxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
+	"X-Real-IP", "Via", "Cf-Connecting-Ip", "True-Client-Ip", "X-Client-Ip", "Fastly-Client-Ip", "X-Cluster-Client-Ip"}
+
+// proxiedBy names the first proxy header on r, or "".
+func proxiedBy(r *http.Request) string {
+	for _, header := range proxyHeaders {
+		if _, ok := r.Header[http.CanonicalHeaderKey(header)]; ok {
+			return header
+		}
+	}
+	for header := range r.Header {
+		if strings.HasPrefix(header, "X-Forwarded-") {
+			return header
+		}
+	}
+	return ""
+}
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	viaSocket, _ := r.Context().Value(socketConn).(bool)
@@ -76,11 +93,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		// A reverse proxy or tunnel in front of api.listen would make remote
 		// callers look local. Proxied requests are refused: remote clients
 		// use the gateway.
-		for _, header := range proxyHeaders {
-			if r.Header.Get(header) != "" {
-				s.reject(w, r, transport, http.StatusForbidden, "proxied request ("+header+"); the local API is loopback only, use the gateway")
-				return
-			}
+		if header := proxiedBy(r); header != "" {
+			s.reject(w, r, transport, http.StatusForbidden, "proxied request ("+header+"); the local API is loopback only, use the gateway")
+			return
 		}
 		if !loopbackHost(r.Host) {
 			// DNS rebinding: a page on evil.example resolving to 127.0.0.1

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/guard"
 	"blueprint/internal/identity"
 )
 
@@ -273,6 +274,9 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 	if err := validateText(text); err != nil {
 		return PostResult{}, err
 	}
+	if err := c.admitRemote(caller, guard.CapRooms, name, len(text)); err != nil {
+		return PostResult{}, err
+	}
 	room, err := c.Room(name)
 	if err != nil {
 		return PostResult{}, err
@@ -284,19 +288,19 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 	post := RoomPost{ID: randomID("rp"), Room: name, From: caller.Label(), Author: caller.Name,
 		Text: text, TS: float64(c.now().UnixNano()) / 1e9, Untrusted: caller.Remote, Source: sourceOf(caller, name)}
 	history := c.roomHistory(name)
-	recipients := []string{}
+	recipients, skipped := []string{}, 0
 	for _, member := range room.Members {
 		if member == caller.Name {
 			continue
 		}
 		if !caller.Policy.agent(member) {
 			// Membership never widens what a caller reaches.
-			c.audit(audit.Event{Kind: "api.room.deliver.skipped", Actor: caller.Label(), Target: member, ID: post.ID,
-				Reason: "room " + name + ": not in the caller's expose list", Fields: map[string]string{"transport": caller.Transport}})
+			skipped++
 			continue
 		}
 		recipients = append(recipients, member)
 	}
+	// The rate check comes first, so a refused post writes one event.
 	if caller.Remote {
 		now := c.now()
 		if !c.roomLimits.allow("room:"+name, remoteRoomPostsPerMinute, 1, now) ||
@@ -305,15 +309,25 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 			return PostResult{}, fmt.Errorf("%w: room %s: too many posts, try again in a minute", ErrForbidden, name)
 		}
 	}
+	if skipped > 0 {
+		c.audit(audit.Event{Kind: "api.room.deliver.skipped", Actor: caller.Label(), Target: name, ID: post.ID,
+			Reason: fmt.Sprintf("room %s: %d member(s) not in the caller's expose list", name, skipped),
+			Fields: map[string]string{"transport": caller.Transport, "skipped": fmt.Sprint(skipped)}})
+	}
 	if err := withLock(history, func() error { return appendHistory(history, post) }); err != nil {
 		return PostResult{}, err
 	}
-	c.audit(audit.Event{Kind: "api.room.post.accepted", Actor: caller.Label(), Target: name, ID: post.ID, Fields: map[string]string{"transport": caller.Transport}})
+	flags, severity := c.scanIntake(caller, "room post", name, post.ID, post.Text)
+	fields := map[string]string{"transport": caller.Transport}
+	for k, v := range flags {
+		fields[k] = v
+	}
+	c.audit(audit.Event{Kind: "api.room.post.accepted", Actor: caller.Label(), Target: name, ID: post.ID, Fields: fields})
 	result := PostResult{Post: post, Deliveries: []SendResult{}}
 	// Each member gets the raw post from the original caller, so a remote
 	// author's post stays untrusted on every delivery route.
 	for _, member := range recipients {
-		sent, err := c.Send(ctx, caller, SendRequest{To: member, Text: post.Text, MessageID: post.ID, Room: name})
+		sent, err := c.Send(ctx, caller, SendRequest{To: member, Text: post.Text, MessageID: post.ID, Room: name, severity: severity})
 		if err != nil {
 			result.Errors = append(result.Errors, member+": "+err.Error())
 			continue
@@ -349,12 +363,20 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 			since = float64(c.now().UnixNano()) / 1e9
 		}
 	}
+	// all holds every visible post, for an after id that is no longer in
+	// the live history (rotated away): the reader resumes from the oldest
+	// post kept instead of waiting forever for an id it will never see.
+	all := []RoomPost{}
 	err = readJSONL(c.roomHistory(name), func(post RoomPost) bool {
+		visible := post.TS >= since
+		if visible && !seen {
+			all = append(all, post)
+		}
 		if !seen {
 			seen = post.ID == after
 			return true
 		}
-		if post.TS >= since {
+		if visible {
 			posts = append(posts, post)
 		}
 		return true
@@ -363,7 +385,7 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 		return Room{}, nil, err
 	}
 	if !seen {
-		return Room{}, nil, fmt.Errorf("%w: post %s in room %s", ErrNotFound, after, name)
+		posts = all
 	}
 	if after == "" && len(posts) > limit {
 		posts = posts[len(posts)-limit:]
@@ -371,7 +393,8 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 		posts = posts[:limit]
 	}
 	for i := range posts {
-		text, err := c.render(posts[i].Untrusted, posts[i].Source, posts[i].From, posts[i].ID, posts[i].Text)
+		text := c.outbound(caller, posts[i].Author, posts[i].Untrusted, posts[i].Text)
+		text, err := c.render(posts[i].Untrusted, posts[i].Source, posts[i].From, posts[i].ID, text)
 		if err != nil {
 			return Room{}, nil, err
 		}

@@ -25,7 +25,8 @@ func (a *app) gateway() (*api.Gateway, error) {
 	profiles := map[string]api.GatewayProfile{}
 	for name, client := range cfg.Clients {
 		profiles[name] = api.GatewayProfile{Name: name, Policy: api.Policy{
-			Agents: client.Agents, Rooms: client.Rooms, Boards: client.Boards, ReadOnlyBoards: client.ReadOnlyBoards}}
+			Agents: client.Agents, Rooms: client.Rooms, Boards: client.Boards, ReadOnlyBoards: client.ReadOnlyBoards,
+			RatePerHour: client.RatePerHour, Burst: client.Burst, MaxBytes: client.MaxBytes, Redact: client.Redact}}
 	}
 	return &api.Gateway{Core: a.apiCore(), PublicURL: cfg.PublicURL, Profiles: profiles, AllowedOrigins: gatewayOrigins}, nil
 }

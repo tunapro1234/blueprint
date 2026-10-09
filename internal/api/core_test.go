@@ -489,3 +489,100 @@ func TestRejectionAuditIsBudgeted(t *testing.T) {
 		t.Fatalf("suppressed count missing: %+v", last)
 	}
 }
+
+func TestRefusedRoomPostWritesOneEvent(t *testing.T) {
+	core := testCore(t, "public", "p1", "p2", "p3")
+	core.Frame = testFramer{}
+	var events []audit.Event
+	core.Audit = func(e audit.Event) { events = append(events, e) }
+	ctx := context.Background()
+	core.Register(ctx, alice, "chatgpt", "")
+	local := Caller{Name: "public", Transport: "cli", Verified: true}
+	core.Join(ctx, local, "r", "", []string{"public", "p1", "p2", "p3"})
+	remote := Caller{Name: "chatgpt", Transport: "gateway", Remote: true, Policy: &Policy{Agents: []string{"public"}, Rooms: []string{"r"}}}
+	core.Join(ctx, remote, "r", "", nil)
+	if _, err := core.Post(ctx, remote, "r", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	skipped := 0
+	for _, e := range events {
+		if e.Kind == "api.room.deliver.skipped" {
+			skipped++
+			if e.Fields["skipped"] != "3" {
+				t.Fatalf("skipped count %+v", e)
+			}
+		}
+	}
+	if skipped != 1 {
+		t.Fatalf("%d skipped events for one post", skipped)
+	}
+	core.roomLimits = limiter{}
+	for i := 0; i < remoteRoomPostsPerMinute; i++ {
+		core.roomLimits.allow("room:r", remoteRoomPostsPerMinute, 1, core.now())
+	}
+	events = nil
+	if _, err := core.Post(ctx, remote, "r", "again"); err == nil {
+		t.Fatal("post over the room budget accepted")
+	}
+	for _, e := range events {
+		if e.Kind == "api.room.deliver.skipped" {
+			t.Fatalf("refused post audited skipped members: %+v", e)
+		}
+	}
+}
+
+func TestRoomReadResumesWhenTheAfterIDRotatedAway(t *testing.T) {
+	core := testCore(t)
+	ctx := context.Background()
+	core.Register(ctx, alice, "alice", "")
+	if _, err := core.Join(ctx, alice, "r", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	core.Post(ctx, alice, "r", "one")
+	core.Post(ctx, alice, "r", "two")
+	_, posts, err := core.RoomRead(alice, "r", "rp_rotated_away", 10)
+	if err != nil || len(posts) != 2 || posts[0].Text != "one" {
+		t.Fatalf("got %+v %v", posts, err)
+	}
+}
+
+func TestSuppressedCountIsFlushedByAnySource(t *testing.T) {
+	core := testCore(t)
+	var events []audit.Event
+	core.Audit = func(e audit.Event) { events = append(events, e) }
+	now := time.Now()
+	core.Now = func() time.Time { return now }
+	for i := 0; i < auditPerMinute+5; i++ {
+		core.auditRejected("flooder", audit.Event{Kind: "api.auth.rejected"})
+	}
+	now = now.Add(time.Minute)
+	core.auditRejected("someone-else", audit.Event{Kind: "api.auth.rejected"})
+	found := false
+	for _, e := range events {
+		if e.Kind == "api.audit.suppressed" && e.Target == "flooder" && strings.HasPrefix(e.Reason, "5 ") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("suppressed count waited for the same source")
+	}
+}
+
+func TestRemoteSendsUseTheGuardPolicy(t *testing.T) {
+	core := testCore(t, "public")
+	core.Frame = testFramer{}
+	ctx := context.Background()
+	remote := Caller{Name: "chatgpt", Transport: "gateway", Remote: true, PeerID: "gateway:c1",
+		Policy: &Policy{Agents: []string{"public"}, RatePerHour: 60, Burst: 2, MaxBytes: 10}}
+	if _, err := core.Send(ctx, remote, SendRequest{To: "public", Text: "far too long text"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("over maxBytes: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := core.Send(ctx, remote, SendRequest{To: "public", Text: fmt.Sprint("hi ", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := core.Send(ctx, remote, SendRequest{To: "public", Text: "hi 3"}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("over the burst: %v", err)
+	}
+}

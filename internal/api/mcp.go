@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"blueprint/internal/guard"
 	"blueprint/internal/release"
 )
 
@@ -52,10 +53,30 @@ type Policy struct {
 	Boards []string // boards it may read and write
 	// ReadOnlyBoards lists boards it may read but not write.
 	ReadOnlyBoards []string
+	// RatePerHour and Burst bound sends and room posts (guard defaults
+	// when zero); MaxBytes bounds one text.
+	RatePerHour, Burst, MaxBytes int
+	// Redact applies to local text the caller reads.
+	Redact guard.RedactPolicy
 }
 
-func (p *Policy) agent(name string) bool { return p == nil || contains(p.Agents, name) }
-func (p *Policy) room(name string) bool  { return p == nil || contains(p.Rooms, name) }
+// guard is the guard policy for the agent and room parts of p.
+func (p *Policy) guard() guard.Policy {
+	caps := []guard.Capability{guard.CapSend, guard.CapLookup}
+	if len(p.Rooms) > 0 {
+		caps = append(caps, guard.CapRooms)
+	}
+	if len(p.Boards)+len(p.ReadOnlyBoards) > 0 {
+		caps = append(caps, guard.CapBoard)
+	}
+	return guard.Policy{Capabilities: caps, Expose: p.Agents, Rooms: p.Rooms,
+		RatePerHour: p.RatePerHour, Burst: p.Burst, MaxBytes: p.MaxBytes, Redact: p.Redact}
+}
+
+func (p *Policy) agent(name string) bool { return p == nil || p.guard().CheckLookup(name).Allow }
+func (p *Policy) room(name string) bool {
+	return p == nil || p.guard().CheckRoom(guard.CapRooms, name, 0).Allow
+}
 func boardOrDefault(name string) string {
 	if name == "" {
 		return DefaultBoard
@@ -380,6 +401,7 @@ func init() {
 					return nil, err
 				}
 				if !s.Policy.agent(args.To) {
+					s.Core.denied(caller, args.To, "not-exposed")
 					return nil, fmt.Errorf("%w: agent %s", ErrNotFound, args.To)
 				}
 				return s.Core.Send(ctx, caller, SendRequest{To: args.To, Text: args.Text, MessageID: args.MessageID, ContextID: args.ContextID})
@@ -423,7 +445,9 @@ func init() {
 					return nil, err
 				}
 				if args.Agent != "" {
+					s.Core.looked(s.Caller(), args.Agent)
 					if !s.Policy.agent(args.Agent) {
+						s.Core.denied(s.Caller(), args.Agent, "not-exposed")
 						return nil, fmt.Errorf("%w: agent %s", ErrNotFound, args.Agent)
 					}
 					return s.Core.Lookup(ctx, args.Agent)
@@ -521,10 +545,12 @@ func init() {
 					return nil, err
 				}
 				if !s.Policy.room(args.Room) {
+					s.Core.denied(caller, args.Room, "room-not-granted")
 					return nil, fmt.Errorf("%w: room %s", ErrNotFound, args.Room)
 				}
 				for _, agent := range args.Agents {
 					if !s.Policy.agent(agent) && agent != caller.Name {
+						s.Core.denied(caller, agent, "not-exposed")
 						return nil, fmt.Errorf("%w: agent %s", ErrNotFound, agent)
 					}
 				}
@@ -641,6 +667,9 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
+				for i := range entries {
+					entries[i].Value = s.Core.outbound(s.Caller(), authorOf(entries[i].Author), entries[i].Untrusted, entries[i].Value)
+				}
 				return map[string]any{"entries": entries}, nil
 			},
 		},
@@ -670,7 +699,11 @@ func init() {
 					return nil, err
 				}
 				if !s.Policy.board(args.Board, true) {
-					return nil, fmt.Errorf("%w: board %s", ErrForbidden, args.Board)
+					if !s.Policy.board(args.Board, false) {
+						// A hidden board looks like a missing one.
+						return nil, fmt.Errorf("%w: board %s", ErrNotFound, boardOrDefault(args.Board))
+					}
+					return nil, fmt.Errorf("%w: board %s is read-only for this connection", ErrForbidden, boardOrDefault(args.Board))
 				}
 				expect := -1
 				if args.Expect != nil {
@@ -702,6 +735,9 @@ func init() {
 				changes, err := s.Core.BoardHistory(args.Board, args.Key, args.Limit)
 				if err != nil {
 					return nil, err
+				}
+				for i := range changes {
+					changes[i].Value = s.Core.outbound(s.Caller(), authorOf(changes[i].Author), changes[i].Untrusted, changes[i].Value)
 				}
 				return map[string]any{"changes": changes}, nil
 			},

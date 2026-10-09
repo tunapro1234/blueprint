@@ -215,19 +215,52 @@ func (g *Gateway) load() (gatewayState, error) {
 			delete(state.Spent, k)
 		}
 	}
-	used := map[string]bool{}
-	for _, t := range state.Tokens {
-		used[t.ClientID] = true
-	}
-	for _, c := range state.Codes {
-		used[c.ClientID] = true
-	}
+	used := state.usedClients()
 	for id, c := range state.Clients {
 		if !used[id] && c.Created < now-int64(unpairedTTL.Seconds()) {
 			delete(state.Clients, id)
 		}
 	}
 	return state, nil
+}
+
+// usedClients are clients with a token, a pending code or a pairing code
+// bound to them.
+func (s *gatewayState) usedClients() map[string]bool {
+	used := map[string]bool{}
+	for _, t := range s.Tokens {
+		used[t.ClientID] = true
+	}
+	for _, c := range s.Codes {
+		used[c.ClientID] = true
+	}
+	for _, p := range s.Pairings {
+		used[p.ClientID] = true
+	}
+	return used
+}
+
+// maxClients bounds dynamically registered clients.
+const maxClients = 200
+
+// makeRoom evicts the oldest unused client when the registry is full, so
+// registrations from strangers cannot lock out a real app.
+func (s *gatewayState) makeRoom() error {
+	if len(s.Clients) < maxClients {
+		return nil
+	}
+	used := s.usedClients()
+	oldest, at := "", int64(0)
+	for id, c := range s.Clients {
+		if !used[id] && (oldest == "" || c.Created < at || (c.Created == at && id < oldest)) {
+			oldest, at = id, c.Created
+		}
+	}
+	if oldest == "" {
+		return errors.New("too many registered clients")
+	}
+	delete(s.Clients, oldest)
+	return nil
 }
 
 func hashSecret(secret string) string {
@@ -605,8 +638,8 @@ func (g *Gateway) register(w http.ResponseWriter, r *http.Request) {
 	}
 	id := randomID("bpc_")
 	err := g.update(func(s *gatewayState) error {
-		if len(s.Clients) >= 200 {
-			return errors.New("too many registered clients")
+		if err := s.makeRoom(); err != nil {
+			return err
 		}
 		s.Clients[id] = oauthClient{Name: name, RedirectURIs: req.RedirectURIs, Created: g.Core.now().Unix()}
 		return nil
@@ -787,30 +820,38 @@ func (g *Gateway) token(w http.ResponseWriter, r *http.Request) {
 	case "refresh_token":
 		refreshOld = hashSecret(form.Get("refresh_token"))
 		var old tokenGrant
-		found, reused := false, ""
+		found, reused, family := false, false, ""
 		g.update(func(s *gatewayState) error {
 			old, found = s.Tokens[refreshOld]
 			if spent, ok := s.Spent[refreshOld]; ok && !found {
 				// A rotated refresh token came back: it leaked. Revoke the
-				// whole family.
-				reused = spent.Family
+				// whole family. Tokens without a family (static tokens,
+				// refresh tokens from before families) are never touched.
+				reused, family = true, spent.Family
 				for k, t := range s.Tokens {
-					if t.Family == spent.Family {
+					if family != "" && t.Family == family && t.Kind != "static" {
 						delete(s.Tokens, k)
 					}
 				}
 			}
 			return nil
 		})
-		if reused != "" {
+		if reused {
+			reason := "a rotated refresh token was presented again; its token family is revoked"
+			if family == "" {
+				reason = "a rotated refresh token from before token families was presented again; nothing could be revoked by family"
+			}
 			g.Core.audit(audit.Event{Kind: "api.gateway.refresh.reused", Severity: audit.Alert, ID: form.Get("client_id"),
-				Reason: "a rotated refresh token was presented again; its token family is revoked", Fields: map[string]string{"transport": "gateway", "family": reused}})
+				Reason: reason, Fields: map[string]string{"transport": "gateway", "family": family}})
 		}
 		if !found || old.Kind != "refresh" || old.ClientID != form.Get("client_id") {
 			oauthError(w, 400, "invalid_grant", "unknown or expired refresh token")
 			return
 		}
 		grant = tokenGrant{Profile: old.Profile, ClientID: old.ClientID, Resource: g.PublicURL, Family: old.Family}
+		if grant.Family == "" {
+			grant.Family = randomID("fam") // a refresh token from before families joins one now
+		}
 	default:
 		oauthError(w, 400, "unsupported_grant_type", "authorization_code or refresh_token")
 		return

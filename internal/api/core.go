@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"blueprint/internal/audit"
+	"blueprint/internal/guard"
 	"blueprint/internal/identity"
 	"blueprint/internal/messagetext"
 	"blueprint/internal/msgq"
@@ -100,6 +101,11 @@ type Core struct {
 	Audit func(audit.Event)
 	Frame Framer
 	Now   func() time.Time
+	// Watch correlates remote denials, lookups and untrusted input into
+	// alerts; nil turns it off.
+	Watch *guard.Watch
+
+	limits *guard.Limiter
 
 	rejects    auditBudget
 	roomLimits limiter
@@ -111,9 +117,13 @@ type Core struct {
 
 // NewCore returns a Core with default audit and framing for stateDir.
 func NewCore(stateDir string, queue *msgq.Queue, directory func(context.Context) ([]AgentInfo, error)) *Core {
-	return &Core{StateDir: stateDir, Queue: queue, Directory: directory,
+	c := &Core{StateDir: stateDir, Queue: queue, Directory: directory,
 		Audit: func(ev audit.Event) { _ = audit.Append(stateDir, ev) },
-		Frame: PassthroughFramer{}, Now: time.Now}
+		Frame: PassthroughFramer{}, Now: time.Now,
+		Watch: guard.NewWatch(guard.WatchConfig{}, guard.AuditSink{StateDir: stateDir, Errors: os.Stderr})}
+	c.limits = guard.NewLimiter()
+	c.limits.Now = c.now
+	return c
 }
 
 func (c *Core) now() time.Time {
@@ -143,10 +153,15 @@ func (c *Core) audit(ev audit.Event) {
 // source can trigger at will. Each source gets a budget per minute; events
 // over it are counted and reported as one api.audit.suppressed event.
 func (c *Core) auditRejected(source string, ev audit.Event) {
-	ok, suppressed := c.rejects.admit(source, c.now())
-	if suppressed > 0 {
-		c.audit(audit.Event{Kind: "api.audit.suppressed", Severity: audit.Warn, Target: source,
-			Reason: fmt.Sprintf("%d rejection events over budget in the last minute", suppressed)})
+	ok, flushed := c.rejects.admit(source, c.now())
+	sources := make([]string, 0, len(flushed))
+	for s := range flushed {
+		sources = append(sources, s)
+	}
+	sort.Strings(sources)
+	for _, s := range sources {
+		c.audit(audit.Event{Kind: "api.audit.suppressed", Severity: audit.Warn, Target: s,
+			Reason: fmt.Sprintf("%d rejection events over budget in the last minute", flushed[s])})
 	}
 	if ok {
 		c.audit(ev)
@@ -308,6 +323,9 @@ type SendRequest struct {
 	ContextID string
 	// Room is set when the message is a room fan-out.
 	Room string
+	// severity is the guard severity of a room post, already scanned
+	// and audited once by Post.
+	severity guard.Severity
 }
 
 // SendResult says where the message went and how far it got.
@@ -325,6 +343,16 @@ type SendResult struct {
 // agent, delivery confirmed by the transcript), the inbox for an inbox agent.
 func (c *Core) Send(ctx context.Context, caller Caller, req SendRequest) (SendResult, error) {
 	result, err := c.send(ctx, caller, req)
+	var flags map[string]string
+	if err == nil {
+		// Accepted remote text is scanned once: a room post was scanned
+		// by Post and carries its severity.
+		severity := req.severity
+		if req.Room == "" {
+			flags, severity = c.scanIntake(caller, "message", req.To, result.ID, req.Text)
+		}
+		c.inbound(caller, req.To, result.ID, severity)
+	}
 	kind, reason := "api.send.", ""
 	if req.Room != "" {
 		kind, reason = "api.room.deliver.", "room "+req.Room
@@ -335,6 +363,9 @@ func (c *Core) Send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 		event.Kind, event.Severity, event.Reason = kind+"rejected", audit.Warn, strings.TrimSpace(reason+" "+err.Error())
 	} else {
 		event.Kind, event.Reason = kind+result.State, reason
+		for k, v := range flags {
+			event.Fields[k] = v
+		}
 	}
 	c.audit(event)
 	return result, err
@@ -343,6 +374,12 @@ func (c *Core) Send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendResult, error) {
 	if err := ValidateCaller(caller); err != nil {
 		return SendResult{}, err
+	}
+	if req.Room == "" {
+		// Room fan-out was admitted once, as a post, by Post.
+		if err := c.admitRemote(caller, guard.CapSend, req.To, len(req.Text)); err != nil {
+			return SendResult{}, err
+		}
 	}
 	if strings.Contains(req.To, "@") {
 		return SendResult{}, invalid("federated addresses are not available through the API yet; use bp msg")
@@ -588,7 +625,8 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 		limit = maxInboxRead
 	}
 	items, remaining, err := c.inbox().take(agent, limit, peek, func(item InboxItem) (string, error) {
-		return c.render(item.Untrusted, item.Source, item.From, item.ID, item.Text)
+		text := c.outbound(caller, authorOf(item.From), item.Untrusted, item.Text)
+		return c.render(item.Untrusted, item.Source, item.From, item.ID, text)
 	})
 	if err != nil {
 		return InboxResult{}, err

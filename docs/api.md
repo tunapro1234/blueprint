@@ -29,7 +29,8 @@ You can also run it in the foreground: `bp serve --api [--listen 127.0.0.1:PORT]
   must also use a loopback `Host` and, if they send an `Origin`, a loopback
   one. That blocks DNS rebinding and cross-site browser requests. The peer
   address must be loopback too, and a request carrying any proxy header
-  (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Via`) is refused: a reverse
+  (`Forwarded`, any `X-Forwarded-*`, `X-Real-IP`, `Via`, `Cf-Connecting-Ip`,
+  `True-Client-Ip` and similar) is refused: a reverse
   proxy in front of the local API would turn remote callers into local ones.
 - The caller names itself with `X-BP-Agent: <name>`. A name that bp cannot
   prove is labeled `<transport>:<name>` in the receiver's envelope (for
@@ -50,7 +51,7 @@ You can also run it in the foreground: `bp serve --api [--listen 127.0.0.1:PORT]
 | GET | `/v1/rooms`, `/v1/rooms/<r>` | list rooms, or one room with its members |
 | POST | `/v1/rooms/<r>/join` and `/v1/rooms/<r>/leave` | membership (`{agent}` adds another member) |
 | POST | `/v1/rooms/<r>/posts` | post `{text}`; it fans out to the other members through the queue |
-| GET | `/v1/rooms/<r>/posts?after=&limit=` | room history (members only) |
+| GET | `/v1/rooms/<r>/posts?after=&limit=` | room history (members only); an `after` id no longer in the live history resumes from the oldest kept post |
 | GET | `/v1/boards`, `/v1/boards/<b>?key=&prefix=` | read the shared board |
 | PUT/DELETE | `/v1/boards/<b>/keys/<key>` | write `{value, expectedVersion}`; a version conflict returns 409 |
 | GET | `/v1/boards/<b>/history` | every change, with its author |
@@ -151,6 +152,23 @@ call `bp_register`.
   mapping P2P uses: accepted, unverified, delivered or failed. A canceled
   message is failed with a `canceled …` reason, and A2A shows it as
   CANCELED.
+- **Guard.** For remote (gateway) callers, `internal/guard` runs on both
+  directions:
+  - *Policy and rate.* The client's expose list is a `guard.Policy`
+    (`CheckSend`, `CheckLookup`, `CheckRoom`), and sends and room posts
+    spend a `guard.Limiter` token (default 120 per hour, burst 20, 16 KiB
+    per text). A denial reads as not-found to the client and is audited
+    locally as `api.guard.denied` with the decision code.
+  - *Scan at intake.* Accepted remote text (messages, room posts, board
+    values) is scanned with `guard.Scan`. Flags never block; they become
+    `guard.flags` fields on the accepted event, and high flags also write a
+    `guard.finding` alert.
+  - *Redact outbound.* Local text a remote client reads (its inbox, room
+    posts, board values) passes `guard.Redact` with the client's `redact`
+    policy; each redaction is audited as `api.guard.redacted`.
+  - *Watch.* Denials, lookups, untrusted input reaching an agent and local
+    text leaving to a client feed a `guard.Watch`, which raises
+    `guard.reach.*` alerts for probing, enumeration and tainted relays.
 - **Audit.** Every request, rejection and token operation is logged to
   `<state>/audit.jsonl` (kinds `api.*`; read them with `bp audit`).
 - **No slash commands.** Every delivered message starts with a sender
@@ -175,6 +193,12 @@ api:
         rooms: [team]
         boards: []
         readOnlyBoards: [main]
+        ratePerHour: 120     # sends and room posts; 0 = guard default
+        burst: 20
+        maxBytes: 16384
+        redact:              # secrets are always redacted
+          emails: true
+          patterns: ["ACME-[0-9]{6}"]
 ```
 
 **Expose lists.** A client sees only what its entry lists. Agents it is not
@@ -209,11 +233,14 @@ redirect host, and asks for a one-time code from
 registered OAuth clients waiting to be paired. The code is bound to that
 client id, lasts 10 minutes and works once, so only someone at the computer
 can connect an app, and a code made for one app cannot be used by another.
-Registered clients that are never paired expire after 1 hour.
+Registered clients that are never paired expire after 1 hour. When the
+registry is full (200 clients), a new registration evicts the oldest client
+that has no token, code or pairing.
 
 **Refresh reuse.** Presenting a refresh token that was already rotated
 revokes the whole token family and logs an `api.gateway.refresh.reused`
-alert.
+alert. Static tokens are never part of a family, and a token from before
+families is only alerted, never used to revoke others.
 
 **Static tokens.** For clients that can send a header,
 `bp api gateway token <client>` issues a static bearer token.
@@ -230,9 +257,14 @@ at delivery (`Core.DeliveryFramed`). The passthrough framer is never enough.
 
 **Audit budget.** Rejections before authentication are logged at most 20
 per minute per source; the rest are counted in one `api.audit.suppressed`
-event.
+event per source, written by the next request from any source.
 
 **Origins.** Requests with no `Origin` are accepted, as are the public
 URL's origin, `https://claude.ai` and `https://chatgpt.com`.
 
-**Rate limit.** 120 requests per minute per token.
+**Rate limit.** 120 requests per minute per token, plus the per-client
+send and post rate above. Room posts from a client also pay a room budget
+(20 per minute) and a fan-out budget (120 deliveries per minute).
+
+**Board writes.** A write to a read-only board is refused with the reason;
+a write to a board the client cannot see is not found.

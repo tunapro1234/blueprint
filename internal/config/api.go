@@ -5,6 +5,8 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+
+	"blueprint/internal/guard"
 )
 
 // APIConfig controls bp's HTTP API (internal/api). Nothing listens unless it
@@ -36,6 +38,14 @@ type GatewayClient struct {
 	Rooms          []string `json:"rooms,omitempty" yaml:"rooms,omitempty"`
 	Boards         []string `json:"boards,omitempty" yaml:"boards,omitempty"`
 	ReadOnlyBoards []string `json:"readOnlyBoards,omitempty" yaml:"readOnlyBoards,omitempty"`
+	// RatePerHour and Burst bound sends and room posts; MaxBytes bounds one
+	// text. Zero uses guard's defaults (120 per hour, burst 20, 16 KiB).
+	RatePerHour int `json:"ratePerHour,omitempty" yaml:"ratePerHour,omitempty"`
+	Burst       int `json:"burst,omitempty" yaml:"burst,omitempty"`
+	MaxBytes    int `json:"maxBytes,omitempty" yaml:"maxBytes,omitempty"`
+	// Redact applies to local text the client reads (secrets always; emails
+	// and extra patterns on request).
+	Redact guard.RedactPolicy `json:"redact,omitempty" yaml:"redact,omitempty"`
 }
 
 var apiName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -77,6 +87,16 @@ func validateAPI(value *APIConfig) error {
 					return fmt.Errorf("gateway client %s: invalid name %q", name, item)
 				}
 			}
+		}
+		// guard skips a pattern that does not compile; say so here instead
+		// of redacting less than the owner asked for.
+		for _, expr := range client.Redact.Patterns {
+			if _, err := regexp.Compile(expr); err != nil {
+				return fmt.Errorf("gateway client %s: redact pattern %q: %v", name, expr, err)
+			}
+		}
+		if client.RatePerHour < 0 || client.Burst < 0 || client.MaxBytes < 0 {
+			return fmt.Errorf("gateway client %s: ratePerHour, burst and maxBytes must not be negative", name)
 		}
 	}
 	return nil

@@ -46,8 +46,8 @@ into `dev`; nobody else pushes.
   `/usr/local/bin/bp`, `blueprint.service`, real peers, or other agents.
   Tests use temporary roots, `env -u TMUX -u TMUX_PANE` and `tmux -S <tmp socket>`.
 - Heavy work: check `sensors | grep "Package id 0"` is below 80C first. Run
-  Go builds and tests with `nice -n 10` and hold `/run/lock/bp-gotest.lock`
-  (`flock /run/lock/bp-gotest.lock nice -n 10 go test ./...`). Browsers hold
+  Go builds and tests with `nice -n 10` and hold `/run/lock/bp-gobuild.lock`
+  (`flock /run/lock/bp-gobuild.lock nice -n 10 go test ./...`). Browsers hold
   `/run/lock/agir-tarayici.lock`.
 - No outbound mail, no WhatsApp, no messages to people. No new listening
   port outside tests; tests bind 127.0.0.1 port 0.

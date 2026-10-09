@@ -79,7 +79,7 @@ func accountsStored(cfg config.Config) bool {
 // when the rc line sourcing them was removed or lives in a file bp cannot see.
 func bpShellPresent(home string) bool {
 	data, err := os.ReadFile(ShellPath(home))
-	return err == nil && strings.HasPrefix(string(data), ShellMarker) && !strings.HasPrefix(string(data), ShellMarker+" Disabled;")
+	return err == nil && strings.HasPrefix(string(data), ShellMarker) && string(data) != DisabledShell
 }
 
 func fileExists(path string) bool {
@@ -99,8 +99,10 @@ func recordExisting(env Env, enabled map[string]bool) error {
 		if err != nil {
 			return err
 		}
-		if data, err := os.ReadFile(ShellPath(env.UserHome)); err == nil && strings.Contains(string(data), ShellMarker) {
-			journal.Record(Change{Kind: KindFile, Path: ShellPath(env.UserHome), Marker: ShellMarker})
+		// Claim shell.sh only while it is exactly a text bp generates; a copy
+		// the user edited stays theirs.
+		if data, err := os.ReadFile(ShellPath(env.UserHome)); err == nil && generatedShell(string(data)) {
+			journal.Record(Change{Kind: KindFile, Path: ShellPath(env.UserHome), Marker: ShellMarker, SHA256: fileSHA256(data)})
 		}
 		for _, path := range rcLinePresent(env) {
 			journal.Record(Change{Kind: KindLine, Path: path, Line: RCLine})
@@ -110,4 +112,11 @@ func recordExisting(env Env, enabled map[string]bool) error {
 		}
 	}
 	return nil
+}
+
+// DisabledShell is the stub bp setup --disable leaves in shell.sh.
+const DisabledShell = ShellMarker + " Disabled; native aliases and records are preserved.\n"
+
+func generatedShell(text string) bool {
+	return text == LocalShell || text == LocalShell+CompatibilityWrappers || text == DisabledShell
 }

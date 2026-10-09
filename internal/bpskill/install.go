@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"blueprint/internal/safefile"
 )
 
 //go:embed SKILL.md
@@ -52,11 +54,11 @@ func InstallContent(home, codexHome, claudeHome string, content []byte) ([]strin
 			results = append(results, "preserved user skill: "+path)
 			continue
 		}
-		old, err := os.ReadFile(path)
-		if err != nil && !os.IsNotExist(err) {
+		old, snap, err := safefile.Read(path)
+		if err != nil {
 			return results, err
 		}
-		if err == nil {
+		if snap.Exists {
 			if bytes.Equal(old, content) {
 				results = append(results, "skill ready: "+path)
 				continue
@@ -84,27 +86,10 @@ func InstallContent(home, codexHome, claudeHome string, content []byte) ([]strin
 			if closeErr != nil {
 				return results, closeErr
 			}
+			results = append(results, "skill backup: "+backup.Name())
 		}
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return results, err
-		}
-		f, err := os.CreateTemp(dir, ".skill-*")
-		if err != nil {
-			return results, err
-		}
-		_, err = f.Write(content)
-		if err == nil {
-			err = f.Sync()
-		}
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
+		if err := safefile.Replace(snap, content, 0600); err != nil {
 			return results, fmt.Errorf("install skill %s: %w", path, err)
-		}
-		if err := os.Rename(f.Name(), path); err != nil {
-			return results, err
 		}
 		results = append(results, "skill installed: "+path)
 	}

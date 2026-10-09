@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
+
+	"blueprint/internal/safefile"
 )
 
 // KindJSONEntry is one element bp added to an array in a user's JSON file
@@ -22,56 +22,47 @@ const KindJSONEntry = "json-entry"
 // AddJSONEntry appends entry to the array at pointer in the JSON file at path,
 // creating the file and missing objects on the way, and returns the change to
 // record. The file is edited as text, so the user's formatting, key order and
-// other entries are kept byte for byte. An element already deep-equal to entry
-// is not added twice.
-func AddJSONEntry(path, pointer string, entry any) (Change, error) {
+// other entries are kept byte for byte. When an element deep-equal to entry is
+// already there it is the user's (or an earlier, already recorded add), so
+// nothing is written and the returned change is nil: undo must never remove
+// what bp did not add.
+func AddJSONEntry(path, pointer string, entry any) (*Change, error) {
 	value, err := json.Marshal(entry)
 	if err != nil {
-		return Change{}, err
+		return nil, err
 	}
 	keys, err := splitPointer(pointer)
 	if err != nil || len(keys) == 0 {
-		return Change{}, fmt.Errorf("json-entry needs the pointer of an array inside an object, got %q", pointer)
+		return nil, fmt.Errorf("json-entry needs the pointer of an array inside an object, got %q", pointer)
 	}
-	change := Change{Kind: KindJSONEntry, Path: path, Option: pointer, Value: string(value)}
-	real := resolvePath(path)
-	data, err := os.ReadFile(real)
-	if errors.Is(err, os.ErrNotExist) {
+	change := &Change{Kind: KindJSONEntry, Path: path, Option: pointer, Value: string(value)}
+	data, snap, err := safefile.Read(path)
+	if err != nil {
+		return nil, err
+	}
+	if !snap.Exists {
 		var doc any = []any{json.RawMessage(value)}
 		for index := len(keys) - 1; index >= 0; index-- {
 			doc = map[string]any{keys[index]: doc}
 		}
 		out, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
-			return Change{}, err
+			return nil, err
 		}
 		change.Created = "/"
-		return change, writeFileAtomic(real, append(out, '\n'), 0600)
-	}
-	if err != nil {
-		return Change{}, err
-	}
-	mode := os.FileMode(0600)
-	if info, err := os.Stat(real); err == nil {
-		mode = info.Mode().Perm()
+		return change, safefile.Replace(snap, append(out, '\n'), 0600)
 	}
 	start := skipSpace(data, 0)
 	if start >= len(data) || data[start] != '{' {
-		return Change{}, fmt.Errorf("%s: not a JSON object", path)
+		return nil, fmt.Errorf("%s: not a JSON object", path)
 	}
 	at := start
 	for depth, key := range keys {
 		members, err := objectMembers(data, at)
 		if err != nil {
-			return Change{}, fmt.Errorf("%s: %w", path, err)
+			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		found := -1
-		for index, member := range members {
-			if member.key == key {
-				found = index
-				break
-			}
-		}
+		found := lastMember(members, key)
 		if found < 0 {
 			// Create the rest of the chain inside this object.
 			var rest any = []any{json.RawMessage(value)}
@@ -80,10 +71,10 @@ func AddJSONEntry(path, pointer string, entry any) (Change, error) {
 			}
 			out, err := insertMember(data, at, members, key, rest)
 			if err != nil {
-				return Change{}, err
+				return nil, err
 			}
 			change.Created = joinPointer(keys[:depth+1])
-			return change, writeFileAtomic(real, out, mode)
+			return change, safefile.Replace(snap, out, 0600)
 		}
 		at = members[found].valueStart
 		want := byte('{')
@@ -91,16 +82,16 @@ func AddJSONEntry(path, pointer string, entry any) (Change, error) {
 			want = '['
 		}
 		if data[at] != want {
-			return Change{}, fmt.Errorf("%s: %s is not a JSON %s", path, joinPointer(keys[:depth+1]), map[byte]string{'{': "object", '[': "array"}[want])
+			return nil, fmt.Errorf("%s: %s is not a JSON %s", path, joinPointer(keys[:depth+1]), map[byte]string{'{': "object", '[': "array"}[want])
 		}
 	}
 	elements, err := arrayElements(data, at)
 	if err != nil {
-		return Change{}, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	for _, element := range elements {
 		if jsonEqual(data[element.start:element.end], value) {
-			return change, nil
+			return nil, nil
 		}
 	}
 	var out []byte
@@ -111,21 +102,16 @@ func AddJSONEntry(path, pointer string, entry any) (Change, error) {
 		indent := leadingSpace(data, elements, len(elements)-1, at)
 		out = splice(data, last.end, last.end, append(append([]byte{','}, indent...), value...))
 	}
-	return change, writeFileAtomic(real, out, mode)
+	return change, safefile.Replace(snap, out, 0600)
 }
 
 func undoJSONEntry(change Change) (string, error) {
-	real := resolvePath(change.Path)
-	data, err := os.ReadFile(real)
-	if errors.Is(err, os.ErrNotExist) {
+	data, snap, err := safefile.Read(change.Path)
+	if err != nil {
+		return "", err
+	}
+	if !snap.Exists {
 		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(real)
-	if err != nil {
-		return "", err
 	}
 	keys, err := splitPointer(change.Option)
 	if err != nil {
@@ -154,7 +140,7 @@ func undoJSONEntry(change Change) (string, error) {
 		if change.Created == "/" {
 			var doc any
 			if json.Unmarshal(data, &doc) == nil && emptySkeleton(doc) {
-				if err := os.Remove(real); err != nil {
+				if err := safefile.Remove(snap); err != nil {
 					return "", err
 				}
 				return "removed " + change.Path, nil
@@ -163,34 +149,19 @@ func undoJSONEntry(change Change) (string, error) {
 			parent, err := locate(data, created[:len(created)-1])
 			if err == nil && data[parent] == '{' {
 				members, err := objectMembers(data, parent)
-				if err == nil {
-					for index, member := range members {
-						if member.key != created[len(created)-1] {
-							continue
-						}
-						var value any
-						if json.Unmarshal(data[member.valueStart:member.end], &value) == nil && emptySkeleton(value) {
-							data = removeMember(data, members, index, parent)
-						}
-						break
+				if index := lastMember(members, created[len(created)-1]); err == nil && index >= 0 {
+					var value any
+					if json.Unmarshal(data[members[index].valueStart:members[index].end], &value) == nil && emptySkeleton(value) {
+						data = removeMember(data, members, index, parent)
 					}
 				}
 			}
 		}
 	}
-	if err := writeFileAtomic(real, data, info.Mode().Perm()); err != nil {
+	if err := safefile.Replace(snap, data, 0600); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("removed bp's entry from %s %s", change.Path, change.Option), nil
-}
-
-// resolvePath follows a symlinked settings file so bp edits the target and
-// the link stays a link.
-func resolvePath(path string) string {
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		return real
-	}
-	return path
 }
 
 func splitPointer(pointer string) ([]string, error) {
@@ -310,16 +281,11 @@ func locate(data []byte, keys []string) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		found := false
-		for _, member := range members {
-			if member.key == key {
-				at, found = member.valueStart, true
-				break
-			}
-		}
-		if !found {
+		index := lastMember(members, key)
+		if index < 0 {
 			return 0, errModified
 		}
+		at = members[index].valueStart
 	}
 	return at, nil
 }
@@ -401,9 +367,28 @@ func splice(data []byte, from, to int, insert []byte) []byte {
 	return append(out, data[to:]...)
 }
 
+// lastMember finds key the way JSON parsers resolve duplicates: the last one wins.
+func lastMember(members []span, key string) int {
+	for index := len(members) - 1; index >= 0; index-- {
+		if members[index].key == key {
+			return index
+		}
+	}
+	return -1
+}
+
+// jsonEqual compares two JSON values; numbers compare by their text, so
+// large integers are not rounded through float64.
 func jsonEqual(a, b []byte) bool {
-	var left, right any
-	return json.Unmarshal(a, &left) == nil && json.Unmarshal(b, &right) == nil && reflect.DeepEqual(left, right)
+	decode := func(data []byte) (any, bool) {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		var value any
+		return value, decoder.Decode(&value) == nil
+	}
+	left, okLeft := decode(a)
+	right, okRight := decode(b)
+	return okLeft && okRight && reflect.DeepEqual(left, right)
 }
 
 // emptySkeleton is true for empty arrays and for objects that hold nothing

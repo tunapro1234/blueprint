@@ -47,13 +47,16 @@ func TestJSONEntryRoundTripIsByteIdentical(t *testing.T) {
 			if last := doc.Hooks.PreToolUse[len(doc.Hooks.PreToolUse)-1]; !strings.Contains(string(last), "bp guard hook claude") {
 				t.Fatalf("entry not appended:\n%s", data)
 			}
-			// Adding again is a no-op.
-			_, err = AddJSONEntry(path, "/hooks/PreToolUse", guardEntry)
+			// Adding again is a no-op and records nothing.
+			again, err := AddJSONEntry(path, "/hooks/PreToolUse", guardEntry)
 			must(t, err)
-			if again, _ := os.ReadFile(path); string(again) != string(data) {
-				t.Fatalf("second add changed the file:\n%s", again)
+			if again != nil {
+				t.Fatalf("second add returned a change: %+v", again)
 			}
-			if _, err := undoJSONEntry(change); err != nil {
+			if reread, _ := os.ReadFile(path); string(reread) != string(data) {
+				t.Fatalf("second add changed the file:\n%s", reread)
+			}
+			if _, err := undoJSONEntry(*change); err != nil {
 				t.Fatal(err)
 			}
 			if after, _ := os.ReadFile(path); string(after) != original {
@@ -73,7 +76,7 @@ func TestJSONEntryCreatesAndRemovesMissingFile(t *testing.T) {
 	if change.Created != "/" {
 		t.Fatalf("created = %q", change.Created)
 	}
-	_, err = undoJSONEntry(change)
+	_, err = undoJSONEntry(*change)
 	must(t, err)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("file bp created was left behind")
@@ -93,7 +96,7 @@ func TestJSONEntryUndoKeepsUserChanges(t *testing.T) {
 		t.Fatalf("fixture edit failed: %s", data)
 	}
 	must(t, os.WriteFile(path, []byte(withUser), 0600))
-	_, err = undoJSONEntry(change)
+	_, err = undoJSONEntry(*change)
 	must(t, err)
 	if after, _ := os.ReadFile(path); string(after) != `{"hooks": {"PreToolUse": [{"matcher": "Bash"}, {"matcher": "Write"}]}}` {
 		t.Fatalf("after undo: %s", after)
@@ -105,7 +108,7 @@ func TestJSONEntryUndoKeepsUserChanges(t *testing.T) {
 	data, _ = os.ReadFile(path)
 	edited := strings.Replace(string(data), `"timeout":5`, `"timeout":30`, 1)
 	must(t, os.WriteFile(path, []byte(edited), 0600))
-	if _, err := undoJSONEntry(change); err != errModified {
+	if _, err := undoJSONEntry(*change); err != errModified {
 		t.Fatalf("err = %v", err)
 	}
 	if after, _ := os.ReadFile(path); string(after) != edited {
@@ -125,8 +128,8 @@ func TestJSONEntryFollowsSymlinkAndJournals(t *testing.T) {
 	must(t, err)
 	journal, err := LoadJournal(f.cfg, "guard-hooks")
 	must(t, err)
-	journal.Record(change)
-	journal.Record(change)
+	journal.Record(*change)
+	journal.Record(*change)
 	if len(journal.Changes) != 1 {
 		t.Fatalf("duplicate change recorded: %+v", journal.Changes)
 	}
@@ -142,5 +145,47 @@ func TestJSONEntryFollowsSymlinkAndJournals(t *testing.T) {
 	}
 	if after, _ := os.ReadFile(target); string(after) != original {
 		t.Fatalf("not byte-identical: %q", after)
+	}
+}
+
+func TestJSONEntryAlreadyPresentIsNotRecorded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	mine, _ := json.Marshal(guardEntry)
+	original := `{"hooks": {"PreToolUse": [` + string(mine) + `]}}`
+	must(t, os.WriteFile(path, []byte(original), 0600))
+	change, err := AddJSONEntry(path, "/hooks/PreToolUse", guardEntry)
+	must(t, err)
+	if change != nil {
+		t.Fatalf("the user's own identical hook was claimed by bp: %+v", change)
+	}
+	if after, _ := os.ReadFile(path); string(after) != original {
+		t.Fatal("file changed")
+	}
+}
+
+func TestJSONEntryNumbersAndDuplicateKeys(t *testing.T) {
+	if jsonEqual([]byte(`{"n": 9007199254740993}`), []byte(`{"n": 9007199254740992}`)) {
+		t.Fatal("large integers compared through float64")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	// Parsers use the last of duplicate keys; so must bp.
+	must(t, os.WriteFile(path, []byte(`{"hooks": {"PreToolUse": [1]}, "hooks": {"PreToolUse": []}}`), 0600))
+	_, err := AddJSONEntry(path, "/hooks/PreToolUse", guardEntry)
+	must(t, err)
+	data, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(data), `{"hooks": {"PreToolUse": [1]}, "hooks": {"PreToolUse": [{`) {
+		t.Fatalf("edited the wrong duplicate: %s", data)
+	}
+}
+
+func TestJSONEntryRefusesDanglingSymlinkAndConcurrentWrite(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "settings.json")
+	must(t, os.Symlink(filepath.Join(dir, "missing", "real.json"), link))
+	if _, err := AddJSONEntry(link, "/hooks/PreToolUse", guardEntry); err == nil {
+		t.Fatal("dangling symlink replaced")
+	}
+	if info, _ := os.Lstat(link); info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink gone")
 	}
 }

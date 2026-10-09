@@ -2,6 +2,8 @@ package modules
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"blueprint/internal/config"
+	"blueprint/internal/safefile"
 )
 
 // Change kinds recorded in a journal.
@@ -43,6 +46,7 @@ type Change struct {
 	Previous string `json:"previous,omitempty"`
 	Unset    bool   `json:"unset,omitempty"`
 	Created  string `json:"created,omitempty"`
+	SHA256   string `json:"sha256,omitempty"`
 	Text     string `json:"text,omitempty"`
 	At       string `json:"at,omitempty"`
 }
@@ -50,7 +54,7 @@ type Change struct {
 func (c Change) key() string {
 	parts := []string{c.Kind, c.Path, c.Line, c.Target, c.Option, c.Text}
 	if c.Kind == KindJSONEntry {
-		parts = append(parts, c.Value)
+		parts = append(parts, c.Value, c.Created)
 	}
 	return strings.Join(parts, "\x00")
 }
@@ -146,8 +150,12 @@ func (j *Journal) Record(change Change) {
 		j.planned = append(j.planned, change.String())
 		return
 	}
-	for _, existing := range j.Changes {
+	for index, existing := range j.Changes {
 		if existing.key() == change.key() {
+			// bp rewrote a file it owns: the new bytes are what undo checks.
+			if change.SHA256 != "" {
+				j.Changes[index].SHA256 = change.SHA256
+			}
 			return
 		}
 	}
@@ -197,17 +205,30 @@ var errModified = errors.New("changed since bp wrote it; left in place")
 func undo(env Env, change Change) (string, error) {
 	switch change.Kind {
 	case KindFile:
-		data, err := os.ReadFile(change.Path)
+		info, err := os.Lstat(change.Path)
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 		if err != nil {
 			return "", err
 		}
-		if change.Marker == "" || !bytes.Contains(data, []byte(change.Marker)) {
+		if !info.Mode().IsRegular() {
+			// bp records files it wrote; a link or directory there now is not one.
 			return "", errModified
 		}
-		if err := os.Remove(change.Path); err != nil {
+		data, snap, err := safefile.Read(change.Path)
+		if err != nil {
+			return "", err
+		}
+		if change.SHA256 != "" {
+			if fileSHA256(data) != change.SHA256 {
+				return "", errModified
+			}
+		} else if change.Marker == "" || !bytes.Contains(data, []byte(change.Marker)) {
+			// Records written before hashes: the marker is the best evidence left.
+			return "", errModified
+		}
+		if err := safefile.Remove(snap); err != nil {
 			return "", err
 		}
 		// Only directories bp itself names (skills/blueprint, .config/bp).
@@ -216,7 +237,7 @@ func undo(env Env, change Change) (string, error) {
 		}
 		return "removed " + change.Path, nil
 	case KindLine:
-		removed, err := removeLine(change.Path, change.Line)
+		removed, err := removeLine(change)
 		if err != nil || !removed {
 			return "", err
 		}
@@ -269,41 +290,55 @@ func undo(env Env, change Change) (string, error) {
 	return "", fmt.Errorf("unknown change kind %q", change.Kind)
 }
 
-// removeLine deletes every line equal to line, and one blank line directly
-// before each when bp's append added it. The file keeps its mode.
-func removeLine(path, line string) (bool, error) {
-	// Rewrite the real file so a dotfile-manager symlink stays a symlink.
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		path = resolved
-	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
+// removeLine undoes one recorded line. A change that carries the exact text
+// bp appended (Value) gets exactly that text removed, last occurrence only,
+// which restores the file byte for byte; older records remove the last line
+// equal to Line and the blank line bp put before it. A file bp created
+// (Created == "/") is removed once nothing else is left in it.
+func removeLine(change Change) (bool, error) {
+	data, snap, err := safefile.Read(change.Path)
+	if err != nil || !snap.Exists {
 		return false, err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return false, err
-	}
-	lines := strings.SplitAfter(string(data), "\n")
-	var out []string
-	removed := false
-	for _, current := range lines {
-		if strings.TrimRight(current, "\r\n") == line {
-			removed = true
-			if n := len(out); n > 0 && strings.TrimSpace(out[n-1]) == "" {
-				out = out[:n-1]
-			}
-			continue
+	text := string(data)
+	var out string
+	if change.Value != "" {
+		index := strings.LastIndex(text, change.Value)
+		if index < 0 {
+			return false, nil
 		}
-		out = append(out, current)
+		out = text[:index] + text[index+len(change.Value):]
+	} else {
+		lines := strings.SplitAfter(text, "\n")
+		found := -1
+		for index := len(lines) - 1; index >= 0; index-- {
+			if strings.TrimRight(lines[index], "\r\n") == change.Line {
+				found = index
+				break
+			}
+		}
+		if found < 0 {
+			return false, nil
+		}
+		from := found
+		if from > 0 && strings.TrimSpace(lines[from-1]) == "" {
+			from--
+		}
+		out = strings.Join(lines[:from], "") + strings.Join(lines[found+1:], "")
 	}
-	if !removed {
-		return false, nil
+	if change.Created == "/" && strings.TrimSpace(out) == "" {
+		return true, safefile.Remove(snap)
 	}
-	return true, writeFileAtomic(path, []byte(strings.Join(out, "")), info.Mode().Perm())
+	return true, safefile.Replace(snap, []byte(out), 0600)
+}
+
+// SHA256 is the hex digest recorded for files bp writes.
+func SHA256(data []byte) string { return fileSHA256(data) }
+
+// fileSHA256 is the hex SHA-256 recorded for files bp writes.
+func fileSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func removeEmptyDir(dir string) {
@@ -343,6 +378,11 @@ const Install = "install"
 
 // RecordInstall adds changes to the install journal.
 func RecordInstall(cfg config.Config, changes ...Change) error {
+	return RecordIn(cfg, Install, changes...)
+}
+
+// RecordIn adds changes to a module's journal under the modules lock.
+func RecordIn(cfg config.Config, module string, changes ...Change) error {
 	if len(changes) == 0 || cfg.StateDir == "" {
 		return nil
 	}
@@ -351,7 +391,7 @@ func RecordInstall(cfg config.Config, changes ...Change) error {
 		return err
 	}
 	defer unlock()
-	journal, err := LoadJournal(cfg, Install)
+	journal, err := LoadJournal(cfg, module)
 	if err != nil {
 		return err
 	}

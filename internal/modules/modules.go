@@ -20,6 +20,7 @@ import (
 
 	"blueprint/internal/audit"
 	"blueprint/internal/config"
+	"blueprint/internal/safefile"
 )
 
 // Module names.
@@ -235,6 +236,40 @@ func journalDir(cfg config.Config) string {
 	return filepath.Join(cfg.StateDir, "modules")
 }
 
+// reread loads the config again under the modules lock so a switch written
+// by a concurrent bp is not lost. On error the caller's copy is kept.
+func reread(cfg config.Config) config.Config {
+	if cfg.Home == "" || cfg.Path == "" {
+		return cfg
+	}
+	fresh, err := config.LoadHome(cfg.Home)
+	if err != nil || fresh.Path != cfg.Path {
+		return cfg
+	}
+	if !fresh.ModulesSet && cfg.ModulesSet {
+		// The migrated set lives only in memory (read-only config): keep it.
+		fresh.Modules, fresh.ModulesSet = cfg.Modules, cfg.ModulesSet
+	}
+	return fresh
+}
+
+// Seed writes the modules a new config starts with (its template has an
+// empty modules map), unless another bp already put modules in it.
+func Seed(cfg config.Config, path string, enabled map[string]bool) error {
+	if len(enabled) == 0 {
+		return nil
+	}
+	unlock, err := lock(cfg)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if fresh, err := config.LoadHome(cfg.Home); err == nil && len(fresh.Modules) > 0 {
+		return nil
+	}
+	return config.SetModules(path, enabled)
+}
+
 func lock(cfg config.Config) (func(), error) {
 	dir := journalDir(cfg)
 	if cfg.StateDir == "" {
@@ -316,11 +351,17 @@ func Enable(env Env, name string, options Options) (Result, error) {
 		}
 		return result, nil
 	}
+	if err := safefile.CheckOwner(env.UserHome); err != nil {
+		return result, err
+	}
 	unlock, err := lock(cfg)
 	if err != nil {
 		return result, err
 	}
 	defer unlock()
+	// Another bp may have switched a module since env.Config was loaded.
+	cfg = reread(cfg)
+	env.Config = cfg
 	journal, err := LoadJournal(cfg, name)
 	if err != nil {
 		return result, err
@@ -378,11 +419,16 @@ func Disable(env Env, name string, options Options) (Result, error) {
 		}
 		return result, nil
 	}
+	if err := safefile.CheckOwner(env.UserHome); err != nil {
+		return result, err
+	}
 	unlock, err := lock(cfg)
 	if err != nil {
 		return result, err
 	}
 	defer unlock()
+	cfg = reread(cfg)
+	env.Config = cfg
 	journal, err = LoadJournal(cfg, name)
 	if err != nil {
 		return result, err

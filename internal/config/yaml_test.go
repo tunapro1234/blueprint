@@ -233,10 +233,17 @@ func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 		"claudeAccounts:\n  limits:\n    \" \": 40\n",
 		"claudeAccounts:\n  keepAliveModel: \"\"\n",
 		"claudeAccounts:\n  keepAliveModel: --bare\n",
+		"claudeAccounts:\n  switchPrefer: sooner\n",
 	} {
 		if _, err := yamlConfig(t, "config.yaml", bad); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
+	}
+	if c, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  switchPrefer: room\n"); err != nil || c.ClaudeAccounts.SwitchPrefer != "room" {
+		t.Fatalf("switchPrefer override=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	if DefaultClaudeAccounts().SwitchPrefer != "soonest-reset" {
+		t.Fatalf("default switchPrefer=%q", DefaultClaudeAccounts().SwitchPrefer)
 	}
 	c, err = yamlConfig(t, "config.yaml", "claudeAccounts:\n  keepAlive: true\n  keepAliveModel: sonnet\n  limits:\n    huseyin: 40\n    \"4\": 35\n")
 	if err != nil || !c.ClaudeAccounts.KeepAlive || c.ClaudeAccounts.KeepAliveModel != "sonnet" || !reflect.DeepEqual(c.ClaudeAccounts.Limits, map[string]int{"huseyin": 40, "4": 35}) || c.ClaudeAccounts.AutoSwitch {

@@ -94,6 +94,10 @@ type ClaudeAccountsConfig struct {
 	Limits          map[string]int `json:"limits,omitempty" yaml:"limits,omitempty"`
 	KeepAlive       bool           `json:"keepAlive" yaml:"keepAlive"`
 	KeepAliveModel  string         `json:"keepAliveModel" yaml:"keepAliveModel"`
+	// SwitchPrefer picks the auto-switch target: "soonest-reset" (the default)
+	// drains the account whose five-hour window resets soonest; "room" picks
+	// the account with the most room left under its limit.
+	SwitchPrefer string `json:"switchPrefer" yaml:"switchPrefer"`
 }
 
 // LimitPercents returns Limits as percentages for the account policy, or nil
@@ -111,7 +115,7 @@ func (c ClaudeAccountsConfig) LimitPercents() map[string]float64 {
 
 // DefaultClaudeAccounts is the claudeAccounts block used when none is set.
 func DefaultClaudeAccounts() ClaudeAccountsConfig {
-	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku"}
+	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku", SwitchPrefer: "soonest-reset"}
 }
 
 // BarConfig controls which metrics appear in the tmux status bar and their order.
@@ -219,6 +223,7 @@ type claudeAccountsOverrides struct {
 	Limits          *map[string]int `json:"limits" yaml:"limits"`
 	KeepAlive       *bool           `json:"keepAlive" yaml:"keepAlive"`
 	KeepAliveModel  *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
+	SwitchPrefer    *string         `json:"switchPrefer" yaml:"switchPrefer"`
 }
 
 type lifecycleOverrides struct {
@@ -596,6 +601,9 @@ func apply(result *Config, values overrides) {
 		if accounts.KeepAliveModel != nil {
 			result.ClaudeAccounts.KeepAliveModel = *accounts.KeepAliveModel
 		}
+		if accounts.SwitchPrefer != nil {
+			result.ClaudeAccounts.SwitchPrefer = *accounts.SwitchPrefer
+		}
 	}
 	if values.Windows != nil {
 		result.Windows = *values.Windows
@@ -625,6 +633,11 @@ func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 	}
 	if strings.TrimSpace(value.KeepAliveModel) == "" || strings.HasPrefix(strings.TrimSpace(value.KeepAliveModel), "-") {
 		return fmt.Errorf("keepAliveModel must name a Claude model")
+	}
+	switch value.SwitchPrefer {
+	case "", "room", "soonest-reset":
+	default:
+		return fmt.Errorf("switchPrefer must be \"room\" or \"soonest-reset\"")
 	}
 	return nil
 }

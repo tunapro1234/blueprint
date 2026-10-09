@@ -113,6 +113,15 @@ func (u *Usage) Max(now time.Time) (value float64, ok bool) {
 	return value, ok
 }
 
+// FiveHourReset is when the five-hour window next resets, or the zero time
+// when there is no known five-hour window (an idle account has none).
+func (u *Usage) FiveHourReset() time.Time {
+	if u == nil || u.FiveHour == nil {
+		return time.Time{}
+	}
+	return u.FiveHour.ResetsAt
+}
+
 // Usage fetch backoff when the server gives no Retry-After.
 const (
 	backoffBase = time.Minute

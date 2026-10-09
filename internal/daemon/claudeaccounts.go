@@ -62,6 +62,7 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 				Threshold: float64(accounts.Threshold),
 				Cooldown:  time.Duration(accounts.CooldownMinutes) * time.Minute,
 				Limits:    accounts.LimitPercents(),
+				Prefer:    accounts.SwitchPrefer,
 			},
 			PollEvery: time.Duration(accounts.PollMinutes) * time.Minute,
 			MaxPolls:  1,

@@ -334,3 +334,57 @@ func TestDecideAndStrategiesHonourPerAccountLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestSoonestResetStrategy(t *testing.T) {
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	// slotAt builds a slot whose five-hour window has a given utilization and
+	// reset time; a negative reset-hours means no known window.
+	slotAt := func(n int, alias string, five, resetHours float64) Slot {
+		s := Slot{Number: n, AccountUUID: fmt.Sprint("a", n), Alias: alias}
+		w := &Window{Utilization: five}
+		if resetHours >= 0 {
+			w.ResetsAt = now.Add(time.Duration(resetHours * float64(time.Hour)))
+		}
+		s.LastUsage = &UsageCache{Usage: &Usage{FiveHour: w}}
+		return s
+	}
+	// Active slot 1 is at threshold; the three candidates differ in both room
+	// and reset so the two policies pick different targets. Slot 3 has the most
+	// room (least usage); slot 2 resets soonest.
+	slots := []Slot{
+		slotAt(1, "team", 95, 2),
+		slotAt(2, "azra", 50, 1),    // soonest reset, least room
+		slotAt(3, "huseyin", 10, 3), // most room, latest reset
+		slotAt(4, "cerci", 30, 2),
+	}
+	old := AutoState{LastSwitchAt: now.Add(-time.Hour)}
+
+	roomPolicy := AutoPolicy{Threshold: 90}
+	if d := Decide(&Accounts{Slots: slots}, 1, old, roomPolicy, now); d.Action != AutoSwitch || d.To != 3 {
+		t.Fatalf("room policy should pick the most-room slot 3: %+v", d)
+	}
+	soonest := AutoPolicy{Threshold: 90, Prefer: StrategySoonestReset}
+	if d := Decide(&Accounts{Slots: slots}, 1, old, soonest, now); d.Action != AutoSwitch || d.To != 2 {
+		t.Fatalf("soonest-reset policy should pick the soonest-reset slot 2: %+v", d)
+	}
+
+	// candidatesFor follows the same ordering: soonest reset first.
+	d := Decide(&Accounts{Slots: slots}, 1, old, soonest, now)
+	cands := candidatesFor(&Accounts{Slots: slots}, d, soonest, now)
+	if len(cands) == 0 || cands[0] != 2 {
+		t.Fatalf("soonest-reset candidates should lead with slot 2: %v", cands)
+	}
+
+	// strategyCandidates orders usable accounts by reset, unknown-reset last.
+	order := []Slot{
+		slotAt(1, "team", 10, 3),
+		slotAt(2, "azra", 10, 1),
+		slotAt(3, "huseyin", 10, -1), // no window: sorts last
+		slotAt(4, "cerci", 10, 2),
+	}
+	got := strategyCandidates(&Accounts{Slots: order, Active: 9}, &liveLogin{}, StrategySoonestReset, nil, now)
+	want := []int{2, 4, 1, 3}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("soonest-reset order = %v, want %v", got, want)
+	}
+}

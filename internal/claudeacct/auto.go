@@ -28,6 +28,10 @@ type AutoPolicy struct {
 	// Limits caps single accounts below the threshold. Keys are a slot
 	// number, an alias or an email; values are utilization percentages.
 	Limits map[string]float64
+	// Prefer orders the eligible targets. StrategySoonestReset picks the
+	// account whose five-hour window resets soonest; any other value (the
+	// default) picks the account with the most room left under its limit.
+	Prefer string
 }
 
 // LimitFor is the utilization at which a slot counts as used up: the
@@ -133,11 +137,13 @@ type rankedTarget struct {
 	n     int
 	value float64
 	room  float64
+	reset time.Time
 }
 
-// rankTargets lists the usable accounts other than from that are below
-// their own limit and have at least AutoHysteresis more room than the
-// active account, most room first.
+// rankTargets lists the usable accounts other than from that are below their
+// own limit and have at least AutoHysteresis more room than the active
+// account. They are ordered by the policy: soonest five-hour reset first for
+// StrategySoonestReset, otherwise most room first.
 func rankTargets(accounts *Accounts, from int, activeRoom float64, policy AutoPolicy, now time.Time) []rankedTarget {
 	var list []rankedTarget
 	for _, s := range accounts.Slots {
@@ -152,9 +158,18 @@ func rankTargets(accounts *Accounts, from int, activeRoom float64, policy AutoPo
 		if room <= 0 || room < activeRoom+AutoHysteresis {
 			continue
 		}
-		list = append(list, rankedTarget{s.Number, value, room})
+		list = append(list, rankedTarget{n: s.Number, value: value, room: room, reset: slotUsage(s).FiveHourReset()})
 	}
-	sort.SliceStable(list, func(i, j int) bool { return list[i].room > list[j].room })
+	if policy.Prefer == StrategySoonestReset {
+		sort.SliceStable(list, func(i, j int) bool {
+			if !list[i].reset.Equal(list[j].reset) {
+				return soonestResetLess(list[i].reset, list[j].reset)
+			}
+			return list[i].room > list[j].room
+		})
+	} else {
+		sort.SliceStable(list, func(i, j int) bool { return list[i].room > list[j].room })
+	}
 	return list
 }
 

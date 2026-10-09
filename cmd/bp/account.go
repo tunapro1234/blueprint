@@ -22,7 +22,7 @@ const accountUsage = `usage:
   bp account add [--slot N] [--alias A]
   bp account list [--json] [--refresh]
   bp account status [--json]
-  bp account switch [N|email|alias] [--strategy best|next-available] [--dry-run]
+  bp account switch [N|email|alias] [--strategy best|next-available|soonest-reset] [--dry-run]
   bp account remove N
   bp account alias N A | bp account alias N --unset
   bp account disable N | bp account enable N
@@ -248,7 +248,11 @@ func (a *app) accountStatus(m *claudeacct.Manager, args []string) error {
 	if cfg.AutoSwitch {
 		mode = "on"
 	}
-	fmt.Fprintf(a.out, "auto switch: %s (threshold %d%%, cooldown %dm, poll every %dm)\n", mode, cfg.Threshold, cfg.CooldownMinutes, cfg.PollMinutes)
+	prefer := cfg.SwitchPrefer
+	if prefer == "" {
+		prefer = "room"
+	}
+	fmt.Fprintf(a.out, "auto switch: %s (threshold %d%%, cooldown %dm, poll every %dm, prefer %s)\n", mode, cfg.Threshold, cfg.CooldownMinutes, cfg.PollMinutes, prefer)
 	if len(cfg.Limits) > 0 {
 		keys := make([]string, 0, len(cfg.Limits))
 		for key := range cfg.Limits {
@@ -283,7 +287,7 @@ func (a *app) accountSwitch(m *claudeacct.Manager, args []string) error {
 	}
 	opts := claudeacct.SwitchOptions{Strategy: flags["--strategy"], DryRun: flags["--dry-run"] != "", Cooldown: a.accountCooldown(), Limits: a.config.ClaudeAccounts.LimitPercents()}
 	if _, given := flags["--strategy"]; given && opts.Strategy == "" {
-		return errors.New("--strategy needs best or next-available")
+		return errors.New("--strategy needs best, next-available or soonest-reset")
 	}
 	if len(positional) == 1 {
 		opts.Selector = positional[0]
@@ -385,7 +389,7 @@ func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
 		return errors.New(accountUsage)
 	}
 	cfg := a.config.ClaudeAccounts
-	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents()}
+	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer}
 	if text, ok := flags["--threshold"]; ok {
 		value, err := strconv.ParseFloat(strings.TrimSuffix(text, "%"), 64)
 		if err != nil || value <= 0 || value > 100 {

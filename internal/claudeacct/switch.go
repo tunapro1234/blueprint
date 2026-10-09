@@ -16,6 +16,11 @@ const (
 	StrategyRotation      = ""
 	StrategyBest          = "best"
 	StrategyNextAvailable = "next-available"
+	// StrategySoonestReset prefers the usable account whose five-hour window
+	// resets soonest: draining the window that refreshes first wastes the
+	// least capacity and, because keepalive staggers the resets evenly, cycles
+	// through the accounts in reset order so each one's load stays low.
+	StrategySoonestReset = "soonest-reset"
 )
 
 // SwitchOptions selects the target of a switch.
@@ -48,9 +53,9 @@ var ErrNoTarget = errors.New("no other usable stored account to switch to")
 // Switch activates another stored account for Claude Code.
 func (m *Manager) Switch(ctx context.Context, opts SwitchOptions) (SwitchResult, error) {
 	switch opts.Strategy {
-	case StrategyRotation, StrategyBest, StrategyNextAvailable:
+	case StrategyRotation, StrategyBest, StrategyNextAvailable, StrategySoonestReset:
 	default:
-		return SwitchResult{}, fmt.Errorf("unknown strategy %q (use best or next-available)", opts.Strategy)
+		return SwitchResult{}, fmt.Errorf("unknown strategy %q (use best, next-available or soonest-reset)", opts.Strategy)
 	}
 	if opts.Selector != "" && opts.Strategy != "" {
 		return SwitchResult{}, errors.New("give a slot or a strategy, not both")
@@ -202,6 +207,8 @@ func rotation(accounts *Accounts, live *liveLogin) []Slot {
 //     without usage come last.
 //   - next-available: rotation order, skipping accounts known to be at
 //     their cap in either window.
+//   - soonest-reset: by soonest five-hour reset (unknown resets last),
+//     skipping accounts known to be at their cap.
 func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, limits map[string]float64, now time.Time) []int {
 	order := rotation(accounts, live)
 	capOf := func(s Slot) float64 {
@@ -239,12 +246,42 @@ func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, li
 			}
 			out = append(out, s.Number)
 		}
+	case StrategySoonestReset:
+		type timed struct {
+			n     int
+			reset time.Time
+		}
+		var list []timed
+		for _, s := range order {
+			if value, known := slotUsage(s).Max(now); known && value >= capOf(s) {
+				continue
+			}
+			list = append(list, timed{s.Number, slotUsage(s).FiveHourReset()})
+		}
+		sort.SliceStable(list, func(i, j int) bool { return soonestResetLess(list[i].reset, list[j].reset) })
+		for _, t := range list {
+			out = append(out, t.n)
+		}
 	default:
 		for _, s := range order {
 			out = append(out, s.Number)
 		}
 	}
 	return out
+}
+
+// soonestResetLess orders reset times so the soonest known reset comes first
+// and an unknown reset (the zero time, an account with no running window)
+// comes last.
+func soonestResetLess(a, b time.Time) bool {
+	aKnown, bKnown := !a.IsZero(), !b.IsZero()
+	if aKnown != bKnown {
+		return aKnown
+	}
+	if aKnown && !a.Equal(b) {
+		return a.Before(b)
+	}
+	return false
 }
 
 func slotUsage(s Slot) *Usage {

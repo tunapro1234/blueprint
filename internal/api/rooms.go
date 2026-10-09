@@ -35,6 +35,8 @@ type RoomPost struct {
 	Text      string  `json:"text"`
 	TS        float64 `json:"ts"`
 	Untrusted bool    `json:"untrusted,omitempty"`
+	// Source describes an external author for framing.
+	Source *FrameSource `json:"source,omitempty"`
 }
 
 // PostResult is a stored post and its per-member deliveries.
@@ -223,7 +225,7 @@ func (c *Core) Post(ctx context.Context, caller Caller, name, text string) (Post
 		return PostResult{}, fmt.Errorf("%w: join room %s before posting", ErrForbidden, name)
 	}
 	post := RoomPost{ID: randomID("rp"), Room: name, From: caller.Label(), Author: caller.Name,
-		Text: text, TS: float64(c.now().UnixNano()) / 1e9, Untrusted: caller.Remote}
+		Text: text, TS: float64(c.now().UnixNano()) / 1e9, Untrusted: caller.Remote, Source: sourceOf(caller, name)}
 	history := c.roomHistory(name)
 	if err := withLock(history, func() error { return appendJSONL(history, post) }); err != nil {
 		return PostResult{}, err
@@ -284,7 +286,11 @@ func (c *Core) RoomRead(caller Caller, name, after string, limit int) (Room, []R
 		posts = posts[:limit]
 	}
 	for i := range posts {
-		posts[i].Text = c.render(posts[i].Untrusted, posts[i].From, posts[i].Text)
+		text, err := c.render(posts[i].Untrusted, posts[i].Source, posts[i].From, posts[i].ID, posts[i].Text)
+		if err != nil {
+			return Room{}, nil, err
+		}
+		posts[i].Text = text
 	}
 	return room, posts, nil
 }

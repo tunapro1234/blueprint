@@ -25,6 +25,8 @@ type BoardEntry struct {
 	Version   int    `json:"version"`
 	UpdatedAt string `json:"updatedAt"`
 	Untrusted bool   `json:"untrusted,omitempty"`
+	// Source describes an external author for framing.
+	Source *FrameSource `json:"source,omitempty"`
 }
 
 // BoardChange is one line of a board's history.
@@ -105,22 +107,33 @@ func (c *Core) BoardGet(board, key, prefix string) ([]BoardEntry, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w: key %q on board %s", ErrNotFound, key, board)
 		}
-		return []BoardEntry{c.renderEntry(entry)}, nil
+		entry, err := c.renderEntry(board, entry)
+		if err != nil {
+			return nil, err
+		}
+		return []BoardEntry{entry}, nil
 	}
 	out := []BoardEntry{}
 	for k, entry := range entries {
 		if strings.HasPrefix(k, prefix) {
-			out = append(out, c.renderEntry(entry))
+			entry, err := c.renderEntry(board, entry)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, entry)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out, nil
 }
 
-// renderEntry frames an untrusted value for the reader; values are stored raw.
-func (c *Core) renderEntry(entry BoardEntry) BoardEntry {
-	entry.Value = c.render(entry.Untrusted, entry.Author, entry.Value)
-	return entry
+// renderEntry frames an external value for the reader; values are stored
+// raw. The channel is board/key@version, stable for one stored value.
+func (c *Core) renderEntry(board string, entry BoardEntry) (BoardEntry, error) {
+	value, err := c.render(entry.Untrusted, entry.Source, entry.Author,
+		fmt.Sprintf("%s/%s@%d", board, entry.Key, entry.Version), entry.Value)
+	entry.Value = value
+	return entry, err
 }
 
 // BoardPut writes key. expect < 0 writes unconditionally; expect == 0
@@ -170,7 +183,7 @@ func (c *Core) boardPut(caller Caller, board, key, value string, expect int, del
 			return invalid("board %s is full (%d keys)", board, maxBoardKeys)
 		}
 		out = BoardEntry{Key: key, Value: value, Author: caller.Label(), Version: current.Version + 1,
-			UpdatedAt: c.now().UTC().Format(time.RFC3339Nano), Untrusted: caller.Remote}
+			UpdatedAt: c.now().UTC().Format(time.RFC3339Nano), Untrusted: caller.Remote, Source: sourceOf(caller, "")}
 		op := "put"
 		if del {
 			op = "delete"
@@ -199,13 +212,22 @@ func (c *Core) BoardHistory(board, key string, limit int) ([]BoardChange, error)
 	changes := []BoardChange{}
 	err = readJSONL(c.boardHistory(board), func(change BoardChange) bool {
 		if key == "" || change.Key == key {
-			change.BoardEntry = c.renderEntry(change.BoardEntry)
 			changes = append(changes, change)
 		}
 		return true
 	})
+	if err != nil {
+		return nil, err
+	}
 	if len(changes) > limit {
 		changes = changes[len(changes)-limit:]
 	}
-	return changes, err
+	for i := range changes {
+		entry, err := c.renderEntry(board, changes[i].BoardEntry)
+		if err != nil {
+			return nil, err
+		}
+		changes[i].BoardEntry = entry
+	}
+	return changes, nil
 }

@@ -126,19 +126,43 @@ func (c *Core) audit(ev audit.Event) {
 	}
 }
 
-// originTransport is the msgq Origin transport for an API caller:
-// bp-api/<transport>. guard.LocalTransports lists bp-api/http, bp-api/socket
-// and bp-api/mcp as local; every other one (bp-api/gateway) is framed at
-// delivery by guard.NeedsFrame.
-func originTransport(transport string) string { return "bp-api/" + transport }
-
-// render applies the shared Framer to stored external text as an inbox,
-// room or board read hands it to an agent: these stores are read directly,
-// not delivered through the queue. Text is always stored raw.
-func (c *Core) render(untrusted bool, source, text string) string {
-	if !untrusted || text == "" || c.Frame == nil {
-		return text
+// originTransport is the msgq Origin transport for an API caller. Local
+// callers are bp-api/http, bp-api/socket or bp-api/mcp, which
+// guard.LocalTransports treats as local. A remote (gateway) caller is mcp,
+// and guard.NeedsFrame frames that at delivery.
+func originTransport(caller Caller) string {
+	if caller.Remote {
+		return "mcp"
 	}
+	return "bp-api/" + caller.Transport
+}
+
+// sourceOf describes a remote caller for framing; nil for a local caller.
+func sourceOf(caller Caller, room string) *FrameSource {
+	if !caller.Remote {
+		return nil
+	}
+	return &FrameSource{Transport: originTransport(caller), Peer: caller.Transport,
+		PeerID: caller.Transport + "/" + caller.Name, AgentClaim: caller.Name, Room: room}
+}
+
+// render applies the Framer to stored external text as an inbox, room or
+// board read hands it to an agent: these stores are read directly, not
+// delivered through the queue. Text is always stored raw. channel is the
+// stable record id. A record marked untrusted without a source (older
+// records) is framed as an external MCP caller.
+func (c *Core) render(untrusted bool, src *FrameSource, from, channel, text string) (string, error) {
+	if (!untrusted && src == nil) || text == "" {
+		return text, nil
+	}
+	if c.Frame == nil {
+		return "", errors.New("no framer configured for external text")
+	}
+	source := FrameSource{Transport: "mcp", AgentClaim: from}
+	if src != nil {
+		source = *src
+	}
+	source.Channel = channel
 	return c.Frame.Frame(source, text)
 }
 
@@ -327,7 +351,7 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	if target.Kind == KindInbox {
 		item, err := c.inbox().add(InboxItem{ID: randomID("ib"), To: req.To, From: from, Text: body,
 			TS: float64(c.now().UnixNano()) / 1e9, ContextID: req.ContextID, Room: req.Room,
-			Untrusted: caller.Remote, Key: key})
+			Untrusted: caller.Remote, Source: sourceOf(caller, req.Room), Key: key})
 		if err != nil {
 			return SendResult{}, err
 		}
@@ -342,10 +366,10 @@ func (c *Core) send(ctx context.Context, caller Caller, req SendRequest) (SendRe
 	// it came from, so the shared frame applies at delivery. A remote caller
 	// is external, with its gateway as the peer alias. It is token-
 	// authenticated, but its name is never verified.
-	origin := &msgq.Origin{Transport: originTransport(caller.Transport), ChannelID: messageID,
+	origin := &msgq.Origin{Transport: originTransport(caller), ChannelID: messageID,
 		AgentClaim: caller.Name, AgentVerified: caller.Verified && !caller.Remote, PeerAuthenticated: true}
-	if caller.Remote {
-		origin.PeerAlias = caller.Transport
+	if src := sourceOf(caller, req.Room); src != nil {
+		origin.PeerAlias, origin.PeerID = src.Peer, src.PeerID
 	}
 	if c.Queue == nil {
 		return SendResult{}, errors.New("message queue unavailable")
@@ -493,7 +517,9 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 	if !identity.ValidName(agent) {
 		return InboxResult{}, invalid("invalid agent name")
 	}
-	items, remaining, err := c.inbox().take(agent, limit, peek)
+	items, remaining, err := c.inbox().take(agent, limit, peek, func(item InboxItem) (string, error) {
+		return c.render(item.Untrusted, item.Source, item.From, item.ID, item.Text)
+	})
 	if err != nil {
 		return InboxResult{}, err
 	}
@@ -506,9 +532,6 @@ func (c *Core) Inbox(caller Caller, agent string, limit int, peek bool) (InboxRe
 			ids[i] = item.ID
 		}
 		c.audit(audit.Event{Kind: "api.inbox.read", Actor: caller.Label(), Target: agent, ID: strings.Join(ids, ","), Fields: map[string]string{"transport": caller.Transport}})
-	}
-	for i := range items {
-		items[i].Text = c.render(items[i].Untrusted, items[i].From, items[i].Text)
 	}
 	return InboxResult{Agent: agent, Messages: items, Remaining: remaining}, nil
 }

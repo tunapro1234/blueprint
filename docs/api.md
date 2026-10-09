@@ -127,18 +127,20 @@ call `bp_register`.
   queue's replay check for a retried `messageId`.
   - A remote (gateway) caller is external, using the P2P inbound pattern.
     Its sender is `external:<client>@gateway`, and the queue Origin is
-    `{Transport: "bp-api/gateway", PeerAlias: "gateway", AgentClaim: <client>,
-    AgentVerified: false}`.
+    `{Transport: "mcp", PeerAlias: "gateway", PeerID: "gateway/<client>",
+    AgentClaim: <client>, AgentVerified: false}`.
   - Local callers get `Transport: "bp-api/http"`, `"bp-api/socket"` or
-    `"bp-api/mcp"`. Those are `guard.LocalTransports`; every other origin
-    transport is framed at delivery (`guard.NeedsFrame`).
-  - The shared delivery-time frame (`guard.Frame`, W6) applies to queue
-    deliveries.
-  - Inbox items, room posts and board values are read directly rather than
-    delivered, so the same `Framer` (`Frame(source, text string) string`)
-    is applied when they are read.
-  - Until bp-guard's implementation is wired in, the framer is a
-    passthrough (TODO W6).
+    `"bp-api/mcp"`, which are `guard.LocalTransports`. msgq frames every
+    other origin at delivery (`guard.NeedsFrame`; see
+    docs/security/guard-api.md on feat/guard).
+  - Inbox items, room posts and board values are read directly, not
+    delivered, so they are framed when read: `Framer.Frame(FrameSource,
+    text) (string, error)`. `FrameSource` mirrors `guard.Source`, and its
+    Channel is the stable record id (the item id, the post id, or
+    `board/key@version`).
+  - A framing error fails the read, and inbox items stay unread. Raw
+    external text is never returned.
+  - Until guard's Framer is wired in, the framer is a passthrough (TODO W6).
 - **States.** Message states come from `msgq.DeliveryState`, the same
   mapping P2P uses: accepted, unverified, delivered or failed. A canceled
   message is failed with a `canceled …` reason, and A2A shows it as

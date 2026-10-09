@@ -35,8 +35,10 @@ type InboxItem struct {
 	Room      string  `json:"room,omitempty"`
 	// Untrusted marks text that crossed a trust boundary. It is stored raw and
 	// framed when the inbox is read.
-	Untrusted bool    `json:"untrusted,omitempty"`
-	ReadAt    float64 `json:"readAt,omitempty"`
+	Untrusted bool `json:"untrusted,omitempty"`
+	// Source describes an external sender for framing.
+	Source *FrameSource `json:"source,omitempty"`
+	ReadAt float64      `json:"readAt,omitempty"`
 	// Key is the idempotency key the item was stored under, so a retried send
 	// returns the same item instead of a second copy.
 	Key string `json:"key,omitempty"`
@@ -143,9 +145,11 @@ func (s inboxStore) add(item InboxItem) (InboxItem, error) {
 	return item, err
 }
 
-// take returns up to limit unread items, oldest first. Unless peek is set
-// they are marked read, and read items older than readRetention are dropped.
-func (s inboxStore) take(agent string, limit int, peek bool) ([]InboxItem, int, error) {
+// take returns up to limit unread items, oldest first, with their text
+// passed through render. Unless peek is set they are marked read, and read
+// items older than readRetention are dropped. A render error fails the whole
+// read before anything is marked, so no item is lost or returned unframed.
+func (s inboxStore) take(agent string, limit int, peek bool, render func(InboxItem) (string, error)) ([]InboxItem, int, error) {
 	var out []InboxItem
 	remaining := 0
 	path := s.path(agent)
@@ -162,11 +166,18 @@ func (s inboxStore) take(agent string, limit int, peek bool) ([]InboxItem, int, 
 		for _, item := range items {
 			if item.ReadAt == 0 {
 				if limit <= 0 || len(out) < limit {
+					text, err := render(item)
+					if err != nil {
+						out = nil
+						return err
+					}
 					if !peek {
 						item.ReadAt = stamp
 						changed = true
 					}
-					out = append(out, item)
+					shown := item
+					shown.Text = text
+					out = append(out, shown)
 				} else {
 					remaining++
 				}

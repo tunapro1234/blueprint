@@ -4,6 +4,8 @@
 package delivery
 
 import (
+	"errors"
+
 	"blueprint/internal/guard"
 	"blueprint/internal/msgq"
 )
@@ -24,9 +26,7 @@ func Renderer(stateDir string) (func(msgq.Message) (string, error), error) {
 		return nil, err
 	}
 	return func(m msgq.Message) (string, error) {
-		// The decision is NeedsFrame(transport), not whether the peer
-		// authenticated: an authenticated P2P peer is still outside this machine.
-		if m.Origin == nil || !guard.NeedsFrame(m.Origin.Transport) {
+		if !External(m) {
 			return m.Msg, nil
 		}
 		framed, err := framer.Envelope(m.From, guard.Source{
@@ -41,4 +41,28 @@ func Renderer(stateDir string) (func(msgq.Message) (string, error), error) {
 		}
 		return framed.Text, nil
 	}, nil
+}
+
+// External reports whether a record's Origin crossed a trust boundary and so
+// must be framed. The decision is NeedsFrame(transport), not whether the peer
+// authenticated: an authenticated P2P peer is still outside this machine. It is
+// wired as msgq.Queue.FrameExternal so owner-facing notices can refuse to quote
+// an external body raw (bp-guard D1), and it is the predicate Renderer uses.
+func External(m msgq.Message) bool {
+	return m.Origin != nil && guard.NeedsFrame(m.Origin.Transport)
+}
+
+// FailClosedRenderer is installed when the guard framer cannot be loaded (a
+// missing or unreadable frame key, a full disk, the wrong owner). It delivers
+// local records unchanged but refuses every external record with an error, so
+// dispatch holds it in the queue — visible in bp qstat — instead of pasting
+// attacker text unframed. Framing failing OPEN was bp-guard D2. The decision
+// matches Renderer's, so turning framing on later reframes the held records.
+func FailClosedRenderer() func(msgq.Message) (string, error) {
+	return func(m msgq.Message) (string, error) {
+		if !External(m) {
+			return m.Msg, nil
+		}
+		return "", errors.New("inbound framing unavailable: guard framer failed to load")
+	}
 }

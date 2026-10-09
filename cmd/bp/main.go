@@ -33,6 +33,7 @@ import (
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/audit"
 	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/identity"
@@ -2604,8 +2605,15 @@ func (a *app) prepareDispatch() {
 		// pasted. The same framer key (under StateDir) backs the daemon, so a
 		// record the daemon and a synchronous bp msg both touch frames identically.
 		if a.config.StateDir != "" {
+			a.queue.FrameExternal = delivery.External
 			if render, err := delivery.Renderer(a.config.StateDir); err != nil {
-				fmt.Fprintf(a.err, "bp: inbound framing OFF: %v; external messages will be delivered unframed\n", err)
+				// Fail CLOSED: hold external records instead of pasting them raw,
+				// and record the gap in the owner's audit log. (bp-guard D2.)
+				a.queue.Render = delivery.FailClosedRenderer()
+				fmt.Fprintf(a.err, "bp: inbound framing unavailable: %v; external messages are HELD, not delivered unframed\n", err)
+				if auditErr := audit.Append(a.config.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+					fmt.Fprintf(a.err, "bp: could not record guard.frame.unavailable: %v\n", auditErr)
+				}
 			} else {
 				a.queue.Render = render
 			}

@@ -22,6 +22,7 @@ import (
 	"blueprint/internal/codexrpc"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
+	"blueprint/internal/audit"
 	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/lowprio"
@@ -74,8 +75,15 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	// if the key cannot be loaded, delivery runs unframed and says so loudly
 	// rather than refusing to start.
 	if cfg.StateDir != "" {
+		queue.FrameExternal = delivery.External
 		if render, err := delivery.Renderer(cfg.StateDir); err != nil {
-			logger.Printf("WARNING: inbound framing OFF: %v; external messages will be delivered unframed", err)
+			// Fail CLOSED: hold external records instead of pasting them raw, and
+			// record the gap in the audit log the owner reads. (bp-guard D2.)
+			queue.Render = delivery.FailClosedRenderer()
+			logger.Printf("WARNING: inbound framing unavailable: %v; external messages are HELD, not delivered unframed", err)
+			if auditErr := audit.Append(cfg.StateDir, audit.Event{Kind: "guard.frame.unavailable", Severity: audit.Alert, Reason: err.Error()}); auditErr != nil {
+				logger.Printf("WARNING: could not record guard.frame.unavailable: %v", auditErr)
+			}
 		} else {
 			queue.Render = render
 		}

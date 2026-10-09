@@ -2247,15 +2247,15 @@ func TestVanishedUnverifiedPasteStopsBlockingAndStopsAdvisingEnter(t *testing.T)
 // notices in one evening described situations already fixed by hand, and the
 // noise hid the one real hanging paste (probot-outreach, 2026-08-23).
 func TestNoticeSaysWhetherThePasteIsStillHanging(t *testing.T) {
-	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, true, false)
+	hanging := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, true, false, false)
 	if !strings.Contains(hanging, "STILL HANGING") {
 		t.Fatalf("a hanging paste was not announced as such: %q", hanging)
 	}
-	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, false, false)
+	gone := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging"}, false, false, false)
 	if !strings.Contains(gone, "MAY HAVE RESOLVED LATER") {
 		t.Fatalf("a resolved case was not marked as such: %q", gone)
 	}
-	torn := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging", Reason: damagedPasteReason}, false, true)
+	torn := noticeText(Message{ID: "q1", To: "kavram-main", Msg: "message still hanging", Reason: damagedPasteReason}, false, true, false)
 	if !strings.Contains(torn, "TORN COPY STILL PRESENT") || strings.Contains(torn, "will clear") || strings.Contains(torn, "will be resent") {
 		t.Fatalf("torn notice promises recovery or hides the fragment: %q", torn)
 	}

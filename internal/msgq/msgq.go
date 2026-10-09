@@ -127,6 +127,16 @@ func (m Message) Wire() string {
 	return m.Msg
 }
 
+// frameExternal reports whether a record crossed a trust boundary, using the
+// injected FrameExternal predicate. A queue with no guard wired (predicate nil)
+// treats every record as local, so notices keep their old raw-head behaviour.
+func (q *Queue) frameExternal(m Message) bool {
+	if q.FrameExternal == nil {
+		return false
+	}
+	return q.FrameExternal(m)
+}
+
 // SenderEvidence is captured by the local sending bp, separate from remote
 // receiver-authored Origin. Context labels and thread claims confer no authority.
 type SenderEvidence struct {
@@ -197,11 +207,17 @@ type Queue struct {
 	// pasted into the pane. cmd/bp binds it to a guard framer so a record whose
 	// Origin crossed a trust boundary is delivered wrapped in an untrusted-input
 	// frame, while a local record is returned unchanged. It is called once per
-	// record per dispatch pass in pendingRecords; a non-nil error holds the
-	// record (it becomes a badRecord) rather than pasting it raw. A nil Render
-	// leaves every record's wire empty, so Wire() falls back to Msg and the queue
-	// behaves exactly as before.
+	// record per dispatch pass in pendingRecords; a non-nil error is carried on
+	// the record (renderErr) so dispatchRecord holds it and never pastes it raw,
+	// while the dedup and display readers still see it. A nil Render leaves every
+	// record's wire empty, so Wire() falls back to Msg and the queue behaves
+	// exactly as before.
 	Render func(Message) (string, error)
+	// FrameExternal reports whether a record's Origin crossed a trust boundary,
+	// i.e. the SAME decision Render makes, exposed as a plain predicate. It lets
+	// owner-facing notices refuse to quote an external body raw (bp-guard D1)
+	// without msgq importing guard. A nil predicate treats every record as local.
+	FrameExternal func(Message) bool
 	// PaneLock lets an in-process caller share its reentrant lock bookkeeping
 	// with queue dispatch. Standalone daemon queues leave it unset and use flock.
 	// Reentrancy is per process, so a caller that types from several goroutines
@@ -656,6 +672,14 @@ func englishStatus(status string) string {
 type record struct {
 	path string
 	Message
+	// renderErr holds a delivery-body render failure (framing could not run).
+	// The record still travels out of pendingRecords so the dedup and display
+	// readers see it — they read the raw Msg — and only dispatchRecord treats it
+	// as a reason to hold and never paste. Dropping it to a badRecord instead
+	// would hide it from the replay and local-duplicate scans (idempotent.go),
+	// which could then admit a second copy of a message that is really still
+	// pending. (bp-guard review D3.)
+	renderErr error
 }
 
 // badRecord is a pending file that could not be read. It is carried out of
@@ -703,17 +727,20 @@ func (q *Queue) pendingRecords() ([]record, []badRecord, error) {
 			continue
 		}
 		// Render the delivery body once, here, the single place dispatch reads
-		// records. A render failure holds the record as a badRecord so it is
-		// reported and never pasted raw; Dispatch keeps delivering the rest.
+		// records. A render failure is carried on the record (not dropped to a
+		// badRecord) so it stays visible to the dedup and display readers that
+		// also call pendingRecords; only dispatchRecord holds it and never
+		// pastes it raw. Dispatch keeps delivering the rest. (D3.)
+		rec := record{path: path, Message: message}
 		if q.Render != nil {
 			wire, rerr := q.Render(message)
 			if rerr != nil {
-				bad = append(bad, badRecord{path: path, err: fmt.Errorf("render delivery body: %w", rerr)})
-				continue
+				rec.renderErr = fmt.Errorf("render delivery body: %w", rerr)
+			} else {
+				rec.wire = wire
 			}
-			message.wire = wire
 		}
-		records = append(records, record{path: path, Message: message})
+		records = append(records, rec)
 	}
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].TS != records[j].TS {
@@ -1367,7 +1394,7 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 		q.update(path, message, report)
 		home := q.resolveNoticeHome(ctx, target, message.From, message.ID, report)
 		if home != "" {
-			if _, err := q.enqueueLocked(home, "bp", noticeText(message, hanging, torn), enqueueOptions{}); err != nil {
+			if _, err := q.enqueueLocked(home, "bp", noticeText(message, hanging, torn, q.frameExternal(message)), enqueueOptions{}); err != nil {
 				if report != nil {
 					report(fmt.Sprintf("msgq: sender notice for %s could not be delivered: %v", message.ID, err))
 				}
@@ -1424,7 +1451,7 @@ func paneTail(pane string, rows int) string {
 // fixed by hand (2026-08-23): "a signal that says something HAPPENED but not
 // whether it is still happening". Four stale notices hide the fifth real one, so
 // the state goes in the FIRST WORDS, where a glance finds it.
-func noticeText(message Message, stillHanging, stillTorn bool) string {
+func noticeText(message Message, stillHanging, stillTorn, external bool) string {
 	head := []rune(strings.TrimSpace(message.Msg))
 	if len(head) > noticeHeadRunes {
 		head = head[:noticeHeadRunes]
@@ -1444,6 +1471,24 @@ func noticeText(message Message, stillHanging, stillTorn bool) string {
 	result := "delivery was unverified"
 	if stillHanging || stillTorn || strings.HasPrefix(message.Reason, damagedPasteReason) || message.Reason == exhaustedReason {
 		result = "message was not delivered"
+	}
+	// An external record's body is attacker-controlled text that would otherwise
+	// reach the coordinator raw, unframed, under the trusted "bp:" label — the one
+	// place framing is bypassed. Withhold it: name only the peer (alias and Ed25519
+	// id are operator/crypto identifiers, never the remote's free text, and the
+	// claimed agent name is deliberately omitted) and point at bp qstat. (D1.)
+	if external {
+		src := "an outside peer"
+		if message.Origin != nil {
+			if message.Origin.PeerAlias != "" {
+				src = message.Origin.PeerAlias
+			}
+			if message.Origin.PeerID != "" {
+				src = strings.TrimSpace(src + " " + message.Origin.PeerID)
+			}
+		}
+		return fmt.Sprintf("bp: %s (message %s to %s, from %s — external, body withheld). %s. Inspect with bp peek %s; read the message with bp qstat %s.",
+			result, message.ID, message.To, src, state, message.To, message.ID)
 	}
 	return fmt.Sprintf("bp: %s (message %s to %s). %s. Inspect with bp peek %s. Start: %s",
 		result, message.ID, message.To, state, message.To, string(head))
@@ -1737,6 +1782,17 @@ func lines(records []record) ([]string, map[string][]record) {
 // "STOP/CANCEL" correction after the instruction it cancelled, and fifteen minutes of
 // silence would have been the cheaper failure by far.
 func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, line *lineState, report func(string)) {
+	// A record whose delivery body could not be rendered (framing failed) is
+	// held here, never pasted raw, and left visible in the queue with a reason.
+	// It travelled this far only so the dedup readers could still see it. (D3.)
+	if rec.renderErr != nil {
+		if report != nil {
+			report(fmt.Sprintf("msgq: %s held: %v", rec.ID, rec.renderErr))
+		}
+		q.remember(rec.path, rec.Message, "held: "+rec.renderErr.Error(), report)
+		line.block(rec.ID)
+		return
+	}
 	// Legacy records must not authorize Enter, cleanup, or a fresh paste.
 	err := messagetext.Validate(rec.Wire())
 	if err == nil {

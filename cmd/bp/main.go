@@ -2,6 +2,7 @@ package main
 
 import (
 	"blueprint/internal/messagetext"
+	"blueprint/internal/modules"
 	"bufio"
 	"bytes"
 	"context"
@@ -24,6 +25,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
 	bpcache "blueprint/internal/cache"
@@ -33,7 +35,6 @@ import (
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/daemon"
 	"blueprint/internal/dashboard"
-	"blueprint/internal/audit"
 	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/identity"
@@ -58,8 +59,11 @@ bp windows [--json] | bp windows watch
 bp focus <agent>              # focus the agent's compositor window
 bp color <agent> [--json|auto|color] # read HEX or set accent (blue, red, 0–255)
 bp whoami                     # sender identity and authority evidence (JSON)
-bp setup [--check|--disable] [--shell bash|zsh] [--wrappers]
-                              # --wrappers adds non-clobbering lush/rush helpers
+bp modules [--json]           # opt-in modules: sessions bar accounts wa ui monitor
+bp enable <module> [--force] [--dry-run] | bp disable <module> [--dry-run]
+                              # enable sessions [--shell bash|zsh] [--wrappers]
+bp setup [--check|--disable]  # bp's own config and book; changes nothing else
+bp uninstall [--purge [--yes]] [--dry-run] # remove what bp added; --purge also deletes its home
 bp onboard [--cli <command>] [--prepare] [-- arguments...]
 bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
@@ -284,6 +288,8 @@ func main() {
 		}
 		os.Exit(1)
 	}
+	// Records the modules an install from before modules already uses.
+	config = modules.Init(config)
 	a := &app{ctx: ctx, config: config, tmux: bptmux.New(), queue: msgq.New(config.MsgqRoot), out: os.Stdout, err: os.Stderr}
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -432,6 +438,16 @@ func (a *app) run(args []string) error {
 		return a.showBook(args[1:])
 	case "setup":
 		return a.localSetup(args[1:])
+	case "modules":
+		return a.modulesCommand(args[1:])
+	case "uninstall":
+		return a.uninstall(args[1:])
+	case "_install-record":
+		return a.installRecord(args[1:])
+	case "enable":
+		return a.moduleSwitch(true, args[1:])
+	case "disable":
+		return a.moduleSwitch(false, args[1:])
 	case "status":
 		return a.status(args[1:])
 	case "windows":
@@ -3682,6 +3698,9 @@ func (a *app) peek(args []string) error {
 }
 
 func (a *app) whatsapp(args []string) error {
+	if !a.moduleEnabled(modules.WA) {
+		return fmt.Errorf("WhatsApp is the wa module: run bp enable wa first")
+	}
 	if a.config.WAOutbox == "" {
 		return fmt.Errorf("wa is not configured on this machine")
 	}
@@ -4131,12 +4150,16 @@ func (a *app) daemon(args []string) error {
 	logger := log.New(a.err, "blueprint: ", log.LstdFlags)
 	service := daemon.New(logger, a.config)
 	a.startDaemonAPI(ctx, logger)
-	renderer := newBarRenderer(a, logger)
 	rendererDone := make(chan struct{})
-	go func() {
-		defer close(rendererDone)
-		renderer.run(ctx)
-	}()
+	if a.moduleEnabled(modules.Bar) {
+		renderer := newBarRenderer(a, logger)
+		go func() {
+			defer close(rendererDone)
+			renderer.run(ctx)
+		}()
+	} else {
+		close(rendererDone)
+	}
 	service.Run(ctx)
 	<-rendererDone
 	return nil

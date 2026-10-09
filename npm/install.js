@@ -161,7 +161,7 @@ async function main() {
   try {
     const result = await install();
     console.log(`Installed ${result.filename} (signature and SHA-256 verified).`);
-    console.log('Run bp setup, then bp onboard in a terminal to configure local agent sessions.');
+    console.log('Run bp setup to create bp\'s own config; it changes nothing else. Optional modules: bp modules. Guided setup: bp onboard.');
   } catch (error) {
     console.error(`bp installation failed: ${error.message}`);
     process.exitCode = 1;

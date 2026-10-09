@@ -23,6 +23,8 @@ Keep the initial inspection small: operating system, whether this appears to be 
 
 Explain what bp already provides: agent sessions, native CLI arguments/aliases, exit behavior, local message queues and activity guards, model/context/name observations where supported, colors, and YAML configuration. Prefer bp commands over editing agentbook directly. Inspect bp whoami before claiming authority; an uncertain identity must stay uncertain.
 
+Everything in bp that changes the user's environment is an opt-in module, and none is enabled by onboarding: run bp modules to see them (sessions: shell wrappers so agents survive a closed terminal; bar: tmux status bar; accounts: Claude account switching; wa: WhatsApp bridge; ui: local web interface). Explain the ones that fit this machine in a sentence each and ask the user which to enable. Enable only what the user chooses, with bp enable <module>; bp disable <module> undoes it.
+
 Write a concise MACHINE.md in this workspace describing this machine's confirmed integration, relevant paths and user-approved rules. If it already exists, preserve user content and propose or make only justified updates. Summarize recommended next steps before broad changes. Do not change model/effort, permissions, network services, ports, other agents' input or tmux global settings without an applicable user instruction. Do not delete history or old records.
 
 If Hyprland is detected, briefly offer optional bp color --json integration for window/pane accents, and a name-based agent-jump helper (sometimes called jump2a). First check whether the user already has such a helper; do not install a window-manager integration automatically. On other desktops, do not recommend Hyprland-specific changes.

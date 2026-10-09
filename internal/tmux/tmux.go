@@ -716,6 +716,14 @@ func (c *Client) PaneProcess(ctx context.Context, session string) (PaneProcess, 
 	return PaneProcess{}, fmt.Errorf("tmux pane process not found for %s", session)
 }
 
+// Exec runs one tmux command and returns its output. It exists for callers
+// such as internal/modules that need a generic command until internal/term
+// owns terminal access.
+func (c *Client) Exec(ctx context.Context, args ...string) (string, error) {
+	out, err := c.run(ctx, nil, args...)
+	return string(out), err
+}
+
 // Option reads one session option, empty when tmux has no value set for it.
 func (c *Client) Option(ctx context.Context, session, name string) (string, error) {
 	out, err := c.run(ctx, nil, "show-options", "-t", exactWindowTarget(session), "-v", name)

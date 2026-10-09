@@ -16,16 +16,17 @@ import (
 	"syscall"
 	"time"
 
+	"blueprint/internal/audit"
 	"blueprint/internal/book"
 	"blueprint/internal/buildinfo"
 	"blueprint/internal/cache"
 	"blueprint/internal/codexrpc"
 	"blueprint/internal/config"
 	"blueprint/internal/dashboard"
-	"blueprint/internal/audit"
 	"blueprint/internal/delivery"
 	"blueprint/internal/fed"
 	"blueprint/internal/lowprio"
+	"blueprint/internal/modules"
 	"blueprint/internal/msgq"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
@@ -121,13 +122,17 @@ func (s *Service) Run(ctx context.Context) {
 	s.startLoop(ctx, "agentbook-reconcile", 10*time.Second, time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "agentbook-reconcile", interval, func() error { return s.reconcileExitedAgents(run) })
 	})
-	s.startLoop(ctx, "keepalive", 30*time.Second, 2*time.Minute, func(run context.Context, interval time.Duration) {
-		s.tracked(run, "keepalive", interval, func() error { return s.keepalive(run) })
-	})
+	// Reopening the coordinator after it exits is the sessions module's.
+	if s.module(modules.Sessions) {
+		s.startLoop(ctx, "keepalive", 30*time.Second, 2*time.Minute, func(run context.Context, interval time.Duration) {
+			s.tracked(run, "keepalive", interval, func() error { return s.keepalive(run) })
+		})
+	}
 	// Legacy usage-policy can type /model and /effort directly into tmux.
 	// Model changes belong to the operator; bp policy status remains available.
 
-	if path, ok := s.usageBinary("usage-pulse"); ok {
+	monitor := s.module(modules.Monitor)
+	if path, ok := s.usageBinary("usage-pulse"); ok && monitor {
 		s.startLoop(ctx, "usage-pulse-chain", 90*time.Second, 5*time.Minute, func(run context.Context, interval time.Duration) {
 			steps := []struct {
 				name string
@@ -145,7 +150,7 @@ func (s *Service) Run(ctx context.Context) {
 			}
 		})
 	}
-	if path, ok := s.usageBinary("usage-watch"); ok {
+	if path, ok := s.usageBinary("usage-watch"); ok && monitor {
 		s.startLoop(ctx, "usage-watch", 2*time.Minute, 10*time.Minute, func(run context.Context, interval time.Duration) {
 			s.tracked(run, "usage-watch", interval, func() error { return command(run, path) })
 		})
@@ -158,80 +163,68 @@ func (s *Service) Run(ctx context.Context) {
 			return err
 		})
 	})
-	s.startLoop(ctx, "watch-radar-chain", 3*time.Minute, 30*time.Minute, func(run context.Context, interval time.Duration) {
-		steps := []struct {
-			name string
-			args []string
-		}{
-			{"watch-radar", []string{"/usr/bin/python3", "/srv/monitor/watch/model_watch.py"}},
-			{"watch-reactions", []string{"/usr/bin/python3", "/srv/monitor/watch/reactions.py"}},
-		}
-		for _, step := range steps {
-			if run.Err() != nil {
-				return
+	// The owner server's monitoring scripts and sanity alarms to the
+	// coordinator are the monitor module's.
+	if monitor {
+		s.startLoop(ctx, "watch-radar-chain", 3*time.Minute, 30*time.Minute, func(run context.Context, interval time.Duration) {
+			steps := []struct {
+				name string
+				args []string
+			}{
+				{"watch-radar", []string{"/usr/bin/python3", "/srv/monitor/watch/model_watch.py"}},
+				{"watch-reactions", []string{"/usr/bin/python3", "/srv/monitor/watch/reactions.py"}},
 			}
-			if err := s.tracked(run, step.name, interval, func() error {
-				return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, step.args...)
-			}); err != nil {
-				return
+			for _, step := range steps {
+				if run.Err() != nil {
+					return
+				}
+				if err := s.tracked(run, step.name, interval, func() error {
+					return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, step.args...)
+				}); err != nil {
+					return
+				}
 			}
-		}
-	})
-	s.startLoop(ctx, "busy-sanity", 5*time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
-		s.tracked(run, "busy-sanity", interval, func() error { return s.busySanity(run) })
-	})
-	// hermes-usage writes one line an hour into state/hermes-usage.jsonl.
-	//
-	// It exists because half of Hermes' cost is measured by a counter that
-	// forgets: OpenRouter's usage_daily resets at midnight UTC, so a day's real
-	// spend is only readable ON that day. The 2026-08-22 figure survives only
-	// because it was queried by hand that evening, and the budget page built on
-	// it carries "N=1" as its largest caveat — one day, one workload. An hourly
-	// reader is the cheapest way to stop that from being true, and it matters
-	// now: Ox Alpha may close around 27 Aug and the decision that follows wants
-	// more than one day of evidence.
-	//
-	// The script is a pure reader (state.db opened read-only, no tmux, no
-	// config writes) and swallows its own errors into the snapshot line, so a
-	// failing measurement can never disturb delivery.
-	s.startLoop(ctx, "hermes-usage", time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
-		s.tracked(run, "hermes-usage", interval, func() error {
-			return commandDirEnv(run, "/srv/blueprint", []string{"AGENT=blueprint"},
-				"/usr/bin/python3", "/srv/blueprint/scripts/hermes-usage-snapshot.py")
 		})
-	})
-	s.startLoop(ctx, "watch-reset", 150*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
-		s.tracked(run, "watch-reset", interval, func() error {
-			return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
+		s.startLoop(ctx, "busy-sanity", 5*time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
+			s.tracked(run, "busy-sanity", interval, func() error { return s.busySanity(run) })
 		})
-	})
+		// hermes-usage writes one line an hour into state/hermes-usage.jsonl.
+		//
+		// It exists because half of Hermes' cost is measured by a counter that
+		// forgets: OpenRouter's usage_daily resets at midnight UTC, so a day's real
+		// spend is only readable ON that day. The 2026-08-22 figure survives only
+		// because it was queried by hand that evening, and the budget page built on
+		// it carries "N=1" as its largest caveat — one day, one workload. An hourly
+		// reader is the cheapest way to stop that from being true, and it matters
+		// now: Ox Alpha may close around 27 Aug and the decision that follows wants
+		// more than one day of evidence.
+		//
+		// The script is a pure reader (state.db opened read-only, no tmux, no
+		// config writes) and swallows its own errors into the snapshot line, so a
+		// failing measurement can never disturb delivery.
+		s.startLoop(ctx, "hermes-usage", time.Minute, time.Hour, func(run context.Context, interval time.Duration) {
+			s.tracked(run, "hermes-usage", interval, func() error {
+				return commandDirEnv(run, "/srv/blueprint", []string{"AGENT=blueprint"},
+					"/usr/bin/python3", "/srv/blueprint/scripts/hermes-usage-snapshot.py")
+			})
+		})
+		s.startLoop(ctx, "watch-reset", 150*time.Second, 10*time.Minute, func(run context.Context, interval time.Duration) {
+			s.tracked(run, "watch-reset", interval, func() error {
+				return commandDirEnv(run, "/srv/monitor/watch", []string{"AGENT=blueprint"}, "/usr/bin/python3", "/srv/monitor/watch/reset_watch.py")
+			})
+		})
+	}
 	// Opt-in (claudeAccounts.autoSwitch): moves Claude Code to another stored
 	// account when the active one nears its limit.
-	s.startClaudeAccountAuto(ctx)
+	if s.module(modules.Accounts) {
+		s.startClaudeAccountAuto(ctx)
+	}
 	// Serve the owner's dashboard on loopback so nginx can proxy monitor.tunapro.xyz to it.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for ctx.Err() == nil {
-			func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: fmt.Sprintf("panic: %v", recovered)})
-					}
-				}()
-				s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "running"})
-				if err := dashboard.Serve(ctx, dashboard.Options{Port: 8787, UsageBin: s.config.UsageBin, Open: func(string) {}}); err != nil && ctx.Err() == nil {
-					s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: err.Error()})
-					s.log.Printf("dash-server: %v", err)
-				}
-			}()
-			if !wait(ctx, 5*time.Second) {
-				return
-			}
-		}
-	}()
+	if s.module(modules.UI) {
+		s.startDashboard(ctx)
+	}
 	bridgePath := ""
-	if s.config.WABridge && s.config.WAOutbox != "" {
+	if s.config.WABridge && s.config.WAOutbox != "" && s.module(modules.WA) {
 		candidate := filepath.Join(filepath.Dir(s.config.WAOutbox), "bridge.js")
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			bridgePath = candidate
@@ -263,6 +256,34 @@ func (s *Service) Run(ctx context.Context) {
 	}
 	<-ctx.Done()
 	s.wg.Wait()
+}
+
+func (s *Service) module(name string) bool {
+	return modules.EnabledIn(s.config, name)
+}
+
+func (s *Service) startDashboard(ctx context.Context) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for ctx.Err() == nil {
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: fmt.Sprintf("panic: %v", recovered)})
+					}
+				}()
+				s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "running"})
+				if err := dashboard.Serve(ctx, dashboard.Options{Port: 8787, UsageBin: s.config.UsageBin, Open: func(string) {}}); err != nil && ctx.Err() == nil {
+					s.setState("dash-server", JobState{LastRun: time.Now().Format(time.RFC3339), Status: "failed", Error: err.Error()})
+					s.log.Printf("dash-server: %v", err)
+				}
+			}()
+			if !wait(ctx, 5*time.Second) {
+				return
+			}
+		}
+	}()
 }
 
 func (s *Service) reconcileExitedAgents(ctx context.Context) error {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"blueprint/internal/modules"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,6 +94,9 @@ func barStatusStyle(accent string) string {
 // writes only on a real change: tmux redraws the bar when an option is set, and
 // a redraw re-runs this command.
 func (a *app) barApplyStyle(agent, accent string) {
+	if !a.moduleEnabled(modules.Bar) {
+		return
+	}
 	want := barStatusStyle(accent)
 	if current, err := a.tmux.Option(a.ctx, agent, "status-style"); err == nil && current == want {
 		return

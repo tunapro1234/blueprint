@@ -40,3 +40,23 @@ func InitYAML(home string) (string, error) {
 	}
 	return path, closeErr
 }
+
+// HomeSentinel marks a directory bp created as its home. bp uninstall --purge
+// deletes only a home that carries it, so a stray BP_HOME pointing at a
+// project with its own config.json can never be wiped.
+const HomeSentinel = ".bp-home"
+
+// MarkHome writes the sentinel into home (idempotent).
+func MarkHome(home string) error {
+	path := filepath.Join(home, HomeSentinel)
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	}
+	return os.WriteFile(path, []byte("This directory is a bp home. bp uninstall --purge deletes it.\n"), 0600)
+}
+
+// IsMarkedHome reports whether home carries the sentinel as a regular file.
+func IsMarkedHome(home string) bool {
+	info, err := os.Lstat(filepath.Join(home, HomeSentinel))
+	return err == nil && info.Mode().IsRegular()
+}

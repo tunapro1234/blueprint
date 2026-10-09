@@ -121,6 +121,9 @@ bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent
 bp con [agent-name]
 bp img [recv]
 bp dash [--port N]
+bp serve --api [--listen 127.0.0.1:PORT] [--no-socket]   # local HTTP API (A2A, MCP, REST)
+bp mcp [--as <name>]          # MCP server on stdio for any agent harness
+bp api token [--path] | bp api config <client> [--http]
 bp fed status|ping|token|log [n]
 bp daemon`
 
@@ -515,6 +518,12 @@ func (a *app) run(args []string) error {
 		return a.dashboard(args[1:])
 	case "p2p":
 		return a.p2pCommand(args[1:])
+	case "serve":
+		return a.serve(args[1:])
+	case "mcp":
+		return a.mcp(args[1:])
+	case "api":
+		return a.apiCommand(args[1:])
 	case "fed":
 		return a.federation(args[1:])
 	case "daemon":
@@ -4073,6 +4082,7 @@ func (a *app) daemon(args []string) error {
 	defer stop()
 	logger := log.New(a.err, "blueprint: ", log.LstdFlags)
 	service := daemon.New(logger, a.config)
+	a.startDaemonAPI(ctx, logger)
 	renderer := newBarRenderer(a, logger)
 	rendererDone := make(chan struct{})
 	go func() {

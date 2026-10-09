@@ -7,7 +7,7 @@ import (
 	"blueprint/internal/audit"
 )
 
-// AuditSink writes Watch alerts to <StateDir>/audit.jsonl. Events are not
+// AuditSink writes Watch alerts to <StateDir>/audit.jsonl as guard.reach.<rule>. Events are not
 // written by default because the transports already audit their own
 // decisions; set Events to log every observation as "guard.<kind>".
 type AuditSink struct {
@@ -25,9 +25,22 @@ func (s AuditSink) Event(ev Event) {
 		Actor: ev.Agent, Target: ev.Target, Peer: ev.Peer, ID: ev.Channel, Reason: ev.Detail})
 }
 
+// alertKinds maps Watch rules onto audit kinds and fixed severities: a probe
+// is a warning, every other reach pattern is an owner alert.
+var alertKinds = map[string]struct{ kind, severity string }{
+	"probe":                 {"guard.reach.probe", audit.Warn},
+	"enumeration":           {"guard.reach.enumeration", audit.Alert},
+	"tainted-secret-access": {"guard.reach.secret", audit.Alert},
+	"tainted-relay":         {"guard.reach.relay", audit.Alert},
+}
+
 func (s AuditSink) Alert(a Alert) {
-	s.write(audit.Event{Time: a.Time.UTC(), Kind: "guard.alert." + a.Rule, Severity: auditSeverity(a.Severity, true),
-		Actor: a.Agent, Peer: a.Peer, ID: a.Channel, Reason: a.Summary})
+	m, ok := alertKinds[a.Rule]
+	if !ok {
+		m.kind, m.severity = "guard.reach."+a.Rule, auditSeverity(a.Severity, true)
+	}
+	s.write(audit.Event{Time: a.Time.UTC(), Kind: m.kind, Severity: m.severity,
+		Actor: a.Agent, Peer: a.Peer, ID: a.Channel, Reason: a.Summary, Fields: map[string]string{"guard.severity": string(a.Severity)}})
 }
 
 func (s AuditSink) write(ev audit.Event) {

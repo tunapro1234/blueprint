@@ -46,7 +46,7 @@ func NewLimiter() *Limiter; func (l *Limiter) Allow(peer string, p Policy) Decis
 
 func NewWatch(cfg WatchConfig, sink Sink) *Watch
 func (w *Watch) Observe(ev Event)                                 // EvDenied, EvLookup, EvInbound, EvSensitive, EvOutbound
-type AuditSink struct{ StateDir string; Events bool; Errors io.Writer } // alerts -> audit.jsonl guard.alert.<rule>
+type AuditSink struct{ StateDir string; Events bool; Errors io.Writer } // alerts -> audit.jsonl guard.reach.{probe,enumeration,secret,relay}
 func Sensitive(tool, input string) (string, bool)
 ```
 

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"blueprint/internal/audit"
 )
 
 func src() Source {
@@ -389,5 +391,23 @@ func TestEnvelopeRendersStoredMessageStably(t *testing.T) {
 	z, _ := f.Envelope("external:sender@a", s, fake)
 	if strings.Count(z.Text, openMarker) != 2 || !strings.Contains(z.Text, "\n"+BodyPrefix+openMarker) {
 		t.Fatalf("imitation frame not wrapped: %q", z.Text)
+	}
+}
+
+func TestAuditSinkKinds(t *testing.T) {
+	dir := t.TempDir()
+	sink := AuditSink{StateDir: dir}
+	for _, rule := range []string{"probe", "enumeration", "tainted-secret-access", "tainted-relay"} {
+		sink.Alert(Alert{Time: time.Unix(1, 0), Rule: rule, Severity: High, Peer: "p", Summary: "s"})
+	}
+	ev, err := audit.Read(dir, audit.Filter{})
+	if err != nil || len(ev) != 4 {
+		t.Fatalf("%v %+v", err, ev)
+	}
+	want := [][2]string{{"guard.reach.probe", audit.Warn}, {"guard.reach.enumeration", audit.Alert}, {"guard.reach.secret", audit.Alert}, {"guard.reach.relay", audit.Alert}}
+	for i, w := range want {
+		if ev[i].Kind != w[0] || ev[i].Severity != w[1] {
+			t.Errorf("%d: %s/%s, want %v", i, ev[i].Kind, ev[i].Severity, w)
+		}
 	}
 }

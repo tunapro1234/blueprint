@@ -61,7 +61,7 @@ func TestLookupEnumerationAlerts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ev, _ := audit.Read(b.Root, audit.Filter{Kind: "guard.alert.enumeration"})
+	ev, _ := audit.Read(b.Root, audit.Filter{Kind: "guard.reach.enumeration"})
 	if len(ev) != 1 || ev[0].Severity != audit.Alert || ev[0].Peer != "a" {
 		t.Fatalf("enumeration alert = %+v", ev)
 	}

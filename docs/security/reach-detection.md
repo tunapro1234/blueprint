@@ -45,7 +45,7 @@ Guard does not write files itself. A `guard.Sink` adapter in W1's
 `internal/audit` maps:
 
 - `Sink.Event(ev)` to `audit.Event{Type: "guard." + ev.Kind, ...}`;
-- `Sink.Alert(a)` to `audit.Event{Type: "guard.alert", Severity: "alert", Rule: a.Rule, ...}`.
+- `Sink.Alert(a)` to `guard.reach.probe` (warn), `guard.reach.enumeration`, `guard.reach.secret`, `guard.reach.relay` (alert), with `Reason` = summary. Implemented as `guard.AuditSink`.
 
 Records carry names, rule, decision code, channel and finding kinds. They
 never carry message bodies or matched secret values; `Finding.Excerpt` is

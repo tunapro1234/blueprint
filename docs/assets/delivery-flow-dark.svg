@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="460" viewBox="0 0 960 460" role="img" aria-labelledby="title desc">
+  <title id="title">How bp delivers a message</title>
+  <desc id="desc">alice, a Codex agent, runs bp msg bob. bob, a Claude Code agent, is busy, so bp queues the message and waits while bob is working, while someone is typing in bob's prompt, or while a menu is open. When bob's turn ends, bp delivers the message as bob's next prompt, and bp qstat reports DELIVERED once bob's transcript shows it.</desc>
+  <style>
+    .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .h { font-size: 17px; font-weight: 600; fill: #e6edf3; }
+    .lead { font-size: 13px; fill: #9198a1; }
+    .name { font-size: 15px; font-weight: 600; fill: #e6edf3; }
+    .pill { font-size: 11px; fill: #9198a1; }
+    .body { font-size: 12.5px; fill: #e6edf3; }
+    .muted { font-size: 12px; fill: #9198a1; }
+    .code { font-size: 12px; fill: #e6edf3; }
+    .codeMuted { font-size: 12px; fill: #9198a1; }
+    .blue { fill: #6d9bff; }
+    .ok { fill: #3fb950; }
+    .label { font-size: 11.5px; fill: #9198a1; }
+    .labelBlue { font-size: 11.5px; font-weight: 600; fill: #6d9bff; }
+  </style>
+
+  <rect x="0.5" y="0.5" width="959" height="459" rx="14" fill="#0d1117" stroke="#30363d"/>
+
+  <text x="28" y="40" class="sans h">bp waits for the lull, then delivers.</text>
+  <text x="28" y="62" class="sans lead">A message never lands in a busy turn or on top of a half-typed prompt, and every message gets a receipt.</text>
+
+  <!-- sender -->
+  <rect x="28" y="84" width="268" height="160" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="46" y="112" class="sans name">alice</text>
+  <rect x="92" y="98" width="52" height="20" rx="10" fill="#21262d"/>
+  <text x="118" y="112" text-anchor="middle" class="sans pill">Codex</text>
+  <rect x="44" y="128" width="236" height="80" rx="6" fill="#0d1117"/>
+  <text x="56" y="152" class="mono code">$ bp msg bob 'Run the tests</text>
+  <text x="56" y="170" class="mono code">  before you reply.'</text>
+  <text x="56" y="194" class="mono code blue">QUEUED (channel: q708724000)</text>
+  <text x="46" y="230" class="sans muted">bob is busy, so the message waits.</text>
+
+  <!-- arrow sender -> bp -->
+  <line x1="300" y1="164" x2="338" y2="164" stroke="#6d9bff" stroke-width="2"/>
+  <path d="M338 158 L348 164 L338 170 Z" fill="#6d9bff"/>
+  <text x="322" y="150" text-anchor="middle" class="sans label">send</text>
+
+  <!-- bp gate -->
+  <rect x="352" y="84" width="268" height="160" rx="10" fill="#1c2a4a" stroke="#6d9bff"/>
+  <text x="370" y="112" class="sans name">bp</text>
+  <rect x="396" y="98" width="128" height="20" rx="10" fill="#161b22"/>
+  <text x="460" y="112" text-anchor="middle" class="sans pill">queue + delivery gate</text>
+  <circle cx="376" cy="139" r="5" fill="none" stroke="#6e7681" stroke-width="1.5"/>
+  <text x="390" y="143" class="sans body">waits while bob is working</text>
+  <circle cx="376" cy="163" r="5" fill="none" stroke="#6e7681" stroke-width="1.5"/>
+  <text x="390" y="167" class="sans body">waits while someone is typing there</text>
+  <circle cx="376" cy="187" r="5" fill="none" stroke="#6e7681" stroke-width="1.5"/>
+  <text x="390" y="191" class="sans body">waits while a menu or prompt is open</text>
+  <circle cx="376" cy="215" r="5" fill="#6d9bff"/>
+  <text x="390" y="219" class="sans body" font-weight="600">delivers when the turn ends</text>
+
+  <!-- arrow bp -> recipient -->
+  <line x1="624" y1="164" x2="688" y2="164" stroke="#6d9bff" stroke-width="2"/>
+  <path d="M688 158 L698 164 L688 170 Z" fill="#6d9bff"/>
+  <text x="661" y="150" text-anchor="middle" class="sans label">at the lull</text>
+
+  <!-- recipient -->
+  <rect x="702" y="84" width="230" height="160" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="720" y="112" class="sans name">bob</text>
+  <rect x="754" y="98" width="82" height="20" rx="10" fill="#21262d"/>
+  <text x="795" y="112" text-anchor="middle" class="sans pill">Claude Code</text>
+  <rect x="718" y="128" width="198" height="80" rx="6" fill="#0d1117"/>
+  <text x="730" y="152" class="mono code">[alice] Run the tests</text>
+  <text x="730" y="170" class="mono code">before you reply.</text>
+  <text x="720" y="230" class="sans muted">It arrives as bob's next prompt.</text>
+
+  <!-- timeline -->
+  <text x="352" y="290" class="sans name">bob's turns</text>
+  <rect x="352" y="304" width="300" height="34" rx="6" fill="#26375e"/>
+  <text x="502" y="326" text-anchor="middle" class="sans body">working on an earlier task</text>
+  <rect x="652" y="304" width="40" height="34" fill="none"/>
+  <rect x="692" y="304" width="240" height="34" rx="6" fill="#26375e" opacity="0.6"/>
+  <text x="812" y="326" text-anchor="middle" class="sans body">working on alice's message</text>
+  <line x1="420" y1="352" x2="672" y2="352" stroke="#6e7681" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <circle cx="420" cy="352" r="4" fill="#6e7681"/>
+  <text x="420" y="374" text-anchor="middle" class="sans label">sent</text>
+  <text x="546" y="374" text-anchor="middle" class="sans label">held in the queue</text>
+  <path d="M672 296 L672 340" stroke="#6d9bff" stroke-width="2"/>
+  <path d="M666 334 L672 344 L678 334 Z" fill="#6d9bff"/>
+  <circle cx="672" cy="352" r="5" fill="#6d9bff"/>
+  <text x="672" y="374" text-anchor="middle" class="sans labelBlue">the lull: delivered</text>
+
+  <!-- receipt -->
+  <rect x="28" y="270" width="296" height="164" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="46" y="298" class="sans name">receipt</text>
+  <rect x="44" y="312" width="264" height="106" rx="6" fill="#0d1117"/>
+  <text x="56" y="334" class="mono code">$ bp qstat q708724000</text>
+  <text x="56" y="352" class="mono codeMuted">PENDING: bob — runtime working: …</text>
+  <text x="56" y="378" class="mono code">$ bp qstat q708724000</text>
+  <text x="56" y="396" class="mono code ok">DELIVERED: bob (at 16:38)</text>
+
+  <text x="352" y="410" class="sans muted">DELIVERED needs evidence: a verified submit or bob's own transcript. A paste that bp</text>
+  <text x="352" y="428" class="sans muted">cannot confirm is reported as unverified and is never typed a second time.</text>
+</svg>

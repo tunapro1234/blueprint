@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func writeTemp(t *testing.T, name, content string) string {
@@ -122,4 +124,44 @@ func loadFor(t *testing.T, home string) Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestSetModulesMultiLineFlowYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "# mine\nmodules: {bar: true,\n  ui: true}\nlocalMouse: true\n"
+	if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetModules(path, map[string]bool{"bar": true, "ui": false, "wa": true}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var got struct {
+		Modules    map[string]bool `yaml:"modules"`
+		LocalMouse bool            `yaml:"localMouse"`
+	}
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("corrupted config: %v\n%s", err, data)
+	}
+	if !got.Modules["bar"] || got.Modules["ui"] || !got.Modules["wa"] || !got.LocalMouse {
+		t.Fatalf("got %+v\n%s", got, data)
+	}
+}
+
+func TestSetModulesQuotesOddNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("localMouse: true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	modules := map[string]bool{"bar": true, "yes": true, "a: b": false, "x}": true}
+	if err := SetModules(path, modules); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var got struct {
+		Modules map[string]bool `yaml:"modules"`
+	}
+	if err := yaml.Unmarshal(data, &got); err != nil || len(got.Modules) != 4 || !got.Modules["yes"] || !got.Modules["x}"] {
+		t.Fatalf("got %+v, %v\n%s", got.Modules, err, data)
+	}
 }

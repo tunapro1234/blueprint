@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"blueprint/internal/safefile"
 )
 
 // SetModules rewrites only the modules key of the config file at path. Every
@@ -21,13 +23,12 @@ func SetModules(path string, modules map[string]bool) error {
 	if path == "" {
 		return fmt.Errorf("no config file to update")
 	}
-	info, err := os.Stat(path)
+	data, snap, err := safefile.Read(path)
 	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
+	if !snap.Exists {
+		return fmt.Errorf("%s does not exist", path)
 	}
 	var updated []byte
 	if filepath.Ext(path) == ".json" {
@@ -41,7 +42,38 @@ func SetModules(path string, modules map[string]bool) error {
 	if bytes.Equal(updated, data) {
 		return nil
 	}
-	return writeAtomic(path, updated, info.Mode().Perm())
+	// Never write a config bp itself could not load back.
+	if err := verifyModules(path, updated, modules); err != nil {
+		return fmt.Errorf("update %s: %w; the file was not changed", path, err)
+	}
+	return safefile.Replace(snap, updated, 0600)
+}
+
+func verifyModules(path string, data []byte, want map[string]bool) error {
+	var got struct {
+		Modules map[string]bool `json:"modules" yaml:"modules"`
+	}
+	var err error
+	if filepath.Ext(path) == ".json" {
+		err = json.Unmarshal(data, &got)
+	} else {
+		var document yaml.Node
+		if err = yaml.Unmarshal(data, &document); err == nil {
+			err = document.Decode(&got)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("the edit would not parse: %w", err)
+	}
+	if len(got.Modules) != len(want) {
+		return fmt.Errorf("the edit would not round-trip the modules key")
+	}
+	for name, value := range want {
+		if got.Modules[name] != value {
+			return fmt.Errorf("the edit would not round-trip the modules key")
+		}
+	}
+	return nil
 }
 
 func sortedModuleNames(modules map[string]bool) []string {
@@ -208,7 +240,9 @@ func setYAMLModules(data []byte, modules map[string]bool) ([]byte, error) {
 	if keyNode.Column == 1 && (valueNode.Line == keyNode.Line) && (valueNode.Kind == yaml.ScalarNode || valueNode.Style&yaml.FlowStyle != 0) {
 		lines := bytes.SplitAfter(data, []byte("\n"))
 		index := keyNode.Line - 1
-		if index < len(lines) {
+		// The text fast path needs the whole value on the key's line; a flow
+		// map continued on the next lines goes through the node encoder.
+		if index < len(lines) && singleLineModules(lines[index]) {
 			old := lines[index]
 			ending := ""
 			if bytes.HasSuffix(old, []byte("\n")) {
@@ -232,7 +266,7 @@ func encodeModulesYAML(modules map[string]bool) []byte {
 		if index > 0 {
 			encoded.WriteString(", ")
 		}
-		fmt.Fprintf(&encoded, "%s: %t", name, modules[name])
+		fmt.Fprintf(&encoded, "%s: %t", yamlKey(name), modules[name])
 	}
 	encoded.WriteByte('}')
 	return encoded.Bytes()
@@ -264,27 +298,32 @@ func setYAMLModulesNode(document *yaml.Node, modules map[string]bool) ([]byte, e
 	return out.Bytes(), nil
 }
 
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
+// singleLineModules reports whether line holds a complete "modules:" entry.
+func singleLineModules(line []byte) bool {
+	var probe map[string]any
+	if yaml.Unmarshal(line, &probe) != nil {
+		return false
 	}
-	name := file.Name()
-	defer os.Remove(name)
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
+	_, ok := probe["modules"]
+	return ok && len(probe) == 1
+}
+
+// yamlKey quotes a module name unless it is a plain lowercase word, so an
+// odd name from a hand-edited config cannot change the YAML structure.
+func yamlKey(name string) string {
+	plain := name != "" && name[0] >= 'a' && name[0] <= 'z'
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			plain = false
+		}
 	}
-	if err := file.Chmod(mode); err != nil {
-		file.Close()
-		return err
+	switch strings.ToLower(name) {
+	case "y", "n", "yes", "no", "on", "off", "true", "false", "null":
+		plain = false
 	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
+	if plain {
+		return name
 	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	quoted, _ := json.Marshal(name)
+	return string(quoted)
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"blueprint/internal/guard"
 	"blueprint/internal/msgq"
 )
 
@@ -133,6 +134,14 @@ func TestHubSendEnqueuesLocalMessage(t *testing.T) {
 	if messages[0].To != "ada" || messages[0].From != "oz@yigit" || messages[0].Msg != "[oz@yigit] lineone\nline two" {
 		t.Fatalf("message=%+v", messages[0])
 	}
+	// The Origin marks it external, so msgq frames it at delivery.
+	o := messages[0].Origin
+	if o == nil || o.Transport != Transport || o.PeerAlias != "yigit" || o.PeerID != "fed-peer:yigit" || o.AgentClaim != "oz" || o.AgentVerified {
+		t.Fatalf("origin=%+v", o)
+	}
+	if !guard.NeedsFrame(o.Transport) {
+		t.Fatal("fed transport is not framed at delivery")
+	}
 }
 
 func TestHubRejectsUnsafeToAndFromNames(t *testing.T) {
@@ -247,6 +256,10 @@ func TestClientPollEnqueuesAndRecordsLastPoll(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Msg != "[ada@tuna] reply" {
 		t.Fatalf("messages=%+v", messages)
+	}
+	host := strings.TrimPrefix(server.URL, "http://")
+	if o := messages[0].Origin; o == nil || o.Transport != Transport || o.PeerAlias != host || o.PeerID != "fed-hub:"+server.URL || o.AgentClaim != "ada@tuna" || o.ChannelID == "" {
+		t.Fatalf("origin=%+v", messages[0].Origin)
 	}
 	if _, err := os.Stat(LastPollPath(stateDir)); err != nil {
 		t.Fatalf("last poll file: %v", err)

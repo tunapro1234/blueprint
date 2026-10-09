@@ -43,10 +43,15 @@ type claudeHookInput struct {
 }
 
 // hookCommand runs `bp _hook <harness> [--agent <name>]` with the harness's
-// hook payload on stdin.
+// hook payload on stdin. claude is the original turn-boundary delivery path
+// (docs/direction.md, "Hooks"); opencode and hermes are the compaction-hooks
+// module's compaction-survival path (docs/security/compaction-hooks-module.md):
+// each harness detects its own compaction differently, but all three end up
+// asking bp for the same identity note (internal/identity.CompactionNote) and
+// any messages queued while the agent was busy.
 func (a *app) hookCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: bp _hook claude [--agent <name>]")
+		return fmt.Errorf("usage: bp _hook claude|opencode|hermes [--agent <name>]")
 	}
 	harness, rest := args[0], args[1:]
 	agent := ""
@@ -56,15 +61,11 @@ func (a *app) hookCommand(args []string) error {
 			i++
 		}
 	}
-	if harness != "claude" {
+	if harness != "claude" && harness != "opencode" && harness != "hermes" {
 		return nil
 	}
 	data, err := io.ReadAll(io.LimitReader(os.Stdin, 2<<20))
 	if err != nil {
-		return nil
-	}
-	var input claudeHookInput
-	if json.Unmarshal(data, &input) != nil {
 		return nil
 	}
 	if agent == "" {
@@ -73,7 +74,19 @@ func (a *app) hookCommand(args []string) error {
 	if agent == "" {
 		return nil
 	}
-	out, err := a.claudeHook(agent, input)
+	var out map[string]any
+	switch harness {
+	case "claude":
+		var input claudeHookInput
+		if json.Unmarshal(data, &input) != nil {
+			return nil
+		}
+		out, err = a.claudeHook(agent, input)
+	case "opencode":
+		out, err = a.opencodeCompactionHook(agent)
+	case "hermes":
+		out, err = a.hermesCompactionHook(agent, data)
+	}
 	if err != nil {
 		fmt.Fprintln(a.err, "bp hook:", err)
 		return nil
@@ -126,7 +139,7 @@ func (a *app) claudeHook(agent string, input claudeHookInput) (map[string]any, e
 		if input.Source != "compact" && input.Source != "clear" {
 			return nil, nil
 		}
-		note := identityNote(agent)
+		note := identity.CompactionNote(agent)
 		text, err := a.claimForHook(agent)
 		if err != nil {
 			text = ""
@@ -142,11 +155,59 @@ func (a *app) claudeHook(agent string, input claudeHookInput) (map[string]any, e
 	return nil, nil
 }
 
-// identityNote is what an agent needs to keep working with bp after its
-// context was compacted or cleared.
-func identityNote(agent string) string {
-	return fmt.Sprintf("[bp] Your context was compacted. You are still the bp agent %q; your queued messages were kept. "+
-		"Reply with `bp msg <agent> '<text>'`, see the other agents with `bp status`, and run `bp help` for more.", agent)
+// opencodeCompactionHook answers `bp _hook opencode`: the compaction-hooks
+// module's plugin (internal/modules/compaction.go) calls it after OpenCode's
+// "session.compacted" event and injects the note into the session itself
+// (client.session.promptAsync), so there is no event payload to parse here —
+// just the note and whatever bp queued while the agent was busy.
+func (a *app) opencodeCompactionHook(agent string) (map[string]any, error) {
+	note := identity.CompactionNote(agent)
+	text, err := a.claimForHook(agent)
+	if err != nil {
+		text = ""
+	}
+	if text != "" {
+		note += "\n\n" + text
+	}
+	return map[string]any{"note": note}, nil
+}
+
+// hermesHookInput is the fields bp needs from a Hermes shell hook's stdin
+// payload (docs/security/compaction-hooks-module.md, "Hermes"): everything
+// else `extra` carries is ignored.
+type hermesHookInput struct {
+	HookEventName string `json:"hook_event_name"`
+	Extra         struct {
+		IsFirstTurn     bool   `json:"is_first_turn"`
+		ParentSessionID string `json:"parent_session_id"`
+	} `json:"extra"`
+}
+
+// hermesCompactionHook answers `bp _hook hermes`, run as a pre_llm_call shell
+// hook (the only Hermes event that can inject LLM context). Hermes has no
+// event that fires on compaction itself; a context-compression fork rotates
+// the session id and chains it to the old one, so the first turn of a session
+// with a parent is the only signal a shell hook can see that a compaction
+// just happened. In-place compression (no rotation) leaves no such signal and
+// is not covered. Every other turn, and anything that fails to parse, answers
+// with nothing: Hermes treats empty output as a silent no-op.
+func (a *app) hermesCompactionHook(agent string, data []byte) (map[string]any, error) {
+	var input hermesHookInput
+	if json.Unmarshal(data, &input) != nil {
+		return nil, nil
+	}
+	if input.HookEventName != "pre_llm_call" || !input.Extra.IsFirstTurn || input.Extra.ParentSessionID == "" {
+		return nil, nil
+	}
+	note := identity.CompactionNote(agent)
+	text, err := a.claimForHook(agent)
+	if err != nil {
+		text = ""
+	}
+	if text != "" {
+		note += "\n\n" + text
+	}
+	return map[string]any{"context": note}, nil
 }
 
 // claimForHook takes the agent's queued messages (and any offline spool) and

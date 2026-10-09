@@ -53,7 +53,7 @@ type Change struct {
 
 func (c Change) key() string {
 	parts := []string{c.Kind, c.Path, c.Line, c.Target, c.Option, c.Text}
-	if c.Kind == KindJSONEntry {
+	if c.Kind == KindJSONEntry || c.Kind == KindYAMLEntry {
 		parts = append(parts, c.Value, c.Created)
 	}
 	return strings.Join(parts, "\x00")
@@ -75,7 +75,7 @@ func (c Change) String() string {
 		return fmt.Sprintf("tmux option %s (%s) = %s", c.Option, target, c.Value)
 	case KindNote:
 		return "note: " + c.Text
-	case KindJSONEntry:
+	case KindJSONEntry, KindYAMLEntry:
 		return fmt.Sprintf("entry in %s %s: %s", c.Path, c.Option, c.Value)
 	}
 	return c.Kind
@@ -284,6 +284,8 @@ func undo(env Env, change Change) (string, error) {
 		return "restored tmux option " + change.Option, nil
 	case KindJSONEntry:
 		return undoJSONEntry(change)
+	case KindYAMLEntry:
+		return undoYAMLEntry(change)
 	case KindNote:
 		return "", errors.New(change.Text)
 	}

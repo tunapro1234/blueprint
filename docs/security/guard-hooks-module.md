@@ -104,3 +104,22 @@ call.
 - Tainted read of a canary or `.credentials.json` writes one alert; `ask`
   mode prints the decision JSON; untainted ordinary access writes nothing.
 - Malformed stdin, missing state dir, unreadable log: exit 0, no output.
+
+## Implementation plan (W2 registry conventions from bp-modules, 9 Oct)
+
+- Add a `GuardHooks = "guard-hooks"` const next to the other module names.
+  `Owns: []string{"guardHooks"}`, matching the JSON name of the config key.
+- `Apply` stays nil. The PreToolUse group is generated into bp's own
+  per-agent settings layer at launch, gated on
+  `modules.EnabledIn(cfg, "guard-hooks")`. Disabling then drops the group at
+  the next launch.
+- `Conflict` (read-only) reports a user PreToolUse hook that the group would
+  shadow.
+- `Notes`: "applies to agents opened from now on; running agents keep their
+  settings until reopened; alerts: bp audit --kind guard.reach".
+- `Detect`: enable the module only when `cfg.GuardHooks` is already set.
+  Never tie it to `cfg.Legacy`, so the owner server keeps its six modules.
+- Tests: `TestFreshConfigEnablesNothing` and
+  `TestSetupChangesNothingOutsideBPHome` stay green, and the legacy fixture
+  asserts guard-hooks is off. Enabling and disabling the module is already
+  audited by `module.enable` and `module.disable`.

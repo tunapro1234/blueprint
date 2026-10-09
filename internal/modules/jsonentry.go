@@ -50,7 +50,10 @@ func AddJSONEntry(path, pointer string, entry any) (*Change, error) {
 			return nil, err
 		}
 		change.Created = "/"
-		return change, safefile.Replace(snap, append(out, '\n'), 0600)
+		if err := safefile.Replace(snap, append(out, '\n'), 0600); err != nil {
+			return nil, err
+		}
+		return change, nil
 	}
 	start := skipSpace(data, 0)
 	if start >= len(data) || data[start] != '{' {
@@ -74,7 +77,10 @@ func AddJSONEntry(path, pointer string, entry any) (*Change, error) {
 				return nil, err
 			}
 			change.Created = joinPointer(keys[:depth+1])
-			return change, safefile.Replace(snap, out, 0600)
+			if err := safefile.Replace(snap, out, 0600); err != nil {
+				return nil, err
+			}
+			return change, nil
 		}
 		at = members[found].valueStart
 		want := byte('{')
@@ -102,7 +108,10 @@ func AddJSONEntry(path, pointer string, entry any) (*Change, error) {
 		indent := leadingSpace(data, elements, len(elements)-1, at)
 		out = splice(data, last.end, last.end, append(append([]byte{','}, indent...), value...))
 	}
-	return change, safefile.Replace(snap, out, 0600)
+	if err := safefile.Replace(snap, out, 0600); err != nil {
+		return nil, err
+	}
+	return change, nil
 }
 
 func undoJSONEntry(change Change) (string, error) {

@@ -18,9 +18,12 @@ import (
 // recorded binary only while it is still bp.
 const binaryMarker = "blueprint (bp) — agent infrastructure CLI"
 
+// tmuxBlockHeader starts the block install.sh appends to ~/.tmux.conf.
+const tmuxBlockHeader = "# blueprint: clipboard, scroll, and mosh integration"
+
 // installerTmuxLines are the only lines install.sh appends to ~/.tmux.conf.
 var installerTmuxLines = map[string]bool{
-	"# blueprint: clipboard, scroll, and mosh integration": true,
+	tmuxBlockHeader:                                 true,
 	"set -g mouse on":                               true,
 	"set -g history-limit 100000":                   true,
 	"setw -g mode-keys vi":                          true,
@@ -72,10 +75,13 @@ func (a *app) installRecord(args []string) error {
 		}
 		change.Kind, change.Marker, change.SHA256 = modules.KindFile, extra, modules.SHA256(data)
 	case "line":
-		if path != filepath.Join(home, ".tmux.conf") || !installerTmuxLines[extra] {
+		// Tmux lines count only inside bp's own block (the header line and the
+		// lines after it); a user's own "set -g mouse on" elsewhere is theirs.
+		data, err := os.ReadFile(path)
+		if path != filepath.Join(home, ".tmux.conf") || !installerTmuxLines[extra] || err != nil || !modules.InBlock(string(data), tmuxBlockHeader, extra) {
 			return refuse()
 		}
-		change.Kind, change.Line = modules.KindLine, extra
+		change.Kind, change.Line, change.Marker = modules.KindLine, extra, tmuxBlockHeader
 	case "link":
 		// /usr/local/bin/bp -> the server's bp binary.
 		target, err := os.Readlink(path)

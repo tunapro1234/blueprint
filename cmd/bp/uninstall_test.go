@@ -298,3 +298,24 @@ func TestPurgeRefusesADirectoryBPCannotProveItOwns(t *testing.T) {
 		t.Fatalf("relative home: %v", err)
 	}
 }
+
+func TestTmuxLinesCountOnlyInsideBPBlock(t *testing.T) {
+	f := newInstallFixture(t)
+	f.run("setup")
+	conf := filepath.Join(f.home, ".tmux.conf")
+	const header = "# blueprint: clipboard, scroll, and mosh integration"
+	original := "set -g mouse on\nset -g prefix C-a\n\n" + header + "\nset -g history-limit 100000\n\nset -g mouse on\n"
+	if err := os.WriteFile(conf, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The user's own "set -g mouse on" (outside bp's block) cannot be claimed.
+	if err := f.app().run([]string{"_install-record", "line", conf, "set -g mouse on"}); err == nil {
+		t.Fatal("recorded a tmux line outside bp's block")
+	}
+	f.run("_install-record", "line", conf, header)
+	f.run("_install-record", "line", conf, "set -g history-limit 100000")
+	f.run("uninstall")
+	if data, _ := os.ReadFile(conf); string(data) != "set -g mouse on\nset -g prefix C-a\n\nset -g mouse on\n" {
+		t.Fatalf("tmux.conf = %q", data)
+	}
+}

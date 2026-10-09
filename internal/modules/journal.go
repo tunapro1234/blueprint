@@ -311,10 +311,15 @@ func removeLine(change Change) (bool, error) {
 	} else {
 		lines := strings.SplitAfter(text, "\n")
 		found := -1
-		for index := len(lines) - 1; index >= 0; index-- {
-			if strings.TrimRight(lines[index], "\r\n") == change.Line {
-				found = index
-				break
+		if change.Marker != "" {
+			// A line of a bp block: only the copy inside that block is bp's.
+			found = blockLine(lines, change.Marker, change.Line)
+		} else {
+			for index := len(lines) - 1; index >= 0; index-- {
+				if strings.TrimRight(lines[index], "\r\n") == change.Line {
+					found = index
+					break
+				}
 			}
 		}
 		if found < 0 {
@@ -330,6 +335,40 @@ func removeLine(change Change) (bool, error) {
 		return true, safefile.Remove(snap)
 	}
 	return true, safefile.Replace(snap, []byte(out), 0600)
+}
+
+// blockLine finds line in the block that starts at the last header line and
+// runs to the next blank line; the header itself matches its own line.
+func blockLine(lines []string, header, line string) int {
+	start := -1
+	for index := len(lines) - 1; index >= 0; index-- {
+		if strings.TrimRight(lines[index], "\r\n") == header {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		return -1
+	}
+	if line == header {
+		return start
+	}
+	for index := start + 1; index < len(lines); index++ {
+		current := strings.TrimRight(lines[index], "\r\n")
+		if strings.TrimSpace(current) == "" {
+			break
+		}
+		if current == line {
+			return index
+		}
+	}
+	return -1
+}
+
+// InBlock reports whether line is the header or one of the lines of bp's
+// block in text.
+func InBlock(text, header, line string) bool {
+	return blockLine(strings.SplitAfter(text, "\n"), header, line) >= 0
 }
 
 // SHA256 is the hex digest recorded for files bp writes.

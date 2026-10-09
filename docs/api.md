@@ -87,7 +87,8 @@ missing or says 0.3.
 
 ## MCP
 
-`bp mcp [--as <name>]` serves MCP over stdio. The same tools are served
+`bp mcp [--as <name>]` serves MCP over stdio. [mcp.md](mcp.md) is the setup guide for
+agents connecting through it; this section is the reference. The same tools are served
 over streamable HTTP at `/mcp`: POST only, stateless, with JSON replies.
 Both the `initialize` handshake (2024-11-05 to 2025-11-25) and the stateless
 2026-07-28 revision work.

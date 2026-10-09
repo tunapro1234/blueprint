@@ -348,6 +348,7 @@ python3 -m unittest scripts.test_local_cli
 - [Configuration and platform limits](docs/configuration.md)
 - [Architecture](DESIGN.md)
 - [Runtime JSON contract](docs/runtime-status.md)
+- [Connecting agents through MCP](docs/mcp.md)
 - [Security boundaries](SECURITY.md)
 - [Build and release](docs/local-release.md)
 

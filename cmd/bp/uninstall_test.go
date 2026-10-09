@@ -211,3 +211,26 @@ func TestSetupCheckRequiresOnlyWhatRequestedModulesNeed(t *testing.T) {
 		t.Fatalf("unknown module preflight = %v", err)
 	}
 }
+
+func TestHintKeepsUsersOwnBlueprintSkill(t *testing.T) {
+	f := newInstallFixture(t)
+	own := filepath.Join(f.home, ".claude", "skills", "blueprint", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(own), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(own, []byte("my notes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.run("setup")
+	codex := filepath.Join(f.home, ".codex", "skills", "blueprint", "SKILL.md")
+	if data, _ := os.ReadFile(codex); !strings.Contains(string(data), "untrusted input") {
+		t.Fatalf("hint missing or without the untrusted-input line: %q", data)
+	}
+	f.run("uninstall")
+	if data, _ := os.ReadFile(own); string(data) != "my notes" {
+		t.Fatalf("user's skill changed: %q", data)
+	}
+	if exists(codex) {
+		t.Fatal("bp's hint left behind")
+	}
+}

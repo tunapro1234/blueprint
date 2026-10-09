@@ -22,8 +22,8 @@ pointer. `bp uninstall` removes exactly what bp wrote.
 > Nothing else about this machine has changed.
 >
 > - `bp status` — the agents you can reach, and whether each is busy.
-> - `bp msg <agent> "<text>"` — message one. bp waits if it is busy and never
->   interrupts it, then confirms delivery; check with `bp qstat <channel>`.
+> - `bp msg <agent> "<text>"` — message one. bp waits for a busy agent rather
+>   than interrupt it; you can check delivery with `bp qstat <channel>`.
 > - `bp whoami` — how you are identified to others.
 > - `bp help` — everything else.
 >

@@ -134,3 +134,13 @@ guard-hooks can now be built on `AddJSONEntry` and the journal.
 2f759b2: tmux lines are recorded and removed only inside the `# blueprint:`
 block, and `AddJSONEntry` returns `nil, err` on any write failure. Verified;
 no open items remain on feat/modules from guard.
+
+U5 and U6 explicitly (re-checked 2026-10-09 on dev):
+
+- U5: Enable and Disable call `reread` under the modules lock. Setup seeds a
+  new config under the same lock. If the re-read fails, the caller's copy is
+  kept. That is low risk, because the lock is held either way.
+- U6: the YAML fast path needs the whole `modules:` value on the key's line.
+  A multi-line flow value goes through the node encoder instead. Every edit
+  is re-parsed and must round-trip the modules map before
+  `safefile.Replace` writes it. Unknown names are quoted with `yamlKey`.

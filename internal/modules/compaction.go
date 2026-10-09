@@ -144,10 +144,17 @@ func applyCompactionHooks(env Env, journal *Journal) error {
 	if err := writeOwnedFile(journal, scriptPath, hermesHookScript(self), hermesHookMarker, 0700); err != nil {
 		return err
 	}
-	change, err := AddYAMLEntry(HermesConfigPath(env.UserHome), "hooks.pre_llm_call", map[string]any{
-		"command": scriptPath,
-		"timeout": 5,
-	})
+	entry := map[string]any{"command": scriptPath, "timeout": 5}
+	if journal.DryRun() {
+		// AddYAMLEntry writes; a dry run only describes the entry.
+		value, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		journal.Record(Change{Kind: KindYAMLEntry, Path: HermesConfigPath(env.UserHome), Option: "hooks.pre_llm_call", Value: string(value)})
+		return nil
+	}
+	change, err := AddYAMLEntry(HermesConfigPath(env.UserHome), "hooks.pre_llm_call", entry)
 	if err != nil {
 		return fmt.Errorf("hermes config.yaml: %w", err)
 	}
@@ -166,13 +173,30 @@ func writeOwnedFile(journal *Journal, path, content, marker string, mode os.File
 		journal.Record(change)
 		return nil
 	}
-	_, snap, err := safefile.Read(path)
+	old, snap, err := safefile.Read(path)
 	if err != nil {
 		return err
+	}
+	// Overwrite only bp's own bytes: the same content, or the bytes this
+	// journal last recorded for the path. A file the user wrote or edited is
+	// refused, not replaced (and a later undo would then delete it).
+	if snap.Exists && string(old) != content && !journalOwns(journal, path, fileSHA256(old)) {
+		return fmt.Errorf("%s exists and is not bp's unedited file; move it aside and enable again", path)
 	}
 	if err := safefile.Replace(snap, []byte(content), mode); err != nil {
 		return err
 	}
 	journal.Record(change)
 	return nil
+}
+
+// journalOwns reports whether the journal recorded path as a file bp wrote
+// with exactly these bytes.
+func journalOwns(journal *Journal, path, sha string) bool {
+	for _, change := range journal.Changes {
+		if change.Kind == KindFile && change.Path == path && change.SHA256 != "" && change.SHA256 == sha {
+			return true
+		}
+	}
+	return false
 }

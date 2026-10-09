@@ -99,7 +99,8 @@ nil. When the module is on, `prepareLocalObservation` adds one PreToolUse
 group (`guardHookGroup` in `cmd/bp/guard_hook.go`) to the per-agent settings
 layer. The layer exists only while `localObservation` is on.
 `guardHooksConflicts` refuses to enable the module when the hook would never
-run: `localObservation` is off, the managed settings set `disableAllHooks` or
+run: the sessions module is off (plain `claude` launches never pass through
+bp), `localObservation` is off, the managed settings set `disableAllHooks` or
 `allowManagedHooksOnly`, or the user settings set `disableAllHooks`.
 `Detect` turns the module on only for a config that already has
 `guardHooks`; the legacy server fixture asserts it stays off. Enabling it on

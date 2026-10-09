@@ -93,7 +93,7 @@ var registry = []Module{
 		Description: "tool-call tripwire for Claude agents: alert when an agent that recently received outside text touches secrets or canary files",
 		Owns:        []string{"guardHooks"},
 		Conflict:    guardHooksConflicts,
-		Notes:       "applies to Claude agents opened from now on; running agents keep their settings until reopened; alerts: bp audit --kind guard.reach",
+		Notes:       "applies to Claude agents opened with bp open or bp run from now on (not plain claude); running agents keep their settings until reopened; alerts: bp audit --kind guard.reach",
 	},
 }
 

@@ -141,6 +141,9 @@ var managedClaudeSettings = "/etc/claude-code/managed-settings.json"
 // agents are watched.
 func guardHooksConflicts(env Env) []string {
 	var conflicts []string
+	if !EnabledIn(env.Config, Sessions) {
+		conflicts = append(conflicts, "sessions is off: only agents started with bp run or bp open get the guard hook; agents started directly as claude are not watched")
+	}
 	if !env.Config.LocalObservation {
 		conflicts = append(conflicts, "localObservation is off; the guard hook is installed through bp's per-agent Claude settings layer, which only exists with localObservation on")
 	}

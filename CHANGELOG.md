@@ -6,7 +6,9 @@ All notable changes to bp are recorded here. The format follows
 
 ## [Unreleased]
 
-Changes on `dev` since the 1.9.30 release.
+Changes on `dev` since the 1.9.31 release.
+
+## [1.9.31] - 2026-10-10
 
 ### Changed
 
@@ -134,3 +136,4 @@ on. Git tags and GitHub Releases exist for v1.6.0 through v1.8.7, and the
 commit history (`git log`) has the details of every change.
 
 [Unreleased]: https://github.com/tunapro1234/blueprint/compare/7c404da...dev
+[1.9.31]: https://github.com/tunapro1234/blueprint/compare/7c404da...dev

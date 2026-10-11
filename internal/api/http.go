@@ -25,6 +25,12 @@ type Server struct {
 	// Token is required as "Authorization: Bearer <token>" on TCP. Unix
 	// socket connections are checked by uid instead and need none.
 	Token string
+	// Console, when set (the ui module is enabled), holds the fleet console's
+	// /v1 endpoints (fleet, tasks, usage, workflows). It is consulted before the
+	// hand-rolled serveREST switch: a path it registers wins, anything else
+	// falls through to serveREST. It sits behind the same loopback+token auth as
+	// the rest of /v1 and adds none of its own.
+	Console *http.ServeMux
 }
 
 // maxBody bounds a request body; every accepted payload is far smaller.
@@ -126,6 +132,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	case path == "/a2a" || strings.HasPrefix(path, "/a2a/"):
 		s.serveA2A(w, r, caller, strings.TrimPrefix(path, "/a2a"))
 	case strings.HasPrefix(path, "/v1/"):
+		if s.Console != nil {
+			if handler, pattern := s.Console.Handler(r); pattern != "" {
+				handler.ServeHTTP(w, r)
+				return
+			}
+		}
 		s.serveREST(w, r, caller, strings.TrimPrefix(path, "/v1"))
 	default:
 		writeStatusError(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", "")

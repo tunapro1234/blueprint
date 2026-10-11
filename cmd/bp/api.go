@@ -17,6 +17,7 @@ import (
 	"blueprint/internal/delivery"
 	"blueprint/internal/guard"
 	"blueprint/internal/identity"
+	"blueprint/internal/modules"
 	"blueprint/internal/msgq"
 )
 
@@ -167,6 +168,47 @@ func (a *app) serve(args []string) error {
 	}
 }
 
+// consoleMux builds the fleet console's /v1 endpoint set on a ServeMux. The
+// Server consults it before serveREST, so these routes extend /v1 without
+// touching the existing hand-rolled REST surface. It is only attached when the
+// ui module is enabled (docs/fleet-console.md). The task view's derivedStatus
+// reuses the exact fleet observer so a task owner's live status matches the
+// hierarchy view and is copied verbatim (unknown stays "").
+func (a *app) consoleMux() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	fleetDeps := api.NewFleetDeps(a.config.StateDir, a.config.Agentbooks, a.tmux)
+	api.RegisterFleet(mux, fleetDeps)
+
+	tasksDeps := api.NewTasksDeps(a.config.StateDir)
+	tasksDeps.ObserveStatus = func(ctx context.Context, owner string) string {
+		if owner == "" || fleetDeps.LoadFleet == nil || fleetDeps.Observe == nil {
+			return ""
+		}
+		fleet, err := fleetDeps.LoadFleet()
+		if err != nil {
+			return ""
+		}
+		var sessions []string
+		if fleetDeps.Sessions != nil {
+			if live, serr := fleetDeps.Sessions(ctx); serr == nil {
+				sessions = live
+			}
+		}
+		state := fleetDeps.Observe(ctx, fleet, owner, sessions)
+		if state.Activity != nil {
+			return state.Activity.State
+		}
+		return ""
+	}
+	api.RegisterTasks(mux, tasksDeps)
+
+	api.RegisterUsage(mux, api.NewUsageDeps(a.config.StateDir, a.config.UsageHistory))
+	api.RegisterWorkflowConsole(mux, api.NewWorkflowConsoleDeps(a.config.StateDir))
+
+	return mux
+}
+
 // startAPI serves the local API on the unix socket and/or a loopback TCP
 // address until ctx ends. It returns how many listeners started.
 func (a *app) startAPI(ctx context.Context, logger *log.Logger, socket bool, listen string, errs chan<- error) (int, error) {
@@ -175,6 +217,9 @@ func (a *app) startAPI(ctx context.Context, logger *log.Logger, socket bool, lis
 		return 0, err
 	}
 	server := &api.Server{Core: a.apiCore(), Token: token}
+	if modules.EnabledIn(a.config, modules.UI) {
+		server.Console = a.consoleMux()
+	}
 	var listeners []net.Listener
 	if socket {
 		listener, err := api.ListenUnix(api.SocketPath(a.config.StateDir))

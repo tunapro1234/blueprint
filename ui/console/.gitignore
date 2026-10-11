@@ -1,0 +1,7 @@
+# Node dependencies and Vite caches. The built bundle in dist/ IS committed
+# (internal/dashboard embeds it); everything below is local-only.
+node_modules/
+.vite/
+*.local
+*.tsbuildinfo
+npm-debug.log*

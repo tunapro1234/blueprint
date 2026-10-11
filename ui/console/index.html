@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>bp fleet console</title>
+    <script>
+      // The bp daemon replaces __BP_CONSOLE_TOKEN__ with the loopback API token
+      // (or "") when it serves this page (internal/dashboard/console.go). The API
+      // client reads window.__BP_TOKEN__ and sends it as the Bearer header.
+      window.__BP_TOKEN__ = "__BP_CONSOLE_TOKEN__";
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

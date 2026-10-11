@@ -175,16 +175,40 @@ func (d *workflowDriver) Compact(_ context.Context, agent string) error {
 	d.typing.Lock()
 	queued, channel, err := d.app.compactDeliver(agent, d.owner)
 	d.typing.Unlock()
-	if errors.Is(err, bptmux.ErrBusy) || errors.Is(err, bptmux.ErrTyping) || errors.Is(err, bptmux.ErrPaneLocked) {
+	return mapCompactResult(queued, channel, err)
+}
+
+// mapCompactResult translates a compact delivery outcome into the sentinel the
+// workflow engine understands.
+//
+//   - A busy/typing/pane-locked target is a transient "try again when idle", so
+//     the engine waits idle and retries (ErrCompactBusy).
+//   - An UNVERIFIED delivery is reported as queued/pending, NOT as a failure. A
+//     slash command carries no digest (msgq cannot witness it) and /compact
+//     launches compaction the instant Enter is pressed: the pane repaints and the
+//     screen submit check comes back unverified even though compaction started.
+//     Failing the run on that doubt is wrong; instead the engine confirms the real
+//     outcome by re-observing the agent's context drop (compactIfNeeded waits
+//     idle, observes, and records effective/ineffective/pending). Delivery-core
+//     stays fail-closed (it still never claims DELIVERED without proof); only the
+//     run-level verdict is relaxed to the engine's own measurement.
+//   - An explicitly queued delivery is pending as well.
+//   - Any other error is a real failure.
+func mapCompactResult(queued bool, channel string, err error) error {
+	switch {
+	case errors.Is(err, bptmux.ErrBusy),
+		errors.Is(err, bptmux.ErrTyping),
+		errors.Is(err, bptmux.ErrPaneLocked):
 		return workflow.ErrCompactBusy
-	}
-	if errors.Is(err, bptmux.ErrUnverified) {
-		return fmt.Errorf("compact was not verified: %w", err)
-	}
-	if queued {
+	case errors.Is(err, bptmux.ErrUnverified):
 		return fmt.Errorf("%w: %s", workflow.ErrCompactQueued, channel)
+	case queued:
+		return fmt.Errorf("%w: %s", workflow.ErrCompactQueued, channel)
+	case err != nil:
+		return err
+	default:
+		return nil
 	}
-	return err
 }
 
 func (a *app) workflow(args []string) error {

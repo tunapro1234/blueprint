@@ -221,3 +221,62 @@ func TestTaskDerivedStatusUnknownWhenNoObserver(t *testing.T) {
 		t.Fatalf("derivedStatus = %v, want empty", body["task"].(map[string]any)["derivedStatus"])
 	}
 }
+
+func TestTaskPriorityDueValidation(t *testing.T) {
+	deps := newTaskDeps(t, nil)
+
+	// A valid priority and due create and read back.
+	code, body := taskRequest(t, deps, "POST", "/v1/tasks", map[string]any{
+		"title": "x", "priority": "high", "due": "2026-10-20",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("valid priority/due status = %d, body %v", code, body)
+	}
+	created, _ := body["task"].(map[string]any)
+	if created["priority"] != "high" || created["due"] != "2026-10-20" {
+		t.Fatalf("priority/due not returned: %v", created)
+	}
+	id, _ := created["id"].(string)
+
+	// A bad priority and a bad due are each refused (fail closed).
+	if code, _ := taskRequest(t, deps, "POST", "/v1/tasks", map[string]any{"title": "x", "priority": "soon"}); code != http.StatusBadRequest {
+		t.Fatalf("bad-priority status = %d, want 400", code)
+	}
+	if code, _ := taskRequest(t, deps, "POST", "/v1/tasks", map[string]any{"title": "x", "due": "tomorrow"}); code != http.StatusBadRequest {
+		t.Fatalf("bad-due status = %d, want 400", code)
+	}
+
+	// PATCH validates priority too, and can clear it with an empty string.
+	if code, _ := taskRequest(t, deps, "PATCH", "/v1/tasks/"+id, map[string]any{"priority": "whenever"}); code != http.StatusBadRequest {
+		t.Fatalf("patch bad-priority status = %d, want 400", code)
+	}
+	code, body = taskRequest(t, deps, "PATCH", "/v1/tasks/"+id, map[string]any{"priority": ""})
+	if code != http.StatusOK {
+		t.Fatalf("patch clear-priority status = %d, body %v", code, body)
+	}
+	patched, _ := body["task"].(map[string]any)
+	if patched["priority"] != nil && patched["priority"] != "" {
+		t.Fatalf("priority not cleared: %v", patched["priority"])
+	}
+}
+
+func TestTaskDelete(t *testing.T) {
+	deps := newTaskDeps(t, nil)
+	code, body := taskRequest(t, deps, "POST", "/v1/tasks", map[string]any{"title": "delete me"})
+	if code != http.StatusOK {
+		t.Fatalf("create status = %d, body %v", code, body)
+	}
+	created, _ := body["task"].(map[string]any)
+	id, _ := created["id"].(string)
+
+	if code, _ := taskRequest(t, deps, "DELETE", "/v1/tasks/"+id, nil); code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", code)
+	}
+	if code, _ := taskRequest(t, deps, "GET", "/v1/tasks/"+id, nil); code != http.StatusNotFound {
+		t.Fatalf("after delete, get status = %d, want 404", code)
+	}
+	// Deleting an unknown id reports 404, not a silent success.
+	if code, _ := taskRequest(t, deps, "DELETE", "/v1/tasks/"+id, nil); code != http.StatusNotFound {
+		t.Fatalf("delete missing status = %d, want 404", code)
+	}
+}

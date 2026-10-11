@@ -14,14 +14,17 @@ const taskUsage = `usage: bp task <command>
   list [--owner <agent>] [--state <state>] [--parent <id>] [--mine] [--json]
         list tasks, optionally filtered; --mine lists tasks you own (your todo)
   add <title...> [--owner <agent>] [--parent <id>] [--state <state>]
-      [--body <text>] [--acceptance <text>]
+      [--priority <level>] [--due <YYYY-MM-DD>] [--body <text>] [--acceptance <text>]
         create a task and print its id
   done <id>
         mark a task done
   assign <id> <agent>
         set a task's owner
+  rm <id>
+        delete a task
 
-States: todo | in_progress | blocked | done | cancelled`
+States:     todo | in_progress | blocked | done | cancelled
+Priorities: low | medium | high | urgent`
 
 // cmdTask is the "bp task" command: a thin CLI over the durable task store so
 // the task model (docs/fleet-console.md, WS2) is usable without the web console.
@@ -44,6 +47,8 @@ func (a *app) cmdTask(args []string) error {
 		return a.taskDone(store, args[1:])
 	case "assign":
 		return a.taskAssign(store, args[1:])
+	case "rm", "delete":
+		return a.taskRm(store, args[1:])
 	default:
 		return fmt.Errorf("unknown task command %q\n%s", args[0], taskUsage)
 	}
@@ -115,7 +120,7 @@ func (a *app) taskList(store *tasks.Store, args []string) error {
 }
 
 func (a *app) taskAdd(store *tasks.Store, args []string) error {
-	var owner, parent, body, acceptance string
+	var owner, parent, body, acceptance, priority, due string
 	state := tasks.StateTodo
 	var titleParts []string
 	for i := 0; i < len(args); i++ {
@@ -138,6 +143,18 @@ func (a *app) taskAdd(store *tasks.Store, args []string) error {
 			}
 			i++
 			state = args[i]
+		case "--priority":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--priority needs a level")
+			}
+			i++
+			priority = args[i]
+		case "--due":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--due needs a YYYY-MM-DD date")
+			}
+			i++
+			due = args[i]
 		case "--body":
 			if i+1 >= len(args) {
 				return fmt.Errorf("--body needs text")
@@ -164,10 +181,17 @@ func (a *app) taskAdd(store *tasks.Store, args []string) error {
 	if !tasks.ValidState(state) {
 		return fmt.Errorf("invalid state %q (todo|in_progress|blocked|done|cancelled)", state)
 	}
+	if !tasks.ValidPriority(priority) {
+		return fmt.Errorf("invalid priority %q (low|medium|high|urgent)", priority)
+	}
+	if !tasks.ValidDue(due) {
+		return fmt.Errorf("invalid due %q (want YYYY-MM-DD)", due)
+	}
 	now := time.Now().UTC()
 	created, err := store.Create(tasks.Task{
 		ID: tasks.NewID(), Title: title, Owner: owner, Parent: parent,
-		State: state, Body: body, Acceptance: acceptance, CreatedAt: now, UpdatedAt: now,
+		State: state, Priority: priority, Due: due,
+		Body: body, Acceptance: acceptance, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return err
@@ -204,6 +228,17 @@ func (a *app) taskAssign(store *tasks.Store, args []string) error {
 		return err
 	}
 	fmt.Fprintf(a.out, "%s: owner -> %s\n", updated.ID, updated.Owner)
+	return nil
+}
+
+func (a *app) taskRm(store *tasks.Store, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: bp task rm <id>")
+	}
+	if err := store.Delete(args[0]); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "%s: deleted\n", args[0])
 	return nil
 }
 

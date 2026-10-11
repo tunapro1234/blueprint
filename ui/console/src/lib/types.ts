@@ -61,12 +61,26 @@ export const TASK_STATES: TaskState[] = [
   "cancelled",
 ];
 
+// Priority mirrors the Asana/Notion ladder. "" (absent) means unset, so an older
+// task written before priorities existed reads back as "no priority" rather than
+// failing to parse.
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
+
+export const TASK_PRIORITIES: TaskPriority[] = [
+  "low",
+  "medium",
+  "high",
+  "urgent",
+];
+
 export interface Task {
   id: string;
   title: string;
   owner: string;
   parent: string;
   state: TaskState;
+  priority?: TaskPriority | "";
+  due?: string;
   body?: string;
   acceptance?: string;
   createdAt?: string;
@@ -84,6 +98,8 @@ export interface NewTask {
   owner?: string;
   parent?: string;
   state?: TaskState;
+  priority?: TaskPriority | "";
+  due?: string;
   body?: string;
   acceptance?: string;
 }
@@ -93,6 +109,8 @@ export interface TaskPatch {
   owner?: string;
   parent?: string;
   state?: TaskState;
+  priority?: TaskPriority | "";
+  due?: string;
   body?: string;
   acceptance?: string;
 }

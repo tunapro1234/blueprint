@@ -223,3 +223,55 @@ func ids(tasks []Task) []string {
 	}
 	return out
 }
+
+func TestStorePriorityAndDue(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	// A valid priority and YYYY-MM-DD due date round-trip through the store.
+	created := mustCreate(t, s, Task{
+		ID: "p1", Title: "urgent", State: StateTodo,
+		Priority: PriorityUrgent, Due: "2026-10-20",
+	})
+	if created.Priority != PriorityUrgent || created.Due != "2026-10-20" {
+		t.Fatalf("priority/due not stored: %+v", created)
+	}
+
+	// An empty priority and empty due are always allowed (unset).
+	plain := mustCreate(t, s, Task{ID: "p2", Title: "no priority"})
+	if plain.Priority != "" || plain.Due != "" {
+		t.Fatalf("empty priority/due should stay empty: %+v", plain)
+	}
+
+	// An unknown priority and a non-date due are refused (fail closed).
+	bad := []Task{
+		{ID: "b1", Title: "bad prio", Priority: "sometime"},
+		{ID: "b2", Title: "bad due", Due: "next tuesday"},
+		{ID: "b3", Title: "bad due2", Due: "2026-13-40"},
+	}
+	for i, task := range bad {
+		task.CreatedAt, task.UpdatedAt = fixedTime(), fixedTime()
+		if _, err := s.Create(task); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("bad priority/due case %d err = %v, want ErrInvalid", i, err)
+		}
+	}
+}
+
+func TestStoreDelete(t *testing.T) {
+	s := NewStore(t.TempDir())
+	mustCreate(t, s, Task{ID: "d1", Title: "to delete"})
+
+	if err := s.Delete("d1"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Get("d1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after Delete, Get err = %v, want ErrNotFound", err)
+	}
+	// Deleting an unknown id is reported, not silently ignored.
+	if err := s.Delete("d1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete missing err = %v, want ErrNotFound", err)
+	}
+	// An invalid id is refused before touching disk.
+	if err := s.Delete("bad/id"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("delete invalid id err = %v, want ErrInvalid", err)
+	}
+}

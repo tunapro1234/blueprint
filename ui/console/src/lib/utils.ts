@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
-import type { AgentStatus, TaskState } from "./types";
+import type { AgentStatus, TaskPriority, TaskState } from "./types";
 
 // cn merges Tailwind classes, with later classes winning conflicts.
 export function cn(...inputs: ClassValue[]): string {
@@ -40,6 +40,57 @@ export const TASK_STATE_LABELS: Record<TaskState, string> = {
   done: "Done",
   cancelled: "Cancelled",
 };
+
+// Priority palette climbs from a calm grey-blue (low) to red (urgent), the same
+// visual ladder Asana/Notion use so the colour reads as urgency at a glance.
+export const TASK_PRIORITY_COLORS: Record<TaskPriority, string> = {
+  low: "#6b7280",
+  medium: "#3b82f6",
+  high: "#f59e0b",
+  urgent: "#ef4444",
+};
+
+export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  urgent: "Urgent",
+};
+
+// ── Due dates ────────────────────────────────────────────────────────────────
+
+// formatDue renders a YYYY-MM-DD due date compactly ("Mar 4"), or "" for an unset
+// date. It parses as local noon so the day label never slips across a timezone.
+export function formatDue(due: string | undefined): string {
+  if (!due) return "";
+  const d = new Date(`${due}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return due;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// dueState classifies a due date relative to today so a card can colour it:
+// "overdue" (before today), "today", "soon" (within 2 days), or "" otherwise.
+export function dueState(
+  due: string | undefined,
+  today: string,
+): "overdue" | "today" | "soon" | "" {
+  if (!due) return "";
+  if (due < today) return "overdue";
+  if (due === today) return "today";
+  const d = new Date(`${due}T12:00:00`).getTime();
+  const t = new Date(`${today}T12:00:00`).getTime();
+  if (!Number.isNaN(d) && !Number.isNaN(t) && d - t <= 2 * 86_400_000) return "soon";
+  return "";
+}
+
+// todayISO is today's calendar date (local) in YYYY-MM-DD, for due comparisons.
+export function todayISO(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 

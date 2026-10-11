@@ -73,6 +73,7 @@ func RegisterTasks(mux *http.ServeMux, deps TasksDeps) {
 	mux.HandleFunc("POST /v1/tasks", deps.handleCreate)
 	mux.HandleFunc("GET /v1/tasks/{id}", deps.handleGet)
 	mux.HandleFunc("PATCH /v1/tasks/{id}", deps.handleUpdate)
+	mux.HandleFunc("DELETE /v1/tasks/{id}", deps.handleDelete)
 }
 
 // taskJSON is one task as the API returns it: the stored task plus the derived,
@@ -185,6 +186,8 @@ func (d TasksDeps) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Owner      string `json:"owner"`
 		Parent     string `json:"parent"`
 		State      string `json:"state"`
+		Priority   string `json:"priority"`
+		Due        string `json:"due"`
 		Body       string `json:"body"`
 		Acceptance string `json:"acceptance"`
 	}
@@ -199,10 +202,19 @@ func (d TasksDeps) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeStatusError(w, http.StatusBadRequest, "INVALID_ARGUMENT", msg, "")
 		return
 	}
+	if !tasks.ValidPriority(body.Priority) {
+		writeStatusError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "priority must be empty or one of low|medium|high|urgent", "")
+		return
+	}
+	if !tasks.ValidDue(body.Due) {
+		writeStatusError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "due must be empty or a YYYY-MM-DD date", "")
+		return
+	}
 	now := d.now().UTC()
 	task := tasks.Task{
 		ID: d.newID(), Title: body.Title, Owner: body.Owner, Parent: body.Parent,
-		State: body.State, Body: body.Body, Acceptance: body.Acceptance,
+		State: body.State, Priority: body.Priority, Due: body.Due,
+		Body: body.Body, Acceptance: body.Acceptance,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	created, err := d.Store.Create(task)
@@ -229,6 +241,8 @@ func (d TasksDeps) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		Owner      *string `json:"owner"`
 		Parent     *string `json:"parent"`
 		State      *string `json:"state"`
+		Priority   *string `json:"priority"`
+		Due        *string `json:"due"`
 		Body       *string `json:"body"`
 		Acceptance *string `json:"acceptance"`
 	}
@@ -239,6 +253,14 @@ func (d TasksDeps) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	// Validate every supplied field up front (fail closed) before touching disk.
 	if body.State != nil && !tasks.ValidState(*body.State) {
 		writeStatusError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "state must be one of todo|in_progress|blocked|done|cancelled", "")
+		return
+	}
+	if body.Priority != nil && !tasks.ValidPriority(*body.Priority) {
+		writeStatusError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "priority must be empty or one of low|medium|high|urgent", "")
+		return
+	}
+	if body.Due != nil && !tasks.ValidDue(*body.Due) {
+		writeStatusError(w, http.StatusBadRequest, "INVALID_ARGUMENT", "due must be empty or a YYYY-MM-DD date", "")
 		return
 	}
 	if body.Owner != nil && *body.Owner != "" && !identity.ValidName(*body.Owner) {
@@ -262,6 +284,12 @@ func (d TasksDeps) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		if body.State != nil {
 			task.State = *body.State
 		}
+		if body.Priority != nil {
+			task.Priority = *body.Priority
+		}
+		if body.Due != nil {
+			task.Due = *body.Due
+		}
 		if body.Body != nil {
 			task.Body = *body.Body
 		}
@@ -276,6 +304,21 @@ func (d TasksDeps) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	obs := d.observer(r.Context())
 	writeJSONResponse(w, http.StatusOK, map[string]any{"task": obs.view(updated)})
+}
+
+// --- DELETE /v1/tasks/{id} ---
+
+func (d TasksDeps) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if d.Store == nil {
+		writeStatusError(w, http.StatusInternalServerError, "INTERNAL", "task store not configured", "")
+		return
+	}
+	id := r.PathValue("id")
+	if err := d.Store.Delete(id); err != nil {
+		taskWriteError(w, err)
+		return
+	}
+	writeJSONResponse(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
 // taskValidateFields checks the name-shaped and state fields of a create. It

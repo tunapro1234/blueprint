@@ -136,6 +136,10 @@ export const tasksApi = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  remove: (id: string) =>
+    apiFetch<{ deleted: string }>(`/v1/tasks/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 };
 
 // ── Usage ──────────────────────────────────────────────────────────────────

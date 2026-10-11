@@ -52,6 +52,43 @@ var validStates = map[string]bool{
 // ValidState reports whether state is one of the allowed task states.
 func ValidState(state string) bool { return validStates[state] }
 
+// Task priorities. An empty priority means "unset" and is always allowed; the
+// named levels mirror the ladder Asana/Notion users expect (low..urgent).
+const (
+	PriorityLow    = "low"
+	PriorityMedium = "medium"
+	PriorityHigh   = "high"
+	PriorityUrgent = "urgent"
+)
+
+// validPriorities is the closed set a non-empty priority is checked against.
+var validPriorities = map[string]bool{
+	PriorityLow:    true,
+	PriorityMedium: true,
+	PriorityHigh:   true,
+	PriorityUrgent: true,
+}
+
+// ValidPriority reports whether priority is allowed: empty (unset) or one of the
+// named levels. The set is closed, so an unknown priority is refused.
+func ValidPriority(priority string) bool {
+	return priority == "" || validPriorities[priority]
+}
+
+// dueLayout is the date-only format a task due date is stored and validated in.
+const dueLayout = "2006-01-02"
+
+// ValidDue reports whether due is allowed: empty (no due date) or a calendar
+// date in YYYY-MM-DD form. A due date carries no time of day on purpose — a
+// task board shows the day, not the minute.
+func ValidDue(due string) bool {
+	if due == "" {
+		return true
+	}
+	_, err := time.Parse(dueLayout, due)
+	return err == nil
+}
+
 // Field bounds. They keep a stored task small and a title/owner single-line;
 // nothing a human writes legitimately comes close to the body bound.
 const (
@@ -70,6 +107,8 @@ type Task struct {
 	Owner      string    `json:"owner,omitempty"`
 	Parent     string    `json:"parent,omitempty"`
 	State      string    `json:"state"`
+	Priority   string    `json:"priority,omitempty"`
+	Due        string    `json:"due,omitempty"`
 	Body       string    `json:"body,omitempty"`
 	Acceptance string    `json:"acceptance,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -186,6 +225,12 @@ func (t Task) validate() error {
 	}
 	if !ValidState(t.State) {
 		return fmt.Errorf("%w: state %q is not one of todo|in_progress|blocked|done|cancelled", ErrInvalid, t.State)
+	}
+	if !ValidPriority(t.Priority) {
+		return fmt.Errorf("%w: priority %q is not one of (empty)|low|medium|high|urgent", ErrInvalid, t.Priority)
+	}
+	if !ValidDue(t.Due) {
+		return fmt.Errorf("%w: due %q is not a YYYY-MM-DD date", ErrInvalid, t.Due)
 	}
 	return nil
 }
@@ -327,6 +372,26 @@ func (s *Store) Update(id string, now time.Time, mutate func(*Task) error) (Task
 		return Task{}, err
 	}
 	return result, nil
+}
+
+// Delete removes a task by id. It is the board's own CRUD delete (a user
+// discarding a todo they created), not a records-retention delete: it only ever
+// removes a single task file this store owns under <StateDir>/tasks. An unknown
+// id is reported as ErrNotFound rather than silently succeeding, so the caller
+// can tell a no-op from a real delete.
+func (s *Store) Delete(id string) error {
+	if !validID(id) {
+		return fmt.Errorf("%w: id %q is not a valid task id", ErrInvalid, id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withLock(func() error {
+		err := os.Remove(s.path(id))
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		return err
+	})
 }
 
 func readTask(path string) (Task, error) {

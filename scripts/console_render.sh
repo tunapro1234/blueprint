@@ -64,8 +64,10 @@ node "$root/scripts/console_render_seed.mjs" "$BP_HOME" "$BP_HOME/state" || echo
 "$bp" task add "Ship fleet console MVP" --owner blueprint >/dev/null 2>&1 || echo "note: task seed 1 skipped"
 "$bp" task add "Wire usage token calc" --owner server-main >/dev/null 2>&1 || echo "note: task seed 2 skipped"
 
-# Seed one workflow (best-effort: if the schema drifts, the Workflows page just
-# renders its empty-state, which is still a valid render).
+# Seed one workflow so the Workflows page is proofed WITH data (the save/clone UI
+# the owner asked for), not just its empty-state. The shape mirrors bp's own
+# workflow schema: units.key names the unit-id field, prompt.template is a
+# relative template FILE, and TemplateData exposes {{.Key}} (capital K).
 wfdir="$work/wf"
 mkdir -p "$wfdir"
 cat > "$wfdir/workflow.yaml" <<'YAML'
@@ -74,11 +76,18 @@ name: egitim-supervised
 description: Multi-agent supervised curriculum build
 units:
   file: units.json
+  key: key
 prompt:
-  template: "Build curriculum unit {{.key}} with peer review."
+  template: prompt.md
 YAML
 echo '[{"key":"unit-1"},{"key":"unit-2"}]' > "$wfdir/units.json"
-"$bp" workflow add "$wfdir" >/dev/null 2>&1 || echo "note: workflow seed skipped (schema drift; page shows empty-state)"
+printf 'Build curriculum unit {{.Key}} with peer review.\n' > "$wfdir/prompt.md"
+# Surface the error if it ever drifts again (the old >/dev/null hid three schema
+# mistakes that silently left the page empty), but keep the render non-fatal.
+if ! "$bp" workflow add "$wfdir" >"$work/wf-add.log" 2>&1; then
+  echo "note: workflow seed failed (Workflows page will show empty-state):"
+  sed 's/^/  /' "$work/wf-add.log"
+fi
 
 # Serve on an OS-assigned loopback port and parse the printed URL.
 log="$work/console.log"

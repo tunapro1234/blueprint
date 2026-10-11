@@ -42,6 +42,9 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const LEAF_COLS_MAX = 6; // widest a leaf cluster grid may get
 const CLUSTER_MIN = 3; // >= this many leaf children render as a boxed grid
+const ROW_RATIO = 4; // target width:height of a node's wrapped child block (tuned
+// against the live 202-agent fleet: the whole chart then lands near a 1.5:1 box,
+// close to 16:9 and the readable-zoom sweet spot, vs ~33:1 with one row per node)
 
 interface OrgNode {
   name: string;
@@ -119,8 +122,71 @@ function gridDims(n: number): { cols: number; rows: number; w: number; h: number
   };
 }
 
-// measureAll fills `sizes` bottom-up with each subtree's bounding box, treating a
-// leaf cluster (>= CLUSTER_MIN leaves) as a single grid block within the row.
+interface Block {
+  w: number;
+  h: number;
+  node?: OrgNode; // a branch subtree or a single small leaf
+  leaves?: OrgNode[]; // a clustered leaf grid
+  cols?: number;
+}
+
+// childBlocks turns a node's children into layout blocks: one per branch subtree,
+// one per small (non-clustered) leaf, and a single grid block for a large leaf
+// cluster. Blocks are what the row-packer arranges.
+function childBlocks(node: OrgNode, sizes: Map<string, Size>): Block[] {
+  const { branches, leaves } = splitChildren(node);
+  const blocks: Block[] = branches.map((b) => {
+    const s = sizes.get(b.name)!;
+    return { w: s.w, h: s.h, node: b };
+  });
+  if (leaves.length >= CLUSTER_MIN) {
+    const g = gridDims(leaves.length);
+    blocks.push({ w: g.w, h: g.h, leaves, cols: g.cols });
+  } else {
+    for (const l of leaves) blocks.push({ w: CARD_W, h: CARD_H, node: l });
+  }
+  return blocks;
+}
+
+// rowTarget chooses how wide a node's child row may get before it wraps. It aims
+// for a child block of roughly ROW_RATIO:1 (wider than tall, since cards are 2:1),
+// so a node with many children stacks into several rows and grows DOWN instead of
+// sprawling sideways — the fix for a short, extremely wide chart. It never drops
+// below the widest single block, which cannot be split.
+function rowTarget(blocks: Block[]): number {
+  const area = blocks.reduce((s, b) => s + b.w * b.h, 0);
+  const widest = blocks.reduce((m, b) => Math.max(m, b.w), CARD_W);
+  return Math.max(widest, Math.sqrt(area * ROW_RATIO));
+}
+
+// packRows greedily shelf-packs blocks into rows no wider than target.
+function packRows(blocks: Block[], target: number): Block[][] {
+  const rows: Block[][] = [];
+  let cur: Block[] = [];
+  let curW = 0;
+  for (const b of blocks) {
+    const add = cur.length > 0 ? GAP_X + b.w : b.w;
+    if (cur.length > 0 && curW + add > target) {
+      rows.push(cur);
+      cur = [b];
+      curW = b.w;
+    } else {
+      cur.push(b);
+      curW += add;
+    }
+  }
+  if (cur.length > 0) rows.push(cur);
+  return rows;
+}
+
+function rowSize(row: Block[]): Size {
+  const w = row.reduce((s, b) => s + b.w, 0) + Math.max(0, row.length - 1) * GAP_X;
+  const h = row.reduce((m, b) => Math.max(m, b.h), 0);
+  return { w, h };
+}
+
+// measureAll fills `sizes` bottom-up with each subtree's bounding box. Children are
+// packed into wrapped rows (see rowTarget), so the box grows down, not only out.
 function measureAll(node: OrgNode, sizes: Map<string, Size>): Size {
   if (node.children.length === 0) {
     const s = { w: CARD_W, h: CARD_H };
@@ -131,26 +197,23 @@ function measureAll(node: OrgNode, sizes: Map<string, Size>): Size {
   for (const b of branches) measureAll(b, sizes);
   for (const l of leaves) sizes.set(l.name, { w: CARD_W, h: CARD_H });
 
-  const clustered = leaves.length >= CLUSTER_MIN;
-  const rowKids = clustered ? branches : [...branches, ...leaves];
-  let rowW =
-    rowKids.reduce((s, c) => s + sizes.get(c.name)!.w, 0) +
-    Math.max(0, rowKids.length - 1) * GAP_X;
-  let rowH = rowKids.reduce((h, c) => Math.max(h, sizes.get(c.name)!.h), CARD_H);
-  if (clustered) {
-    const g = gridDims(leaves.length);
-    if (rowKids.length > 0) rowW += GAP_X;
-    rowW += g.w;
-    rowH = Math.max(rowH, g.h);
-  }
-  const s = { w: Math.max(CARD_W, rowW), h: CARD_H + GAP_Y + rowH };
+  const blocks = childBlocks(node, sizes);
+  const rows = packRows(blocks, rowTarget(blocks));
+  let childrenW = CARD_W;
+  let childrenH = 0;
+  rows.forEach((row, i) => {
+    const rs = rowSize(row);
+    childrenW = Math.max(childrenW, rs.w);
+    childrenH += (i > 0 ? GAP_Y : 0) + rs.h;
+  });
+  const s = { w: childrenW, h: CARD_H + GAP_Y + childrenH };
   sizes.set(node.name, s);
   return s;
 }
 
-// placeTree positions `node` and its descendants, appending any leaf clusters to
-// `clusters`. Branch subtrees and small leaf sets sit in the child row; a large
-// leaf set becomes a boxed grid placed after them.
+// placeTree positions `node` and its descendants using the same row packing as
+// measureAll, appending any leaf clusters to `clusters`. Each child row is centered
+// under the node and rows stack downward.
 function placeTree(
   node: OrgNode,
   x: number,
@@ -163,41 +226,34 @@ function placeTree(
   out[node.name] = { x: x + (self.w - CARD_W) / 2, y };
   if (node.children.length === 0) return;
 
-  const { branches, leaves } = splitChildren(node);
-  const clustered = leaves.length >= CLUSTER_MIN;
-  const rowKids = clustered ? branches : [...branches, ...leaves];
-  const g = clustered ? gridDims(leaves.length) : null;
-
-  let rowW =
-    rowKids.reduce((s, c) => s + sizes.get(c.name)!.w, 0) +
-    Math.max(0, rowKids.length - 1) * GAP_X;
-  if (g) {
-    if (rowKids.length > 0) rowW += GAP_X;
-    rowW += g.w;
-  }
-  rowW = Math.max(CARD_W, rowW);
-
-  let cx = x + (self.w - rowW) / 2;
-  const cy = y + CARD_H + GAP_Y;
-  for (const c of rowKids) {
-    placeTree(c, cx, cy, sizes, out, clusters);
-    cx += sizes.get(c.name)!.w + GAP_X;
-  }
-  if (g) {
-    const gx = cx;
-    clusters.push({
-      parent: node.name,
-      members: leaves.map((l) => l.name),
-      x: gx,
-      y: cy,
-      w: g.w,
-      h: g.h,
-    });
-    leaves.forEach((c, i) => {
-      const col = i % g.cols;
-      const row = Math.floor(i / g.cols);
-      out[c.name] = { x: gx + col * (CARD_W + GAP_X), y: cy + row * (CARD_H + GAP_Y) };
-    });
+  const blocks = childBlocks(node, sizes);
+  const rows = packRows(blocks, rowTarget(blocks));
+  let cy = y + CARD_H + GAP_Y;
+  for (const row of rows) {
+    const rs = rowSize(row);
+    let cx = x + (self.w - rs.w) / 2;
+    for (const b of row) {
+      if (b.leaves) {
+        const cols = b.cols ?? gridCols(b.leaves.length);
+        clusters.push({
+          parent: node.name,
+          members: b.leaves.map((l) => l.name),
+          x: cx,
+          y: cy,
+          w: b.w,
+          h: b.h,
+        });
+        b.leaves.forEach((c, i) => {
+          const col = i % cols;
+          const rr = Math.floor(i / cols);
+          out[c.name] = { x: cx + col * (CARD_W + GAP_X), y: cy + rr * (CARD_H + GAP_Y) };
+        });
+      } else if (b.node) {
+        placeTree(b.node, cx, cy, sizes, out, clusters);
+      }
+      cx += b.w + GAP_X;
+    }
+    cy += rs.h + GAP_Y;
   }
 }
 

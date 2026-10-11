@@ -6,9 +6,9 @@
     <meta name="color-scheme" content="light dark" />
     <title>bp fleet console</title>
     <script>
-      // The bp daemon replaces __BP_CONSOLE_TOKEN__ with the loopback API token
-      // (or "") when it serves this page (internal/dashboard/console.go). The API
-      // client reads window.__BP_TOKEN__ and sends it as the Bearer header.
+      // The bp daemon rewrites the quoted placeholder below with the loopback API
+      // token (or "") when it serves this page (internal/dashboard/console.go). The
+      // API client reads window.__BP_TOKEN__ and sends it as the Bearer header.
       window.__BP_TOKEN__ = "__BP_CONSOLE_TOKEN__";
     </script>
     <script type="module" crossorigin src="./assets/index-CwFe008J.js"></script>

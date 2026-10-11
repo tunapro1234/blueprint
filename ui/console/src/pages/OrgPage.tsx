@@ -1,11 +1,18 @@
-// OrgPage reimplements Paperclip's hand-rolled tidy-tree org chart (no graph
-// library) over bp's live fleet, plus the three bp-native extensions the owner
-// asked for: drag a card onto another to reparent it (POST /v1/fleet/reparent),
-// drag a card onto empty canvas to free-move it (persisted via /v1/fleet/layout),
-// and a "group by host" toggle that draws one zone box per machine.
+// OrgPage draws bp's live fleet as a tidy org chart, plus the three bp-native
+// extensions the owner asked for: drag a card onto another to reparent it
+// (POST /v1/fleet/reparent), drag a card onto empty canvas to free-move it
+// (persisted via /v1/fleet/layout), and a "group by host" toggle that draws one
+// zone box per machine.
 //
-// The layout math (subtreeWidth / layoutTree / layoutForest) and the custom
-// pan/zoom are ported from ui/src/pages/OrgChart.tsx in the reference study.
+// Layout notes. A real fleet is deep but very fan-out heavy: a handful of
+// parents own dozens of leaf workers. A plain tidy tree lays every sibling in
+// one row, which makes the chart "short but extremely wide" and unreadable on a
+// 1920x1080 screen. Two measures fix that and fill the space efficiently:
+//   1. leaf clustering — when a node has >= CLUSTER_MIN leaf children (agents
+//      with no reports of their own), they are packed into a compact grid block
+//      with a single edge to the parent, instead of one very wide row;
+//   2. forest shelf-packing — root subtrees are wrapped into rows whose width
+//      targets a ~16:9 aspect, instead of growing left-to-right forever.
 
 import {
   useCallback,
@@ -29,10 +36,12 @@ import { Button, PageState, Spinner } from "../components/ui";
 const CARD_W = 200;
 const CARD_H = 100;
 const GAP_X = 32;
-const GAP_Y = 80;
+const GAP_Y = 72;
 const PADDING = 60;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
+const LEAF_COLS_MAX = 6; // widest a leaf cluster grid may get
+const CLUSTER_MIN = 3; // >= this many leaf children render as a boxed grid
 
 interface OrgNode {
   name: string;
@@ -41,6 +50,18 @@ interface OrgNode {
 }
 
 type PosMap = Record<string, LayoutPos>;
+interface Size {
+  w: number;
+  h: number;
+}
+interface Cluster {
+  parent: string;
+  members: string[];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 // buildForest turns the flat agent list into a parent→children forest. A parent
 // that is not itself in the set (or "") makes its agent a root, so a live but
@@ -71,36 +92,142 @@ function buildForest(agents: FleetAgent[]): OrgNode[] {
   return roots;
 }
 
-function subtreeWidth(node: OrgNode): number {
-  if (node.children.length === 0) return CARD_W;
-  const childrenW = node.children.reduce((sum, c) => sum + subtreeWidth(c), 0);
-  const gaps = (node.children.length - 1) * GAP_X;
-  return Math.max(CARD_W, childrenW + gaps);
+// splitChildren separates children that have their own descendants (branches,
+// laid as tidy subtrees) from leaves (candidates for grid clustering).
+function splitChildren(node: OrgNode): { branches: OrgNode[]; leaves: OrgNode[] } {
+  const branches: OrgNode[] = [];
+  const leaves: OrgNode[] = [];
+  for (const c of node.children) {
+    if (c.children.length > 0) branches.push(c);
+    else leaves.push(c);
+  }
+  return { branches, leaves };
 }
 
-function layoutTree(node: OrgNode, x: number, y: number, out: PosMap) {
-  const totalW = subtreeWidth(node);
-  out[node.name] = { x: x + (totalW - CARD_W) / 2, y };
-  if (node.children.length > 0) {
-    const childrenW = node.children.reduce((s, c) => s + subtreeWidth(c), 0);
-    const gaps = (node.children.length - 1) * GAP_X;
-    let cx = x + (totalW - childrenW - gaps) / 2;
-    for (const child of node.children) {
-      const cw = subtreeWidth(child);
-      layoutTree(child, cx, y + CARD_H + GAP_Y, out);
-      cx += cw + GAP_X;
-    }
+function gridCols(n: number): number {
+  return Math.min(LEAF_COLS_MAX, Math.max(2, Math.ceil(Math.sqrt(n))));
+}
+
+function gridDims(n: number): { cols: number; rows: number; w: number; h: number } {
+  const cols = gridCols(n);
+  const rows = Math.ceil(n / cols);
+  return {
+    cols,
+    rows,
+    w: cols * CARD_W + (cols - 1) * GAP_X,
+    h: rows * CARD_H + (rows - 1) * GAP_Y,
+  };
+}
+
+// measureAll fills `sizes` bottom-up with each subtree's bounding box, treating a
+// leaf cluster (>= CLUSTER_MIN leaves) as a single grid block within the row.
+function measureAll(node: OrgNode, sizes: Map<string, Size>): Size {
+  if (node.children.length === 0) {
+    const s = { w: CARD_W, h: CARD_H };
+    sizes.set(node.name, s);
+    return s;
+  }
+  const { branches, leaves } = splitChildren(node);
+  for (const b of branches) measureAll(b, sizes);
+  for (const l of leaves) sizes.set(l.name, { w: CARD_W, h: CARD_H });
+
+  const clustered = leaves.length >= CLUSTER_MIN;
+  const rowKids = clustered ? branches : [...branches, ...leaves];
+  let rowW =
+    rowKids.reduce((s, c) => s + sizes.get(c.name)!.w, 0) +
+    Math.max(0, rowKids.length - 1) * GAP_X;
+  let rowH = rowKids.reduce((h, c) => Math.max(h, sizes.get(c.name)!.h), CARD_H);
+  if (clustered) {
+    const g = gridDims(leaves.length);
+    if (rowKids.length > 0) rowW += GAP_X;
+    rowW += g.w;
+    rowH = Math.max(rowH, g.h);
+  }
+  const s = { w: Math.max(CARD_W, rowW), h: CARD_H + GAP_Y + rowH };
+  sizes.set(node.name, s);
+  return s;
+}
+
+// placeTree positions `node` and its descendants, appending any leaf clusters to
+// `clusters`. Branch subtrees and small leaf sets sit in the child row; a large
+// leaf set becomes a boxed grid placed after them.
+function placeTree(
+  node: OrgNode,
+  x: number,
+  y: number,
+  sizes: Map<string, Size>,
+  out: PosMap,
+  clusters: Cluster[],
+) {
+  const self = sizes.get(node.name)!;
+  out[node.name] = { x: x + (self.w - CARD_W) / 2, y };
+  if (node.children.length === 0) return;
+
+  const { branches, leaves } = splitChildren(node);
+  const clustered = leaves.length >= CLUSTER_MIN;
+  const rowKids = clustered ? branches : [...branches, ...leaves];
+  const g = clustered ? gridDims(leaves.length) : null;
+
+  let rowW =
+    rowKids.reduce((s, c) => s + sizes.get(c.name)!.w, 0) +
+    Math.max(0, rowKids.length - 1) * GAP_X;
+  if (g) {
+    if (rowKids.length > 0) rowW += GAP_X;
+    rowW += g.w;
+  }
+  rowW = Math.max(CARD_W, rowW);
+
+  let cx = x + (self.w - rowW) / 2;
+  const cy = y + CARD_H + GAP_Y;
+  for (const c of rowKids) {
+    placeTree(c, cx, cy, sizes, out, clusters);
+    cx += sizes.get(c.name)!.w + GAP_X;
+  }
+  if (g) {
+    const gx = cx;
+    clusters.push({
+      parent: node.name,
+      members: leaves.map((l) => l.name),
+      x: gx,
+      y: cy,
+      w: g.w,
+      h: g.h,
+    });
+    leaves.forEach((c, i) => {
+      const col = i % g.cols;
+      const row = Math.floor(i / g.cols);
+      out[c.name] = { x: gx + col * (CARD_W + GAP_X), y: cy + row * (CARD_H + GAP_Y) };
+    });
   }
 }
 
-function layoutForest(roots: OrgNode[]): PosMap {
-  const out: PosMap = {};
+// layoutForest lays each root subtree, then shelf-packs the roots into rows whose
+// total width targets a ~16:9 aspect so the chart fills a 1920x1080 viewport
+// instead of growing into one short, very wide strip.
+function layoutForest(roots: OrgNode[]): { positions: PosMap; clusters: Cluster[] } {
+  const sizes = new Map<string, Size>();
+  const rootSizes = roots.map((r) => measureAll(r, sizes));
+  const area = rootSizes.reduce((s, m) => s + m.w * m.h, 0);
+  const widest = rootSizes.reduce((m, s) => Math.max(m, s.w), CARD_W);
+  const target = Math.max(widest, Math.sqrt(area * (16 / 9)));
+
+  const positions: PosMap = {};
+  const clusters: Cluster[] = [];
   let x = PADDING;
-  for (const root of roots) {
-    layoutTree(root, x, PADDING, out);
-    x += subtreeWidth(root) + GAP_X;
+  let y = PADDING;
+  let rowH = 0;
+  for (let i = 0; i < roots.length; i++) {
+    const m = rootSizes[i];
+    if (x > PADDING && x - PADDING + m.w > target) {
+      x = PADDING;
+      y += rowH + GAP_Y * 2;
+      rowH = 0;
+    }
+    placeTree(roots[i], x, y, sizes, positions, clusters);
+    x += m.w + GAP_X * 2;
+    rowH = Math.max(rowH, m.h);
   }
-  return out;
+  return { positions, clusters };
 }
 
 interface HostZone {
@@ -125,7 +252,7 @@ function hostLayout(agents: FleetAgent[]): { positions: PosMap; zones: HostZone[
   const positions: PosMap = {};
   const zones: HostZone[] = [];
   const zonePad = 24;
-  const cols = 3;
+  const cols = 4;
   let y = PADDING;
   for (const host of [...hosts.keys()].sort()) {
     const list = hosts.get(host)!.sort((a, b) => a.name.localeCompare(b.name));
@@ -170,7 +297,13 @@ export function OrgPage() {
   }, [layoutQuery.data]);
 
   const forest = useMemo(() => buildForest(agents), [agents]);
-  const tidy = useMemo(() => layoutForest(forest), [forest]);
+  const layout = useMemo(() => layoutForest(forest), [forest]);
+  const tidy = layout.positions;
+  const clusters = layout.clusters;
+  const clusteredSet = useMemo(
+    () => new Set(clusters.flatMap((c) => c.members)),
+    [clusters],
+  );
   const host = useMemo(() => hostLayout(agents), [agents]);
 
   const reparentMut = useMutation({
@@ -238,13 +371,15 @@ export function OrgPage() {
     });
   }, [bounds]);
 
-  // Fit once the first data arrives.
-  const fitted = useRef(false);
+  // Re-fit when the data (and thus bounds) first arrives or the mode changes.
+  const fitKey = `${groupByHost}:${agents.length}`;
+  const lastFit = useRef("");
   useEffect(() => {
-    if (fitted.current || agents.length === 0 || !containerRef.current) return;
-    fitted.current = true;
+    if (agents.length === 0 || !containerRef.current) return;
+    if (lastFit.current === fitKey) return;
+    lastFit.current = fitKey;
     fit();
-  }, [agents, fit]);
+  }, [fitKey, agents.length, fit]);
 
   const zoomTo = useCallback(
     (nextZoom: number, cx: number, cy: number) => {
@@ -389,15 +524,25 @@ export function OrgPage() {
   const edges = groupByHost
     ? []
     : agents
-        .filter((a) => a.parent && agents.some((p) => p.name === a.parent))
+        .filter(
+          (a) =>
+            a.parent &&
+            !clusteredSet.has(a.name) &&
+            agents.some((p) => p.name === a.parent),
+        )
         .map((a) => ({ parent: a.parent, child: a.name }));
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-2">
-        <h1 className="text-sm font-semibold">Org</h1>
+        <div className="flex items-baseline gap-2">
+          <h1 className="text-sm font-semibold">Org</h1>
+          <span className="text-[11px] text-muted-foreground">{agents.length} agents</span>
+        </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Drag a card onto another to reparent; onto empty space to arrange.</span>
+          <span className="hidden md:inline">
+            Drag a card onto another to reparent; onto empty space to arrange.
+          </span>
           <Button
             variant={groupByHost ? "default" : "outline"}
             onClick={() => setGroupByHost((v) => !v)}
@@ -479,6 +624,24 @@ export function OrgPage() {
                 />
               );
             })}
+            {!groupByHost &&
+              clusters.map((cl) => {
+                const p = posOf(cl.parent, dragged);
+                const x1 = p.x + CARD_W / 2;
+                const y1 = p.y + CARD_H;
+                const x2 = cl.x + cl.w / 2;
+                const y2 = cl.y;
+                const midY = (y1 + y2) / 2;
+                return (
+                  <path
+                    key={`cluster-${cl.parent}`}
+                    d={`M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`}
+                    fill="none"
+                    stroke="var(--border)"
+                    strokeWidth={1.5}
+                  />
+                );
+              })}
           </g>
         </svg>
 
@@ -487,6 +650,19 @@ export function OrgPage() {
           className="absolute inset-0"
           style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "0 0" }}
         >
+          {/* Leaf-cluster backing boxes, behind their cards. */}
+          {!groupByHost &&
+            clusters.map((cl) => (
+              <div
+                key={`clbox-${cl.parent}`}
+                className="absolute rounded-md border border-dashed border-border/70 bg-background/30"
+                style={{ left: cl.x - 10, top: cl.y - 10, width: cl.w + 20, height: cl.h + 20 }}
+              >
+                <span className="absolute -top-2 right-2 rounded-sm bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
+                  {cl.members.length}
+                </span>
+              </div>
+            ))}
           {agents.map((agent) => {
             const p = posOf(agent.name, dragged);
             return <OrgCard key={agent.name} agent={agent} x={p.x} y={p.y} />;

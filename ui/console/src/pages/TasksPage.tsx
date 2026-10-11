@@ -10,6 +10,8 @@
 // console has no server-side "current identity" endpoint; it never guesses one.
 
 import {
+  createContext,
+  useContext,
   useEffect,
   useMemo,
   useState,
@@ -31,11 +33,12 @@ import {
   X,
 } from "lucide-react";
 
-import { tasksApi } from "../lib/api";
+import { tasksApi, fleetApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
 import {
   TASK_PRIORITIES,
   TASK_STATES,
+  type FleetAgent,
   type NewTask,
   type Task,
   type TaskPatch,
@@ -47,6 +50,7 @@ import {
   TASK_PRIORITY_LABELS,
   TASK_STATE_COLORS,
   TASK_STATE_LABELS,
+  agentStatusColor,
   cn,
   dueState,
   formatDue,
@@ -93,6 +97,39 @@ function sortForColumn(a: Task, b: Task): number {
   return (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1;
 }
 
+// FleetStatusContext lets any task view resolve an assignee's live agent record
+// (status + reason) and list every live agent, without threading the fleet map
+// through every component. The default is empty, so a view works even outside the
+// provider.
+interface FleetStatus {
+  get: (name: string) => FleetAgent | undefined;
+  all: FleetAgent[];
+}
+const FleetStatusContext = createContext<FleetStatus>({
+  get: () => undefined,
+  all: [],
+});
+
+// AssigneeDot shows an assignee's live status color, or a hollow ring when the
+// assignee is not a known live agent (a free-text owner). It never invents a
+// status: unknown assignees read as "not a live agent".
+function AssigneeDot({ name }: { name?: string }) {
+  const { get } = useContext(FleetStatusContext);
+  if (!name) return null;
+  const agent = get(name);
+  return (
+    <span
+      className="h-2 w-2 shrink-0 rounded-full border border-border"
+      style={{ backgroundColor: agent ? agentStatusColor(agent.status) : "transparent" }}
+      title={
+        agent
+          ? `${agent.status}${agent.statusReason ? ` — ${agent.statusReason}` : ""}`
+          : "not a live agent"
+      }
+    />
+  );
+}
+
 export function TasksPage() {
   const queryClient = useQueryClient();
   const [view, setView] = useState<"board" | "list">("board");
@@ -108,6 +145,18 @@ export function TasksPage() {
     queryKey: queryKeys.tasks.list(filter),
     queryFn: () => tasksApi.list(filter),
   });
+  // The live fleet, joined to tasks by assignee so a card/row/drawer can show the
+  // assignee's current status. Failure is non-fatal: tasks still render.
+  const fleetQuery = useQuery({
+    queryKey: queryKeys.fleet.tree(),
+    queryFn: fleetApi.tree,
+  });
+  const fleetStatus = useMemo<FleetStatus>(() => {
+    const agents = fleetQuery.data?.agents ?? [];
+    const m = new Map<string, FleetAgent>();
+    for (const a of agents) m.set(a.name, a);
+    return { get: (name) => m.get(name), all: agents };
+  }, [fleetQuery.data]);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -168,6 +217,7 @@ export function TasksPage() {
     patchMut.mutate({ id, patch: { state } });
 
   return (
+    <FleetStatusContext.Provider value={fleetStatus}>
     <div className="relative flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-5 py-2">
         <div className="flex items-center gap-2">
@@ -280,6 +330,7 @@ export function TasksPage() {
         />
       )}
     </div>
+    </FleetStatusContext.Provider>
   );
 }
 
@@ -415,7 +466,11 @@ function BoardCard({
           </div>
           <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
             <span className="flex min-w-0 items-center gap-1">
-              <User className="h-3 w-3 shrink-0" />
+              {task.owner ? (
+                <AssigneeDot name={task.owner} />
+              ) : (
+                <User className="h-3 w-3 shrink-0" />
+              )}
               <span className="truncate">{task.owner || "unassigned"}</span>
             </span>
             {task.updatedAt && (
@@ -683,7 +738,10 @@ function TaskList({
                     )}
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
-                    {task.owner || "—"}
+                    <span className="flex items-center gap-1.5">
+                      <AssigneeDot name={task.owner} />
+                      <span>{task.owner || "—"}</span>
+                    </span>
                   </td>
                   <td
                     className="px-3 py-2"
@@ -776,6 +834,7 @@ function TaskDrawer({
   const [body, setBody] = useState(task.body ?? "");
   const [acceptance, setAcceptance] = useState(task.acceptance ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const { get: getAgent, all: liveAgents } = useContext(FleetStatusContext);
 
   useEffect(() => {
     setTitle(task.title);
@@ -886,7 +945,22 @@ function TaskDrawer({
                 value={owner}
                 onChange={(e) => setOwner(e.target.value)}
                 placeholder="agent name"
+                list="fleet-agent-names"
               />
+              <datalist id="fleet-agent-names">
+                {liveAgents.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.status}
+                    {a.role ? ` · ${a.role}` : ""}
+                  </option>
+                ))}
+              </datalist>
+              {owner && (
+                <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <AssigneeDot name={owner} />
+                  {getAgent(owner) ? `live: ${getAgent(owner)!.status}` : "not a live agent"}
+                </p>
+              )}
             </Field>
             <Field label="Due">
               <Input

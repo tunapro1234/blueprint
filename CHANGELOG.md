@@ -6,7 +6,9 @@ All notable changes to bp are recorded here. The format follows
 
 ## [Unreleased]
 
-Changes on `dev` since the 1.9.31 release.
+Changes on `dev` since the 1.9.32 release.
+
+## [1.9.32] - 2026-10-11
 
 ### Changed
 

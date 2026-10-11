@@ -66,7 +66,7 @@ const PAGES = [
   { path: "/org", label: "org", markers: ["Org"] },
   { path: "/tasks", label: "tasks", markers: ["Tasks"] },
   { path: "/usage", label: "usage", markers: ["Usage", "Subscription", "API-equivalent"] },
-  { path: "/workflows", label: "workflows", markers: ["Workflows"] },
+  { path: "/workflows", label: "workflows", markers: ["Workflows", "egitim-supervised"] },
 ];
 const NAV = ["Org", "Tasks", "Usage", "Workflows"];
 

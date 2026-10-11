@@ -540,7 +540,7 @@ function OrgCard({ agent, x, y }: { agent: FleetAgent; x: number; y: number }) {
           />
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm font-semibold leading-tight">{agent.name}</span>
+          <span className="truncate text-sm font-semibold leading-tight" title={agent.name}>{agent.name}</span>
           <span className="truncate text-[11px] leading-tight text-muted-foreground">
             {agent.role || "—"}
           </span>

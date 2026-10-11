@@ -69,6 +69,7 @@ node "$root/scripts/console_render_seed.mjs" "$BP_HOME" "$BP_HOME/state" || echo
 wfdir="$work/wf"
 mkdir -p "$wfdir"
 cat > "$wfdir/workflow.yaml" <<'YAML'
+version: 1
 name: egitim-supervised
 description: Multi-agent supervised curriculum build
 units:

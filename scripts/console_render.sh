@@ -54,6 +54,12 @@ cat > "$AGENTBOOK" <<'JSON'
 }
 JSON
 
+# Seed the usage/cost view: an owner pricing block (config.json), four Team
+# premium seats and a token store, so the Usage page renders its full cost strip
+# (subscription, "if it were API" spend, value ratio) rather than empty panels.
+# This writes config.json first, so the CLI seeds below use the same stateDir.
+node "$root/scripts/console_render_seed.mjs" "$BP_HOME" "$BP_HOME/state" || echo "note: usage seed skipped"
+
 # Seed a couple of tasks (CLI writes <StateDir>/tasks/*.json; no daemon needed).
 "$bp" task add "Ship fleet console MVP" --owner blueprint >/dev/null 2>&1 || echo "note: task seed 1 skipped"
 "$bp" task add "Wire usage token calc" --owner server-main >/dev/null 2>&1 || echo "note: task seed 2 skipped"

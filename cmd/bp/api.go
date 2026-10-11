@@ -203,7 +203,15 @@ func (a *app) consoleMux() *http.ServeMux {
 	}
 	api.RegisterTasks(mux, tasksDeps)
 
-	api.RegisterUsage(mux, api.NewUsageDeps(a.config.StateDir, a.config.UsageHistory))
+	var usagePricing api.UsagePricing
+	if u := a.config.Usage; u != nil {
+		usagePricing = api.UsagePricing{
+			Plan:                  u.Plan,
+			PerSeatUSD:            u.PerSeatUSD,
+			PerSeatFiveHourTokens: u.PerSeatFiveHourTokens,
+		}
+	}
+	api.RegisterUsage(mux, api.NewUsageDeps(a.config.StateDir, a.config.UsageHistory, usagePricing))
 	api.RegisterWorkflowConsole(mux, api.NewWorkflowConsoleDeps(a.config.StateDir))
 
 	return mux

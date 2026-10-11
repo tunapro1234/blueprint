@@ -21,12 +21,16 @@ package api
 
 import (
 	"context"
+	"math"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"blueprint/internal/claudeacct"
+	"blueprint/internal/tokens"
 	"blueprint/internal/usagecli"
 )
 
@@ -56,7 +60,116 @@ type ConsoleUsage struct {
 	Accounts []ConsoleUsageAccount
 	// RecentDays is the overall recent-days utilization series, oldest first.
 	RecentDays []ConsoleUsageDay
+	// Subscription is the real subscription basis (seat count times the owner's
+	// per-seat price). Nil when no per-seat price is configured, so the console
+	// never shows a guessed cost.
+	Subscription *ConsoleSubscription
+	// Spend is the recent real token burn and what it would have cost at Claude
+	// API prices ("if it were API"). Nil when the token store is unreadable.
+	Spend *ConsoleSpend
+	// Value compares the API-equivalent spend to the subscription cost. Nil
+	// unless both are known.
+	Value *ConsoleValue
 }
+
+// ConsoleSubscription is the real subscription cost basis. Seats is the number
+// of stored accounts (the real seat count, not a constant); MonthlyUSD is
+// Seats*PerSeatUSD.
+type ConsoleSubscription struct {
+	Plan       string
+	Seats      int
+	PerSeatUSD float64
+	MonthlyUSD float64
+}
+
+// ConsoleSpend is real recorded token usage over a recent window and its
+// Claude-API-equivalent cost. Tokens are actual counts from the token store
+// (internal/tokens), never derived from a percentage; ApiEquivalentUSD prices
+// the Claude models among them at published API rates.
+type ConsoleSpend struct {
+	Window           string
+	TotalTokens      int64
+	ApiEquivalentUSD float64
+	ByModel          []ConsoleModelSpend
+}
+
+// ConsoleModelSpend is one model's share of the recent spend.
+type ConsoleModelSpend struct {
+	Model            string
+	Tokens           int64
+	ApiEquivalentUSD float64
+}
+
+// ConsoleValue is the API-equivalent spend against the subscription cost: what
+// the plan would cost on the API versus what it actually costs.
+type ConsoleValue struct {
+	ApiEquivalentUSD float64
+	SubscriptionUSD  float64
+	Ratio            float64
+}
+
+// UsagePricing carries the owner-set cost inputs the usage view needs. Only the
+// owner knows the real plan price and a seat's token budget, so these are never
+// defaulted to a non-zero guess: a zero value simply leaves the dependent figure
+// unknown.
+type UsagePricing struct {
+	// Plan labels the subscription for display (e.g. "team").
+	Plan string
+	// PerSeatUSD is one seat's monthly price; 0 disables the subscription/value.
+	PerSeatUSD float64
+	// PerSeatFiveHourTokens is one seat's estimated five-hour token budget; 0
+	// leaves the per-account token estimate nil.
+	PerSeatFiveHourTokens int64
+}
+
+// usageSpendDays is the trailing window, in days, that the spend/value figures
+// cover. A rolling window matches the owner's "recent days" ask and sidesteps
+// month-boundary timezone edge cases; ~30 days approximates a monthly bill for
+// the value ratio.
+const usageSpendDays = 30
+
+// claudeModelRate returns the published Claude API price (USD per 1M input and
+// output tokens) for a model name, matching the same families the monitor's
+// price table uses. A model that is not a Claude model (e.g. a Codex/GPT model)
+// returns ok=false and contributes tokens but no API-equivalent cost.
+func claudeModelRate(model string) (inputUSDPerM, outputUSDPerM float64, ok bool) {
+	switch m := strings.ToLower(model); {
+	case strings.Contains(m, "opus"):
+		return 5, 25, true
+	case strings.Contains(m, "sonnet"):
+		return 3, 15, true
+	case strings.Contains(m, "haiku"):
+		return 1, 5, true
+	case strings.Contains(m, "fable"):
+		return 10, 50, true
+	default:
+		return 0, 0, false
+	}
+}
+
+// Cache pricing follows Anthropic's rule: a cache read costs 0.1x input, a cache
+// write 1.25x input. These mirror model-prices.json so the console and the
+// monitor agree on "if it were API".
+const (
+	usageCacheReadMultiplier  = 0.1
+	usageCacheWriteMultiplier = 1.25
+)
+
+// modelSpendUSD prices one model's recorded tokens at Claude API rates. It
+// returns 0 for a non-Claude model.
+func modelSpendUSD(row tokens.ModelTokens) float64 {
+	inputRate, outputRate, ok := claudeModelRate(row.Model)
+	if !ok {
+		return 0
+	}
+	return (float64(row.In)*inputRate +
+		float64(row.Out)*outputRate +
+		float64(row.CacheRead)*inputRate*usageCacheReadMultiplier +
+		float64(row.CacheWrite)*inputRate*usageCacheWriteMultiplier) / 1_000_000
+}
+
+// roundUSD rounds a dollar figure to cents so the JSON carries clean money.
+func roundUSD(v float64) float64 { return math.Round(v*100) / 100 }
 
 // ConsoleUsageAccount is one account's current utilization. PercentOfLimit and
 // Limit are fractions in [0,1] (0.37 = 37%), matching the contract. A nil
@@ -87,10 +200,10 @@ type ConsoleUsageDay struct {
 // recent-days series from the usage history file at usageHistory (the same file
 // `bp usage` reads). Either source being absent degrades gracefully to fewer
 // rows rather than a fabricated reading.
-func NewUsageDeps(stateDir, usageHistory string) UsageDeps {
+func NewUsageDeps(stateDir, usageHistory string, pricing UsagePricing) UsageDeps {
 	return UsageDeps{
 		Overview: func(ctx context.Context) (ConsoleUsage, error) {
-			return productionUsageOverview(ctx, stateDir, usageHistory)
+			return productionUsageOverview(ctx, stateDir, usageHistory, pricing)
 		},
 	}
 }
@@ -104,9 +217,38 @@ func RegisterUsage(mux *http.ServeMux, deps UsageDeps) {
 // --- GET /v1/usage/accounts ---
 
 type usageResponseJSON struct {
-	AsOf       string             `json:"asOf,omitempty"`
-	Accounts   []usageAccountJSON `json:"accounts"`
-	RecentDays []usageDayJSON     `json:"recentDays"`
+	AsOf         string                 `json:"asOf,omitempty"`
+	Accounts     []usageAccountJSON     `json:"accounts"`
+	RecentDays   []usageDayJSON         `json:"recentDays"`
+	Subscription *usageSubscriptionJSON `json:"subscription"`
+	Spend        *usageSpendJSON        `json:"spend"`
+	Value        *usageValueJSON        `json:"value"`
+}
+
+type usageSubscriptionJSON struct {
+	Plan       string  `json:"plan,omitempty"`
+	Seats      int     `json:"seats"`
+	PerSeatUSD float64 `json:"perSeatUsd"`
+	MonthlyUSD float64 `json:"monthlyUsd"`
+}
+
+type usageSpendJSON struct {
+	Window           string                `json:"window"`
+	TotalTokens      int64                 `json:"totalTokens"`
+	ApiEquivalentUSD float64               `json:"apiEquivalentUsd"`
+	ByModel          []usageModelSpendJSON `json:"byModel"`
+}
+
+type usageModelSpendJSON struct {
+	Model            string  `json:"model"`
+	Tokens           int64   `json:"tokens"`
+	ApiEquivalentUSD float64 `json:"apiEquivalentUsd"`
+}
+
+type usageValueJSON struct {
+	ApiEquivalentUSD float64 `json:"apiEquivalentUsd"`
+	SubscriptionUSD  float64 `json:"subscriptionUsd"`
+	Ratio            float64 `json:"ratio"`
 }
 
 type usageAccountJSON struct {
@@ -163,6 +305,29 @@ func (d UsageDeps) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	for _, day := range overview.RecentDays {
 		resp.RecentDays = append(resp.RecentDays, usageDayJSON{Date: day.Date, Percent: day.Percent, EstTokens: day.EstTokens})
 	}
+	if s := overview.Subscription; s != nil {
+		resp.Subscription = &usageSubscriptionJSON{
+			Plan:       s.Plan,
+			Seats:      s.Seats,
+			PerSeatUSD: s.PerSeatUSD,
+			MonthlyUSD: s.MonthlyUSD,
+		}
+	}
+	if sp := overview.Spend; sp != nil {
+		entry := &usageSpendJSON{
+			Window:           sp.Window,
+			TotalTokens:      sp.TotalTokens,
+			ApiEquivalentUSD: sp.ApiEquivalentUSD,
+			ByModel:          make([]usageModelSpendJSON, 0, len(sp.ByModel)),
+		}
+		for _, m := range sp.ByModel {
+			entry.ByModel = append(entry.ByModel, usageModelSpendJSON{Model: m.Model, Tokens: m.Tokens, ApiEquivalentUSD: m.ApiEquivalentUSD})
+		}
+		resp.Spend = entry
+	}
+	if v := overview.Value; v != nil {
+		resp.Value = &usageValueJSON{ApiEquivalentUSD: v.ApiEquivalentUSD, SubscriptionUSD: v.SubscriptionUSD, Ratio: v.Ratio}
+	}
 	writeJSONResponse(w, http.StatusOK, resp)
 }
 
@@ -172,7 +337,7 @@ func (d UsageDeps) handleAccounts(w http.ResponseWriter, r *http.Request) {
 // history to build the console usage view. It never fetches: no network call and
 // no token rotation, so the console stays a pure reader of state the accounts
 // module already maintains.
-func productionUsageOverview(ctx context.Context, stateDir, usageHistory string) (ConsoleUsage, error) {
+func productionUsageOverview(ctx context.Context, stateDir, usageHistory string, pricing UsagePricing) (ConsoleUsage, error) {
 	manager := &claudeacct.Manager{
 		Store:  claudeacct.NewStore(stateDir),
 		Env:    claudeacct.OSEnv(),
@@ -188,7 +353,15 @@ func productionUsageOverview(ctx context.Context, stateDir, usageHistory string)
 	out := ConsoleUsage{}
 	var asOf time.Time
 	for _, slot := range overview.Slots {
-		out.Accounts = append(out.Accounts, usageAccountFromSlot(slot, now))
+		account := usageAccountFromSlot(slot, now)
+		// Estimate the token count behind the percentage only when the owner has
+		// configured a per-seat budget; otherwise estTokens stays nil (honest
+		// unknown, never a fabricated denominator).
+		if pricing.PerSeatFiveHourTokens > 0 && account.PercentOfLimit != nil {
+			est := int64(math.Round(*account.PercentOfLimit * float64(pricing.PerSeatFiveHourTokens)))
+			account.EstTokens = &est
+		}
+		out.Accounts = append(out.Accounts, account)
 		if slot.LastUsage != nil && slot.LastUsage.FetchedAt.After(asOf) {
 			asOf = slot.LastUsage.FetchedAt
 		}
@@ -199,7 +372,94 @@ func productionUsageOverview(ctx context.Context, stateDir, usageHistory string)
 		asOf = latestSample
 	}
 	out.AsOf = asOf
+
+	// Subscription basis: the real seat count (stored accounts) times the owner's
+	// per-seat price. Unknown price leaves it nil rather than showing $0.
+	if pricing.PerSeatUSD > 0 {
+		seats := len(out.Accounts)
+		out.Subscription = &ConsoleSubscription{
+			Plan:       pricing.Plan,
+			Seats:      seats,
+			PerSeatUSD: pricing.PerSeatUSD,
+			MonthlyUSD: roundUSD(float64(seats) * pricing.PerSeatUSD),
+		}
+	}
+
+	// Recent real spend and its Claude-API-equivalent cost, from the token store.
+	// A missing or unreadable store leaves Spend nil (the accounts list is the
+	// primary payload); it is never faked.
+	if spend, ok := usageSpend(stateDir, now); ok {
+		out.Spend = spend
+		if out.Subscription != nil && out.Subscription.MonthlyUSD > 0 {
+			out.Value = &ConsoleValue{
+				ApiEquivalentUSD: spend.ApiEquivalentUSD,
+				SubscriptionUSD:  out.Subscription.MonthlyUSD,
+				Ratio:            math.Round(spend.ApiEquivalentUSD/out.Subscription.MonthlyUSD*100) / 100,
+			}
+		}
+	}
 	return out, nil
+}
+
+// usageSpend totals the real tokens recorded in the trailing window and prices
+// the Claude models among them at API rates. It returns ok=false when the token
+// store cannot be read, so the caller leaves the spend/value panels unknown
+// instead of reporting a fabricated zero.
+func usageSpend(stateDir string, now time.Time) (*ConsoleSpend, bool) {
+	storeDir := filepath.Join(stateDir, "tokens")
+	rows, err := tokens.ModelSummary(storeDir, tokens.LastDaysRange(now, usageSpendDays))
+	if err != nil {
+		return nil, false
+	}
+	spend := &ConsoleSpend{Window: strconv.Itoa(usageSpendDays) + "d"}
+	byModel := map[string]*ConsoleModelSpend{}
+	for _, row := range rows {
+		rowTokens := row.In + row.Out + row.CacheRead + row.CacheWrite
+		spend.TotalTokens += rowTokens
+		usd := modelSpendUSD(row)
+		spend.ApiEquivalentUSD += usd
+		// Group priced Claude usage by model family for the breakdown; unpriced
+		// (non-Claude) rows still count in TotalTokens but add no cost line.
+		if usd > 0 {
+			family := claudeModelFamily(row.Model)
+			entry := byModel[family]
+			if entry == nil {
+				entry = &ConsoleModelSpend{Model: family}
+				byModel[family] = entry
+			}
+			entry.Tokens += rowTokens
+			entry.ApiEquivalentUSD += usd
+		}
+	}
+	spend.ApiEquivalentUSD = roundUSD(spend.ApiEquivalentUSD)
+	for _, entry := range byModel {
+		entry.ApiEquivalentUSD = roundUSD(entry.ApiEquivalentUSD)
+		spend.ByModel = append(spend.ByModel, *entry)
+	}
+	sort.Slice(spend.ByModel, func(i, j int) bool {
+		if spend.ByModel[i].ApiEquivalentUSD != spend.ByModel[j].ApiEquivalentUSD {
+			return spend.ByModel[i].ApiEquivalentUSD > spend.ByModel[j].ApiEquivalentUSD
+		}
+		return spend.ByModel[i].Model < spend.ByModel[j].Model
+	})
+	return spend, true
+}
+
+// claudeModelFamily collapses a raw model id to the family the rate table keys
+// on, so the breakdown reads "opus" rather than a dozen dated variants.
+func claudeModelFamily(model string) string {
+	switch m := strings.ToLower(model); {
+	case strings.Contains(m, "opus"):
+		return "opus"
+	case strings.Contains(m, "sonnet"):
+		return "sonnet"
+	case strings.Contains(m, "haiku"):
+		return "haiku"
+	case strings.Contains(m, "fable"):
+		return "fable"
+	default:
+		return model
+	}
 }
 
 // usageAccountFromSlot maps one stored account to the console view. Status fields

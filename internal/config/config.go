@@ -45,6 +45,7 @@ type Config struct {
 	API              *APIConfig              `json:"api,omitempty" yaml:"api,omitempty"`
 	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
 	GuardHooks       *GuardHooksConfig       `json:"guardHooks,omitempty" yaml:"guardHooks,omitempty"`
+	Usage            *UsageConfig            `json:"usage,omitempty" yaml:"usage,omitempty"`
 	CLIUpdates       map[string][]string     `json:"cliUpdates,omitempty" yaml:"cliUpdates,omitempty"`
 	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
 	Bar              BarConfig               `json:"bar" yaml:"bar"`
@@ -171,6 +172,25 @@ func (c Config) CodexDisabled() bool {
 	return c.Codex != nil && c.Codex.Disabled
 }
 
+// UsageConfig tunes the fleet console's usage/cost view (internal/api usage.go).
+// It is optional: with no block, per-account utilization still renders, but the
+// per-account token estimate and the subscription/value figures stay unknown
+// rather than guessed. Every field is owner-set, because only the owner knows
+// the real plan price and a seat's token budget; bp never invents them.
+type UsageConfig struct {
+	// Plan labels the subscription for display (e.g. "team"); it changes no math.
+	Plan string `json:"plan,omitempty" yaml:"plan,omitempty"`
+	// PerSeatUSD is the monthly price of one seat. The console multiplies it by
+	// the number of stored accounts (the real seat count) to get the
+	// subscription cost; 0 leaves the subscription and the value ratio unknown.
+	PerSeatUSD float64 `json:"perSeatUsd,omitempty" yaml:"perSeatUsd,omitempty"`
+	// PerSeatFiveHourTokens is one seat's estimated five-hour token budget. The
+	// console multiplies it by an account's utilization to estimate the token
+	// count behind a percentage; 0 leaves that per-account estimate unknown,
+	// never a fabricated number.
+	PerSeatFiveHourTokens int64 `json:"perSeatFiveHourTokens,omitempty" yaml:"perSeatFiveHourTokens,omitempty"`
+}
+
 // FedConfig enables one side of blueprint federation. A nil value leaves
 // federation completely disabled.
 type FedConfig struct {
@@ -206,6 +226,7 @@ type overrides struct {
 	API              *APIConfig               `json:"api" yaml:"api"`
 	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
 	GuardHooks       *GuardHooksConfig        `json:"guardHooks" yaml:"guardHooks"`
+	Usage            *UsageConfig             `json:"usage" yaml:"usage"`
 	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
 	CLIUpdates       *map[string][]string     `json:"cliUpdates" yaml:"cliUpdates"`
 	Bar              *barOverrides            `json:"bar" yaml:"bar"`
@@ -551,6 +572,10 @@ func apply(result *Config, values overrides) {
 		value := *values.GuardHooks
 		value.Canaries = append([]string(nil), value.Canaries...)
 		result.GuardHooks = &value
+	}
+	if values.Usage != nil {
+		value := *values.Usage
+		result.Usage = &value
 	}
 	if values.Remotes != nil {
 		result.Remotes = make(map[string]RemoteConfig, len(*values.Remotes))

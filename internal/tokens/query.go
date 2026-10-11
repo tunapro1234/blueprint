@@ -228,3 +228,64 @@ func itoa(value int64) string {
 	}
 	return string(buffer[index:])
 }
+
+// ModelTokens is the token total for one (source, model) pair across every
+// agent in a period. Unlike Summary, it keeps the model name even when no agent
+// filter is applied, so a caller can price usage per model (the console's
+// API-equivalent cost calculation needs this).
+type ModelTokens struct {
+	Src        string `json:"src"`
+	Model      string `json:"model"`
+	Requests   int64  `json:"reqs"`
+	In         int64  `json:"in"`
+	Out        int64  `json:"out"`
+	CacheWrite int64  `json:"cache_write"`
+	CacheRead  int64  `json:"cache_read"`
+}
+
+// ModelSummary totals tokens by (source, model) across all agents in period.
+// It reads the same daily rollup Summary reads, so it reflects exactly the same
+// recorded usage, only grouped by model instead of by agent. Rows are sorted by
+// output tokens descending for a stable, meaningful order.
+func ModelSummary(root string, period Range) ([]ModelTokens, error) {
+	type key struct{ src, model string }
+	grouped := map[key]*ModelTokens{}
+	for year := period.Start.Year(); year <= period.End.Year(); year++ {
+		var rows []DailyRecord
+		path := filepath.Join(root, "daily", time.Date(year, 1, 1, 0, 0, 0, 0, istanbul).Format("2006")+".jsonl")
+		err := readJSONLines(path, &rows)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		for _, row := range rows {
+			if !period.contains(row.Day) {
+				continue
+			}
+			k := key{row.Src, row.Model}
+			target := grouped[k]
+			if target == nil {
+				target = &ModelTokens{Src: row.Src, Model: row.Model}
+				grouped[k] = target
+			}
+			target.Requests += row.Requests
+			target.In += row.In
+			target.Out += row.Out
+			target.CacheWrite += row.CacheWrite
+			target.CacheRead += row.CacheRead
+		}
+	}
+	out := make([]ModelTokens, 0, len(grouped))
+	for _, row := range grouped {
+		out = append(out, *row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Out != out[j].Out {
+			return out[i].Out > out[j].Out
+		}
+		if out[i].Src != out[j].Src {
+			return out[i].Src < out[j].Src
+		}
+		return out[i].Model < out[j].Model
+	})
+	return out, nil
+}

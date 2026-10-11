@@ -7,8 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"blueprint/internal/tokens"
 )
 
 // usageRequest drives one request through a mux that has RegisterUsage mounted.
@@ -137,4 +141,108 @@ func TestUsageAccountsNotConfigured(t *testing.T) {
 	if code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 when Overview is not configured", code)
 	}
+}
+
+func TestUsageSerializesCostFields(t *testing.T) {
+	est := int64(1_500_000)
+	deps := UsageDeps{
+		Overview: func(context.Context) (ConsoleUsage, error) {
+			return ConsoleUsage{
+				Accounts: []ConsoleUsageAccount{
+					{Name: "tuna", Slot: 1, PercentOfLimit: usageFloatPtr(0.15), EstTokens: &est, Window: "5h", Active: true},
+				},
+				Subscription: &ConsoleSubscription{Plan: "team", Seats: 4, PerSeatUSD: 150, MonthlyUSD: 600},
+				Spend: &ConsoleSpend{
+					Window: "30d", TotalTokens: 3_000_000, ApiEquivalentUSD: 6,
+					ByModel: []ConsoleModelSpend{{Model: "opus", Tokens: 1_000_000, ApiEquivalentUSD: 5}},
+				},
+				Value: &ConsoleValue{ApiEquivalentUSD: 6, SubscriptionUSD: 600, Ratio: 0.01},
+			}, nil
+		},
+	}
+	code, body := usageRequest(t, deps, "GET", "/v1/usage/accounts")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	// A configured per-seat budget lets the percentage map to an estimated token
+	// count (passed through from the overview), no longer a forced null.
+	acct := body["accounts"].([]any)[0].(map[string]any)
+	if acct["estTokens"].(float64) != 1_500_000 {
+		t.Fatalf("estTokens = %v, want 1500000", acct["estTokens"])
+	}
+	sub, ok := body["subscription"].(map[string]any)
+	if !ok || sub["seats"].(float64) != 4 || sub["monthlyUsd"].(float64) != 600 || sub["plan"] != "team" {
+		t.Fatalf("subscription = %v", body["subscription"])
+	}
+	spend, ok := body["spend"].(map[string]any)
+	if !ok || spend["window"] != "30d" || spend["apiEquivalentUsd"].(float64) != 6 {
+		t.Fatalf("spend = %v", body["spend"])
+	}
+	if models, ok := spend["byModel"].([]any); !ok || len(models) != 1 || models[0].(map[string]any)["model"] != "opus" {
+		t.Fatalf("spend.byModel = %v", spend["byModel"])
+	}
+	val, ok := body["value"].(map[string]any)
+	if !ok || val["subscriptionUsd"].(float64) != 600 {
+		t.Fatalf("value = %v", body["value"])
+	}
+}
+
+func TestModelSpendUSD(t *testing.T) {
+	// Opus: 1M input + 1M output = 5 + 25 = $30.
+	opus := modelSpendUSD(tokens.ModelTokens{Model: "claude-opus-4-8", In: 1_000_000, Out: 1_000_000})
+	if opus != 30 {
+		t.Fatalf("opus usd = %v, want 30", opus)
+	}
+	// Cache read is 0.1x input, cache write 1.25x input (haiku input = $1/M).
+	haiku := modelSpendUSD(tokens.ModelTokens{Model: "claude-haiku-5", CacheRead: 1_000_000, CacheWrite: 1_000_000})
+	if haiku != 0.1+1.25 {
+		t.Fatalf("haiku cache usd = %v, want 1.35", haiku)
+	}
+	// A non-Claude model (Codex/GPT) is not priced at Claude rates.
+	if gpt := modelSpendUSD(tokens.ModelTokens{Model: "gpt-6", In: 1_000_000, Out: 1_000_000}); gpt != 0 {
+		t.Fatalf("gpt usd = %v, want 0 (not a Claude model)", gpt)
+	}
+}
+
+func TestUsageSpendFromStore(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	stateDir := t.TempDir()
+	dailyDir := filepath.Join(stateDir, "tokens", "daily")
+	if err := os.MkdirAll(dailyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"day":"2026-10-11","agent":"a1","src":"claude","model":"claude-opus-4-8","reqs":1,"in":1000000,"out":0,"cache_write":0,"cache_read":0}`,
+		`{"day":"2026-10-11","agent":"a2","src":"claude","model":"claude-haiku-5","reqs":1,"in":1000000,"out":0,"cache_write":0,"cache_read":0}`,
+		`{"day":"2026-10-11","agent":"a3","src":"codex","model":"gpt-6","reqs":1,"in":1000000,"out":0,"cache_write":0,"cache_read":0}`,
+	}
+	if err := os.WriteFile(filepath.Join(dailyDir, "2026.jsonl"), []byte(join(lines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spend, ok := usageSpend(stateDir, now)
+	if !ok {
+		t.Fatal("usageSpend ok = false, want true")
+	}
+	// All three rows' tokens count; only the two Claude rows are priced
+	// (opus $5 + haiku $1 = $6), the Codex row contributes tokens but no cost.
+	if spend.TotalTokens != 3_000_000 {
+		t.Fatalf("total tokens = %d, want 3000000", spend.TotalTokens)
+	}
+	if spend.ApiEquivalentUSD != 6 {
+		t.Fatalf("apiEquivalentUsd = %v, want 6", spend.ApiEquivalentUSD)
+	}
+	if len(spend.ByModel) != 2 {
+		t.Fatalf("byModel = %v, want 2 Claude families", spend.ByModel)
+	}
+	if spend.ByModel[0].Model != "opus" || spend.ByModel[0].ApiEquivalentUSD != 5 {
+		t.Fatalf("top model = %+v, want opus $5", spend.ByModel[0])
+	}
+}
+
+func join(lines []string) string {
+	out := ""
+	for _, l := range lines {
+		out += l + "\n"
+	}
+	return out
 }

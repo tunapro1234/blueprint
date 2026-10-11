@@ -52,6 +52,12 @@ export function formatTokens(n: number | undefined): string {
   return String(n);
 }
 
+export function formatUSD(n: number | undefined): string {
+  if (n === undefined || n === null || Number.isNaN(n)) return "—";
+  if (Math.abs(n) >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;
+  return `$${n.toFixed(2)}`;
+}
+
 // formatPercent renders a 0..1 ratio as a whole-number percent.
 export function formatPercent(ratio: number | undefined): string {
   if (ratio === undefined || ratio === null || Number.isNaN(ratio)) return "—";

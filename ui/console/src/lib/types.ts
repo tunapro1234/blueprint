@@ -116,10 +116,39 @@ export interface UsageDay {
   estTokens?: number;
 }
 
+export interface UsageSubscription {
+  plan?: string;
+  seats: number;
+  perSeatUsd: number;
+  monthlyUsd: number;
+}
+
+export interface UsageModelSpend {
+  model: string;
+  tokens: number;
+  apiEquivalentUsd: number;
+}
+
+export interface UsageSpend {
+  window: string;
+  totalTokens: number;
+  apiEquivalentUsd: number;
+  byModel?: UsageModelSpend[];
+}
+
+export interface UsageValue {
+  apiEquivalentUsd: number;
+  subscriptionUsd: number;
+  ratio: number;
+}
+
 export interface UsageAccounts {
   asOf?: string;
   accounts: UsageAccount[];
   recentDays?: UsageDay[];
+  subscription?: UsageSubscription | null;
+  spend?: UsageSpend | null;
+  value?: UsageValue | null;
 }
 
 // ── Workflows (WS4) ──────────────────────────────────────────────────────────

@@ -9,10 +9,17 @@ import { Gauge } from "lucide-react";
 
 import { usageApi } from "../lib/api";
 import { queryKeys } from "../lib/queryKeys";
-import type { UsageAccount, UsageDay } from "../lib/types";
+import type {
+  UsageAccount,
+  UsageDay,
+  UsageSpend,
+  UsageSubscription,
+  UsageValue,
+} from "../lib/types";
 import {
   formatPercent,
   formatTokens,
+  formatUSD,
   relativeTime,
   resetTime,
   usageBarColor,
@@ -46,6 +53,9 @@ export function UsagePage() {
   const data = usageQuery.data;
   const accounts = data?.accounts ?? [];
   const recentDays = data?.recentDays ?? [];
+  const subscription = data?.subscription ?? undefined;
+  const spend = data?.spend ?? undefined;
+  const value = data?.value ?? undefined;
 
   return (
     <div className="h-full overflow-auto">
@@ -57,6 +67,10 @@ export function UsagePage() {
       </div>
 
       <div className="space-y-4 p-5">
+        {(subscription || spend || value) && (
+          <ValueStrip subscription={subscription} spend={spend} value={value} />
+        )}
+
         {accounts.length === 0 ? (
           <PageState icon={Gauge} title="No accounts reported." />
         ) : (
@@ -67,9 +81,99 @@ export function UsagePage() {
           </div>
         )}
 
+        {spend && spend.byModel && spend.byModel.length > 0 && <SpendBreakdown spend={spend} />}
+
         {recentDays.length > 0 && <RecentDays days={recentDays} />}
       </div>
     </div>
+  );
+}
+
+// ValueStrip is the headline: the real subscription cost (seats x per-seat
+// price), what the recent token burn would have cost at Claude API prices
+// ("if it were API"), and the value ratio between them. Every tile renders only
+// when its figure is actually known, so an unconfigured install shows fewer
+// tiles rather than a guessed cost.
+function ValueStrip({
+  subscription,
+  spend,
+  value,
+}: {
+  subscription?: UsageSubscription;
+  spend?: UsageSpend;
+  value?: UsageValue;
+}) {
+  return (
+    <Card className="p-4">
+      <div className="grid gap-4 sm:grid-cols-3">
+        {subscription && (
+          <Tile
+            label="Subscription"
+            value={`${formatUSD(subscription.monthlyUsd)}/mo`}
+            detail={`${subscription.seats} ${subscription.plan ? subscription.plan + " " : ""}seat${
+              subscription.seats === 1 ? "" : "s"
+            } · ${formatUSD(subscription.perSeatUsd)}/seat`}
+          />
+        )}
+        {spend && (
+          <Tile
+            label={`If it were API · last ${spend.window}`}
+            value={formatUSD(spend.apiEquivalentUsd)}
+            detail={`${formatTokens(spend.totalTokens)} tokens burned`}
+          />
+        )}
+        {value && (
+          <Tile
+            label="Value ratio"
+            value={`${value.ratio.toLocaleString("en-US", { maximumFractionDigits: 1 })}×`}
+            detail={`${formatUSD(value.apiEquivalentUsd)} API / ${formatUSD(value.subscriptionUsd)} plan`}
+          />
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function Tile({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
+      {detail && <div className="mt-0.5 text-[11px] text-muted-foreground">{detail}</div>}
+    </div>
+  );
+}
+
+// SpendBreakdown shows the API-equivalent cost per model family over the recent
+// window. These are real recorded tokens priced at API rates, not estimates.
+function SpendBreakdown({ spend }: { spend: UsageSpend }) {
+  const max = Math.max(...spend.byModel!.map((m) => m.apiEquivalentUsd), 0.0001);
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          API-equivalent spend by model
+        </h2>
+        <span className="text-[11px] text-muted-foreground">last {spend.window} · real tokens</span>
+      </div>
+      <div className="space-y-2">
+        {spend.byModel!.map((m) => (
+          <div key={m.model} className="flex items-center gap-3">
+            <span className="w-20 shrink-0 text-xs font-medium">{m.model}</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-[#8b5cf6]"
+                style={{ width: `${(m.apiEquivalentUsd / max) * 100}%` }}
+              />
+            </div>
+            <span className="w-28 shrink-0 text-right text-xs tabular-nums">
+              {formatUSD(m.apiEquivalentUsd)}
+              <span className="ml-1 text-[10px] text-muted-foreground">{formatTokens(m.tokens)}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

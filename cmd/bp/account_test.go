@@ -245,8 +245,10 @@ func TestAccountCLIEndToEnd(t *testing.T) {
 	_, _ = e.run(a, "list", "--refresh")
 	out, code = e.run(a, "auto", "--once")
 	expect(out, code, accountAutoNothing, "cooling down")
+	// --threshold 99 gives the active account (95%) room; under the default
+	// soonest-reset strategy it already resets soonest, so there is nothing to do.
 	out, code = e.run(a, "auto", "--once", "--threshold", "99")
-	expect(out, code, accountAutoNothing, "below threshold 99%")
+	expect(out, code, accountAutoNothing, "resets soonest among usable accounts")
 
 	a = e.app(0)
 	out, code = e.run(a, "auto", "--once", "--dry-run")

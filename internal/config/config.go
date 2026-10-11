@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"blueprint/internal/ntfy"
 	"blueprint/internal/p2p"
@@ -51,6 +52,7 @@ type Config struct {
 	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
 	Windows          WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts   ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Monitor          MonitorConfig           `json:"monitor" yaml:"monitor"`
 	// Modules records which opt-in modules are enabled (internal/modules).
 	// ModulesSet is false when the file has no modules key: an install from
 	// before modules existed, which internal/modules migrates.
@@ -116,6 +118,45 @@ func (c ClaudeAccountsConfig) LimitPercents() map[string]float64 {
 // DefaultClaudeAccounts is the claudeAccounts block used when none is set.
 func DefaultClaudeAccounts() ClaudeAccountsConfig {
 	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku", SwitchPrefer: "soonest-reset"}
+}
+
+// MonitorConfig controls the daemon's usage-dashboard maintenance cadence
+// (internal/daemon). UsagePulseMinutes is how often usage-pulse samples the
+// account usage into history.jsonl; DashboardGenMinutes is how often the
+// dashboard's data.json is regenerated from those logs. The two are decoupled
+// so the expensive regeneration scan can run far less often than the cheap
+// sample without dropping history samples. Both values are minutes and are
+// adjustable at runtime (edit config.json, no code release); a hand-edited
+// zero or negative value falls back to the default rather than stalling.
+type MonitorConfig struct {
+	UsagePulseMinutes   int `json:"usagePulseMinutes" yaml:"usagePulseMinutes"`
+	DashboardGenMinutes int `json:"dashboardGenMinutes" yaml:"dashboardGenMinutes"`
+}
+
+// DefaultMonitor is the monitor block used when none is set: usage-pulse every
+// five minutes (unchanged), dashboard regeneration every fifteen.
+func DefaultMonitor() MonitorConfig {
+	return MonitorConfig{UsagePulseMinutes: 5, DashboardGenMinutes: 15}
+}
+
+// UsagePulseInterval is how often the daemon runs usage-pulse (history sampling).
+func (c MonitorConfig) UsagePulseInterval() time.Duration {
+	return intervalMinutes(c.UsagePulseMinutes, 5)
+}
+
+// DashboardGenInterval is how often the daemon regenerates the dashboard data.
+func (c MonitorConfig) DashboardGenInterval() time.Duration {
+	return intervalMinutes(c.DashboardGenMinutes, 15)
+}
+
+// intervalMinutes converts a minute count to a duration, clamping to a
+// one-minute floor so a hand-edited zero or negative value can never produce a
+// zero-tick ticker.
+func intervalMinutes(minutes, fallback int) time.Duration {
+	if minutes < 1 {
+		minutes = fallback
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 // BarConfig controls which metrics appear in the tmux status bar and their order.
@@ -212,6 +253,7 @@ type overrides struct {
 	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
 	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts   *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Monitor          *monitorOverrides        `json:"monitor" yaml:"monitor"`
 	Modules          *map[string]bool         `json:"modules" yaml:"modules"`
 }
 
@@ -224,6 +266,11 @@ type claudeAccountsOverrides struct {
 	KeepAlive       *bool           `json:"keepAlive" yaml:"keepAlive"`
 	KeepAliveModel  *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
 	SwitchPrefer    *string         `json:"switchPrefer" yaml:"switchPrefer"`
+}
+
+type monitorOverrides struct {
+	UsagePulseMinutes   *int `json:"usagePulseMinutes" yaml:"usagePulseMinutes"`
+	DashboardGenMinutes *int `json:"dashboardGenMinutes" yaml:"dashboardGenMinutes"`
 }
 
 type lifecycleOverrides struct {
@@ -435,6 +482,7 @@ func defaults(home string, legacy bool) Config {
 			Lifecycle:        lifecycle,
 			Windows:          windows,
 			ClaudeAccounts:   DefaultClaudeAccounts(),
+			Monitor:          DefaultMonitor(),
 			LocalObservation: true,
 			LocalMouse:       true,
 			UpdateCheck:      true,
@@ -451,6 +499,7 @@ func defaults(home string, legacy bool) Config {
 		Lifecycle:        lifecycle,
 		Windows:          windows,
 		ClaudeAccounts:   DefaultClaudeAccounts(),
+		Monitor:          DefaultMonitor(),
 		LocalObservation: true,
 		LocalMouse:       true,
 		UpdateCheck:      true,
@@ -603,6 +652,14 @@ func apply(result *Config, values overrides) {
 		}
 		if accounts.SwitchPrefer != nil {
 			result.ClaudeAccounts.SwitchPrefer = *accounts.SwitchPrefer
+		}
+	}
+	if monitor := values.Monitor; monitor != nil {
+		if monitor.UsagePulseMinutes != nil {
+			result.Monitor.UsagePulseMinutes = *monitor.UsagePulseMinutes
+		}
+		if monitor.DashboardGenMinutes != nil {
+			result.Monitor.DashboardGenMinutes = *monitor.DashboardGenMinutes
 		}
 	}
 	if values.Windows != nil {

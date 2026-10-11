@@ -133,21 +133,21 @@ func (s *Service) Run(ctx context.Context) {
 
 	monitor := s.module(modules.Monitor)
 	if path, ok := s.usageBinary("usage-pulse"); ok && monitor {
-		s.startLoop(ctx, "usage-pulse-chain", 90*time.Second, 5*time.Minute, func(run context.Context, interval time.Duration) {
-			steps := []struct {
-				name string
-				args []string
-			}{
-				{"usage-pulse", []string{path}},
-				{"dashboard-gen", []string{"/usr/bin/python3", "/srv/monitor/site/gen.py"}},
-			}
-			for _, step := range steps {
-				if run.Err() != nil {
-					return
-				}
-				// Dashboard generation must still run when the pulse command fails.
-				_ = s.tracked(run, step.name, interval, func() error { return command(run, step.args...) })
-			}
+		// usage-pulse keeps sampling history.jsonl on its own (cheap) cadence.
+		// dashboard-gen is decoupled onto a separate, far slower loop: the
+		// data.json regeneration scans every transcript and is the expensive
+		// job, so running it at the pulse rate wasted CPU and heated the box.
+		// Both cadences are config-tunable at runtime (config.Monitor), so the
+		// interval can be changed without a code release.
+		pulse := s.config.Monitor.UsagePulseInterval()
+		s.startLoop(ctx, "usage-pulse", 90*time.Second, pulse, func(run context.Context, interval time.Duration) {
+			s.tracked(run, "usage-pulse", interval, func() error { return command(run, path) })
+		})
+		gen := s.config.Monitor.DashboardGenInterval()
+		s.startLoop(ctx, "dashboard-gen", 2*time.Minute, gen, func(run context.Context, interval time.Duration) {
+			s.tracked(run, "dashboard-gen", interval, func() error {
+				return command(run, "/usr/bin/python3", "/srv/monitor/site/gen.py")
+			})
 		})
 	}
 	if path, ok := s.usageBinary("usage-watch"); ok && monitor {

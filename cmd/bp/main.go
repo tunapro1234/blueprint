@@ -498,6 +498,8 @@ func (a *app) run(args []string) error {
 		return a.reparent(args[1:])
 	case "task":
 		return a.cmdTask(args[1:])
+	case "console":
+		return a.console(args[1:])
 	case "msg":
 		return a.message(args[1:])
 	case "announce":

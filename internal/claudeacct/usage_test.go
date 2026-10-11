@@ -388,3 +388,69 @@ func TestSoonestResetStrategy(t *testing.T) {
 		t.Fatalf("soonest-reset order = %v, want %v", got, want)
 	}
 }
+
+func TestProactiveSoonestReset(t *testing.T) {
+	now := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	// slot builds a slot whose five-hour window has a utilization and a reset
+	// at now+resetIn; a negative resetIn means no running window.
+	slot := func(n int, alias string, five float64, resetIn time.Duration) Slot {
+		s := Slot{Number: n, AccountUUID: fmt.Sprint("a", n), Alias: alias}
+		w := &Window{Utilization: five}
+		if resetIn >= 0 {
+			w.ResetsAt = now.Add(resetIn)
+		}
+		s.LastUsage = &UsageCache{Usage: &Usage{FiveHour: w}}
+		return s
+	}
+	soonest := AutoPolicy{Threshold: 80, Cooldown: 5 * time.Minute, Prefer: StrategySoonestReset}
+
+	// The active account has plenty of room but another usable account resets
+	// much sooner: proactively switch to it even though nothing is exhausted.
+	slots := []Slot{
+		slot(1, "team", 5, 3*time.Hour),
+		slot(2, "azra", 5, 4*time.Hour),
+		slot(3, "huseyin", 3, 86*time.Minute), // active, lots of room, resets late
+		slot(4, "cerci", 10, 2*time.Minute),   // resets soonest
+	}
+	fresh := AutoState{}
+	if d := Decide(&Accounts{Slots: slots}, 3, fresh, soonest, now); d.Action != AutoSwitch || d.To != 4 {
+		t.Fatalf("active with room should switch to the soonest-reset slot 4: %+v", d)
+	}
+
+	// When the active account is already the soonest to reset, stay put.
+	if d := Decide(&Accounts{Slots: slots}, 4, fresh, soonest, now); d.Action != AutoNone {
+		t.Fatalf("active already resets soonest should stay: %+v", d)
+	}
+
+	// Hysteresis: a target that resets only just sooner than the active account
+	// does not cause a switch; one that resets clearly sooner does.
+	near := []Slot{
+		slot(1, "a", 5, 10*time.Minute), // active
+		slot(2, "b", 5, 9*time.Minute),  // 1m sooner, within the 2m margin
+	}
+	if d := Decide(&Accounts{Slots: near}, 1, fresh, soonest, now); d.Action != AutoNone {
+		t.Fatalf("a target within the hysteresis margin should not switch: %+v", d)
+	}
+	near[1] = slot(2, "b", 5, 7*time.Minute) // 3m sooner, beyond the margin
+	if d := Decide(&Accounts{Slots: near}, 1, fresh, soonest, now); d.Action != AutoSwitch || d.To != 2 {
+		t.Fatalf("a target beyond the hysteresis margin should switch: %+v", d)
+	}
+
+	// Cooldown blocks a proactive switch that would otherwise happen.
+	cooling := AutoState{LastSwitchAt: now.Add(-time.Minute)}
+	if d := Decide(&Accounts{Slots: slots}, 3, cooling, soonest, now); d.Action != AutoNone {
+		t.Fatalf("a proactive switch inside the cooldown should wait: %+v", d)
+	}
+
+	// The active account is used up and is not the soonest with room: switch to
+	// the soonest usable account that still has room.
+	used := []Slot{
+		slot(1, "team", 85, 1*time.Minute), // soonest, but no room
+		slot(2, "azra", 10, 30*time.Minute),
+		slot(3, "huseyin", 90, 20*time.Minute), // active, used up
+		slot(4, "cerci", 20, 90*time.Minute),
+	}
+	if d := Decide(&Accounts{Slots: used}, 3, fresh, soonest, now); d.Action != AutoSwitch || d.To != 2 {
+		t.Fatalf("used-up active should switch to the soonest slot with room (2): %+v", d)
+	}
+}

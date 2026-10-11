@@ -8,6 +8,16 @@ All notable changes to bp are recorded here. The format follows
 
 Changes on `dev` since the 1.9.31 release.
 
+### Changed
+
+- Automatic account switching with `claudeAccounts.switchPrefer: "soonest-reset"`
+  (the default) now keeps the active account on whichever usable account resets
+  soonest, switching proactively as the order changes rather than only when the
+  active account hits its threshold. Usage lands on the five-hour window that is
+  about to refresh, and the active account rotates roughly every (5h / number of
+  accounts). A short reset-time hysteresis and the existing cooldown keep two
+  near-simultaneous resets from flapping. `switchPrefer: "room"` is unchanged.
+
 ## [1.9.31] - 2026-10-10
 
 ### Changed

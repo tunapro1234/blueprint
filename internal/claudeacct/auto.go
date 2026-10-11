@@ -14,6 +14,12 @@ import (
 // must be, so two nearly equal accounts do not flap.
 const AutoHysteresis = 10.0
 
+// SoonestResetHysteresis is how much sooner another account's five-hour window
+// must reset before proactive soonest-reset switching leaves an active account
+// that still has room, so two accounts whose windows reset at nearly the same
+// time do not flap.
+const SoonestResetHysteresis = 2 * time.Minute
+
 // Auto decision outcomes.
 const (
 	AutoNone     = "none"
@@ -86,7 +92,12 @@ type Decision struct {
 }
 
 // Decide is the pure auto-switch decision table. Each account is measured
-// against its own limit (the threshold, or the account's lower limit):
+// against its own limit (the threshold, or the account's lower limit).
+//
+// With StrategySoonestReset the active account should always be the usable
+// account, with room under its limit, whose five-hour window resets soonest,
+// so usage lands on the window that is about to refresh (see
+// decideSoonestReset). Otherwise:
 //
 //   - no stored account is live, or its usage is unknown: none
 //   - the live account's 5h and 7d are both below its limit: none
@@ -106,6 +117,9 @@ func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, 
 	}
 	limit := policy.LimitFor(*current)
 	d := Decision{From: active, ActiveMax: activeMax, ActiveLimit: limit}
+	if policy.Prefer == StrategySoonestReset {
+		return decideSoonestReset(accounts, active, *current, activeMax, limit, state, policy, now, d)
+	}
 	if activeMax < limit {
 		d.Action, d.Reason = AutoNone, fmt.Sprintf("active account at %.0f%%, below %s", activeMax, limitText(limit, policy))
 		return d
@@ -173,10 +187,110 @@ func rankTargets(accounts *Accounts, from int, activeRoom float64, policy AutoPo
 	return list
 }
 
+// decideSoonestReset implements proactive soonest-reset switching: the active
+// account should always be the usable account, with room under its limit, whose
+// five-hour window resets soonest, so usage lands on the window that is about to
+// refresh. It switches when the active account has no room left, or when another
+// usable account with room resets meaningfully sooner (SoonestResetHysteresis),
+// subject to the cooldown. An account with no running window (an idle account)
+// counts as resetting latest.
+func decideSoonestReset(accounts *Accounts, active int, current Slot, activeMax, limit float64, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
+	activeHasRoom := activeMax < limit
+	activeReset := slotUsage(current).FiveHourReset()
+	targets := soonestTargets(accounts, active, policy, now)
+	if len(targets) == 0 {
+		if activeHasRoom {
+			d.Action, d.Reason = AutoNone, "active account has room and no other account is usable"
+		} else {
+			d.Action = AutoNoTarget
+			d.Reason = fmt.Sprintf("active account at %.0f%% (%s) and no other account has room under its limit", activeMax, limitText(limit, policy))
+		}
+		return d
+	}
+	best := targets[0]
+	if activeHasRoom && !resetSooner(best.reset, activeReset, SoonestResetHysteresis) {
+		d.Action, d.Reason = AutoNone, "active account has room and resets soonest among usable accounts"
+		return d
+	}
+	if !state.LastSwitchAt.IsZero() && now.Before(state.LastSwitchAt.Add(policy.Cooldown)) {
+		d.Action = AutoNone
+		d.Reason = "cooling down for " + FormatDuration(state.LastSwitchAt.Add(policy.Cooldown).Sub(now)) + " after the last switch"
+		return d
+	}
+	d.Action, d.To, d.TargetMax = AutoSwitch, best.n, best.value
+	if activeHasRoom {
+		d.Reason = fmt.Sprintf("slot %d resets sooner (%s) than the active account (%s); switching to spend the sooner window first", best.n, resetText(best.reset, now), resetText(activeReset, now))
+	} else {
+		d.Reason = fmt.Sprintf("active account at %.0f%% (%s); slot %d resets soonest with room", activeMax, limitText(limit, policy), best.n)
+	}
+	return d
+}
+
+// soonestTargets lists the usable accounts other than from that have room under
+// their own limit, ordered by soonest five-hour reset first (an unknown reset
+// last). Unlike rankTargets it does not require more room than the active
+// account: proactive soonest-reset switching is driven by reset time, not room.
+func soonestTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Time) []rankedTarget {
+	var list []rankedTarget
+	for _, s := range accounts.Slots {
+		if s.Number == from || !s.Usable() {
+			continue
+		}
+		value, known := slotUsage(s).Max(now)
+		if !known {
+			continue
+		}
+		room := policy.LimitFor(s) - value
+		if room <= 0 {
+			continue
+		}
+		list = append(list, rankedTarget{n: s.Number, value: value, room: room, reset: slotUsage(s).FiveHourReset()})
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		if !list[i].reset.Equal(list[j].reset) {
+			return soonestResetLess(list[i].reset, list[j].reset)
+		}
+		return list[i].room > list[j].room
+	})
+	return list
+}
+
+// resetSooner reports whether target resets meaningfully before active, by at
+// least margin. An account with no running window (zero reset) never counts as
+// sooner; an idle active account (zero reset) is always beaten by a target that
+// has a running window.
+func resetSooner(target, active time.Time, margin time.Duration) bool {
+	if target.IsZero() {
+		return false
+	}
+	if active.IsZero() {
+		return true
+	}
+	return target.Before(active.Add(-margin))
+}
+
+// resetText renders a five-hour reset time relative to now for a decision
+// reason.
+func resetText(reset, now time.Time) string {
+	if reset.IsZero() {
+		return "no running window"
+	}
+	if d := reset.Sub(now); d > 0 {
+		return "in " + FormatDuration(d)
+	}
+	return "now"
+}
+
 // candidatesFor lists auto targets best first (the decision's pick first).
 func candidatesFor(accounts *Accounts, d Decision, policy AutoPolicy, now time.Time) []int {
+	var targets []rankedTarget
+	if policy.Prefer == StrategySoonestReset {
+		targets = soonestTargets(accounts, d.From, policy, now)
+	} else {
+		targets = rankTargets(accounts, d.From, d.ActiveLimit-d.ActiveMax, policy, now)
+	}
 	var out []int
-	for _, r := range rankTargets(accounts, d.From, d.ActiveLimit-d.ActiveMax, policy, now) {
+	for _, r := range targets {
 		out = append(out, r.n)
 	}
 	return out

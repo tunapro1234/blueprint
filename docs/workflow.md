@@ -30,7 +30,7 @@ generic example):
       format: json
       require_fresh: true
     validate:
-      command: ["python3", "check.py", "{{.Output}}"]
+      command: ["python3", "./check.py", "{{.Output}}"]
       timeout: 2m
       rounds: 3
       weak_after: 2
@@ -62,6 +62,11 @@ weak_after; otherwise it behaves like exit 1. Any other exit, timeout, crash,
 missing output, stale output, or invalid JSON fails that unit without stopping
 the run. When exit 1 exhausts the configured rounds, the result is weak only if
 the final round meets weak_after.
+
+A validator file shipped inside the definition directory must be referenced with a
+path separator, for example `./check.py`, so it resolves in the run's snapshot copy
+of the definition. A bare name with no separator runs from the project workdir
+instead.
 
 Control characters in rendered prompts are replaced with U+FFFD, except for
 newlines and tabs. The replacement count is recorded with the unit transition.

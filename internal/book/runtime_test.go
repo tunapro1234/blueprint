@@ -432,3 +432,50 @@ func TestRuntimeReadsCodexInsteadOfStaleClaude(t *testing.T) {
 		t.Fatalf("lost remote fallback/protection: %+v", remote)
 	}
 }
+
+func TestStaleOpenTurnRescuedToIdleOnlyWhenPaneQuiet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	dir := filepath.Join(home, "projects", "-work")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	id := "11111111-2222-3333-4444-555555555555"
+	// A real user prompt with no recorded answer is an open turn; stamped 30
+	// minutes ago it is past turnOpenCeiling, so the transcript reads stale.
+	old := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	row := `{"type":"user","timestamp":"` + old + `","message":{"role":"user","content":[{"type":"text","text":"do the thing"}]}}` + "\n"
+	if e := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(row), 0600); e != nil {
+		t.Fatal(e)
+	}
+	agent := Agent{Name: "agent", Folder: "/work"}
+
+	// claudeRuntimeBound alone leaves a stale-open turn unknown with the sentinel.
+	a := &cache.Activity{State: "unknown", ObservedAt: time.Now().UTC()}
+	claudeRuntimeBound(agent, a, id)
+	if a.State != "unknown" || a.Reason != reasonTurnStale {
+		t.Fatalf("stale-open turn not classified as stale: %+v", a)
+	}
+
+	// A busy pane is never rescued: a turn genuinely in progress keeps the block.
+	busy := &cache.Activity{State: "unknown", Reason: reasonTurnStale}
+	if rescueStaleOpenTurn(busy, true) || busy.State != "unknown" {
+		t.Fatalf("stale-open rescued over a busy pane: %+v", busy)
+	}
+
+	// A quiet pane rescues the same observation to a deliverable idle, recording
+	// the basis so status/receipts stay honest about where idle came from.
+	if !rescueStaleOpenTurn(a, false) || a.State != "idle" || a.Reason != "" {
+		t.Fatalf("stale-open over a quiet pane not rescued: %+v", a)
+	}
+	if a.Source != "pane-after-stale-turn" {
+		t.Fatalf("rescue source not recorded: %+v", a)
+	}
+
+	// A different unknown reason stays fail-closed even over a quiet pane: only the
+	// stale-open sentinel is rescued, never a general "cannot read the turn".
+	other := &cache.Activity{State: "unknown", Reason: "no readable decisive turn event"}
+	if rescueStaleOpenTurn(other, false) || other.State != "unknown" {
+		t.Fatalf("non-stale unknown wrongly rescued: %+v", other)
+	}
+}

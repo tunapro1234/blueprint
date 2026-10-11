@@ -82,6 +82,13 @@ func observedRuntimeState(ctx context.Context, agent Agent, state cache.State, p
 			a.State, a.Source = "working", "pane"
 		}
 	}
+	if state.Runtime == "claude" {
+		// Scoped to claude: the rescue reasons from claude's screen-vs-transcript
+		// asymmetry. Codex carries the same "turn evidence stale" reason from its
+		// app-server truth source and must keep failing closed, so it is not
+		// rescued here.
+		rescueStaleOpenTurn(a, screen)
+	}
 	if bptmux.Dialog(pane) {
 		a.State, a.Source, a.Reason = "blocked", "pane", "dialog or navigation/search input"
 	}
@@ -406,6 +413,39 @@ func shellQuoteRecoveryArg(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
+// reasonTurnStale marks an observation whose only defect is a turn left
+// structurally open past turnOpenCeiling with no fresh transcript activity. It is
+// a sentinel, not just a message: observedRuntimeState keys the stale-open rescue
+// (rescueStaleOpenTurn) on it, so the two sites must agree on the value. The
+// codex path uses the same user-facing string (see codexRuntime), which is why
+// the rescue call is scoped to state.Runtime == "claude": codex keeps failing
+// closed from its app-server truth source and is never rescued from the screen.
+const reasonTurnStale = "turn evidence stale"
+
+// rescueStaleOpenTurn resolves a claude observation that failed ONLY because its
+// turn is stale-open (reasonTurnStale) to idle when the live pane is not busy.
+//
+// This makes the runtime observation agree with the TurnOpen gate, which already
+// treats a turn open past turnOpenCeiling as NOT busy (turnopen.go) precisely so
+// that "doubt does not last forever": a turn whose close was never recorded (an
+// interrupt, a Remote Control drop, an account change mid-turn) must not block an
+// agent's queue indefinitely. msgq consults the runtime block before TurnOpen, so
+// without this the stale-open block would defeat TurnOpen's own ceiling.
+//
+// Safety holds because screen is the authority here, not the stale file: a turn
+// that is genuinely in progress still draws a spinner and was already promoted to
+// "working" by the caller (screen == true), so it is never rescued. Only a
+// stale-open turn over a quiet pane — the agent waiting at an empty composer —
+// becomes idle. Dialog and typing-draft checks still run after this and can put
+// the verdict back to blocked.
+func rescueStaleOpenTurn(a *cache.Activity, screenBusy bool) bool {
+	if a == nil || screenBusy || a.State != "unknown" || a.Reason != reasonTurnStale {
+		return false
+	}
+	a.State, a.Source, a.Reason = "idle", "pane-after-stale-turn", ""
+	return true
+}
+
 func claudeRuntime(agent Agent, a *cache.Activity) cache.State {
 	return claudeRuntimeBound(agent, a, "")
 }
@@ -440,7 +480,7 @@ func claudeRuntimeBound(agent Agent, a *cache.Activity, liveID string) cache.Sta
 	}
 	age := a.ObservedAt.Sub(stamp)
 	if age < -time.Minute || (phase == turnOpenVerdict && age > turnOpenCeiling) {
-		a.Reason = "turn evidence stale"
+		a.Reason = reasonTurnStale
 		return state
 	}
 	busy := phase == turnOpenVerdict

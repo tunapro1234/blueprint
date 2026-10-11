@@ -18,6 +18,17 @@ Changes on `dev` since the 1.9.31 release.
   accounts). A short reset-time hysteresis and the existing cooldown keep two
   near-simultaneous resets from flapping. `switchPrefer: "room"` is unchanged.
 
+### Fixed
+
+- A Claude agent whose turn was left structurally open — its close never
+  recorded because the session was interrupted, Remote Control dropped, or the
+  signed-in account changed mid-turn — no longer has its message queue blocked
+  indefinitely. Once the open turn is older than the 15-minute ceiling the live
+  pane decides: if it shows no spinner, no dialog and no half-typed draft, the
+  agent is idle and deliverable. This matches what the `TurnOpen` gate already
+  concluded for the same case; a turn genuinely in progress still shows a
+  spinner and is never treated as idle.
+
 ## [1.9.31] - 2026-10-10
 
 ### Changed

@@ -3475,7 +3475,31 @@ func (a *app) compactDeliver(target, sender string) (bool, string, error) {
 	if err := a.clearComposer(target); err != nil {
 		return false, "", err
 	}
-	return a.deliver(target, sender, "/compact")
+	return compactDeliveryOutcome(a.deliver(target, sender, "/compact"))
+}
+
+// compactDeliveryOutcome reinterprets a workflow-driven /compact delivery, because
+// a /compact can be confirmed by neither proof bp has: the pane repaints the
+// instant the command runs, so the screen submit check sees it unverified, and the
+// command is far too short for the transcript witness to locate (book.CanWitness is
+// false below transcriptProbeMin). The queue therefore settles a compaction that
+// actually ran as "not delivered (hanging in composer)" or "unconfirmed" — a false
+// negative deliver() hands back as a hard error. Read literally that error fails the
+// whole workflow run even though the agent compacted (observed on probot-egitim
+// 2026-10-11: transcript shows "Compacted", yet the run errored "not delivered
+// (hanging in composer)").
+//
+// So any outcome that reached a queue channel but did not verify is unprovable HERE
+// and must defer to the one authority that can tell a real compaction apart from a
+// no-op: Engine.compactIfNeeded, which observes the context drop. Those become
+// ErrUnverified, which the driver maps to ErrCompactQueued (pending). A genuine
+// refusal — no open session, a validation error — never produces a channel, so it
+// keeps its own error and still fails the run.
+func compactDeliveryOutcome(queued bool, channel string, err error) (bool, string, error) {
+	if err != nil && channel != "" && !errors.Is(err, bptmux.ErrBusy) {
+		return queued, channel, bptmux.ErrUnverified
+	}
+	return queued, channel, err
 }
 
 func (a *app) compact(args []string) error {

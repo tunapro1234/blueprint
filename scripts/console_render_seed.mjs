@@ -29,7 +29,7 @@ writeFileSync(
   JSON.stringify(
     {
       stateDir,
-      usage: { plan: "team", perSeatUsd: 150, perSeatFiveHourTokens: 50_000_000 },
+      usage: { plan: "team", perSeatUsd: 125, perSeatFiveHourTokens: 50_000_000 },
     },
     null,
     2,

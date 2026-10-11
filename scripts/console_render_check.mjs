@@ -103,8 +103,13 @@ for (const spec of PAGES) {
     text = (await page.innerText("body")).replace(/\s+/g, " ").trim();
     const shot = `${outDir}/${spec.label}.png`;
     await page.screenshot({ path: shot, fullPage: true });
-    const navOk = NAV.every((n) => text.includes(n));
-    const markerOk = spec.markers.every((m) => text.includes(m));
+    // Match case-insensitively: innerText returns text with CSS text-transform
+    // applied, so an uppercase heading renders as "SUBSCRIPTION" even though the
+    // DOM text is "Subscription". A case-sensitive check would be a false
+    // negative on any styled heading.
+    const haystack = text.toLowerCase();
+    const navOk = NAV.every((n) => haystack.includes(n.toLowerCase()));
+    const markerOk = spec.markers.every((m) => haystack.includes(m.toLowerCase()));
     ok = navOk && markerOk && errors.length === 0;
     results.push({
       path: spec.path,

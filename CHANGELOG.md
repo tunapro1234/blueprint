@@ -8,6 +8,23 @@ All notable changes to bp are recorded here. The format follows
 
 Changes on `dev` since the 1.9.31 release.
 
+### Added
+
+- `bp qclear <channel-id>...` retracts bp's own text left hanging in a target's
+  composer. When bp pastes a message but cannot confirm it, the text can settle
+  unsent in the composer and block every later message behind it with "composer
+  contains foreign text", and bp never re-pastes a settled record. `qclear`
+  clears the composer only when it still holds exactly that text on an idle pane
+  (Ctrl-u, never Escape); a busy pane, a dialog, a human's draft or an
+  already-empty composer are left untouched.
+- `bp open --no-remote-control` skips the `/remote-control` and `/rename`
+  startup commands for a Claude pane. Use it when Remote Control cannot bind on
+  the machine (the signed-in claude.ai account or organization changed), where
+  `/remote-control` would otherwise hang unsubmitted in the composer and stop
+  the new agent from coming up. The pane opens and takes messages but has no
+  phone or claude.ai control until Remote Control is re-established; the default
+  stays Remote-Control-on.
+
 ### Changed
 
 - Automatic account switching with `claudeAccounts.switchPrefer: "soonest-reset"`

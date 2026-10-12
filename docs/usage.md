@@ -204,6 +204,7 @@ bp msg work 'Please review the change'   # bp msg [--force-busy] <name> <message
 bp qstat <channel-id> [--json]
 bp q [--retry]
 bp qcancel <channel-id>...
+bp qclear <channel-id>...                 # retract bp's own text left hanging in a composer
 bp peek work                              # bp peek <name> [n]
 bp whoami
 bp announce <message...> [--dry-run]
@@ -273,7 +274,14 @@ binary without creating a new message; it does not bypass busy, draft, or
 identity checks. Use it, without closing the agent, when a local worker left
 over from before an update still runs the old binary. `bp qcancel` withdraws
 queued messages; a send already in progress refuses the cancellation rather
-than claiming the recipient can no longer receive it. `bp peek <name> [n]`
+than claiming the recipient can no longer receive it. `bp qclear
+<channel-id>...` retracts bp's own text left hanging in a target's composer:
+when bp pasted a message but could not confirm it, the text can sit unsent and
+block every later message behind it with "composer contains foreign text", yet
+bp never pastes a settled record again. `qclear` clears the composer only when
+it still holds exactly that text on an idle pane (it presses Ctrl-u, never
+Escape); a busy pane, a dialog, a human's draft or an already-empty composer
+are left untouched. `bp peek <name> [n]`
 prints the last `n` non-empty lines of the agent's screen (default 8).
 
 `bp announce` sends `[ANNOUNCE <sender>] <text>` to the sender's descendants
@@ -318,7 +326,14 @@ to keep Claude's own permission prompts. Codex keeps its sandbox unless you
 pass `--no-sandbox`. More options: `--resume|--fresh`, `--thread <id>`,
 `--rebind`, `--adopt`, `--worktree <topic>`, `--parent <name>`,
 `--role <text>`, `--ephemeral`, `--remote unix://…`, `--no-prompt`,
-`--account <N|email|alias|default>` and `-- <native flags>`. For a new local
+`--no-remote-control`, `--account <N|email|alias|default>` and
+`-- <native flags>`. `--no-remote-control` skips the `/remote-control` and
+`/rename` startup commands for a Claude pane: use it when Remote Control
+cannot bind on the machine (the signed-in claude.ai account or organization
+changed), where `/remote-control` would otherwise hang unsubmitted in the
+composer and stop the agent from coming up. The pane then opens and takes
+messages but has no phone or claude.ai control until Remote Control is
+re-established. For a new local
 registration an explicit `--parent` wins; otherwise bp uses the verified
 caller, or the local coordinator when the caller is unverified.
 

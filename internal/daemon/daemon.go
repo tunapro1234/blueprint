@@ -90,6 +90,11 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 		}
 	}
 	service := &Service{config: cfg, state: NewState(filepath.Join(cfg.StateDir, "jobs.json")), tmux: bptmux.New(), queue: queue, log: logger}
+	// The same transcript turn-open read, moved into the delivery path itself: the
+	// queue's TurnOpen gate (above) runs before Send, but a turn can still open in
+	// the quiet window between that gate and the paste. This probe re-checks right
+	// before the keystroke and fails closed when the transcript cannot be read.
+	service.tmux.TurnOpenProbe = book.StrictTurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	return service
 }
 

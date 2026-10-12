@@ -19,5 +19,11 @@ type Activity struct {
 	LastTurnError      bool       `json:"last_turn_error,omitempty"`
 	ScreenBusy         *bool      `json:"screen_busy,omitempty"`
 	TurnBusy           *bool      `json:"turn_busy,omitempty"`
-	DeliveryBlocked    bool       `json:"delivery_blocked"`
+	// TurnReadErr carries a genuine transcript READ failure (an unreadable or
+	// mid-write tail), as distinct from a readable-but-inconclusive transcript,
+	// which leaves this empty. Only the Claude runtime sets it, and only the
+	// strict delivery-path turn-open probe reads it, to fail closed when it
+	// cannot confirm the turn is closed.
+	TurnReadErr     string `json:"turn_read_err,omitempty"`
+	DeliveryBlocked bool   `json:"delivery_blocked"`
 }

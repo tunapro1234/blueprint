@@ -558,9 +558,18 @@ func Busy(pane string) bool {
 }
 
 type Client struct {
-	Bin            string
-	Sleep          func(time.Duration)
-	Now            func() time.Time
+	Bin   string
+	Sleep func(time.Duration)
+	Now   func() time.Time
+	// TurnOpenProbe, when set, is consulted at the end of readyToSend — after the
+	// screen already read idle and after the quiet window — to catch a Claude turn
+	// that opened during that window, which the screen cannot see while a turn
+	// streams with no spinner. It reports (open, err): open true blocks the paste
+	// (queued like a busy pane), and a non-nil err fails closed (the transcript
+	// could not be read, so the turn's state is unknown). It answers (false, nil)
+	// for anything it cannot assess, so it never blocks a non-Claude delivery. The
+	// daemon wires book.StrictTurnOpenProbe here; left nil, delivery is unchanged.
+	TurnOpenProbe  func(context.Context, string) (bool, error)
 	exec           func(context.Context, []byte, ...string) ([]byte, error)
 	statusSnapshot *statusSnapshot
 }
@@ -1388,6 +1397,26 @@ func (c *Client) readyToSend(ctx context.Context, session, firstPane string, for
 	if !secondActivity.IsZero() && now.Sub(secondActivity) < clientIdleWindow {
 		return false, nil
 	}
+	// Last, the transcript. The screen passed above, but a Claude turn can open
+	// during the quiet window with no spinner yet (a streaming or tool phase),
+	// and the screen checks cannot see it. This probe re-reads the live turn one
+	// more time, right before the paste, closing that window. A forced record
+	// walks past an open turn exactly as it walks past the screen's spinner, so
+	// the probe is skipped for it; a nil probe (the default) leaves delivery
+	// unchanged.
+	if !force && c.TurnOpenProbe != nil {
+		open, err := c.TurnOpenProbe(ctx, session)
+		if err != nil {
+			// The transcript could not be read, so the turn's state is unknown.
+			// Fail closed: queue rather than paste into a possibly working agent.
+			return false, fmt.Errorf("%w: %s", ErrNotReady, turnUnreadableReason)
+		}
+		if open {
+			// A turn opened during the quiet window. Treat it exactly like a busy
+			// pane: nothing is injected and the message waits for the next pass.
+			return false, nil
+		}
+	}
 	return true, nil
 }
 
@@ -1938,6 +1967,7 @@ var bufferSequence uint64
 
 const (
 	authExpiredReason    = "pane session ended (Login expired / run /login)"
+	turnUnreadableReason = "transcript unreadable: cannot confirm the turn is closed"
 	composerOtherReason  = "composer contains other text: paste never entered"
 	composerBrokenReason = "paste entered the composer incorrectly (rewritten, still does not match)"
 )

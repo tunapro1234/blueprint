@@ -511,3 +511,53 @@ func TurnOpenProbe(agentbooks []string, projectsRoot string) func(agent string) 
 		return state.Activity == nil || state.Activity.State != "idle"
 	}
 }
+
+// StrictTurnOpenProbe is the turn-open check consulted INSIDE the delivery path
+// (tmux.Client.TurnOpenProbe), right before a paste and after the screen already
+// read idle, to catch a Claude turn that opened during the pre-send quiet window
+// — the window readyToSend's screen-only re-check cannot see, because a streaming
+// turn draws no spinner yet.
+//
+// It differs from TurnOpenProbe on purpose. TurnOpenProbe backs the msgq gate and
+// fails closed to "open" on every uncertainty, which is right for a first gate but
+// wrong for a second opinion: blocking here on a pane this probe cannot assess
+// would stall delivery to every non-Claude agent and on every transient blip. So
+// this one answers (false, nil) — deliverable — for a non-Claude pane, an unknown
+// agent, or a readable-but-inconclusive transcript; reports (true, nil) only for a
+// provably open Claude turn; and returns an error ONLY when the transcript
+// genuinely could not be read (an unreadable or mid-write tail), so the caller
+// queues rather than pastes (fail closed). projectsRoot is accepted for symmetry
+// with TurnOpenProbe; RuntimeFor resolves transcript paths itself.
+func StrictTurnOpenProbe(agentbooks []string, projectsRoot string) func(context.Context, string) (bool, error) {
+	return func(ctx context.Context, name string) (bool, error) {
+		fleet, err := LoadFleet(Paths(agentbooks))
+		if err != nil {
+			return false, nil
+		}
+		if _, ok := fleet.Agents[name]; !ok {
+			return false, nil
+		}
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return strictTurnVerdict(RuntimeFor(ctx, bptmux.New(), fleet, name))
+	}
+}
+
+// strictTurnVerdict maps an observation to the strict delivery-probe answer. It
+// is the whole decision, kept pure so it can be tested without a live pane: a
+// non-Claude or unassessable observation is deliverable (false, nil); a genuine
+// transcript read failure fails closed (an error, so the caller queues); and a
+// decisively read Claude turn answers with whether it is open.
+func strictTurnVerdict(state cache.State) (bool, error) {
+	a := state.Activity
+	if a == nil || state.Runtime != "claude" {
+		return false, nil
+	}
+	if a.TurnReadErr != "" {
+		return false, fmt.Errorf("transcript unreadable: %s", a.TurnReadErr)
+	}
+	if a.TurnBusy != nil {
+		return *a.TurnBusy, nil
+	}
+	return false, nil
+}

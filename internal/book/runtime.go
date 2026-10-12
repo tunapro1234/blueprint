@@ -474,7 +474,18 @@ func claudeRuntimeBound(agent Agent, a *cache.Activity, liveID string) cache.Sta
 	if !stamp.IsZero() {
 		a.LastEventAt = &stamp
 	}
-	if err != nil || phase == turnNone || phase == turnUncertainVerdict || stamp.IsZero() {
+	if err != nil {
+		// A genuine read failure, kept apart from the readable-but-inconclusive
+		// case below: an unreadable transcript, or a mid-write tail whose last
+		// byte is not yet a newline (what a streaming turn looks like on disk),
+		// means the turn's state cannot be confirmed. The strict delivery probe
+		// reads TurnReadErr to fail closed rather than paste into a possibly
+		// working agent; status output is unchanged because it reads a.Reason.
+		a.TurnReadErr = err.Error()
+		a.Reason = "no readable decisive turn event"
+		return state
+	}
+	if phase == turnNone || phase == turnUncertainVerdict || stamp.IsZero() {
 		a.Reason = "no readable decisive turn event"
 		return state
 	}

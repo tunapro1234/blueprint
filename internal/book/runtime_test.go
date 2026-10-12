@@ -479,3 +479,49 @@ func TestStaleOpenTurnRescuedToIdleOnlyWhenPaneQuiet(t *testing.T) {
 		t.Fatalf("non-stale unknown wrongly rescued: %+v", other)
 	}
 }
+
+// A genuine transcript read failure must reach the Activity as TurnReadErr, kept
+// apart from a readable-but-inconclusive transcript: it is the one signal the
+// strict delivery probe fails closed on. A mid-write tail — the last byte not yet
+// a newline, which is how a streaming turn looks on disk — is exactly that
+// failure, and must NOT be mistaken for a decisive turn verdict.
+func TestClaudeRuntimeBoundSurfacesTranscriptReadError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	dir := filepath.Join(home, "projects", "-work")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	id := "11111111-2222-3333-4444-555555555555"
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	row := `{"type":"user","timestamp":"` + now + `","message":{"role":"user","content":[{"type":"text","text":"do the thing"}]}}`
+	agent := Agent{Name: "agent", Folder: "/work"}
+
+	// Mid-write tail, no trailing newline: readTurnPhase errors, and the error
+	// must surface as TurnReadErr with no turn verdict taken.
+	if e := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(row), 0600); e != nil {
+		t.Fatal(e)
+	}
+	a := &cache.Activity{State: "unknown", ObservedAt: time.Now().UTC()}
+	claudeRuntimeBound(agent, a, id)
+	if a.TurnReadErr == "" {
+		t.Fatalf("an unreadable mid-write tail did not set TurnReadErr: %+v", a)
+	}
+	if a.TurnBusy != nil {
+		t.Fatalf("a turn verdict was taken from an unreadable transcript: %+v", a)
+	}
+
+	// The same record with a clean, newline-terminated tail reads decisively — an
+	// open turn, since the prompt has no answer — and sets NO read error.
+	if e := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(row+"\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	b := &cache.Activity{State: "unknown", ObservedAt: time.Now().UTC()}
+	claudeRuntimeBound(agent, b, id)
+	if b.TurnReadErr != "" {
+		t.Fatalf("a readable transcript set a spurious TurnReadErr: %+v", b)
+	}
+	if b.TurnBusy == nil || !*b.TurnBusy {
+		t.Fatalf("a readable open turn was not seen: %+v", b)
+	}
+}

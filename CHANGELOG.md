@@ -41,6 +41,15 @@ Changes on `dev` since the 1.9.31 release.
 
 ### Fixed
 
+- A queued message no longer pastes into a Claude agent that began a turn in the
+  brief window between the delivery gate and the keystroke. The screen gate reads
+  idle, but a turn can open during the pre-send settle with no spinner yet (a
+  streaming or tool phase), and the screen-only re-check could not see it, so the
+  paste landed in a working agent and hung unsent. Delivery now re-reads the live
+  transcript turn one last time right before the paste and, if the turn has
+  opened, waits for the next pass; if the transcript cannot be read, it fails
+  closed and queues rather than pasting with the turn state unknown. A
+  `--force-busy` message is unaffected, and non-Claude agents are not touched.
 - A Claude agent whose turn was left structurally open — its close never
   recorded because the session was interrupted, Remote Control dropped, or the
   signed-in account changed mid-turn — no longer has its message queue blocked

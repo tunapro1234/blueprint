@@ -2674,7 +2674,14 @@ type OpenOptions struct {
 	// slow launch is waiting on, instead of a silent multi-minute wait (#22).
 	Progress func(string) `json:"-"`
 	NoPrompt bool         `json:"-"`
-	Legacy   bool         `json:"-"`
+	// NoRemoteControl skips the /remote-control + /rename startup commands for a
+	// Claude pane. It is an opt-out for a machine where Remote Control cannot bind
+	// (e.g. the signed-in claude.ai account/org changed): there the /remote-control
+	// slash command hangs unsubmitted in the composer and blocks the onboarding
+	// prompt behind it. The pane then has no phone/claude.ai control and keeps its
+	// launch name, but it opens and takes messages. Default stays RC-on.
+	NoRemoteControl bool `json:"-"`
+	Legacy          bool `json:"-"`
 	// Launcher is an internal, shell-quoted wrapper for local managed sessions.
 	// It receives the complete native command as one argument.
 	Launcher string `json:"-"`
@@ -3344,7 +3351,7 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	progress("harness ready")
 	c.Sleep(time.Second)
-	if !opts.Codex && !opts.Hermes && !opts.OpenCode {
+	if !opts.Codex && !opts.Hermes && !opts.OpenCode && !opts.NoRemoteControl {
 		c.sendStartupCommand(ctx, session, "/remote-control")
 		// When RC is already active (a resumed session reconnects on its own)
 		// the command opens the Continue/Disconnect menu instead of just

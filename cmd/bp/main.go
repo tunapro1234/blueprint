@@ -71,7 +71,7 @@ bp book [--json]              # configured books and coordinator
 bp config path|check           # settings file location / validation
 bp run [--name <name>] [--parent <name>] [--role <text>] [--ephemeral|--persistent] [--adopt] [--allow-codex] <codex|claude|opencode|hermes> [arguments...]
                               # bp open also accepts --opencode for managed sessions
-bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [--account <N|email|alias|default>] [-- <native flags>]
+bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [--no-remote-control] [--account <N|email|alias|default>] [-- <native flags>]
 bp attach <agent> [--no-revive] # attach live or revive from its recorded launch
 bp attach <agent>@<server>      # delegate the same command to a registered remote
 bp schema export [<project-dir>] [--lead <agent>]
@@ -1461,7 +1461,7 @@ func unverifiedCause(err error) string {
 
 func (a *app) open(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [--account <N|email|alias|default>] [-- <native flags>]")
+		return fmt.Errorf("usage: bp open <name> <directory> [--ephemeral] [--worktree <topic>] [--parent <name>] [--role <text>] [--resume|--fresh] [--codex|--claude|--hermes|--opencode] [--allow-codex] [--remote unix://] [--thread <id>] [--rebind] [--adopt] [--no-sandbox] [--no-prompt] [--no-remote-control] [--account <N|email|alias|default>] [-- <native flags>]")
 	}
 	name, dir := args[0], args[1]
 	if err := book.RequireUnarchived(a.config.Agentbooks, name); err != nil {
@@ -1547,6 +1547,12 @@ func (a *app) open(args []string) error {
 			opts.NoSandbox = true
 		case "--no-prompt":
 			opts.NoPrompt = true
+		case "--no-remote-control":
+			// Skip the /remote-control + /rename startup commands for a Claude
+			// pane. Use it when Remote Control cannot bind on this machine (the
+			// signed-in claude.ai account/org changed), where /remote-control
+			// otherwise hangs unsubmitted in the composer and blocks onboarding.
+			opts.NoRemoteControl = true
 		case "--rebind":
 			rebind = true
 		case "--adopt":

@@ -138,6 +138,28 @@ func claudePasteChip(pane string) bool {
 	return ok && claudeChip.MatchString(tail)
 }
 
+// PasteChipLabel returns the Claude paste-chip label the composer is showing
+// ("[Pasted text #36 +3 lines]"), or "" when the composer shows no such chip.
+//
+// It exists for ONE purpose: bp cannot read the TEXT behind a chip, so a hanging
+// paste that collapsed into a chip can never be matched by its content. But the
+// LABEL is stable for the lifetime of the paste, and the "#N" counter is assigned
+// by Claude Code per session and only ever increases, so a label captured the
+// moment bp's own paste chipped identifies that exact paste until the session
+// ends. The delivery path records this label on the hanging record; `bp qclear`
+// later compares it against the composer to prove the chip is still bp's own
+// before erasing it. A session restart resets "#N", but it also changes the
+// record's AttemptBinding, which the caller checks first, so a stale label can
+// never match a different session's chip. Claude-only for now: the Codex and
+// opencode chips carry no per-paste identifier, so their labels are not unique.
+func PasteChipLabel(pane string) string {
+	tail, ok := composerTail(pane)
+	if !ok {
+		return ""
+	}
+	return claudeChip.FindString(tail)
+}
+
 // composerTail joins every rendered row from the final prompt line to the end of
 // the pane (composer + overflow + status line, never the transcript above) with
 // dim/ANSI and the prompt marker removed, so a chip label split by a wrap still
@@ -1581,6 +1603,91 @@ func (c *Client) ClearDelivered(ctx context.Context, session string, texts []str
 		return false, err
 	}
 	return true, nil
+}
+
+// ClearChip erases a Claude paste chip that provably carries chipSig — the label
+// bp recorded when its OWN paste collapsed into that chip (see PasteChipLabel).
+// It is the chip counterpart of ClearDelivered: ClearDelivered proves ownership
+// by the composer holding our exact TEXT, which a chip never does, so a hanging
+// chip was unclearable before this. Here ownership is proven by the label match.
+//
+// Every guard ClearDelivered applies applies here: a dialog, a busy pane or an
+// empty composer refuse the clear, and the erase is C-u only, never Escape, so it
+// can neither cancel a running turn nor touch a human's draft. The one thing that
+// differs is the ownership proof: the composer must currently show a chip whose
+// label equals chipSig exactly. A different chip, a readable composer, or no chip
+// all mean "not the paste we recorded" and leave the pane untouched.
+func (c *Client) ClearChip(ctx context.Context, session, chipSig string) (bool, error) {
+	if chipSig == "" {
+		return false, nil
+	}
+	if err := c.requireAgentPane(ctx, session); err != nil {
+		return false, err
+	}
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	if paneDialog(pane) {
+		return false, ErrDialog
+	}
+	if Busy(pane) {
+		return false, ErrBusy
+	}
+	if !composerFilled(pane) {
+		return false, nil // nothing hanging: the ordinary case
+	}
+	if PasteChipLabel(pane) != chipSig {
+		return false, nil // not the chip we recorded: leave it exactly as it is
+	}
+	return c.clearChipWithCtrlU(ctx, session, chipSig)
+}
+
+// clearChipWithCtrlU presses C-u on a composer holding our chip until the chip is
+// gone, the composer reads empty, or the budget runs out. It re-reads the pane
+// before every press and stops the instant the composer is no longer showing our
+// chip — a dialog, a busy turn, an empty box, a different chip, or two presses
+// that changed nothing all end it, so it never keeps hammering a composer C-u is
+// not acting on. It reports whether the composer actually cleared; the caller
+// never treats an unproven clear as success.
+func (c *Client) clearChipWithCtrlU(ctx context.Context, session, chipSig string) (bool, error) {
+	target := "=" + session + ":"
+	prev := ""
+	stall := 0
+	for attempt := 0; attempt < composerClearAttemptsMax; attempt++ {
+		pane, err := c.CaptureAnsi(ctx, session)
+		if err != nil {
+			return false, err
+		}
+		if paneDialog(pane) {
+			return false, clearStopped(ErrDialog, pane)
+		}
+		if Busy(pane) {
+			return false, clearStopped(ErrBusy, pane)
+		}
+		if !composerFilled(pane) {
+			return true, nil // the chip is gone and nothing else took its place
+		}
+		if PasteChipLabel(pane) != chipSig {
+			// The box no longer holds our chip: a different chip, or readable
+			// content C-u would be erasing blind. Stop and leave it alone.
+			return false, clearStopped(ErrTyping, pane)
+		}
+		if box, _, _ := claudeComposerBoxAt(pane); box == prev {
+			if stall++; stall >= composerClearStallMax {
+				return false, clearStopped(ErrTyping, pane)
+			}
+		} else {
+			stall = 0
+			prev = box
+		}
+		if _, err := c.run(ctx, nil, "send-keys", "-t", target, "C-u"); err != nil {
+			return false, err
+		}
+		c.Sleep(composerClearWindow)
+	}
+	pane, _ := c.CaptureAnsi(ctx, session)
+	return false, clearStopped(ErrTyping, pane)
 }
 
 // composerFilled reports whether a composer holds anything visible, using the

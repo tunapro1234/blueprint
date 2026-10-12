@@ -16,7 +16,11 @@ Changes on `dev` since the 1.9.31 release.
   contains foreign text", and bp never re-pastes a settled record. `qclear`
   clears the composer only when it still holds exactly that text on an idle pane
   (Ctrl-u, never Escape); a busy pane, a dialog, a human's draft or an
-  already-empty composer are left untouched.
+  already-empty composer are left untouched. It also handles a paste that
+  collapsed into an unreadable chip (`[Pasted text #N +M lines]`): bp records the
+  chip's label when its own paste chips, and `qclear` matches that label — and
+  the target's unchanged session — to clear the chip even though its text cannot
+  be read.
 - `bp open --no-remote-control` skips the `/remote-control` and `/rename`
   startup commands for a Claude pane. Use it when Remote Control cannot bind on
   the machine (the signed-in claude.ai account or organization changed), where

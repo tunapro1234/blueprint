@@ -281,7 +281,11 @@ block every later message behind it with "composer contains foreign text", yet
 bp never pastes a settled record again. `qclear` clears the composer only when
 it still holds exactly that text on an idle pane (it presses Ctrl-u, never
 Escape); a busy pane, a dialog, a human's draft or an already-empty composer
-are left untouched. `bp peek <name> [n]`
+are left untouched. It also clears a paste that collapsed into an unreadable
+chip (`[Pasted text #N +M lines]`), which bp cannot match by content: bp records
+the chip's label when its own paste chips, and `qclear` erases the chip only
+when the composer still shows that exact label and the target is still the same
+session. `bp peek <name> [n]`
 prints the last `n` non-empty lines of the agent's screen (default 8).
 
 `bp announce` sends `[ANNOUNCE <sender>] <text>` to the sender's descendants

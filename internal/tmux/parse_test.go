@@ -884,6 +884,24 @@ func TestClassifyComposer(t *testing.T) {
 	}
 }
 
+func TestPasteChipLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		pane string
+		want string
+	}{
+		{"empty composer", "❯  \n" + composerBorder, ""},
+		{"plain text, no chip", "❯ deploy the new bar chips\n" + composerBorder, ""},
+		{"claude chip", "❯ [Pasted text #36 +3 lines]\n" + composerBorder, "[Pasted text #36 +3 lines]"},
+		{"claude chip, single-digit counter", "❯ [Pasted text #1 +12 lines]\n" + composerBorder, "[Pasted text #1 +12 lines]"},
+	}
+	for _, tc := range cases {
+		if got := PasteChipLabel(tc.pane); got != tc.want {
+			t.Errorf("%s: PasteChipLabel=%q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSendRefusesExpiredLoginBeforePasting(t *testing.T) {
 	// The 2026-08-01 incident state: the composer is empty and stable, but the
 	// session's auth expired and it consumes nothing. Nothing may be injected,

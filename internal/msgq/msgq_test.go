@@ -23,10 +23,11 @@ type fakeTarget struct {
 	sendErr error // when set, Send returns it instead of recording the delivery
 	// cleared records every ClearDelivered call and, when the pane provably holds
 	// one of the texts, empties it — the way the real client's C-u loop does.
-	cleared   [][]string
-	submitted []string
-	submitErr error
-	clearErr  error
+	cleared     [][]string
+	chipCleared []string
+	submitted   []string
+	submitErr   error
+	clearErr    error
 	// forced lists the deliveries that came through SendForce — the door that may
 	// type into a working pane.
 	forced []string
@@ -139,6 +140,23 @@ func (f *fakeTarget) ClearDelivered(_ context.Context, _ string, texts []string)
 		return false, f.clearErr
 	}
 	if _, ours := bptmux.StuckPaste(f.pane, texts); !ours {
+		return false, nil
+	}
+	f.pane = composerPane("")
+	return true, nil
+}
+
+// ClearChip mirrors the real client: it erases the composer only when the pane is
+// still showing a chip whose label equals chipSig. The fake models "showing that
+// chip" as the pane text containing the label, which is enough to exercise the
+// queue-layer routing and binding guard; the real label parse and C-u loop are
+// covered in the tmux package.
+func (f *fakeTarget) ClearChip(_ context.Context, _ string, chipSig string) (bool, error) {
+	f.chipCleared = append(f.chipCleared, chipSig)
+	if f.clearErr != nil {
+		return false, f.clearErr
+	}
+	if chipSig == "" || !strings.Contains(f.pane, chipSig) {
 		return false, nil
 	}
 	f.pane = composerPane("")

@@ -64,6 +64,14 @@ type Message struct {
 	// screen read inside screenSettleGrace of it is not evidence either way:
 	// a loaded TUI can show the submitted text in its composer for seconds.
 	UnverifiedAt float64 `json:"unverified_at,omitempty"`
+	// ChipSig is the paste-chip label the composer showed when this record's own
+	// paste collapsed into a chip ("[Pasted text #36 +3 lines]"). bp cannot read
+	// the text behind a chip, so a hanging chip cannot be matched by content; this
+	// label is how `bp qclear` proves the chip is still bp's own before erasing it.
+	// It is only ever set for a NoRepaste record whose paste chipped, and it is
+	// trusted only together with a matching AttemptBinding (a session restart
+	// resets the chip counter but also changes the binding). See tmux.PasteChipLabel.
+	ChipSig string `json:"chipSig,omitempty"`
 	// TornClears counts the times bp erased a MUTILATED copy of this message from
 	// the target's composer and allowed it to be sent again. Bounded by
 	// tornClearMax: a paste that tears repeatedly is a pane problem, not
@@ -838,6 +846,11 @@ type Target interface {
 	// ClearDelivered is used only for unconfirmed torn-paste recovery under
 	// the pane/turn guards. Confirmed delivery never authorizes composer edits.
 	ClearDelivered(context.Context, string, []string) (bool, error)
+	// ClearChip erases a paste chip the composer still shows, proven to be bp's
+	// own by a label match against the signature recorded when the paste chipped.
+	// Same guards as ClearDelivered (idle pane, C-u only); used only by qclear for
+	// a hanging record whose text collapsed into an unreadable chip.
+	ClearChip(context.Context, string, string) (bool, error)
 	// SubmitStuck presses Enter on a composer holding one of texts EXACTLY, and
 	// reports whether it cleared. Dispatch uses it for the one case the witness
 	// cannot reach: an unverified send still sitting unsubmitted in the box.
@@ -1021,11 +1034,15 @@ type ClearOutcome struct {
 // only when that record is such a hanging paste, asks the target to clear the
 // composer.
 //
-// The clear itself (Target.ClearDelivered) presses Ctrl-u, never Escape, and ONLY
-// when the composer still holds EXACTLY bp's own text on an idle pane: a busy pane,
-// a dialog, a foreign or partial composer, or an already-empty one are all left
-// untouched. So this can neither cancel a running turn nor erase a human's draft.
-// It takes the operator lock so it never races a delivery pass.
+// The clear itself presses Ctrl-u, never Escape, and ONLY on an idle pane: a busy
+// pane, a dialog or an already-empty composer are all left untouched, so it can
+// neither cancel a running turn nor erase a human's draft. Ownership is proven two
+// ways. The ordinary record still holds bp's exact TEXT, matched by ClearDelivered.
+// A record whose paste collapsed into an unreadable chip holds no readable text, so
+// it is matched by the chip LABEL recorded at paste time (ChipSig) via ClearChip,
+// and only while the target is still the same session (AttemptBinding match), since
+// the chip counter the label carries resets on a restart. It takes the operator
+// lock so it never races a delivery pass.
 func (q *Queue) ClearHangingComposer(ctx context.Context, target Target, ids ...string) ([]ClearOutcome, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -1045,7 +1062,19 @@ func (q *Queue) ClearHangingComposer(ctx context.Context, target Target, ids ...
 			outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Status: "not a hanging paste; composer left untouched"})
 			continue
 		}
-		cleared, cerr := target.ClearDelivered(ctx, message.To, []string{message.Wire()})
+		var cleared bool
+		var cerr error
+		if message.ChipSig != "" {
+			// The paste collapsed into a chip, so it can only be matched by label,
+			// and only when the target pane is still the same session that chipped.
+			if q.Binding != nil && message.AttemptBinding != "" && q.Binding(message.To) != message.AttemptBinding {
+				outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Status: "chip recorded but the target session changed; composer left untouched"})
+				continue
+			}
+			cleared, cerr = target.ClearChip(ctx, message.To, message.ChipSig)
+		} else {
+			cleared, cerr = target.ClearDelivered(ctx, message.To, []string{message.Wire()})
+		}
 		switch {
 		case cerr != nil:
 			outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Status: "could not clear", Err: cerr})
@@ -1059,10 +1088,14 @@ func (q *Queue) ClearHangingComposer(ctx context.Context, target Target, ids ...
 }
 
 // isHangingComposer reports whether a record is bp's own text left unsent in the
-// composer: NoRepaste rules out re-pasting, and the status or reason proves the
-// paste hung. Both are required so a torn or foreign record is never cleared here.
+// composer. NoRepaste rules out re-pasting; the remaining proof is either the
+// hanging status/reason (the exact-text case) or a recorded chip label (the
+// unreadable-chip case). A torn or foreign record has neither and is never cleared.
 func isHangingComposer(m Message) bool {
-	return m.NoRepaste && (m.Status == StatusHangingComposer || strings.HasPrefix(m.Reason, hangingPasteReason))
+	if !m.NoRepaste {
+		return false
+	}
+	return m.ChipSig != "" || m.Status == StatusHangingComposer || strings.HasPrefix(m.Reason, hangingPasteReason)
 }
 
 // lockDispatchForOperator takes the dispatch lock for a short operator action
@@ -2237,10 +2270,18 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// cannot be staged cheaply. So instead of reproducing it, bp records
 			// what the screen looked like when it happened; the next real
 			// occurrence carries its own evidence.
-			if report != nil {
-				if pane, capErr := target.Capture(ctx, rec.To); capErr == nil {
+			if pane, capErr := target.Capture(ctx, rec.To); capErr == nil {
+				if report != nil {
 					report(fmt.Sprintf("msgq: %s -> %s UNVERIFIED (%v); final screen rows:\n%s",
 						message.ID, message.To, err, paneTail(pane, unverifiedSnapshotRows)))
+				}
+				// If our paste collapsed into a chip, record its label now, while the
+				// chip is on screen. bp cannot read the text behind a chip, so this is
+				// the only moment it can tie this hanging record to the exact chip —
+				// what lets `bp qclear` erase it later (qclear matches the label, not
+				// the content, and checks the binding first). See tmux.PasteChipLabel.
+				if sig := bptmux.PasteChipLabel(pane); sig != "" {
+					message.ChipSig = sig
 				}
 			}
 			// Injected and submitted, but nothing confirmed it either way. Closing

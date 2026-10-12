@@ -53,6 +53,8 @@ type fakeDriver struct {
 	deliveryResults    []Delivery
 	deliveryIndex      int
 	onSend             func(string, string)
+	compactQueued      bool
+	waitTimeouts       []time.Duration
 }
 
 func newFakeDriver(clock *fakeClock) *fakeDriver {
@@ -131,11 +133,33 @@ func (d *fakeDriver) Compact(_ context.Context, agent string) error {
 		d.compactWhileActive = true
 		return ErrCompactBusy
 	}
+	if d.compactQueued {
+		// The /compact reached a queue but could not be verified: the engine
+		// records the compaction pending and defers to the context-drop
+		// observation (see mapCompactResult / compactIfNeeded).
+		return ErrCompactQueued
+	}
 	d.compactCount++
 	if d.compactReduction > 0 {
 		d.contextTokens -= d.compactReduction
 	}
 	return nil
+}
+
+// WaitDelivery records the timeout it was handed and resolves the delivery, so a
+// test can assert how long the engine is willing to wait for a queued prompt.
+func (d *fakeDriver) WaitDelivery(_ context.Context, agent string, delivery Delivery, timeout time.Duration) (Delivery, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.waitTimeouts = append(d.waitTimeouts, timeout)
+	d.clock.Advance(time.Millisecond)
+	delivery.Status = DeliveryDelivered
+	if delivery.DeliveredAt.IsZero() {
+		delivery.DeliveredAt = d.clock.Now()
+	}
+	d.pendingWorking[agent] = true
+	d.active[agent] = true
+	return delivery, nil
 }
 
 func (d *fakeDriver) sentCount() int {
@@ -357,6 +381,51 @@ func TestEngineCompactionBeforeUnitsAndTwoAgentQueue(t *testing.T) {
 				t.Fatalf("unit %s assigned twice", row.Unit)
 			}
 			seen[row.Unit] = true
+		}
+	})
+}
+
+// TestEnginePendingCompactionExtendsStartTimeout pins the fix for probot-egitim's
+// 2026-10-11 hat7 report: a ctx_above compaction that bp cannot verify is recorded
+// pending, after which the agent is still mid-compaction when the unit prompt is
+// sent. The prompt is queued and lands only once the compaction finishes, so the
+// engine must wait the unit budget for it, not the short start window — otherwise a
+// unit the agent actually works is failed as "not delivered before start timeout".
+// A normal unit (no pending compaction) must keep the short start window.
+func TestEnginePendingCompactionExtendsStartTimeout(t *testing.T) {
+	t.Run("pending compaction waits the unit budget", func(t *testing.T) {
+		clock := newFakeClock()
+		yamlText := baseYAML("compact:\n  ctx_above: 150\ntimeouts:\n  start: 2s\n  unit: 30m\n")
+		store, run := makeRun(t, clock, yamlText, `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+		driver := newFakeDriver(clock)
+		driver.contextTokens = 200 // above ctx_above, triggers the compaction
+		driver.compactQueued = true
+		driver.deliveryResults = []Delivery{{Status: DeliveryQueued}}
+		runEngine(t, store, run, driver, clock)
+		rows, _, err := store.Times(run.ID)
+		if err != nil || len(rows) != 1 || rows[0].Result != "done" {
+			t.Fatalf("pending-compaction unit should finish, got %#v err=%v", rows, err)
+		}
+		if rows[0].CompactResult != "pending" {
+			t.Fatalf("compaction should be recorded pending, got %q", rows[0].CompactResult)
+		}
+		if len(driver.waitTimeouts) != 1 || driver.waitTimeouts[0] != 30*time.Minute {
+			t.Fatalf("queued prompt after a pending compaction must wait the unit budget (30m), got %v", driver.waitTimeouts)
+		}
+	})
+	t.Run("normal unit keeps the start window", func(t *testing.T) {
+		clock := newFakeClock()
+		yamlText := baseYAML("timeouts:\n  start: 2s\n  unit: 30m\n")
+		store, run := makeRun(t, clock, yamlText, `[{"id":"one"}]`, "{{.Key}}", "", "agent-a")
+		driver := newFakeDriver(clock)
+		driver.deliveryResults = []Delivery{{Status: DeliveryQueued}}
+		runEngine(t, store, run, driver, clock)
+		rows, _, err := store.Times(run.ID)
+		if err != nil || len(rows) != 1 || rows[0].Result != "done" {
+			t.Fatalf("queued unit should finish, got %#v err=%v", rows, err)
+		}
+		if len(driver.waitTimeouts) != 1 || driver.waitTimeouts[0] != 2*time.Second {
+			t.Fatalf("a normal queued prompt must wait only the start window (2s), got %v", driver.waitTimeouts)
 		}
 	})
 }

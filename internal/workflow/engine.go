@@ -438,7 +438,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		}
 		var observation Observation
 		var startErr error
-		startedAt, observation, startErr = e.waitForStart(ctx, agent, deliveredAt, d.Timeouts.Start)
+		startedAt, observation, startErr = e.waitForStart(ctx, agent, deliveredAt, duration(d.Timeouts.Start, 3*time.Minute))
 		if startErr != nil {
 			return startErr
 		}
@@ -478,9 +478,24 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 	if delivery.QueuedAt.IsZero() {
 		delivery.QueuedAt = queuedAt
 	}
+	// After a pending compaction the agent is still settling. bp cannot confirm a
+	// /compact landed (it is witnessable by neither the screen nor the transcript,
+	// see compactIfNeeded), so the agent may still be mid-compaction when this unit
+	// prompt is sent, and both delivery and the first turn legitimately take far
+	// longer than the normal start window. Give them the unit budget so a prompt
+	// that lands once the compaction finishes is confirmed by the transcript
+	// witness instead of being failed as "not delivered before start timeout"
+	// (probot-egitim hat7, 2026-10-11: the compaction finished and the agent did
+	// the work, but the 3-minute start timeout had already failed the unit). A
+	// paste that truly never lands still fails, bounded by the witness window:
+	// WaitDelivery returns as soon as the record settles terminal.
+	startTimeout := duration(d.Timeouts.Start, 3*time.Minute)
+	if metrics.compactResult == "pending" {
+		startTimeout = duration(d.Timeouts.Unit, 40*time.Minute)
+	}
 	if delivery.Status == DeliveryQueued {
 		if waiter, ok := e.Driver.(DeliveryWaiter); ok {
-			delivery, err = waiter.WaitDelivery(ctx, agent, delivery, duration(d.Timeouts.Start, 3*time.Minute))
+			delivery, err = waiter.WaitDelivery(ctx, agent, delivery, startTimeout)
 			if err != nil && ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -515,7 +530,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sent", Round: round, DeliveryID: delivery.ChannelID, DeliveryStatus: string(delivery.Status), QueuedAt: timePointer(delivery.QueuedAt), DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: metrics.last}); err != nil {
 		return err
 	}
-	startedAt, observation, err := e.waitForStart(ctx, agent, delivery.DeliveredAt, d.Timeouts.Start)
+	startedAt, observation, err := e.waitForStart(ctx, agent, delivery.DeliveredAt, startTimeout)
 	if err != nil {
 		return err
 	}
@@ -881,8 +896,8 @@ func (e *Engine) clearWaiting(runID, agent string) error {
 	return nil
 }
 
-func (e *Engine) waitForStart(ctx context.Context, agent string, deliveredAt time.Time, timeout string) (time.Time, Observation, error) {
-	deadline := e.now().Add(duration(timeout, 3*time.Minute))
+func (e *Engine) waitForStart(ctx context.Context, agent string, deliveredAt time.Time, timeout time.Duration) (time.Time, Observation, error) {
+	deadline := e.now().Add(timeout)
 	blockedCount := 0
 	var last Observation
 	for {

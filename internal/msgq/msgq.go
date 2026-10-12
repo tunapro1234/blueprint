@@ -1003,6 +1003,68 @@ func (q *Queue) Cancel(ids ...string) ([]string, error) {
 	return canceled, errs
 }
 
+// ClearOutcome reports what ClearHangingComposer did for one channel.
+type ClearOutcome struct {
+	ID      string
+	To      string
+	Cleared bool
+	Status  string // human-readable result, always set
+	Err     error
+}
+
+// ClearHangingComposer retracts bp's OWN unsent text left in a target's composer.
+// A message that bp pasted but could not verify, and then could not finish,
+// settles as StatusHangingComposer with NoRepaste set: the exact text sits in the
+// composer and blocks every later message behind it ("composer contains foreign
+// text"), yet bp never retries a settled record, so nothing clears it. This is the
+// operator's retract: for each channel it reads the record (done or pending) and,
+// only when that record is such a hanging paste, asks the target to clear the
+// composer.
+//
+// The clear itself (Target.ClearDelivered) presses Ctrl-u, never Escape, and ONLY
+// when the composer still holds EXACTLY bp's own text on an idle pane: a busy pane,
+// a dialog, a foreign or partial composer, or an already-empty one are all left
+// untouched. So this can neither cancel a running turn nor erase a human's draft.
+// It takes the operator lock so it never races a delivery pass.
+func (q *Queue) ClearHangingComposer(ctx context.Context, target Target, ids ...string) ([]ClearOutcome, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	release, err := q.lockDispatchForOperator(cancelLockWait)
+	if err != nil {
+		return nil, fmt.Errorf("%w; nothing cleared, check bp qstat and retry", err)
+	}
+	defer release()
+	outcomes := make([]ClearOutcome, 0, len(ids))
+	for _, id := range ids {
+		message, err := q.Record(id)
+		if err != nil {
+			outcomes = append(outcomes, ClearOutcome{ID: id, Status: "no such message", Err: err})
+			continue
+		}
+		if !isHangingComposer(message) {
+			outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Status: "not a hanging paste; composer left untouched"})
+			continue
+		}
+		cleared, cerr := target.ClearDelivered(ctx, message.To, []string{message.Wire()})
+		switch {
+		case cerr != nil:
+			outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Status: "could not clear", Err: cerr})
+		case cleared:
+			outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Cleared: true, Status: "composer cleared"})
+		default:
+			outcomes = append(outcomes, ClearOutcome{ID: id, To: message.To, Status: "composer untouched (not bp's text, pane busy, or already clear)"})
+		}
+	}
+	return outcomes, nil
+}
+
+// isHangingComposer reports whether a record is bp's own text left unsent in the
+// composer: NoRepaste rules out re-pasting, and the status or reason proves the
+// paste hung. Both are required so a torn or foreign record is never cleared here.
+func isHangingComposer(m Message) bool {
+	return m.NoRepaste && (m.Status == StatusHangingComposer || strings.HasPrefix(m.Reason, hangingPasteReason))
+}
+
 // lockDispatchForOperator takes the dispatch lock for a short operator action
 // (cancel, rename). A delivery pass holds that lock for its whole run, and on a
 // busy queue the daemon starts the next pass the moment one ends, so polling

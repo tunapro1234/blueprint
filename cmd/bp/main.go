@@ -103,6 +103,7 @@ bp remote rm <name>
 bp remote [<agent>...]       # existing /remote-control action; list/add/rm are reserved
 bp shell <server> [agent]    # interactive remote shell, or remote bp attach
 bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>...
+bp qclear <channel-id>...        # retract bp's own text left hanging in a composer
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] [--from <label>] [--mention <jid|number>]... [--mention-all] <message...>
                              # --from states the sender outside tmux (cron, scripts);
@@ -530,6 +531,22 @@ func (a *app) run(args []string) error {
 		canceled, err := a.queue.Cancel(args[1:]...)
 		for _, id := range canceled {
 			fmt.Fprintf(a.out, "canceled: %s\n", id)
+		}
+		return err
+	case "qclear":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: bp qclear <channel-id>...")
+		}
+		if a.queue == nil || a.tmux == nil {
+			return errors.New("qclear needs the local queue and tmux")
+		}
+		outcomes, err := a.queue.ClearHangingComposer(a.ctx, a.tmux, args[1:]...)
+		for _, o := range outcomes {
+			if o.Err != nil {
+				fmt.Fprintf(a.out, "%s (%s): %s: %v\n", o.ID, o.To, o.Status, o.Err)
+				continue
+			}
+			fmt.Fprintf(a.out, "%s (%s): %s\n", o.ID, o.To, o.Status)
 		}
 		return err
 	case "peek":

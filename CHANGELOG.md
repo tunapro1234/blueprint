@@ -20,7 +20,10 @@ Changes on `dev` since the 1.9.32 release.
   message id), so a subagent turn that also appears in the main transcript as a
   sidechain is counted once. `bp tokens backfill` runs the one-time full scan of
   the previously-unseen transcripts and refuses to run during the 20:00–22:59
-  Europe/Istanbul heat window unless given `--force`.
+  Europe/Istanbul heat window unless given `--force`. The scan counts only
+  transcripts within the 14-day raw-retention window, so a day whose raw tier
+  has already aged out is never recomputed from subagent-only records and its
+  retained daily and hourly totals stay intact.
 
 ## [1.9.32] - 2026-10-11
 

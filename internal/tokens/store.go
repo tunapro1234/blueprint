@@ -42,6 +42,13 @@ func Collect(config Config) (CollectStats, error) {
 	names := loadResolver(config.Agentbooks)
 	liveSources := map[string]bool{}
 
+	// retentionFloor is the oldest day whose raw tier GC still keeps (14-day
+	// window). Newly discovered subagent/workflow transcripts are not counted
+	// before it, so a day whose raw has aged out is never recomputed from
+	// raw-only records and its retained rollups are never overwritten.
+	gcNow := config.Now().In(istanbul)
+	retentionFloor := time.Date(gcNow.Year(), gcNow.Month(), gcNow.Day(), 0, 0, 0, 0, istanbul).AddDate(0, 0, -14)
+
 	var candidates []RawRecord
 	for _, source := range []struct {
 		root string
@@ -66,7 +73,7 @@ func Collect(config Config) (CollectStats, error) {
 			// entry is dropped rather than written.
 			if source.kind == "claude" {
 				if kind, wf, projDir := claudeFileRole(path); kind != "" {
-					rows, next, err = scanClaudeSubagent(path, cp, kind, wf, projDir, names)
+					rows, next, err = scanClaudeSubagent(path, cp, kind, wf, projDir, names, retentionFloor)
 					if err != nil {
 						return stats, fmt.Errorf("read %s: %w", path, err)
 					}

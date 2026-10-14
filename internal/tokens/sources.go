@@ -177,7 +177,16 @@ func claudeFileRole(path string) (kind, wf, projDir string) {
 // would multiply across thousands of subagent files for little value): it emits
 // one weighted usage record per assistant turn, attributed to the owning main
 // agent and tagged with its Kind so bp usage/tokens can separate it.
-func scanClaudeSubagent(path string, cp checkpoint, kind, wf, projDir string, names resolver) ([]RawRecord, checkpoint, error) {
+// scanClaudeSubagent counts a subagent or workflow transcript. retentionFloor
+// is the midnight (Europe/Istanbul) of the oldest day whose raw tier is still
+// kept: a record on or before it is skipped. Those transcripts are discovered
+// in bulk with no checkpoint, so a first scan would otherwise emit records for
+// days whose raw has aged out (14-day retention) while their daily and hourly
+// rollups are still kept (90-400 days). Recomputing such a day from its now
+// raw-only records would overwrite the retained main-agent totals with
+// subagent-only ones. Staying within the raw window means every day we touch
+// still has complete raw, so its rollup is recomputed in full.
+func scanClaudeSubagent(path string, cp checkpoint, kind, wf, projDir string, names resolver, retentionFloor time.Time) ([]RawRecord, checkpoint, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, cp, err
@@ -210,6 +219,10 @@ func scanClaudeSubagent(path string, cp checkpoint, kind, wf, projDir string, na
 		}
 		ts, ok := parseTimestamp(rec.Timestamp)
 		if !ok {
+			return nil
+		}
+		day := time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, istanbul)
+		if !day.After(retentionFloor) {
 			return nil
 		}
 		rows = append(rows, RawRecord{

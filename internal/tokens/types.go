@@ -76,7 +76,19 @@ type RawRecord struct {
 	PromptID   string `json:"prompt_id"`
 	Prompt     string `json:"prompt"`
 	Sidechain  bool   `json:"sidechain,omitempty"`
+	// Kind names where this usage came from: "" for the agent's own main
+	// transcript, "subagent" for a spawned subagent and "workflow" for a
+	// workflow agent. Subagent and workflow usage is attributed to the main
+	// agent that owns the session (Owner), so it rolls up under that agent
+	// while staying separable by Kind.
+	Kind string `json:"kind,omitempty"`
+	// WF is the workflow id (wf_...) for Kind=="workflow", empty otherwise.
+	WF string `json:"wf,omitempty"`
 }
+
+// isSub reports whether the record is subagent or workflow usage rather than
+// the agent's own main-transcript usage.
+func (r RawRecord) isSub() bool { return r.Kind == "subagent" || r.Kind == "workflow" }
 
 func (r RawRecord) rollupAgent() string {
 	if strings.Contains(r.Agent, "@") {
@@ -117,10 +129,14 @@ type HourlyRecord struct {
 }
 
 type DailyRecord struct {
-	Day        string `json:"day"`
-	Agent      string `json:"agent"`
-	Src        string `json:"src"`
-	Model      string `json:"model"`
+	Day   string `json:"day"`
+	Agent string `json:"agent"`
+	Src   string `json:"src"`
+	Model string `json:"model"`
+	// Kind separates main ("") from "subagent"/"workflow" usage within an
+	// agent's day, so the daily rollup — which outlives the 14-day raw files —
+	// still carries the split that bp usage/tokens reports.
+	Kind       string `json:"kind,omitempty"`
 	Requests   int64  `json:"reqs"`
 	In         int64  `json:"in"`
 	Out        int64  `json:"out"`

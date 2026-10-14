@@ -89,7 +89,15 @@ func (r resolver) claudeAgent(path, title string) (agent, owner string) {
 	if title != "" {
 		return title, ""
 	}
-	munged := filepath.Base(filepath.Dir(path))
+	return r.agentForMunged(filepath.Base(filepath.Dir(path)))
+}
+
+// agentForMunged resolves the munged project directory name (the immediate
+// child of the Claude projects root, e.g. "-srv-probot-business") to an agent
+// label, matching an agentbook folder or reversing the munge. It is the
+// title-less half of claudeAgent, shared with subagent/workflow attribution so
+// a subagent's usage lands under the same label as its owning main agent.
+func (r resolver) agentForMunged(munged string) (agent, owner string) {
 	for folder, name := range r.byFolder {
 		if mungedPath(folder) == munged {
 			if label, parent := r.worktreeAgent(folder); label != "" {

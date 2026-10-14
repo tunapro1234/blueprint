@@ -105,3 +105,65 @@ func TestClaudeBindingExplainsDuplicateAndMissingPin(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestRenamedAgentResolvesByProcessNotTitle locks the fix for the server-main
+// false alarm (2026-10-14): a Claude agent whose orchestration name no longer
+// equals the customTitle recorded in its transcript (renamed 2026-10-07:
+// registry "server-main", transcript still "server-main-claude") must still
+// resolve a session file. The title probe (ResumeSessionPath, keyed on the
+// name) cannot bridge that divergence; the process binding (pane PID -> child
+// claude -> sessions/<pid>.json -> sessionId) does, and it is what the status
+// reader and the pane-sanity watchdog now use.
+func TestRenamedAgentResolvesByProcessNotTitle(t *testing.T) {
+	proc, sessions := t.TempDir(), filepath.Join(t.TempDir(), "sessions")
+	projects := filepath.Join(filepath.Dir(sessions), "projects")
+	put := func(path, data string) {
+		t.Helper()
+		if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
+			t.Fatal(e)
+		}
+		if e := os.WriteFile(path, []byte(data), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	const (
+		registryName = "server-main"        // the agentbook key the watchdog keys on
+		transTitle   = "server-main-claude" // the stale customTitle in the transcript
+		id           = "e4355d7d-a888-414e-bd56-78a309328326"
+	)
+	// Fake pane process tree: pane shell -> interactive claude writing `id`.
+	put(filepath.Join(proc, "10/comm"), "zsh\n")
+	put(filepath.Join(proc, "10/task/10/children"), "11")
+	put(filepath.Join(proc, "11/comm"), "claude\n")
+	fields := strings.Fields(strings.Repeat("0 ", 20))
+	fields[19] = "777"
+	put(filepath.Join(proc, "11/stat"), "11 (claude) "+strings.Join(fields, " "))
+	if e := os.Symlink("/srv", filepath.Join(proc, "11/cwd")); e != nil {
+		t.Fatal(e)
+	}
+	r := map[string]any{"pid": 11, "sessionId": id, "cwd": "/srv", "procStart": "777", "kind": "interactive"}
+	data, _ := json.Marshal(r)
+	put(filepath.Join(sessions, "11.json"), string(data))
+	// The transcript carries the OLD title, not the current registry name.
+	put(filepath.Join(projects, mungeProjectPath("/srv"), id+".jsonl"),
+		`{"type":"custom-title","customTitle":"`+transTitle+`","sessionId":"`+id+`"}`+"\n")
+
+	// Title probe keyed on the registry name finds nothing — the old watchdog's
+	// exact failure.
+	if path, ok := ResumeSessionPath(projects, "/srv", registryName); ok {
+		t.Fatalf("title probe unexpectedly resolved %q for name %q", path, registryName)
+	}
+	// It would have matched the stale title, which is precisely why keying on a
+	// mutable display name is wrong.
+	if _, ok := ResumeSessionPath(projects, "/srv", transTitle); !ok {
+		t.Fatal("sanity: title probe should match the stale transcript title")
+	}
+	// Process binding resolves regardless of the title divergence.
+	got, err := claudeProcessSession(proc, sessions, 10, "/srv")
+	if err != nil || got != id {
+		t.Fatalf("process binding: got %q err %v, want %q", got, err, id)
+	}
+	if _, err := ClaudeSessionPathForID(projects, "/srv", got); err != nil {
+		t.Fatalf("ClaudeSessionPathForID(%q): %v", got, err)
+	}
+}

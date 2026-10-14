@@ -791,6 +791,30 @@ type busySanityState struct {
 // that closed between the listing and the capture proves nothing either way, and
 // the loop must keep its own state file current regardless. monitor reports
 // whether the monitor module's alarms run; the blocked-queue watchdog always does.
+// claudeSessionResolvable reports whether bp can locate a live Claude session
+// file for this pane the SAME way the status reader does (internal/book
+// observedRuntimeState -> claudeRuntimeBound): first the process binding —
+// pane PID -> child claude PID -> ~/.claude/sessions/<pid>.json sessionId,
+// which is title-independent and follows /resume — and only if that fails the
+// newest-transcript-by-title fallback.
+//
+// The class-B watchdog must ask the same question the reader answers, or it
+// cries wolf. It keyed on the title alone (ResumeSessionPath) and so alarmed on
+// server-main, whose orchestration name ("server-main") no longer equals the
+// customTitle its transcript carries ("server-main-claude", renamed 2026-10-07):
+// the reader binds by process session and never looked at that title, so the
+// agent's context/model/turn were never actually blank. Any renamed or
+// shared-cwd Claude agent hits the same divergence; the fix is generic.
+func claudeSessionResolvable(projects, dir string, panePID int, agent string) bool {
+	if id, err := bptmux.ClaudeProcessSession(panePID, dir); err == nil && id != "" {
+		if _, err := bptmux.ClaudeSessionPathForID(projects, dir, id); err == nil {
+			return true
+		}
+	}
+	_, ok := bptmux.ResumeSessionPath(projects, dir, agent)
+	return ok
+}
+
 func (s *Service) busySanity(ctx context.Context, monitor bool) error {
 	path := filepath.Join(s.config.StateDir, busySanityFile)
 	state := readBusySanity(path)
@@ -850,7 +874,7 @@ func (s *Service) busySanity(ctx context.Context, monitor bool) error {
 		if !isAgent {
 			observation.Binary = paneAgentBinary(process.PID)
 		} else if observation.ClaudePane {
-			_, observation.SessionFound = bptmux.ResumeSessionPath(projects, cache.FolderPath(observation.Folder), session)
+			observation.SessionFound = claudeSessionResolvable(projects, cache.FolderPath(observation.Folder), process.PID, session)
 		}
 		observations = append(observations, observation)
 		if !isAgent {

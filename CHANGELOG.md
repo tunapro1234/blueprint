@@ -8,6 +8,20 @@ All notable changes to bp are recorded here. The format follows
 
 Changes on `dev` since the 1.9.32 release.
 
+### Added
+
+- The token counter now includes subagent and workflow transcripts. Usage from
+  `<session>/subagents/*.jsonl` and `<session>/subagents/workflows/wf_*/agent-*.jsonl`
+  was never read, so a busy day's subagent work — often larger than the main
+  agents' own — went uncounted. Each record is attributed to the main agent that
+  owns the session and tagged with a `kind` (`subagent` or `workflow`, with the
+  workflow id), so `bp tokens` shows a main agent's own usage and the work it
+  farmed out to subagents separately. Records are deduped by request id (then
+  message id), so a subagent turn that also appears in the main transcript as a
+  sidechain is counted once. `bp tokens backfill` runs the one-time full scan of
+  the previously-unseen transcripts and refuses to run during the 20:00–22:59
+  Europe/Istanbul heat window unless given `--force`.
+
 ## [1.9.32] - 2026-10-11
 
 ### Changed

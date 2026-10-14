@@ -14,6 +14,7 @@ import (
 const tokensUsage = `usage:
   bp tokens [--day YYYY-MM-DD | --since Nd] [--agent NAME] [--hours | --prompts] [--top N] [--json]
   bp tokens collect [--json]
+  bp tokens backfill [--force] [--json]
   bp tokens gc [--json]`
 
 type tokenOptions struct {
@@ -28,6 +29,9 @@ type tokenOptions struct {
 
 func (a *app) tokens(args []string) error {
 	config := tokens.DefaultConfig(a.config.StateDir, a.config.TokenAgentbooks)
+	if len(args) > 0 && args[0] == "backfill" {
+		return a.tokensBackfill(config, args[1:])
+	}
 	if len(args) > 0 && (args[0] == "collect" || args[0] == "gc") {
 		action := args[0]
 		jsonOutput := false
@@ -145,6 +149,57 @@ func (a *app) tokens(args []string) error {
 	return warnTokenFootprint(a, config)
 }
 
+// tokensBackfill runs a token collection for the explicit, one-time cost of
+// pulling in every subagent and workflow transcript that earlier releases never
+// scanned. Those files carry no checkpoint yet, so the collect reads each in
+// full — hundreds of megabytes on a busy day. That is heavy enough that it must
+// not land during the evening heat window (20:00-22:59 Europe/Istanbul), where
+// the server already runs hot; --force overrides the guard. After the first
+// pass the checkpoints advance and the daemon's ordinary collect stays
+// incremental.
+func (a *app) tokensBackfill(config tokens.Config, args []string) error {
+	force, jsonOutput := false, false
+	for _, arg := range args {
+		switch arg {
+		case "--force":
+			if force {
+				return fmt.Errorf("%s", tokensUsage)
+			}
+			force = true
+		case "--json":
+			if jsonOutput {
+				return fmt.Errorf("%s", tokensUsage)
+			}
+			jsonOutput = true
+		default:
+			return fmt.Errorf("%s", tokensUsage)
+		}
+	}
+	now := time.Now().In(time.FixedZone("Europe/Istanbul", 3*60*60))
+	if backfillHeatWindow(now) && !force {
+		return fmt.Errorf("backfill refused during the 20:00-23:00 heat window (now %02d:%02d); re-run outside it or pass --force", now.Hour(), now.Minute())
+	}
+	stats, err := tokens.Collect(config)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		return writeTokenJSON(a.out, stats)
+	}
+	fmt.Fprintf(a.out, "Backfill collected %d new requests from %d files (%d duplicates, %d affected days).\n",
+		stats.Added, stats.Files, stats.Deduped, stats.Days)
+	fmt.Fprintln(a.out, "Subagent and workflow usage is now counted; view it with: bp tokens --day YYYY-MM-DD")
+	return nil
+}
+
+// backfillHeatWindow reports whether the given local time falls in the evening
+// heat window (20:00-22:59 Europe/Istanbul) when the heavy one-time backfill is
+// refused without --force.
+func backfillHeatWindow(now time.Time) bool {
+	hour := now.Hour()
+	return hour >= 20 && hour < 23
+}
+
 func parseTokenOptions(args []string) (tokenOptions, error) {
 	options := tokenOptions{top: 20}
 	for index := 0; index < len(args); index++ {
@@ -250,7 +305,7 @@ func renderTokenSummary(a *app, result tokens.SummaryResult) {
 	}
 	for _, src := range tokenSummarySources(result.Rows) {
 		var rows []tokens.SummaryRow
-		var out, reqs int64
+		var out, reqs, subOut int64
 		for _, row := range result.Rows {
 			if row.Src != src {
 				continue
@@ -258,14 +313,28 @@ func renderTokenSummary(a *app, result tokens.SummaryResult) {
 			rows = append(rows, row)
 			out += row.Out
 			reqs += row.Requests
+			subOut += row.SubOut
 		}
-		fmt.Fprintf(a.out, "\n--- %s: %s out, %d requests, %d agents ---\n",
+		header := fmt.Sprintf("\n--- %s: %s out, %d requests, %d agents ---\n",
 			strings.ToUpper(src), tokens.Human(out), reqs, len(rows))
+		if subOut > 0 {
+			header = fmt.Sprintf("\n--- %s: %s out (incl. %s subagent), %d requests, %d agents ---\n",
+				strings.ToUpper(src), tokens.Human(out), tokens.Human(subOut), reqs, len(rows))
+		}
+		fmt.Fprint(a.out, header)
 		fmt.Fprintf(a.out, "%3s %-32s %6s %8s %8s %8s %9s\n", "#", "AGENT", "REQS", "OUT", "IN", "CACHE-W", "CACHE-R")
 		for index, row := range rows {
 			fmt.Fprintf(a.out, "%3d %-32s %6d %8s %8s %8s %9s\n",
 				index+1, truncateTokenText(row.Agent, 32), row.Requests, tokens.Human(row.Out),
 				tokens.Human(row.In), tokens.Human(row.CacheWrite), tokens.Human(row.CacheRead))
+			// Break out the subagent/workflow portion already folded into the
+			// row above, so a main agent's own usage and the work it farmed out
+			// to subagents are both visible.
+			if row.SubOut > 0 || row.SubRequests > 0 {
+				fmt.Fprintf(a.out, "%3s %-32s %6d %8s %8s %8s %9s\n",
+					"", "  └ subagent", row.SubRequests, tokens.Human(row.SubOut),
+					tokens.Human(row.SubIn), tokens.Human(row.SubCacheWrite), tokens.Human(row.SubCacheRead))
+			}
 		}
 	}
 }

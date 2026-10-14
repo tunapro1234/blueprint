@@ -43,6 +43,14 @@ type SummaryRow struct {
 	Out        int64  `json:"out"`
 	CacheWrite int64  `json:"cache_write"`
 	CacheRead  int64  `json:"cache_read"`
+	// Sub* is the portion of the totals above that came from subagents and
+	// workflows (Kind != ""), attributed to this main agent. The totals
+	// already include it; these fields let a reader show the split.
+	SubRequests   int64 `json:"sub_reqs,omitempty"`
+	SubIn         int64 `json:"sub_in,omitempty"`
+	SubOut        int64 `json:"sub_out,omitempty"`
+	SubCacheWrite int64 `json:"sub_cache_write,omitempty"`
+	SubCacheRead  int64 `json:"sub_cache_read,omitempty"`
 }
 
 type SummaryResult struct {
@@ -80,6 +88,13 @@ func Summary(root string, period Range, agent string) (SummaryResult, error) {
 			target.Out += row.Out
 			target.CacheWrite += row.CacheWrite
 			target.CacheRead += row.CacheRead
+			if row.Kind != "" {
+				target.SubRequests += row.Requests
+				target.SubIn += row.In
+				target.SubOut += row.Out
+				target.SubCacheWrite += row.CacheWrite
+				target.SubCacheRead += row.CacheRead
+			}
 		}
 	}
 	result := SummaryResult{Day: period.Label(), Rows: make([]SummaryRow, 0, len(grouped))}

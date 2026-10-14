@@ -58,9 +58,25 @@ func Collect(config Config) (CollectStats, error) {
 			liveSources[path] = true
 			stats.Files++
 			cp := checkpoints[path]
-			ctx := contexts.Sources[path]
 			var rows []RawRecord
 			var next checkpoint
+			// A subagent/workflow transcript is counted without a prompt
+			// context: keeping the node graph for each of thousands of them
+			// would bloat contexts.json for no reporting gain, so its context
+			// entry is dropped rather than written.
+			if source.kind == "claude" {
+				if kind, wf, projDir := claudeFileRole(path); kind != "" {
+					rows, next, err = scanClaudeSubagent(path, cp, kind, wf, projDir, names)
+					if err != nil {
+						return stats, fmt.Errorf("read %s: %w", path, err)
+					}
+					candidates = append(candidates, rows...)
+					checkpoints[path] = next
+					delete(contexts.Sources, path)
+					continue
+				}
+			}
+			ctx := contexts.Sources[path]
 			var nextContext sourceContext
 			if source.kind == "claude" {
 				rows, next, nextContext, err = scanClaude(path, cp, ctx, names)
@@ -280,7 +296,7 @@ func rollup(rows []RawRecord) ([]PromptRecord, []HourlyRecord, []DailyRecord) {
 		Hour              int
 	}
 	type dayKey struct {
-		Agent, Src, Model string
+		Agent, Src, Model, Kind string
 	}
 	promptMap := map[promptKey]*PromptRecord{}
 	hourMap := map[hourKey]*HourlyRecord{}
@@ -313,10 +329,10 @@ func rollup(rows []RawRecord) ([]PromptRecord, []HourlyRecord, []DailyRecord) {
 		}
 		addHourly(hour, raw)
 
-		dk := dayKey{agent, raw.Src, raw.Model}
+		dk := dayKey{agent, raw.Src, raw.Model, raw.Kind}
 		daily := dayMap[dk]
 		if daily == nil {
-			daily = &DailyRecord{Day: raw.Day, Agent: agent, Src: raw.Src, Model: raw.Model}
+			daily = &DailyRecord{Day: raw.Day, Agent: agent, Src: raw.Src, Model: raw.Model, Kind: raw.Kind}
 			dayMap[dk] = daily
 		}
 		addDaily(daily, raw)
@@ -577,7 +593,10 @@ func sortDaily(rows []DailyRecord) {
 		if a.Src != b.Src {
 			return a.Src < b.Src
 		}
-		return a.Model < b.Model
+		if a.Model != b.Model {
+			return a.Model < b.Model
+		}
+		return a.Kind < b.Kind
 	})
 }
 

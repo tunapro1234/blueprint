@@ -60,6 +60,7 @@ type claudeLine struct {
 	RequestID   string `json:"requestId"`
 	Timestamp   string `json:"timestamp"`
 	Message     struct {
+		ID      string          `json:"id"`
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
 		Usage   struct {
@@ -94,7 +95,17 @@ func discoverFiles(root, kind string) ([]string, error) {
 		base := entry.Name()
 		switch kind {
 		case "claude":
-			if filepath.Ext(base) == ".jsonl" && filepath.Dir(filepath.Dir(path)) == filepath.Clean(root) {
+			if filepath.Ext(base) != ".jsonl" {
+				return nil
+			}
+			// A main transcript sits directly under <root>/<proj>/<sess>.jsonl.
+			// Subagent and workflow transcripts sit under a "subagents"
+			// directory and are named agent-*.jsonl (their journal.jsonl holds
+			// no usage). Both are collected; the role is decided per file by
+			// claudeFileRole.
+			if filepath.Dir(filepath.Dir(path)) == filepath.Clean(root) {
+				files = append(files, path)
+			} else if strings.HasPrefix(base, "agent-") && hasPathComponent(path, "subagents") {
 				files = append(files, path)
 			}
 		case "codex":
@@ -106,6 +117,128 @@ func discoverFiles(root, kind string) ([]string, error) {
 	})
 	sort.Strings(files)
 	return files, err
+}
+
+// claudeDedupKey is the identity used to drop a Claude usage record already
+// counted, whether it reappears in another incremental pass or in both a main
+// transcript (as a sidechain) and the subagent file. The request id is stable
+// across all of those, so it leads; the message id is the next-best stable id
+// when a record carries no request id; the session+uuid pair is the file-local
+// last resort.
+func claudeDedupKey(requestID, messageID, sessionID, uuid string) string {
+	switch {
+	case requestID != "":
+		return "claude:" + requestID
+	case messageID != "":
+		return "claude:" + messageID
+	default:
+		return "claude:" + sessionID + ":" + uuid
+	}
+}
+
+func hasPathComponent(path, name string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == name {
+			return true
+		}
+	}
+	return false
+}
+
+// claudeFileRole classifies a discovered Claude transcript by its path. A main
+// transcript returns ("", "", ""). A file under a "subagents" directory returns
+// kind "subagent", or "workflow" with its wf_ id when it sits under
+// subagents/workflows/wf_<id>/, together with the munged project directory
+// (the immediate child of the projects root) so the owning main agent can be
+// resolved.
+func claudeFileRole(path string) (kind, wf, projDir string) {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
+	sub := -1
+	for i, part := range parts {
+		if part == "subagents" {
+			sub = i
+			break
+		}
+	}
+	if sub < 2 {
+		return "", "", ""
+	}
+	projDir = parts[sub-2]
+	kind = "subagent"
+	if sub+1 < len(parts) && parts[sub+1] == "workflows" && sub+2 < len(parts) {
+		kind = "workflow"
+		wf = parts[sub+2]
+	}
+	return kind, wf, projDir
+}
+
+// scanClaudeSubagent counts usage from a subagent or workflow transcript. Unlike
+// a main transcript it keeps no prompt-attribution context (the heavy node graph
+// would multiply across thousands of subagent files for little value): it emits
+// one weighted usage record per assistant turn, attributed to the owning main
+// agent and tagged with its Kind so bp usage/tokens can separate it.
+func scanClaudeSubagent(path string, cp checkpoint, kind, wf, projDir string, names resolver) ([]RawRecord, checkpoint, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, cp, err
+	}
+	if info.Size() < cp.Offset {
+		cp.Offset = 0
+	}
+	agent, owner := names.agentForMunged(projDir)
+	if owner == "" {
+		owner = agent
+	}
+	promptID := "(subagent)"
+	preview := "[subagent]"
+	if kind == "workflow" {
+		promptID = "(workflow)"
+		preview = "[workflow " + wf + "]"
+	}
+	var rows []RawRecord
+	nextOffset, err := readCompleteLines(path, cp.Offset, func(_ int64, line []byte) error {
+		if !bytes.Contains(line, []byte(`"usage"`)) {
+			return nil
+		}
+		var rec claudeLine
+		if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" {
+			return nil
+		}
+		usage := rec.Message.Usage
+		if usage.InputTokens == 0 && usage.OutputTokens == 0 && usage.CacheCreationInputTokens == 0 && usage.CacheReadInputTokens == 0 {
+			return nil
+		}
+		ts, ok := parseTimestamp(rec.Timestamp)
+		if !ok {
+			return nil
+		}
+		rows = append(rows, RawRecord{
+			Key:        claudeDedupKey(rec.RequestID, rec.Message.ID, rec.SessionID, rec.UUID),
+			TS:         ts.Format(time.RFC3339Nano),
+			Day:        ts.Format("2006-01-02"),
+			Hour:       ts.Hour(),
+			Src:        "claude",
+			Agent:      agent,
+			Owner:      owner,
+			Model:      valueOr(rec.Message.Model, "?"),
+			Requests:   1,
+			In:         usage.InputTokens,
+			Out:        usage.OutputTokens,
+			CacheWrite: usage.CacheCreationInputTokens,
+			CacheRead:  usage.CacheReadInputTokens,
+			PromptID:   promptID,
+			Prompt:     preview,
+			Sidechain:  rec.IsSidechain,
+			Kind:       kind,
+			WF:         wf,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, cp, err
+	}
+	cp = checkpoint{Size: info.Size(), Offset: nextOffset, MTime: info.ModTime().UnixNano()}
+	return rows, cp, nil
 }
 
 func readCompleteLines(path string, offset int64, visit func(int64, []byte) error) (int64, error) {
@@ -244,16 +377,13 @@ func scanClaude(path string, cp checkpoint, ctx sourceContext, names resolver) (
 		if !ok {
 			continue
 		}
-		key := item.rec.RequestID
-		if key == "" {
-			key = item.rec.SessionID + ":" + item.rec.UUID
-		}
+		key := claudeDedupKey(item.rec.RequestID, item.rec.Message.ID, item.rec.SessionID, item.rec.UUID)
 		ref := item.ref
 		if ref.ID == "" {
 			ref = promptRef{ID: "(unattributed)", Preview: "(unattributed)"}
 		}
 		rows = append(rows, RawRecord{
-			Key:        "claude:" + key,
+			Key:        key,
 			TS:         ts.Format(time.RFC3339Nano),
 			Day:        ts.Format("2006-01-02"),
 			Hour:       ts.Hour(),

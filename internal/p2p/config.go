@@ -17,6 +17,10 @@ type Config struct {
 	Relay      bool            `json:"relay,omitempty" yaml:"relay,omitempty"`
 	MDNS       bool            `json:"mdns,omitempty" yaml:"mdns,omitempty"`
 	Peers      map[string]Peer `json:"peers,omitempty" yaml:"peers,omitempty"`
+	// HopMaxBytes caps one incoming agent bundle (`bp hop`); 0 means the
+	// built-in default. A bundle larger than this is refused before it is
+	// staged, so a peer cannot fill the disk even when hop is allowed.
+	HopMaxBytes int64 `json:"hopMaxBytes,omitempty" yaml:"hopMaxBytes,omitempty"`
 }
 
 type Peer struct {
@@ -29,6 +33,10 @@ type Peer struct {
 	// LoopCap is the most new inbound messages to one agent per LoopWindow
 	// before the pair is paused for the owner; 0 means the default.
 	LoopCap int `json:"loopCap,omitempty" yaml:"loopCap,omitempty"`
+	// AllowHop opts this peer in to moving an agent onto this machine with
+	// `bp hop`. It is off by default: connectivity and exposure never grant it,
+	// and an incoming bundle is staged for owner review even when it is on.
+	AllowHop bool `json:"allowHop,omitempty" yaml:"allowHop,omitempty"`
 }
 
 func ValidName(s string) bool {

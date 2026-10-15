@@ -156,6 +156,9 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 		p := p
 		h.SetStreamHandler(p, func(s network.Stream) { n.handle(s, p) })
 	}
+	// Hop streams an arbitrary-sized bundle body, so it has its own handler
+	// rather than the framed request/response path the others share.
+	h.SetStreamHandler(HopProtocol, n.handleHop)
 	if cfg.MDNS {
 		n.mdns = mdns.NewMdnsService(h, "_blueprint._udp", n)
 		if err := n.mdns.Start(); err != nil {

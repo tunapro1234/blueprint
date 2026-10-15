@@ -2,6 +2,8 @@ package p2p
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +17,16 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
+
+// NewHopID mints a transfer/idempotency channel id in the same shape as a
+// message channel ("p" + 32 hex), so validID accepts it on both sides.
+func NewHopID() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	return "p" + hex.EncodeToString(buf[:]), nil
+}
 
 // HopProtocol carries one agent bundle (internal/hop) from a source machine to
 // a receiver. Unlike the message protocols it streams an arbitrary-sized body,

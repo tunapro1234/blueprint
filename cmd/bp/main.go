@@ -127,6 +127,8 @@ bp workflow times <run-id|name> [--json]
 bp wait <agent> --until idle|working [--confirm N] [--timeout D] [--json]
 bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent> [--timeout <dur>] [--json]
 bp p2p resume <peer> [agent] | pauses [--json]   # lift loop-cap pauses
+bp hop <agent> --to <peer> [--no-files] [--copy] [--delete-source] [--raw] [--dry-run]  # move an agent to a peer
+bp hop list [--json] | accept <id> [--dir <path>] [--yes] | reject <id>   # review incoming hops
 bp messages reindex                               # add done/ history to messages.jsonl
 bp audit [--since <dur>] [--kind <prefix>] [--severity info|warn|alert] [--peer <alias>] [-n N] [--json]
 bp guard status                       # guard-hooks state, coverage, recent alerts
@@ -562,6 +564,8 @@ func (a *app) run(args []string) error {
 		return a.dashboard(args[1:])
 	case "p2p":
 		return a.p2pCommand(args[1:])
+	case "hop":
+		return a.hopCommand(args[1:])
 	case "serve":
 		return a.serve(args[1:])
 	case "mcp":

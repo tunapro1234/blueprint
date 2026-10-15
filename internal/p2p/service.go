@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -50,6 +51,11 @@ func (n *Node) Info() Info {
 	return i
 }
 func SocketPath(root string) string { return statePath(root, "control.sock") }
+
+// HopSocketPath is a second local control socket dedicated to hop transfers.
+// It is separate from the main control socket so a long, large bundle upload
+// does not run into that server's short read/write timeouts.
+func HopSocketPath(root string) string { return statePath(root, "hop.sock") }
 
 // Serve runs only transport and the caller's ordinary guarded queue dispatcher.
 // The local control socket is private; no network endpoint can issue BP commands.
@@ -138,6 +144,16 @@ func (n *Node) Serve(ctx context.Context, dispatch func([]string)) error {
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
+
+	// The hop socket carries large bundle uploads, so it has its own server with
+	// no body read/write deadline; the transfer is bounded by SendHop's own
+	// timeout instead. It shares nothing with the main control server.
+	hopServer, hopClosed, e := n.serveHop(ctx)
+	if e != nil {
+		cancel()
+		_ = server.Close()
+		return e
+	}
 	// Discovery can wait for offline rendezvous points; it cannot stop delivery
 	// over existing direct connections or processing the local agent queue.
 	discovered := make(chan struct{})
@@ -178,6 +194,8 @@ func (n *Node) Serve(ctx context.Context, dispatch func([]string)) error {
 		defer stop()
 		_ = server.Shutdown(shutdown)
 		_ = server.Close()
+		_ = hopServer.Close()
+		<-hopClosed
 		<-discovered
 		<-transferred
 	}()
@@ -209,6 +227,106 @@ func (n *Node) Serve(ctx context.Context, dispatch func([]string)) error {
 			dispatchPending()
 		}
 	}
+}
+
+// serveHop starts the hop control server on its own socket and returns the
+// server plus a channel closed when it stops. It carries large bundle uploads,
+// so it sets no body timeouts; SendHop bounds the transfer.
+func (n *Node) serveHop(ctx context.Context) (*http.Server, chan struct{}, error) {
+	socket := HopSocketPath(n.Root)
+	if info, e := os.Lstat(socket); e == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return nil, nil, fmt.Errorf("refusing to replace non-socket %s", socket)
+		}
+		if e = os.Remove(socket); e != nil {
+			return nil, nil, e
+		}
+	} else if !os.IsNotExist(e) {
+		return nil, nil, e
+	}
+	listener, e := net.Listen("unix", socket)
+	if e != nil {
+		return nil, nil, e
+	}
+	if e = os.Chmod(socket, 0600); e != nil {
+		_ = listener.Close()
+		return nil, nil, e
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/hop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", 405)
+			return
+		}
+		alias := r.URL.Query().Get("peer")
+		if _, ok := n.Config.Peers[alias]; !ok {
+			http.Error(w, "unknown peer", 404)
+			return
+		}
+		var header HopHeader
+		if err := readFrame(r.Body, &header); err != nil {
+			http.Error(w, "invalid hop header", 400)
+			return
+		}
+		res, err := n.SendHop(r.Context(), alias, header, r.Body)
+		if err != nil {
+			// The request was well formed; the transfer failed. Report it in the
+			// body so the CLI can show the reason rather than a bare 5xx.
+			_ = json.NewEncoder(w).Encode(HopResult{Error: err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(res)
+	})
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		_ = server.Serve(listener)
+	}()
+	return server, closed, nil
+}
+
+// SendHopControl asks the local daemon to push a bundle to a peer. The request
+// body is the framed header followed by the raw bundle; the daemon streams it
+// to the peer over HopProtocol and returns the peer's result.
+func SendHopControl(ctx context.Context, root, alias string, header HopHeader, body io.Reader) (HopResult, error) {
+	frame, err := frameBytes(header)
+	if err != nil {
+		return HopResult{}, err
+	}
+	reader := io.MultiReader(bytes.NewReader(frame), body)
+	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", HopSocketPath(root))
+	}}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: hopTimeout + time.Minute}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://bp/hop?peer="+url.QueryEscape(alias), reader)
+	if err != nil {
+		return HopResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	res, err := client.Do(req)
+	if err != nil {
+		return HopResult{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return HopResult{}, fmt.Errorf("p2p hop: %s: %s", res.Status, string(b))
+	}
+	var result HopResult
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxFrame)).Decode(&result); err != nil {
+		return HopResult{}, err
+	}
+	return result, nil
+}
+
+func frameBytes(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := writeFrame(&buf, v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func Control(ctx context.Context, root, method, endpoint string, result any) error {

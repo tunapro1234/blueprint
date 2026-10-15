@@ -664,6 +664,12 @@ bp qstat <channel-id> --json
 bp p2p channels [--json]
 bp p2p pauses [--json]
 bp p2p resume <peer> [agent]
+
+# Move an agent (and its files) to a peer
+bp hop <agent> --to <peer> [--no-files] [--copy] [--delete-source] [--raw] [--dry-run]
+bp hop list [--json]
+bp hop accept <id> [--dir <path>] [--yes]
+bp hop reject <id>
 ```
 
 P2P messaging is opt-in. It uses libp2p connections authenticated with
@@ -677,6 +683,18 @@ pauses until `bp p2p resume` or until 30 minutes pass, and `bp p2p pauses`
 lists the pauses. Lookup answers only for agents exposed to the asking peer.
 Setup, relays, channel states and guarantees: [p2p.md](p2p.md). The older HTTP
 federation remains available as `bp fed status|ping|token|log [n]`.
+
+`bp hop` moves a whole agent to a peer: its conversation transcript and, by
+default, its working-directory files. The default is a move — the bundle is
+delivered for the peer owner to review, then the source agent is stopped and
+archived with its files kept (`--delete-source` removes them, `--copy` leaves
+the source running, `--no-files` carries only the conversation). A busy agent is
+not hopped. Hop is a separate opt-in from messaging: a peer can move an agent
+onto your machine only when you set `allowHop` for that peer, each bundle is
+size-capped (`hopMaxBytes`), and an incoming bundle is quarantined — `bp hop
+list` shows what arrived and nothing is materialized or launched until you run
+`bp hop accept <id>` (or `bp hop reject <id>`). Accept re-validates every entry,
+places the files and transcript, and resumes the agent. Details: [p2p.md](p2p.md).
 
 ## Audit
 

@@ -10,6 +10,25 @@ Changes on `dev` since the 1.9.32 release.
 
 ### Added
 
+- `bp hop <agent> --to <peer>` moves an agent to another machine over P2P: its
+  conversation transcript and, by default, its working-directory files travel in
+  a single gzip-tar bundle streamed over the existing authenticated libp2p
+  connection. The default is a move — the bundle is delivered for the peer
+  owner's review, then the source agent is stopped and archived with its files
+  kept (never deleted). Flags cover the other cases: `--copy` leaves the source
+  running, `--no-files` carries only the conversation, `--delete-source` removes
+  the source files (explicit opt-in), `--raw` includes `.git/` and gitignored
+  files, and `--dry-run` shows the bundle without sending it. Moving an agent in
+  the middle of a turn is refused. The transfer is a new ingress: a peer may
+  hop an agent onto a machine only when that machine opts it in with `allowHop`
+  on the peer (off by default; connectivity and exposure never grant it), each
+  bundle is capped (`hopMaxBytes`, default 2 GiB), and an incoming bundle is
+  quarantined with a pending record — nothing is materialized or launched until
+  the owner reviews it with `bp hop list` and runs `bp hop accept <id>`
+  (`bp hop reject <id>` discards it). Accept re-validates every bundle entry
+  (fail-closed extraction, path-traversal and symlink guards, size cap), places
+  the files and transcript, and resumes the agent. See [p2p.md](docs/p2p.md).
+
 - The token counter now includes subagent and workflow transcripts. Usage from
   `<session>/subagents/*.jsonl` and `<session>/subagents/workflows/wf_*/agent-*.jsonl`
   was never read, so a busy day's subagent work — often larger than the main

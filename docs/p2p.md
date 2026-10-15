@@ -98,6 +98,66 @@ removes that protection. P2P cancellation and remote shell/peek control are not
 provided. Existing HTTP federation can still receive traffic during migration;
 when P2P is enabled, `agent@peer` sends use its configured peer list.
 
+## Moving an agent (`bp hop`)
+
+`bp hop <agent> --to <peer>` moves a whole agent to another machine: its
+conversation transcript and, by default, its working-directory files travel in a
+single gzip-tar bundle streamed over the same authenticated connection the
+messages use. It is a separate opt-in from messaging. The receiving machine
+accepts a hop from a peer only when it sets `allowHop` for that peer, and caps
+one bundle with `hopMaxBytes` (0 means the 2 GiB default):
+
+```yaml
+p2p:
+  peers:
+    laptop:
+      id: OTHER_MACHINE_PEER_ID
+      expose: [main]
+      allowHop: true        # off by default; connectivity/expose never grant it
+  hopMaxBytes: 2147483648   # optional; per-bundle size cap
+```
+
+The default is a **move**: the bundle is delivered for the peer owner's review,
+then the source agent is stopped and archived with its files kept — never
+deleted. Flags change the behaviour:
+
+- `--copy` — leave the source agent running; deliver a copy.
+- `--no-files` — carry only the conversation, not the working directory.
+- `--delete-source` — after a confirmed move, delete the source files too
+  (explicit opt-in; refuses obviously unsafe paths).
+- `--raw` — include `.git/` and gitignored files (normally git's ignore rules
+  and `.git` are skipped).
+- `--dry-run` — print the bundle's file list and size without sending.
+
+A busy agent is not hopped; wait for it to go idle so its transcript and files
+are not captured mid-write.
+
+An incoming bundle is **quarantined**, not applied. It lands under
+`state/p2p/hop/incoming/<id>/` with a pending record; nothing is written into a
+working directory, registered in the agentbook, or launched until the owner
+reviews it:
+
+```sh
+bp hop list                     # what arrived, from which peer, how large
+bp hop accept <id> [--dir <path>] [--yes]
+bp hop reject <id>              # discard the staged bundle
+```
+
+`accept` re-validates the bundle with the same fail-closed extractor the format
+defines — the manifest is checked first, every entry must sit under the bundle's
+`work/` or `transcript/` root, path-traversal and symlinks are refused, and the
+cumulative size is capped — then it places the files and the Claude transcript
+and resumes the agent with `bp open --resume`. `--dir` chooses the destination
+working directory (default: the bundle's folder basename under the current
+directory); a non-empty target needs `--yes`.
+
+Hop is a new ingress, so it verifies the **peer**, never the bundle's claims:
+the advisory source host/agent in the bundle are shown to the owner but never
+trusted for authorization, and the owner's explicit `accept` is the only thing
+that materializes anything. Decisions are audited as `p2p.hop.received`,
+`p2p.hop.denied` (peer not allowed to hop) and `p2p.hop.rejected` (bad header or
+over the size cap), alongside the message events.
+
 ## Who verifies what
 
 The sending BP resolves the local sender using its existing identity probes. It

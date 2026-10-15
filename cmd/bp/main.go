@@ -110,6 +110,7 @@ bp wa send [--to <target>] [--reply <msgId>] [--from <label>] [--mention <jid|nu
 bp wa read <target> [n] | bp wa chats
 bp usage
 bp tokens [--day YYYY-MM-DD | --since 7d] [--hours | --prompts] [--agent <name>] [--json]
+bp tokens --fleet [--since 7d] [--per-seat-usd N [--seats M]] [--json]
 bp tokens collect | bp tokens gc
 bp monitor [usage|cost|agents|projects|services|radar]
 bp policy status|override <hours>

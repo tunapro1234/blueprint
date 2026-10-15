@@ -13,18 +13,22 @@ import (
 
 const tokensUsage = `usage:
   bp tokens [--day YYYY-MM-DD | --since Nd] [--agent NAME] [--hours | --prompts] [--top N] [--json]
+  bp tokens --fleet [--since Nd] [--per-seat-usd N [--seats M]] [--top N] [--json]
   bp tokens collect [--json]
   bp tokens backfill [--force] [--json]
   bp tokens gc [--json]`
 
 type tokenOptions struct {
-	day     string
-	since   int
-	agent   string
-	hours   bool
-	prompts bool
-	top     int
-	json    bool
+	day        string
+	since      int
+	agent      string
+	hours      bool
+	prompts    bool
+	top        int
+	json       bool
+	fleet      bool
+	perSeatUSD float64
+	seats      int
 }
 
 func (a *app) tokens(args []string) error {
@@ -70,6 +74,9 @@ func (a *app) tokens(args []string) error {
 	options, err := parseTokenOptions(args)
 	if err != nil {
 		return err
+	}
+	if options.fleet {
+		return a.tokensFleet(options)
 	}
 	now := time.Now().In(time.FixedZone("Europe/Istanbul", 3*60*60))
 	period := tokens.DayRange(now)
@@ -264,6 +271,36 @@ func parseTokenOptions(args []string) (tokenOptions, error) {
 			options.hours = true
 		case arg == "--prompts":
 			options.prompts = true
+		case arg == "--fleet":
+			options.fleet = true
+		case arg == "--per-seat-usd", strings.HasPrefix(arg, "--per-seat-usd="):
+			raw := strings.TrimPrefix(arg, "--per-seat-usd=")
+			if raw == "--per-seat-usd" {
+				next, err := value()
+				if err != nil {
+					return options, err
+				}
+				raw = next
+			}
+			usd, err := strconv.ParseFloat(raw, 64)
+			if err != nil || usd <= 0 {
+				return options, fmt.Errorf("--per-seat-usd must be a positive number")
+			}
+			options.perSeatUSD = usd
+		case arg == "--seats", strings.HasPrefix(arg, "--seats="):
+			raw := strings.TrimPrefix(arg, "--seats=")
+			if raw == "--seats" {
+				next, err := value()
+				if err != nil {
+					return options, err
+				}
+				raw = next
+			}
+			seats, err := strconv.Atoi(raw)
+			if err != nil || seats < 1 {
+				return options, fmt.Errorf("--seats must be a positive integer")
+			}
+			options.seats = seats
 		case arg == "--json":
 			options.json = true
 		default:
@@ -275,6 +312,15 @@ func parseTokenOptions(args []string) (tokenOptions, error) {
 	}
 	if options.hours && options.prompts {
 		return options, fmt.Errorf("--hours and --prompts are mutually exclusive")
+	}
+	if options.fleet && (options.hours || options.prompts || options.day != "" || options.agent != "") {
+		return options, fmt.Errorf("--fleet cannot be combined with --hours, --prompts, --day or --agent")
+	}
+	if !options.fleet && (options.perSeatUSD > 0 || options.seats > 0) {
+		return options, fmt.Errorf("--per-seat-usd and --seats only apply with --fleet")
+	}
+	if options.seats > 0 && options.perSeatUSD <= 0 {
+		return options, fmt.Errorf("--seats needs --per-seat-usd")
 	}
 	return options, nil
 }

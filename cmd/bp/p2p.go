@@ -15,6 +15,7 @@ import (
 
 	"blueprint/internal/book"
 	"blueprint/internal/p2p"
+	"blueprint/internal/tokens"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -150,6 +151,7 @@ func (a *app) p2pCommand(args []string) error {
 		defer n.Close()
 		n.Log = a.err
 		n.ResolveLookup = a.resolvePeerLookup
+		n.ResolveTokens = a.resolveFleetTokens
 		return n.Serve(ctx, a.dispatchP2P)
 	default:
 		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|lookup|resume|pauses|serve")
@@ -243,6 +245,32 @@ func (a *app) resolvePeerLookup(query string) p2p.LookupResponse {
 		state = "live"
 	}
 	return p2p.LookupResponse{Found: true, Name: record.Agent.Name, State: state}
+}
+
+// resolveFleetTokens answers a peer's fleet token query with this machine's
+// per-(agent, model) token totals over the trailing `since` days. It reads the
+// durable daily rollups only — no prompt text, no transcripts — and the caller
+// labels the machine, so nothing machine-specific leaves here.
+func (a *app) resolveFleetTokens(since int) p2p.TokensReport {
+	report := p2p.TokensReport{SinceDays: since, Rows: []p2p.TokensRow{}}
+	config := tokens.DefaultConfig(a.config.StateDir, a.config.TokenAgentbooks)
+	now := time.Now().In(time.FixedZone("Europe/Istanbul", 3*60*60))
+	rows, err := tokens.FleetSummary(config.StoreDir, tokens.LastDaysRange(now, since))
+	if err != nil {
+		report.Error = "token store unavailable"
+		return report
+	}
+	report.Rows = make([]p2p.TokensRow, 0, len(rows))
+	for _, row := range rows {
+		report.Rows = append(report.Rows, p2p.TokensRow{
+			Agent: row.Agent, Src: row.Src, Model: row.Model,
+			Requests: row.Requests, In: row.In, Out: row.Out,
+			CacheWrite: row.CacheWrite, CacheRead: row.CacheRead,
+			SubRequests: row.SubRequests, SubIn: row.SubIn, SubOut: row.SubOut,
+			SubCacheWrite: row.SubCacheWrite, SubCacheRead: row.SubCacheRead,
+		})
+	}
+	return report
 }
 
 func formatP2PLookupTip(query string, result p2p.LookupPeerResult) string {

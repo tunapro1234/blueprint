@@ -10,6 +10,21 @@ Changes on `dev` since the 1.9.32 release.
 
 ### Added
 
+- `bp tokens --fleet` aggregates token usage across the machines connected over
+  P2P, so a subscription spread over several machines can be priced from one
+  place. It fans out to each connected, opted-in peer over a new read-only
+  `/bp/tokens/1.0.0` protocol, merges each machine's per-(agent, model) totals
+  locally, and prices them at Claude API-equivalent rates (the same per-model
+  table the monitor uses, with Anthropic's cache multipliers). A non-Claude
+  model contributes its token counts but no dollar figure. `--per-seat-usd N`
+  (optionally with `--seats M`) adds a subscription-seat basis: the combined
+  API-equivalent spend as a percentage of the seat cost. The report is
+  machine-labelled and lists an unreachable or un-opted-in peer with its error
+  rather than dropping it silently. A peer answers only when granted
+  `allowTokens` in its entry under `p2p.peers` — off by default, since the
+  answer reveals local agent names and activity volume; connectivity and the
+  expose list never grant it. The response carries token counts only: no prompt
+  text, no transcripts, no machine metadata.
 - The token counter now includes subagent and workflow transcripts. Usage from
   `<session>/subagents/*.jsonl` and `<session>/subagents/workflows/wf_*/agent-*.jsonl`
   was never read, so a busy day's subagent work — often larger than the main

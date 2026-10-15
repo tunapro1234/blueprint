@@ -35,7 +35,7 @@ what"). Model compliance with framing is not guaranteed (section 6).
 | bp state | `msgq` `pending/`, `done/`; `state/p2p/outbox`; `state/fed/messages.jsonl`, `log.jsonl`; planned `audit.jsonl`, `messages.jsonl` (W1) | Integrity of queue and provenance (`msgq.Origin`); confidentiality of bodies. |
 | Owner attention | WhatsApp outbox (`internal/wa/wa.go` `Send`), notices (`noticeHomes` in `msgq.go`) | Spam or spoofed notices waste the owner's attention or impersonate agents on the phone. |
 | Compute and quota | Model turns, CPU, disk | Every delivered message costs a model turn; a lookup spawns a tmux query (`cmd/bp/p2p.go` `resolvePeerLookup`). |
-| Existence and names of agents | agentbooks, tmux sessions, native titles | Names and titles reveal projects and clients; lookup must not become an enumeration oracle. |
+| Existence and names of agents | agentbooks, tmux sessions, native titles, token-usage totals | Names and titles reveal projects and clients; lookup and fleet token reads must not become an enumeration oracle. |
 
 ## 3. Trust boundaries
 
@@ -96,6 +96,7 @@ Status: **open** (no mitigation in code), **planned** (assigned, not in code),
 | T-R6 | **Discovery as a directory.** Any authenticated peer, configured or not, may register addresses and fetch the addresses of a known Peer ID on a relay node (`node.go` `discover`, `docs/p2p.md`). | A5, A7 | Requires knowing the Peer ID; 4096-entry cap, 10-minute expiry, 32 addresses | Accept as metadata exposure; document; optional allowlist mode for private relays | W1 | partial (by design) |
 | T-R7 | **Unknown peer access.** | A1 | Not in `Config.Peers` -> "peer is not allowed" for msg/qstat, stream reset for lookup (`node.go:185-188,262-265`); mDNS only adds addresses of configured IDs (`node.go` `HandlePeerFound`) | - | - | mitigated |
 | T-R8 | **Agent claim treated as authority.** A peer claims `from: server-main`, `certain: true`. | A1 | Origin records `AgentVerified: false` (`node.go:225-227`); remote claims never reach `Authoritative()`; envelope says `external:` | Frame repeats it in prose | W6 | mitigated (P2P); see T-F1 for fed |
+| T-R9 | **Token-usage read.** `/bp/tokens/1.0.0` (`internal/p2p/tokens.go` `handleTokens`) returns this machine's per-(agent, model) token totals over a trailing window. The response reveals local agent names and activity volume, which — like lookup (T-R2) — could become an enumeration/profiling oracle. | A1, A5 | Gated on a dedicated `Peer.AllowTokens` grant, off by default and independent of `expose`; an unconfigured identity is reset before any audit write; the response carries token counts only — no prompt text, no transcripts, no machine metadata (the caller labels the machine, `wire.go` `TokensReport`); reads only the durable daily rollups. | Window bounded by `MaxTokensSinceDays` (400) and the 12 s RPC deadline; a configured peer reaching without the grant is audited `p2p.tokens.denied`; keep the grant opt-in and the response counts-only. | - | mitigated |
 
 ### 5.3 Floods, loops and cost
 

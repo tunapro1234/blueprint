@@ -760,6 +760,7 @@ repository.
 | `bp monitor [usage\|cost\|agents\|projects\|services\|radar]` | renders the same monitor views in the terminal, from the same source |
 | `bp usage`, `bp policy status\|override <hours>` | quota helpers for installs that set `usageHistory` and `usageBin` |
 | `bp tokens [--day YYYY-MM-DD \| --since 7d] [--hours \| --prompts] [--agent <name>] [--json]`, `bp tokens collect\|backfill\|gc` | token usage from agent transcripts, main and subagent/workflow split; `backfill` runs the one-time full scan (refused 20:00–23:00 unless `--force`) |
+| `bp tokens --fleet [--since 7d] [--per-seat-usd N [--seats M]] [--top N] [--json]` | the same counts aggregated across P2P-connected machines, priced at Claude API-equivalent rates (and, with `--per-seat-usd`, as a percentage of seat cost); each peer must grant `allowTokens` ([p2p.md](p2p.md)) |
 | `bp service` | the daemon's job states |
 | `bp daemon` | the background scheduler: queue dispatch, the API when enabled, and the jobs of enabled modules |
 | `bp messages reindex` | adds older `done/` records to `messages.jsonl` |

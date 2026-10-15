@@ -52,6 +52,34 @@ Lookup checks connected configured peers in parallel and returns only a canonica
 agent name and whether it is live, closed or archived. An older peer without the
 lookup protocol is skipped in text output and marked as an error in JSON.
 
+## Fleet token usage
+
+`bp tokens --fleet` aggregates token usage across the connected machines so a
+subscription spread over several machines can be priced from one place. It asks
+each connected peer for its per-(agent, model) token totals over a trailing
+window, merges them locally, and prices them at Claude API-equivalent rates
+(`--per-seat-usd N` adds a subscription-seat basis). The answer carries token
+counts only — no prompt text, no transcripts, no machine metadata; the asking
+side labels each machine by its local peer alias.
+
+A peer answers only when its entry grants `allowTokens`:
+
+```yaml
+p2p:
+  peers:
+    laptop:
+      id: OTHER_MACHINE_PEER_ID
+      expose: [main]
+      allowTokens: true   # let this peer read this machine's token totals
+```
+
+`allowTokens` is off by default and is independent of `expose`: connectivity and
+the expose list never grant it, because the totals reveal local agent names and
+activity volume. A peer that is not connected, runs an older version without the
+`/bp/tokens/1.0.0` protocol, or has not set `allowTokens` is listed with an
+error rather than dropped. A configured peer that reaches for usage it was not
+granted is recorded in the audit log (`p2p.tokens.denied`).
+
 For a reachable LAN peer, `addresses: [/ip4/192.168.1.20/tcp/PORT]` under its peer
 entry avoids the rendezvous service. `mdns: true` discovers configured identities
 on the LAN; discovering an unknown identity never grants permission.

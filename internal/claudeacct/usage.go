@@ -122,6 +122,20 @@ func (u *Usage) FiveHourReset() time.Time {
 	return u.FiveHour.ResetsAt
 }
 
+// FiveHourResetAt is FiveHourReset seen at now: a cached reset time that is not
+// after now belongs to a window that has already ended (effective reads it as
+// 0%), so the account has no running window until it is used again and counts
+// as idle (the zero time). Without this an account whose window just expired,
+// with usage not yet refetched, sorted as the soonest reset and pulled the whole
+// fleet onto a fresh window (seen after a restart, when every cache is stale).
+func (u *Usage) FiveHourResetAt(now time.Time) time.Time {
+	r := u.FiveHourReset()
+	if !r.After(now) {
+		return time.Time{}
+	}
+	return r
+}
+
 // Usage fetch backoff when the server gives no Retry-After.
 const (
 	backoffBase = time.Minute

@@ -256,7 +256,7 @@ func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, li
 			if value, known := slotUsage(s).Max(now); known && value >= capOf(s) {
 				continue
 			}
-			list = append(list, timed{s.Number, slotUsage(s).FiveHourReset()})
+			list = append(list, timed{s.Number, slotUsage(s).FiveHourResetAt(now)})
 		}
 		sort.SliceStable(list, func(i, j int) bool { return soonestResetLess(list[i].reset, list[j].reset) })
 		for _, t := range list {

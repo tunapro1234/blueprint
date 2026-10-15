@@ -172,7 +172,7 @@ func rankTargets(accounts *Accounts, from int, activeRoom float64, policy AutoPo
 		if room <= 0 || room < activeRoom+AutoHysteresis {
 			continue
 		}
-		list = append(list, rankedTarget{n: s.Number, value: value, room: room, reset: slotUsage(s).FiveHourReset()})
+		list = append(list, rankedTarget{n: s.Number, value: value, room: room, reset: slotUsage(s).FiveHourResetAt(now)})
 	}
 	if policy.Prefer == StrategySoonestReset {
 		sort.SliceStable(list, func(i, j int) bool {
@@ -196,7 +196,7 @@ func rankTargets(accounts *Accounts, from int, activeRoom float64, policy AutoPo
 // counts as resetting latest.
 func decideSoonestReset(accounts *Accounts, active int, current Slot, activeMax, limit float64, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
 	activeHasRoom := activeMax < limit
-	activeReset := slotUsage(current).FiveHourReset()
+	activeReset := slotUsage(current).FiveHourResetAt(now)
 	targets := soonestTargets(accounts, active, policy, now)
 	if len(targets) == 0 {
 		if activeHasRoom {
@@ -244,7 +244,7 @@ func soonestTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Ti
 		if room <= 0 {
 			continue
 		}
-		list = append(list, rankedTarget{n: s.Number, value: value, room: room, reset: slotUsage(s).FiveHourReset()})
+		list = append(list, rankedTarget{n: s.Number, value: value, room: room, reset: slotUsage(s).FiveHourResetAt(now)})
 	}
 	sort.SliceStable(list, func(i, j int) bool {
 		if !list[i].reset.Equal(list[j].reset) {

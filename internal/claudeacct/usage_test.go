@@ -389,6 +389,37 @@ func TestSoonestResetStrategy(t *testing.T) {
 	}
 }
 
+func TestSoonestResetIgnoresExpiredWindow(t *testing.T) {
+	now := time.Date(2030, 1, 1, 21, 50, 0, 0, time.UTC)
+	slot := func(n int, alias string, five float64, resetIn time.Duration) Slot {
+		s := Slot{Number: n, AccountUUID: fmt.Sprint("a", n), Alias: alias}
+		s.LastUsage = &UsageCache{Usage: &Usage{FiveHour: &Window{Utilization: five, ResetsAt: now.Add(resetIn)}}}
+		return s
+	}
+	soonest := AutoPolicy{Threshold: 80, Cooldown: 5 * time.Minute, Prefer: StrategySoonestReset}
+	// Slot 3's cached window ended a minute ago (usage not refetched yet): it is
+	// idle, not the soonest reset. The active slot 2 resets in about an hour and
+	// has room, so auto stays on it instead of moving everyone to a fresh window.
+	slots := []Slot{
+		slot(1, "team", 17, 2*time.Hour),
+		slot(2, "azra", 17, 67*time.Minute), // active
+		slot(3, "huseyin", 83, -time.Minute),
+		slot(4, "cerci", 0, 3*time.Hour),
+	}
+	if d := Decide(&Accounts{Slots: slots}, 2, AutoState{}, soonest, now); d.Action != AutoNone {
+		t.Fatalf("an expired window must not count as the soonest reset: %+v", d)
+	}
+	// The expired slot sorts with the idle accounts, after every running window.
+	got := strategyCandidates(&Accounts{Slots: slots, Active: 9}, &liveLogin{}, StrategySoonestReset, nil, now)
+	if want := []int{2, 1, 4, 3}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("soonest-reset order = %v, want %v", got, want)
+	}
+	// When the active account itself is expired (idle), a running window wins.
+	if d := Decide(&Accounts{Slots: slots}, 3, AutoState{}, soonest, now); d.Action != AutoSwitch || d.To != 2 {
+		t.Fatalf("an idle active account should move to the soonest running window: %+v", d)
+	}
+}
+
 func TestProactiveSoonestReset(t *testing.T) {
 	now := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
 	// slot builds a slot whose five-hour window has a utilization and a reset

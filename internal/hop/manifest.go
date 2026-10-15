@@ -106,6 +106,20 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
+// hasParentComponent reports whether any slash-separated component of p is a
+// real parent-directory traversal segment ("..") rather than merely a name that
+// contains ".." as a substring. Filenames like "do..ts.txt" are valid and common
+// in dependency trees (e.g. node_modules fixtures), so they must not be rejected;
+// only a "/../" component can escape the extraction root.
+func hasParentComponent(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // safePayloadPath rejects anything that could escape the extraction root or is
 // not under a known payload root. It is intentionally strict: a surprising
 // entry fails the bundle rather than being skipped silently.
@@ -113,8 +127,8 @@ func safePayloadPath(p string) error {
 	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, `\`) {
 		return fmt.Errorf("unsafe bundle path %q", p)
 	}
-	if strings.Contains(p, "..") {
-		return fmt.Errorf("bundle path %q contains ..", p)
+	if hasParentComponent(p) {
+		return fmt.Errorf("bundle path %q contains a .. component", p)
 	}
 	for _, r := range p {
 		if r == 0 {

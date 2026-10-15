@@ -17,6 +17,26 @@ func fixedClock() func() time.Time {
 	return func() time.Time { return t }
 }
 
+func TestSafePayloadPathDotDotComponentVsSubstring(t *testing.T) {
+	// A ".." substring inside a name is allowed; a ".." path component is not.
+	good := []string{
+		"work/node_modules/@fastify/send/test/fixtures/do..ts.txt",
+		"work/a..b/c",
+		"transcript/sess..1.jsonl",
+	}
+	for _, p := range good {
+		if err := safePayloadPath(p); err != nil {
+			t.Errorf("safePayloadPath(%q) = %v, want allowed", p, err)
+		}
+	}
+	bad := []string{"work/../etc/x", "work/a/../../x", "../work/x"}
+	for _, p := range bad {
+		if err := safePayloadPath(p); err == nil {
+			t.Errorf("safePayloadPath(%q) = nil, want refused", p)
+		}
+	}
+}
+
 func writeTree(t *testing.T, root string, files map[string]string) {
 	t.Helper()
 	for rel, content := range files {

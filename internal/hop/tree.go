@@ -417,8 +417,8 @@ func safeTreePath(p string) error {
 	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, `\`) {
 		return fmt.Errorf("unsafe bundle path %q", p)
 	}
-	if strings.Contains(p, "..") {
-		return fmt.Errorf("bundle path %q contains ..", p)
+	if hasParentComponent(p) {
+		return fmt.Errorf("bundle path %q contains a .. component", p)
 	}
 	for _, r := range p {
 		if r == 0 {

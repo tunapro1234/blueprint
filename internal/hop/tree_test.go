@@ -90,6 +90,36 @@ func TestWriteReadTreeRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWriteReadTreeAllowsDotDotInFilename(t *testing.T) {
+	// A file literally named with ".." as a substring (common in dependency
+	// trees, e.g. @fastify/send fixtures) is NOT path traversal and must be
+	// packed and extracted unchanged. Only a "/../" component may escape.
+	dir := t.TempDir()
+	rel := "node_modules/@fastify/send/test/fixtures/do..ts.txt"
+	writeTree(t, dir, map[string]string{rel: "fixture body"})
+
+	var buf bytes.Buffer
+	if _, err := WriteTree(&buf, TreeWriteOptions{
+		Root:   "lh-hack",
+		Agents: []TreeWriteAgent{{Spec: AgentSpec{Name: "lh-hack", Harness: "claude"}, Folder: dir, IncludeFiles: true}},
+		Clock:  fixedClock(),
+	}); err != nil {
+		t.Fatalf("filename containing .. must be allowed: %v", err)
+	}
+	dest := t.TempDir()
+	if _, err := ReadTree(bytes.NewReader(buf.Bytes()), dest, 0); err != nil {
+		t.Fatalf("read with .. filename: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "agents", "lh-hack", "work", filepath.FromSlash(rel)))
+	if err != nil || string(got) != "fixture body" {
+		t.Fatalf("round-trip of %q = %q, %v", rel, got, err)
+	}
+	// A genuine ".." component is still rejected.
+	if err := safeTreePath("agents/lh-hack/work/../../etc/x"); err == nil {
+		t.Fatal("a real .. component must still be refused")
+	}
+}
+
 func TestTreeManifestValidate(t *testing.T) {
 	good := func() TreeManifest {
 		return TreeManifest{

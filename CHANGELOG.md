@@ -6,7 +6,19 @@ All notable changes to bp are recorded here. The format follows
 
 ## [Unreleased]
 
-Changes on `dev` since the 1.9.33 release.
+Changes on `dev` since the 1.9.34 release.
+
+## [1.9.34] - 2026-10-15
+
+### Fixed
+
+- `bp hop` no longer refuses a working directory that contains a file whose
+  name merely includes `..` as a substring (for example the `do..ts.txt`
+  fixture shipped inside some npm packages). The bundle path check rejected any
+  path containing `..` anywhere; it now rejects only a real `..` path
+  component, so genuine traversal is still refused while ordinary filenames
+  pack and extract unchanged. This affected both the single-agent and
+  recursive bundle paths and could block hopping a whole `node_modules` tree.
 
 ## [1.9.33] - 2026-10-15
 

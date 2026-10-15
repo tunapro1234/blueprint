@@ -117,6 +117,50 @@ func TestSendHopRefusesOversize(t *testing.T) {
 	}
 }
 
+func TestValidHopHeaderAgentsBound(t *testing.T) {
+	base := hopHeader([]byte("x"))
+	base.TotalBytes = 1
+	cases := []struct {
+		name   string
+		agents int
+		ok     bool
+	}{
+		{"single", 0, true},
+		{"small-subtree", 3, true},
+		{"at-cap", MaxHopAgents, true},
+		{"negative", -1, false},
+		{"over-cap", MaxHopAgents + 1, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := base
+			h.Agents = c.agents
+			err := validHopHeader(h, 1<<20)
+			if (err == nil) != c.ok {
+				t.Fatalf("Agents=%d: validHopHeader=%v want ok=%v", c.agents, err, c.ok)
+			}
+		})
+	}
+}
+
+func TestSendHopRefusesOverAgentCap(t *testing.T) {
+	// A recursive bundle claiming more than MaxHopAgents is refused outright and
+	// nothing is staged.
+	a, b := hopPair(t, true, 0)
+	body := []byte("tree-bundle")
+	h := hopHeader(body)
+	h.Format = 2
+	h.Agents = MaxHopAgents + 1
+	res, err := a.SendHop(context.Background(), "b", h, bytes.NewReader(body))
+	if err == nil && res.Accepted {
+		t.Fatalf("over-cap subtree should not be accepted, got %+v", res)
+	}
+	pending, _ := ListHopPending(b.Root)
+	if len(pending) != 0 {
+		t.Fatalf("over-cap subtree left %d staged dirs", len(pending))
+	}
+}
+
 func TestSendHopSenderCapGuardsDeclaredSize(t *testing.T) {
 	// The sender refuses before dialing when the declared size is over its cap.
 	a, _ := hopPair(t, true, 16)

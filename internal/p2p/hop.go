@@ -60,6 +60,11 @@ type HopHeader struct {
 	Format       int    `json:"format"`
 	SourceHost   string `json:"sourceHost,omitempty"`
 	SourceAgent  string `json:"sourceAgent,omitempty"`
+	// Agents is the number of agents in a recursive (subtree) bundle, where
+	// Agent is the subtree root. It is 0 for a single-agent hop. It is the
+	// peer's assertion for display and audit only; the bundle is re-validated
+	// at accept time.
+	Agents int `json:"agents,omitempty"`
 }
 
 // HopResult is the framed reply the receiver writes after the body. Accepted
@@ -261,7 +266,7 @@ func (n *Node) handleHop(s network.Stream) {
 
 	_ = audit.Append(n.Root, audit.Event{Kind: "p2p.hop.received", Severity: audit.Info, Peer: alias, PeerID: remote.String(), Actor: header.SourceAgent, Target: header.Agent, ID: id,
 		Reason: "agent bundle staged for owner review",
-		Fields: map[string]string{"bytes": fmt.Sprint(written), "files": fmt.Sprint(header.FileCount), "withFiles": fmt.Sprint(header.IncludeFiles), "accept": "bp hop accept " + id}})
+		Fields: map[string]string{"bytes": fmt.Sprint(written), "files": fmt.Sprint(header.FileCount), "withFiles": fmt.Sprint(header.IncludeFiles), "agents": fmt.Sprint(header.Agents), "accept": "bp hop accept " + id}})
 	_ = writeFrame(s, HopResult{Accepted: true, ID: id})
 }
 
@@ -284,8 +289,16 @@ func validHopHeader(h HopHeader, cap int64) error {
 	if h.FileCount < 0 {
 		return fmt.Errorf("invalid file count")
 	}
+	if h.Agents < 0 || h.Agents > MaxHopAgents {
+		return fmt.Errorf("agent count out of range")
+	}
 	return nil
 }
+
+// MaxHopAgents bounds how many agents one recursive bundle may carry, so a
+// single transfer cannot describe an unbounded hierarchy. It is generous: real
+// subtrees are in the dozens to low hundreds.
+const MaxHopAgents = 1000
 
 // HopIncomingDir is the quarantine directory for staged incoming bundles.
 func HopIncomingDir(root string) string { return statePath(root, "hop", "incoming") }

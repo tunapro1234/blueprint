@@ -48,6 +48,7 @@ type Node struct {
 	inbound       chan struct{}
 	inboundRetry  time.Duration
 	ResolveLookup func(string) LookupResponse
+	ResolveTokens func(int) TokensReport
 	limits        *limiter
 	watch         *guard.Watch
 	channelMu     sync.Mutex
@@ -152,7 +153,7 @@ func New(ctx context.Context, root string, cfg Config, q *msgq.Queue) (*Node, er
 		n.Close()
 		return nil, fmt.Errorf("read saved peer addresses: %w", err)
 	}
-	for _, p := range []protocol.ID{MessageProtocol, StatusProtocol, DiscoveryProtocol, PingProtocol, LookupProtocol} {
+	for _, p := range []protocol.ID{MessageProtocol, StatusProtocol, DiscoveryProtocol, PingProtocol, LookupProtocol, TokensProtocol} {
 		p := p
 		h.SetStreamHandler(p, func(s network.Stream) { n.handle(s, p) })
 	}
@@ -207,6 +208,10 @@ func queueID(id peer.ID, channel string) string {
 func (n *Node) handle(s network.Stream, p protocol.ID) {
 	if p == LookupProtocol {
 		n.handleLookup(s)
+		return
+	}
+	if p == TokensProtocol {
+		n.handleTokens(s)
 		return
 	}
 	defer s.Close()

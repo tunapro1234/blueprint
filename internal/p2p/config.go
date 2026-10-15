@@ -29,6 +29,11 @@ type Peer struct {
 	// LoopCap is the most new inbound messages to one agent per LoopWindow
 	// before the pair is paused for the owner; 0 means the default.
 	LoopCap int `json:"loopCap,omitempty" yaml:"loopCap,omitempty"`
+	// AllowTokens lets this peer read this machine's token-usage summary
+	// (`bp tokens --fleet`): per-agent/model token counts, no prompt text. Off
+	// by default — connectivity and expose never grant it — since it reveals
+	// local agent names and activity volume.
+	AllowTokens bool `json:"allowTokens,omitempty" yaml:"allowTokens,omitempty"`
 }
 
 func ValidName(s string) bool {

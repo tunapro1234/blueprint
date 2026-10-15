@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -135,6 +136,22 @@ func (n *Node) Serve(ctx context.Context, dispatch func([]string)) error {
 		w.WriteHeader(204)
 		cancel()
 	})
+	mux.HandleFunc("/tokens/fleet", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method", 405)
+			return
+		}
+		since := 1
+		if value := r.URL.Query().Get("since"); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed <= 0 || parsed > MaxTokensSinceDays {
+				http.Error(w, "invalid since window", 400)
+				return
+			}
+			since = parsed
+		}
+		_ = json.NewEncoder(w).Encode(n.fleetTokens(r.Context(), since))
+	})
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
@@ -237,6 +254,39 @@ func Control(ctx context.Context, root, method, endpoint string, result any) err
 }
 func Ping(ctx context.Context, root, alias string) error {
 	return Control(ctx, root, http.MethodGet, "/ping?peer="+url.QueryEscape(alias), &response{})
+}
+
+// FleetTokens asks the local daemon for the fleet-wide token-usage report over
+// a trailing window of `since` days. The daemon returns this machine's usage
+// plus each connected, opted-in peer's. The body can be larger than one wire
+// frame, so it is decoded with a generous cap rather than the shared Control.
+func FleetTokens(ctx context.Context, root string, since int) (FleetTokensReport, error) {
+	if since <= 0 || since > MaxTokensSinceDays {
+		return FleetTokensReport{}, fmt.Errorf("invalid since window")
+	}
+	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", SocketPath(root))
+	}}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{Transport: tr, Timeout: 30 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://bp/tokens/fleet?since="+strconv.Itoa(since), nil)
+	if err != nil {
+		return FleetTokensReport{}, err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return FleetTokensReport{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode/100 != 2 {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return FleetTokensReport{}, fmt.Errorf("p2p: %s: %s", res.Status, string(b))
+	}
+	var report FleetTokensReport
+	if err := json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(&report); err != nil {
+		return FleetTokensReport{}, err
+	}
+	return report, nil
 }
 
 func Lookup(ctx context.Context, root, query string, budget time.Duration) (LookupReport, error) {

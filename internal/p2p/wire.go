@@ -22,9 +22,56 @@ const (
 	DiscoveryProtocol protocol.ID = "/bp/discovery/1.0.0"
 	PingProtocol      protocol.ID = "/bp/ping/1.0.0"
 	LookupProtocol    protocol.ID = "/bp/lookup/1.0.0"
+	TokensProtocol    protocol.ID = "/bp/tokens/1.0.0"
 	maxFrame                      = 128 * 1024
 	rpcTimeout                    = 12 * time.Second
 )
+
+// MaxTokensSinceDays bounds a fleet token query's window so one request cannot
+// force a peer to scan an unbounded history.
+const MaxTokensSinceDays = 400
+
+// TokensRequest asks a peer for its token-usage summary over a trailing window.
+type TokensRequest struct {
+	SinceDays int `json:"since_days"`
+}
+
+// TokensRow is one agent+model's token totals on the responding machine, with
+// the subagent/workflow portion split out. It carries token counts only — no
+// prompt text, no machine metadata. The totals already include Sub*.
+type TokensRow struct {
+	Agent         string `json:"agent"`
+	Src           string `json:"src"`
+	Model         string `json:"model,omitempty"`
+	Requests      int64  `json:"reqs"`
+	In            int64  `json:"in"`
+	Out           int64  `json:"out"`
+	CacheWrite    int64  `json:"cache_write"`
+	CacheRead     int64  `json:"cache_read"`
+	SubRequests   int64  `json:"sub_reqs,omitempty"`
+	SubIn         int64  `json:"sub_in,omitempty"`
+	SubOut        int64  `json:"sub_out,omitempty"`
+	SubCacheWrite int64  `json:"sub_cache_write,omitempty"`
+	SubCacheRead  int64  `json:"sub_cache_read,omitempty"`
+}
+
+// TokensReport is one machine's answer to a fleet token query. Machine is the
+// local peer alias for the responder (filled in by the asking side), SinceDays
+// echoes the window, and Error is set instead of Rows when the machine could
+// not answer.
+type TokensReport struct {
+	Machine   string      `json:"machine"`
+	SinceDays int         `json:"since_days"`
+	Rows      []TokensRow `json:"rows,omitempty"`
+	Error     string      `json:"error,omitempty"`
+}
+
+// FleetTokensReport is the aggregated answer `bp tokens --fleet` returns: one
+// TokensReport per machine (local first, then each connected peer).
+type FleetTokensReport struct {
+	SinceDays int            `json:"since_days"`
+	Machines  []TokensReport `json:"machines"`
+}
 
 const MaxLookupQueryBytes = 256
 

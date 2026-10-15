@@ -29,6 +29,19 @@ Changes on `dev` since the 1.9.32 release.
   (fail-closed extraction, path-traversal and symlink guards, size cap), places
   the files and transcript, and resumes the agent. See [p2p.md](docs/p2p.md).
 
+- `bp hop <root> --to <peer> --recursive` moves a whole hierarchy — an agent and
+  every descendant under it — as one bundle that preserves the parent/child
+  structure, so an entire fleet migrates to another machine in a single
+  transfer. One recursive bundle carries at most a thousand agents
+  (`MaxHopAgents`), a bound checked on both ends. On accept, every agent's files
+  and transcript are rebuilt and the agents are registered in the agentbook as
+  closed, revivable entries — **nothing is launched**, so accepting a migrated
+  fleet never starts dozens of sessions at once; revive one later with
+  `bp open <name> <dir> --resume`. `bp hop accept <id> --parent <name>` attaches
+  the subtree's root under a local agent, and `--resume` opts into launching the
+  whole subtree parent-first right after accept. A single-agent hop still
+  auto-resumes on accept as before.
+
 - The token counter now includes subagent and workflow transcripts. Usage from
   `<session>/subagents/*.jsonl` and `<session>/subagents/workflows/wf_*/agent-*.jsonl`
   was never read, so a busy day's subagent work — often larger than the main

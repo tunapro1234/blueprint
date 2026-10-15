@@ -151,6 +151,39 @@ and resumes the agent with `bp open --resume`. `--dir` chooses the destination
 working directory (default: the bundle's folder basename under the current
 directory); a non-empty target needs `--yes`.
 
+### Moving a whole hierarchy (`--recursive`)
+
+`bp hop <root> --to <peer> --recursive` moves the agent **and every descendant
+under it** as one bundle, preserving the parent/child structure — a whole fleet
+migrates in a single transfer. The subtree is captured parent-first, every agent
+must be idle, and one recursive bundle carries at most a thousand agents
+(`MaxHopAgents`), a bound checked when the bundle is sent, when it is received,
+and when its manifest is validated. `--dry-run` lists the agents and their
+parents without sending.
+
+A recursive bundle uses a tree layout — each agent's files and transcript live
+under `agents/<name>/` — and the receiver dispatches on it automatically. On
+`accept`, every agent's files and transcript are rebuilt under `--dir` (each at
+its own folder basename) and the agents are registered in the agentbook **as
+closed, revivable entries with their hierarchy intact — nothing is launched.**
+This is deliberate: accepting a migrated fleet must never start dozens of
+sessions at once. Revive an agent later with `bp open <name> <dir> --resume`.
+Two flags change this:
+
+- `--parent <name>` — attach the subtree's root under an existing local agent
+  (the in-bundle parent/child links are always preserved; this only sets where
+  the root hangs). Only the operator chooses the root's new parent — the bundle
+  never names a local agent to attach under.
+- `--resume` — launch every agent, parent-first, right after accept, instead of
+  leaving them closed.
+
+The manifest validation also rejects a malformed hierarchy before anything is
+written: the declared root must be parentless and present, every other agent's
+parent must reference an agent in the same bundle, names must be unique, and the
+graph must be acyclic and fully reachable from the root. As with a single hop,
+the advisory source host/agent fields are shown to the owner but never trusted,
+and the owner's explicit `accept` is the only thing that materializes anything.
+
 Hop is a new ingress, so it verifies the **peer**, never the bundle's claims:
 the advisory source host/agent in the bundle are shown to the owner but never
 trusted for authorization, and the owner's explicit `accept` is the only thing

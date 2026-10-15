@@ -666,9 +666,9 @@ bp p2p pauses [--json]
 bp p2p resume <peer> [agent]
 
 # Move an agent (and its files) to a peer
-bp hop <agent> --to <peer> [--no-files] [--copy] [--delete-source] [--raw] [--dry-run]
+bp hop <agent> --to <peer> [--recursive] [--no-files] [--copy] [--delete-source] [--raw] [--dry-run]
 bp hop list [--json]
-bp hop accept <id> [--dir <path>] [--yes]
+bp hop accept <id> [--dir <path>] [--parent <name>] [--resume] [--yes]
 bp hop reject <id>
 ```
 
@@ -695,6 +695,17 @@ size-capped (`hopMaxBytes`), and an incoming bundle is quarantined — `bp hop
 list` shows what arrived and nothing is materialized or launched until you run
 `bp hop accept <id>` (or `bp hop reject <id>`). Accept re-validates every entry,
 places the files and transcript, and resumes the agent. Details: [p2p.md](p2p.md).
+
+`bp hop <root> --to <peer> --recursive` moves a whole hierarchy — the agent and
+every descendant under it — as one bundle, preserving the parent/child structure.
+It is capped at a thousand agents per transfer (`MaxHopAgents`). On the receiver,
+`bp hop accept <id>` rebuilds every agent's files and transcript and registers
+them in the agentbook **as closed, revivable agents — nothing is launched** (so
+accepting a migrated fleet never starts dozens of sessions at once); revive one
+later with `bp open <name> <dir> --resume`. `--parent <name>` attaches the
+subtree root under a local agent, and `--resume` opts into launching every agent,
+parent-first, right after accept. A single-agent hop still resumes on accept as
+before.
 
 ## Audit
 

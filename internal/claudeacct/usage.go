@@ -149,6 +149,10 @@ func recordUsage(cache *UsageCache, now time.Time, usage *Usage, err error) *Usa
 	}
 	cache.AttemptAt = now
 	if err == nil {
+		cache.PrevFiveHour, cache.PrevFetchedAt = 0, time.Time{}
+		if prev, ok := sameWindow(cache.Usage, usage); ok {
+			cache.PrevFiveHour, cache.PrevFetchedAt = prev, cache.FetchedAt
+		}
 		cache.Usage, cache.FetchedAt = usage, now
 		cache.Error, cache.Failures, cache.BackoffUntil = "", 0, time.Time{}
 		return cache
@@ -173,6 +177,64 @@ func recordUsage(cache *UsageCache, now time.Time, usage *Usage, err error) *Usa
 	cache.Error = kind
 	cache.BackoffUntil = now.Add(wait)
 	return cache
+}
+
+// sameWindow returns the five-hour utilization of old when old and fresh
+// describe the same running five-hour window (same reset time).
+func sameWindow(old, fresh *Usage) (float64, bool) {
+	if old == nil || fresh == nil || old.FiveHour == nil || fresh.FiveHour == nil {
+		return 0, false
+	}
+	if old.FiveHour.ResetsAt.IsZero() || !old.FiveHour.ResetsAt.Equal(fresh.FiveHour.ResetsAt) {
+		return 0, false
+	}
+	return old.FiveHour.Utilization, true
+}
+
+// burnRate is the five-hour utilization growth in points per minute between
+// the last two fetches of the same window; ok is false without two such
+// fetches.
+func (c *UsageCache) burnRate() (perMinute float64, ok bool) {
+	if c == nil || c.Usage == nil || c.Usage.FiveHour == nil || c.PrevFetchedAt.IsZero() {
+		return 0, false
+	}
+	span := c.FetchedAt.Sub(c.PrevFetchedAt).Minutes()
+	if span <= 0 {
+		return 0, false
+	}
+	return (c.Usage.FiveHour.Utilization - c.PrevFiveHour) / span, true
+}
+
+// FastPollEvery is how often the active account is polled while it is
+// projected to cross its limit before the next regular poll.
+const FastPollEvery = time.Minute
+
+// pollEvery is how stale this cache may get before a refetch: every, or
+// FastPollEvery when the current burn rate would carry the five-hour
+// utilization to limit (limit > 0) before the next regular poll.
+func (c *UsageCache) pollEvery(now time.Time, every time.Duration, limit float64) time.Duration {
+	if limit <= 0 || every <= FastPollEvery {
+		return every
+	}
+	value, known := c.fiveHourAt(now)
+	rate, ok := c.burnRate()
+	if !known || !ok || rate <= 0 || value >= limit {
+		// At or over the limit the auto pass already switches; polling
+		// faster would not help.
+		return every
+	}
+	if value+rate*every.Minutes() >= limit {
+		return FastPollEvery
+	}
+	return every
+}
+
+// fiveHourAt is the cached five-hour utilization seen at now.
+func (c *UsageCache) fiveHourAt(now time.Time) (float64, bool) {
+	if c == nil || c.Usage == nil || c.Usage.FiveHour == nil {
+		return 0, false
+	}
+	return c.Usage.FiveHour.effective(now), true
 }
 
 // due reports whether the cache should be refetched.

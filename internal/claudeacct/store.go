@@ -48,6 +48,11 @@ type UsageCache struct {
 	Error        string    `json:"error,omitempty"`
 	Failures     int       `json:"failures,omitempty"`
 	BackoffUntil time.Time `json:"backoffUntil,omitempty"`
+	// PrevFiveHour and PrevFetchedAt are the five-hour utilization of the
+	// fetch before FetchedAt, kept only while both fetches saw the same
+	// window, so the burn rate can be estimated.
+	PrevFiveHour  float64   `json:"prevFiveHour,omitempty"`
+	PrevFetchedAt time.Time `json:"prevFetchedAt,omitempty"`
 }
 
 // Accounts is accounts.json.

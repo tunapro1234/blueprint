@@ -341,7 +341,11 @@ func (m *Manager) AutoOnce(ctx context.Context, opts AutoOptions) (AutoResult, e
 	}
 	var result AutoResult
 	if !opts.DryRun {
-		result.Polled = pollOrder(accounts, active, m.now(), opts.PollEvery, opts.MaxPolls)
+		limit := 0.0
+		if current := accounts.Slot(active); current != nil {
+			limit = opts.Policy.LimitFor(*current)
+		}
+		result.Polled = pollOrder(accounts, active, m.now(), opts.PollEvery, opts.MaxPolls, limit)
 		if len(result.Polled) > 0 {
 			m.refreshUsage(ctx, accounts, live, result.Polled)
 			if err := m.Store.Save(accounts); err != nil {
@@ -388,7 +392,7 @@ func (m *Manager) PollOnce(ctx context.Context, every time.Duration, max int) ([
 	if current := live.liveSlot(accounts); current != nil {
 		active = current.Number
 	}
-	polled := pollOrder(accounts, active, m.now(), every, max)
+	polled := pollOrder(accounts, active, m.now(), every, max, 0)
 	if len(polled) == 0 {
 		return nil, nil
 	}
@@ -398,8 +402,11 @@ func (m *Manager) PollOnce(ctx context.Context, every time.Duration, max int) ([
 
 // pollOrder picks which accounts to refetch: the active account first when
 // due, then the others whose data is oldest. Dead accounts and accounts in
-// backoff are skipped.
-func pollOrder(accounts *Accounts, active int, now time.Time, every time.Duration, max int) []int {
+// backoff are skipped. With activeLimit > 0 the active account is polled every
+// FastPollEvery while its burn rate would carry it to that limit before the
+// next regular poll, so a fast-burning account is switched before it hits
+// 100%.
+func pollOrder(accounts *Accounts, active int, now time.Time, every time.Duration, max int, activeLimit float64) []int {
 	if every <= 0 {
 		every = ListMaxAge
 	}
@@ -409,7 +416,11 @@ func pollOrder(accounts *Accounts, active int, now time.Time, every time.Duratio
 	}
 	var list []due
 	for _, s := range accounts.Slots {
-		if s.Dead || !s.LastUsage.due(now, every) {
+		maxAge := every
+		if s.Number == active {
+			maxAge = s.LastUsage.pollEvery(now, every, activeLimit)
+		}
+		if s.Dead || !s.LastUsage.due(now, maxAge) {
 			continue
 		}
 		if s.Number != active && s.Disabled {

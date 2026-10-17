@@ -16,7 +16,8 @@ func TestRecordUsageKeepsPreviousFetchOfSameWindow(t *testing.T) {
 	if !c.PrevFetchedAt.IsZero() {
 		t.Fatalf("first fetch has no previous: %+v", c)
 	}
-	c = recordUsage(c, t0.Add(5*time.Minute), fiveHourUsage(75, reset), nil)
+	// The endpoint reports the same reset with sub-second noise.
+	c = recordUsage(c, t0.Add(5*time.Minute), fiveHourUsage(75, reset.Add(-400*time.Millisecond)), nil)
 	if c.PrevFiveHour != 60 || !c.PrevFetchedAt.Equal(t0) {
 		t.Fatalf("previous fetch not kept: %+v", c)
 	}

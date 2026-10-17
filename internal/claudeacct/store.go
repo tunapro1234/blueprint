@@ -51,8 +51,8 @@ type UsageCache struct {
 	// PrevFiveHour and PrevFetchedAt are the five-hour utilization of the
 	// fetch before FetchedAt, kept only while both fetches saw the same
 	// window, so the burn rate can be estimated.
-	PrevFiveHour  float64   `json:"prevFiveHour,omitempty"`
-	PrevFetchedAt time.Time `json:"prevFetchedAt,omitempty"`
+	PrevFiveHour  float64   `json:"prevFiveHour,omitzero"`
+	PrevFetchedAt time.Time `json:"prevFetchedAt,omitzero"`
 }
 
 // Accounts is accounts.json.

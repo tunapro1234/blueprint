@@ -179,13 +179,20 @@ func recordUsage(cache *UsageCache, now time.Time, usage *Usage, err error) *Usa
 	return cache
 }
 
+// windowJitter is how far apart two reported reset times of the same
+// five-hour window may be: the usage endpoint returns the reset with
+// sub-second noise (21:59:59.6 then 22:00:00.09).
+const windowJitter = time.Minute
+
 // sameWindow returns the five-hour utilization of old when old and fresh
-// describe the same running five-hour window (same reset time).
+// describe the same running five-hour window (reset times within
+// windowJitter).
 func sameWindow(old, fresh *Usage) (float64, bool) {
 	if old == nil || fresh == nil || old.FiveHour == nil || fresh.FiveHour == nil {
 		return 0, false
 	}
-	if old.FiveHour.ResetsAt.IsZero() || !old.FiveHour.ResetsAt.Equal(fresh.FiveHour.ResetsAt) {
+	a, b := old.FiveHour.ResetsAt, fresh.FiveHour.ResetsAt
+	if a.IsZero() || b.IsZero() || a.Sub(b).Abs() > windowJitter {
 		return 0, false
 	}
 	return old.FiveHour.Utilization, true

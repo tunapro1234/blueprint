@@ -59,7 +59,7 @@ var registry = []Module{
 	{
 		Name:        Sessions,
 		Description: "open, close and resume agents in tmux; shell wrappers so agents survive a closed terminal; the daemon reopens the coordinator",
-		Owns:        []string{"lifecycle", "localObservation", "localMouse"},
+		Owns:        []string{"lifecycle", "localObservation", "localMouse", "remoteControlOnOpen"},
 		Conflict:    sessionsConflicts,
 		Apply:       applySessions,
 		Notes:       "open a new terminal, or run: . \"$HOME/.config/bp/shell.sh\"",

@@ -737,6 +737,7 @@ func (b *liveFleetUpdate) Restart(name, folder string, opts bptmux.OpenOptions) 
 	if !dead {
 		return fmt.Errorf("native CLI did not leave an exited pane; refusing to terminate a live pane")
 	}
+	launch.RemoteControl = b.app.config.RemoteControlOnOpen
 	return b.app.tmux.Open(b.app.ctx, name, folder, launch, func(message string) { fmt.Fprintln(b.app.out, message) })
 }
 

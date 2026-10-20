@@ -269,10 +269,35 @@ func TestClaudeOpenRenamesAfterRemoteControl(t *testing.T) {
 		}
 		return inner(ctx, input, args...)
 	}
-	if err := client.Open(context.Background(), "claude-main", "/work", OpenOptions{NoPrompt: true}, nil); err != nil {
+	if err := client.Open(context.Background(), "claude-main", "/work", OpenOptions{NoPrompt: true, RemoteControl: true}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(sent, ",") != "/remote-control,/rename claude-main" {
 		t.Fatalf("startup commands sent in order %q; calls %q", sent, h.calls)
+	}
+}
+
+func TestClaudeOpenSkipsRemoteControlByDefault(t *testing.T) {
+	h := &launchHarness{capture: "bypass permissions\n"}
+	client := h.client()
+	inner := client.exec
+	var sent []string
+	client.exec = func(ctx context.Context, input []byte, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ") + " " + string(input)
+		for _, cmd := range []string{"/remote-control", "/rename"} {
+			if strings.Contains(joined, cmd) {
+				sent = append(sent, cmd)
+			}
+		}
+		if strings.Contains(joined, "#{pane_current_command}") {
+			return []byte("claude\n"), nil
+		}
+		return inner(ctx, input, args...)
+	}
+	if err := client.Open(context.Background(), "claude-main", "/work", OpenOptions{NoPrompt: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("Remote Control is off by default but bp sent %q", sent)
 	}
 }

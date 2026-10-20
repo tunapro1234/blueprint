@@ -1219,6 +1219,9 @@ const (
 	// RemoteDisconnected: Claude Code dropped the session after it was active,
 	// for example when the signed-in account or organization changed.
 	RemoteDisconnected
+	// RemoteOff: the session was disconnected on purpose ("Disconnect this
+	// session" in the /remote-control menu, as bp remote --off does).
+	RemoteOff
 )
 
 var (
@@ -1238,10 +1241,12 @@ func RemoteControlStatus(pane string) (state RemoteControl, url, reason string) 
 		case remoteDisconnectRow.MatchString(line):
 			state, url = RemoteDisconnected, ""
 			reason = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "●"))
+		case remoteStoppedLine.MatchString(line):
+			state, url, reason = RemoteOff, "", ""
 		case remoteActiveLine.MatchString(line):
 			state, reason = RemoteActive, ""
 		}
-		if state != RemoteDisconnected {
+		if state == RemoteActive || state == RemoteUnknown {
 			if matches := remoteURLPattern.FindAllString(line, -1); len(matches) > 0 {
 				url = strings.TrimRight(matches[len(matches)-1], ".,)")
 			}
@@ -2674,7 +2679,12 @@ type OpenOptions struct {
 	// slow launch is waiting on, instead of a silent multi-minute wait (#22).
 	Progress func(string) `json:"-"`
 	NoPrompt bool         `json:"-"`
-	Legacy   bool         `json:"-"`
+	// RemoteControl connects a Claude pane to Remote Control at startup
+	// (/remote-control, then /rename so the bridge shows the agent name). Off
+	// by default (config remoteControlOnOpen); a resumed session that
+	// reconnects on its own is then disconnected.
+	RemoteControl bool `json:"-"`
+	Legacy        bool `json:"-"`
 	// Launcher is an internal, shell-quoted wrapper for local managed sessions.
 	// It receives the complete native command as one argument.
 	Launcher string `json:"-"`
@@ -3344,7 +3354,23 @@ func (c *Client) Open(ctx context.Context, session, dir string, opts OpenOptions
 	}
 	progress("harness ready")
 	c.Sleep(time.Second)
-	if !opts.Codex && !opts.Hermes && !opts.OpenCode {
+	if !opts.Codex && !opts.Hermes && !opts.OpenCode && !opts.RemoteControl && opts.Resume {
+		// Remote Control is off by default, but a resumed session that was
+		// connected reconnects on its own (its banner then reads "· /rc").
+		// Disconnect it so the default holds after every resume.
+		// The bridge can attach a few seconds after the composer is ready.
+		for check := 0; check < 4; check++ {
+			history, err := c.CaptureHistory(ctx, session, 5000)
+			if err == nil && RemoteControlBannerConnected(history) {
+				if _, err := c.DisconnectRemoteControl(ctx, session); err != nil && warn != nil {
+					warn("WARNING: " + session + " reconnected to Remote Control on resume and bp could not disconnect it: " + err.Error() + " (run bp remote --off " + session + ")")
+				}
+				break
+			}
+			c.Sleep(2 * time.Second)
+		}
+	}
+	if !opts.Codex && !opts.Hermes && !opts.OpenCode && opts.RemoteControl {
 		c.sendStartupCommand(ctx, session, "/remote-control")
 		// When RC is already active (a resumed session reconnects on its own)
 		// the command opens the Continue/Disconnect menu instead of just

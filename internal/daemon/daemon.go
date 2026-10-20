@@ -604,6 +604,7 @@ func (s *Service) keepalive(ctx context.Context) error {
 	}
 	opts := *agent.Launch
 	opts.NoPrompt, opts.Legacy, opts.Resume = true, s.config.Legacy, true
+	opts.RemoteControl = s.config.RemoteControlOnOpen
 	if opts.Codex && s.config.CodexDisabled() {
 		// Refusing would leave the coordinator down; the record is the
 		// operator's to change (bp doctor lists it).

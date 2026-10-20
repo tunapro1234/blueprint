@@ -101,6 +101,7 @@ bp remote list [--json]
 bp remote add <name> --host <host> [--port N] [--user <user>] [--identity <path>] [--transport mosh|ssh] [--mosh-ports <range>] [--elevate <command>]
 bp remote rm <name>
 bp remote [<agent>...]       # existing /remote-control action; list/add/rm are reserved
+bp remote --off [--wait <duration>] [<agent>...]  # turn Remote Control off (all live Claude agents by default); waits for busy ones
 bp shell <server> [agent]    # interactive remote shell, or remote bp attach
 bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>...
 bp peek <name> [n]
@@ -1803,6 +1804,7 @@ func (a *app) open(args []string) error {
 		opts.Launcher = managedLauncherEnv(a.config.Home)
 		opts.Launcher += " " + quoteShell(self) + " _open-session " + quoteShell(name) + " " + managedHarness
 	}
+	opts.RemoteControl = a.config.RemoteControlOnOpen
 	if err := a.tmux.Open(a.ctx, name, dir, opts, func(text string) { fmt.Fprintln(a.out, text) }); err != nil {
 		// Roll back only while tmux can still be believed. A cancelled or timed-out
 		// open cannot ask it anything (HasSession reports "no" for an unreachable
@@ -4235,6 +4237,11 @@ func (a *app) daemon(args []string) error {
 // its claude.ai/code URL. Idempotent: an already-connected session just reports
 // "is active" with the same URL. Codex sessions are skipped (no such command).
 func (a *app) remote(args []string) error {
+	for i, arg := range args {
+		if arg == "--off" {
+			return a.remoteOff(append(append([]string(nil), args[:i]...), args[i+1:]...))
+		}
+	}
 	if handled, err := a.remoteRegistry(args); handled {
 		return err
 	}

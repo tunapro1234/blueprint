@@ -39,23 +39,37 @@ var ClaudeScreen = struct {
 	RemoteControlURL          *regexp.Regexp
 	RemoteControlActive       *regexp.Regexp
 	RemoteControlDisconnected *regexp.Regexp
+	// RemoteControlStopped is the reply to choosing "Disconnect this
+	// session" in the /remote-control menu (measured on 2.1.304).
+	RemoteControlStopped *regexp.Regexp
+	// RemoteControlDisconnectItem and RemoteControlMenuCursor locate the
+	// menu entry that turns Remote Control off.
+	RemoteControlDisconnectItem string
+	RemoteControlMenuCursor     string
+	// RemoteControlBanner is the startup banner's cwd row while the session
+	// is connected ("/path · /rc").
+	RemoteControlBanner *regexp.Regexp
 }{
-	BusySpinner:               regexp.MustCompile(`^[^\p{L}\p{N}\s] +[^\s()]*(?:…|\.\.\.) *(?:\((?:\d+h +)?(?:\d+m +)?\d+(?:\.\d+)?s[^()]*\))?$`),
-	LegacyBusyCounter:         regexp.MustCompile(`\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+(?:\.\d+)?s?\s*[·•]|⏵`),
-	LegacyBusyHint:            "esc to interrupt",
-	PasteChip:                 regexp.MustCompile(`\[Pasted text[^\]]*\]`),
-	ComposerFooter:            []string{"-- INSERT --", "-- NORMAL --", "bypass permissions"},
-	ComposerBorder:            "─━",
-	DialogFooter:              []string{"Enter to select", "Esc to cancel"},
-	AuthExpired:               []string{"login expired", "run /login"},
-	StatusBullet:              "●",
-	UsageLimit:                regexp.MustCompile(`(?i)^⚠(?:️)?\s+usage\s+limit\s+reached(?:\b|$)`),
-	UsageReset:                regexp.MustCompile(`(?i)\blimit\s+resets?\s+([^·…]+)`),
-	RemoteControlMenu:         "Enter to select",
-	RemoteControlMenuItems:    []string{"Disconnect this session", "Remote Control"},
-	RemoteControlURL:          regexp.MustCompile(`https://claude\.ai/code/\S+`),
-	RemoteControlActive:       regexp.MustCompile(`^\s*(?:⎿\s*)?/remote-control is active\b`),
-	RemoteControlDisconnected: regexp.MustCompile(`^\s*●\s*Remote Control disconnected\b`),
+	BusySpinner:                 regexp.MustCompile(`^[^\p{L}\p{N}\s] +[^\s()]*(?:…|\.\.\.) *(?:\((?:\d+h +)?(?:\d+m +)?\d+(?:\.\d+)?s[^()]*\))?$`),
+	LegacyBusyCounter:           regexp.MustCompile(`\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+(?:\.\d+)?s?\s*[·•]|⏵`),
+	LegacyBusyHint:              "esc to interrupt",
+	PasteChip:                   regexp.MustCompile(`\[Pasted text[^\]]*\]`),
+	ComposerFooter:              []string{"-- INSERT --", "-- NORMAL --", "bypass permissions"},
+	ComposerBorder:              "─━",
+	DialogFooter:                []string{"Enter to select", "Esc to cancel"},
+	AuthExpired:                 []string{"login expired", "run /login"},
+	StatusBullet:                "●",
+	UsageLimit:                  regexp.MustCompile(`(?i)^⚠(?:️)?\s+usage\s+limit\s+reached(?:\b|$)`),
+	UsageReset:                  regexp.MustCompile(`(?i)\blimit\s+resets?\s+([^·…]+)`),
+	RemoteControlMenu:           "Enter to select",
+	RemoteControlMenuItems:      []string{"Disconnect this session", "Remote Control"},
+	RemoteControlURL:            regexp.MustCompile(`https://claude\.ai/code/\S+`),
+	RemoteControlActive:         regexp.MustCompile(`^\s*(?:⎿\s*)?/remote-control is active\b`),
+	RemoteControlDisconnected:   regexp.MustCompile(`^\s*●\s*Remote Control disconnected\b`),
+	RemoteControlStopped:        regexp.MustCompile(`^\s*⎿\s*Remote Control disconnected\b`),
+	RemoteControlDisconnectItem: "Disconnect this session",
+	RemoteControlMenuCursor:     "❯",
+	RemoteControlBanner:         regexp.MustCompile(`\s·\s/rc\s*$`),
 }
 
 // CodexIdleText is the two-word core of the Codex composer placeholder; the

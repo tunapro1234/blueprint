@@ -8,6 +8,28 @@ All notable changes to bp are recorded here. The format follows
 
 Changes on `dev` since the 1.9.34 release.
 
+### Added
+
+- `bp remote --off [--wait <duration>] [<agent>...]` turns Remote Control off
+  in Claude sessions (every live one when no name is given). It opens the
+  /remote-control menu, selects "Disconnect this session" and confirms the
+  "Remote Control disconnected." line. A session that was not connected is
+  connected by the command itself, so bp sends it a second time and
+  disconnects it again. A working agent or a composer holding text is never
+  touched: it is retried every 20 seconds until `--wait` (default 10m) runs
+  out and is then reported as still busy.
+- Config `remoteControlOnOpen` (default `false`).
+
+### Changed
+
+- `bp open`, resume and daemon relaunches no longer connect Claude sessions to
+  Remote Control. A resumed session that reconnects on its own (its banner
+  reads `· /rc`) is disconnected. Set `remoteControlOnOpen: true` for the old
+  behaviour (/remote-control and /rename at startup). `bp doctor` reports a
+  dropped Remote Control only when that setting is on or the agent is named.
+- The Claude account auto switch polls the active account every minute while
+  its burn rate would carry it past its limit before the next regular poll.
+
 ## [1.9.34] - 2026-10-15
 
 ### Fixed

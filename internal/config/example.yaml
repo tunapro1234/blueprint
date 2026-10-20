@@ -17,6 +17,10 @@ localObservation: true
 # Mouse scrolling and selection in local bp tmux sessions.
 localMouse: true
 
+# Connect Claude sessions to Remote Control (claude.ai/code, phone) on bp open/resume.
+# Off: sessions open without it and a resumed session that reconnects is disconnected.
+remoteControlOnOpen: false
+
 # Throwaway agents launched through bp run are archived after they close.
 # bp open remains persistent unless --ephemeral is supplied.
 lifecycle:

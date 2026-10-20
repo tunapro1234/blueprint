@@ -376,7 +376,10 @@ func doctorRuntimeChecks(cfg bpconfig.Config, fleet book.Fleet, selected string)
 				checks = append(checks, *stale)
 			}
 		}
-		if commands[name] == "claude" {
+		// With Remote Control off by default a dropped bridge is not a fault;
+		// report it only where bp is meant to keep sessions connected, or
+		// when this agent was asked about.
+		if commands[name] == "claude" && (cfg.RemoteControlOnOpen || selected != "") {
 			if pane, err := client.CaptureHistory(ctx, name, doctorRemoteHistory); err == nil {
 				if check, ok := doctorRemoteControlCheck(name, pane, selected != ""); ok {
 					checks = append(checks, check)
@@ -558,6 +561,11 @@ func doctorRemoteControlCheck(name, pane string, selected bool) (doctorCheck, bo
 		}
 		return doctorCheck{Name: "remote_control/" + name, Agent: name, Warning: true, Detail: detail,
 			Next: "bp remote " + name + " (if the account changed on purpose; otherwise /login back to the previous account first)"}, true
+	case bptmux.RemoteOff:
+		if !selected {
+			return doctorCheck{}, false
+		}
+		return doctorCheck{Name: "remote_control/" + name, Agent: name, OK: true, Detail: name + ": Remote Control turned off"}, true
 	case bptmux.RemoteActive:
 		if !selected {
 			return doctorCheck{}, false

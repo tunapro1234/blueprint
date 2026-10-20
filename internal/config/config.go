@@ -23,34 +23,39 @@ const LegacyHome = "/srv/blueprint"
 
 // Config contains all paths and feature switches that vary by machine.
 type Config struct {
-	UpdateCheck      bool                    `json:"updateCheck" yaml:"updateCheck"`
-	LocalMouse       bool                    `json:"localMouse" yaml:"localMouse"`
-	LocalObservation bool                    `json:"localObservation" yaml:"localObservation"`
-	Path             string                  `json:"-" yaml:"-"`
-	Home             string                  `json:"-" yaml:"-"`
-	Legacy           bool                    `json:"-" yaml:"-"`
-	MsgqRoot         string                  `json:"msgqRoot" yaml:"msgqRoot"`
-	Agentbooks       []string                `json:"agentbooks" yaml:"agentbooks"`
-	TokenAgentbooks  []string                `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
-	StateDir         string                  `json:"stateDir" yaml:"stateDir"`
-	WAOutbox         string                  `json:"waOutbox" yaml:"waOutbox"`
-	WAStore          string                  `json:"waStore" yaml:"waStore"`
-	UsageBin         string                  `json:"usageBin" yaml:"usageBin"`
-	UsageHistory     string                  `json:"usageHistory" yaml:"usageHistory"`
-	ClipboardDir     string                  `json:"clipboardDir" yaml:"clipboardDir"`
-	WABridge         bool                    `json:"waBridge" yaml:"waBridge"`
-	Ntfy             *ntfy.Config            `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
-	Fed              *FedConfig              `json:"fed,omitempty" yaml:"fed,omitempty"`
-	P2P              *p2p.Config             `json:"p2p,omitempty" yaml:"p2p,omitempty"`
-	API              *APIConfig              `json:"api,omitempty" yaml:"api,omitempty"`
-	Codex            *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
-	GuardHooks       *GuardHooksConfig       `json:"guardHooks,omitempty" yaml:"guardHooks,omitempty"`
-	CLIUpdates       map[string][]string     `json:"cliUpdates,omitempty" yaml:"cliUpdates,omitempty"`
-	Remotes          map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
-	Bar              BarConfig               `json:"bar" yaml:"bar"`
-	Lifecycle        LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
-	Windows          WindowsConfig           `json:"windows" yaml:"windows"`
-	ClaudeAccounts   ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
+	UpdateCheck      bool `json:"updateCheck" yaml:"updateCheck"`
+	LocalMouse       bool `json:"localMouse" yaml:"localMouse"`
+	LocalObservation bool `json:"localObservation" yaml:"localObservation"`
+	// RemoteControlOnOpen makes bp open/resume connect a Claude session to
+	// Remote Control (/remote-control + /rename). Off by default: a session
+	// opens without it, and a resumed session that reconnects on its own is
+	// disconnected again.
+	RemoteControlOnOpen bool                    `json:"remoteControlOnOpen" yaml:"remoteControlOnOpen"`
+	Path                string                  `json:"-" yaml:"-"`
+	Home                string                  `json:"-" yaml:"-"`
+	Legacy              bool                    `json:"-" yaml:"-"`
+	MsgqRoot            string                  `json:"msgqRoot" yaml:"msgqRoot"`
+	Agentbooks          []string                `json:"agentbooks" yaml:"agentbooks"`
+	TokenAgentbooks     []string                `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
+	StateDir            string                  `json:"stateDir" yaml:"stateDir"`
+	WAOutbox            string                  `json:"waOutbox" yaml:"waOutbox"`
+	WAStore             string                  `json:"waStore" yaml:"waStore"`
+	UsageBin            string                  `json:"usageBin" yaml:"usageBin"`
+	UsageHistory        string                  `json:"usageHistory" yaml:"usageHistory"`
+	ClipboardDir        string                  `json:"clipboardDir" yaml:"clipboardDir"`
+	WABridge            bool                    `json:"waBridge" yaml:"waBridge"`
+	Ntfy                *ntfy.Config            `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
+	Fed                 *FedConfig              `json:"fed,omitempty" yaml:"fed,omitempty"`
+	P2P                 *p2p.Config             `json:"p2p,omitempty" yaml:"p2p,omitempty"`
+	API                 *APIConfig              `json:"api,omitempty" yaml:"api,omitempty"`
+	Codex               *CodexConfig            `json:"codex,omitempty" yaml:"codex,omitempty"`
+	GuardHooks          *GuardHooksConfig       `json:"guardHooks,omitempty" yaml:"guardHooks,omitempty"`
+	CLIUpdates          map[string][]string     `json:"cliUpdates,omitempty" yaml:"cliUpdates,omitempty"`
+	Remotes             map[string]RemoteConfig `json:"remotes,omitempty" yaml:"remotes,omitempty"`
+	Bar                 BarConfig               `json:"bar" yaml:"bar"`
+	Lifecycle           LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
+	Windows             WindowsConfig           `json:"windows" yaml:"windows"`
+	ClaudeAccounts      ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
 	// Modules records which opt-in modules are enabled (internal/modules).
 	// ModulesSet is false when the file has no modules key: an install from
 	// before modules existed, which internal/modules migrates.
@@ -187,32 +192,33 @@ type FedConfig struct {
 }
 
 type overrides struct {
-	UpdateCheck      *bool                    `json:"updateCheck" yaml:"updateCheck"`
-	LocalMouse       *bool                    `json:"localMouse" yaml:"localMouse"`
-	LocalObservation *bool                    `json:"localObservation" yaml:"localObservation"`
-	MsgqRoot         *string                  `json:"msgqRoot" yaml:"msgqRoot"`
-	Agentbooks       *[]string                `json:"agentbooks" yaml:"agentbooks"`
-	TokenAgentbooks  *[]string                `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
-	StateDir         *string                  `json:"stateDir" yaml:"stateDir"`
-	WAOutbox         *string                  `json:"waOutbox" yaml:"waOutbox"`
-	WAStore          *string                  `json:"waStore" yaml:"waStore"`
-	UsageBin         *string                  `json:"usageBin" yaml:"usageBin"`
-	UsageHistory     *string                  `json:"usageHistory" yaml:"usageHistory"`
-	ClipboardDir     *string                  `json:"clipboardDir" yaml:"clipboardDir"`
-	WABridge         *bool                    `json:"waBridge" yaml:"waBridge"`
-	Ntfy             *ntfy.Config             `json:"ntfy" yaml:"ntfy"`
-	Fed              *FedConfig               `json:"fed" yaml:"fed"`
-	P2P              *p2p.Config              `json:"p2p" yaml:"p2p"`
-	API              *APIConfig               `json:"api" yaml:"api"`
-	Codex            *CodexConfig             `json:"codex" yaml:"codex"`
-	GuardHooks       *GuardHooksConfig        `json:"guardHooks" yaml:"guardHooks"`
-	Remotes          *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
-	CLIUpdates       *map[string][]string     `json:"cliUpdates" yaml:"cliUpdates"`
-	Bar              *barOverrides            `json:"bar" yaml:"bar"`
-	Lifecycle        *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
-	Windows          *WindowsConfig           `json:"windows" yaml:"windows"`
-	ClaudeAccounts   *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
-	Modules          *map[string]bool         `json:"modules" yaml:"modules"`
+	UpdateCheck         *bool                    `json:"updateCheck" yaml:"updateCheck"`
+	LocalMouse          *bool                    `json:"localMouse" yaml:"localMouse"`
+	LocalObservation    *bool                    `json:"localObservation" yaml:"localObservation"`
+	RemoteControlOnOpen *bool                    `json:"remoteControlOnOpen" yaml:"remoteControlOnOpen"`
+	MsgqRoot            *string                  `json:"msgqRoot" yaml:"msgqRoot"`
+	Agentbooks          *[]string                `json:"agentbooks" yaml:"agentbooks"`
+	TokenAgentbooks     *[]string                `json:"tokenAgentbooks" yaml:"tokenAgentbooks"`
+	StateDir            *string                  `json:"stateDir" yaml:"stateDir"`
+	WAOutbox            *string                  `json:"waOutbox" yaml:"waOutbox"`
+	WAStore             *string                  `json:"waStore" yaml:"waStore"`
+	UsageBin            *string                  `json:"usageBin" yaml:"usageBin"`
+	UsageHistory        *string                  `json:"usageHistory" yaml:"usageHistory"`
+	ClipboardDir        *string                  `json:"clipboardDir" yaml:"clipboardDir"`
+	WABridge            *bool                    `json:"waBridge" yaml:"waBridge"`
+	Ntfy                *ntfy.Config             `json:"ntfy" yaml:"ntfy"`
+	Fed                 *FedConfig               `json:"fed" yaml:"fed"`
+	P2P                 *p2p.Config              `json:"p2p" yaml:"p2p"`
+	API                 *APIConfig               `json:"api" yaml:"api"`
+	Codex               *CodexConfig             `json:"codex" yaml:"codex"`
+	GuardHooks          *GuardHooksConfig        `json:"guardHooks" yaml:"guardHooks"`
+	Remotes             *map[string]RemoteConfig `json:"remotes" yaml:"remotes"`
+	CLIUpdates          *map[string][]string     `json:"cliUpdates" yaml:"cliUpdates"`
+	Bar                 *barOverrides            `json:"bar" yaml:"bar"`
+	Lifecycle           *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
+	Windows             *WindowsConfig           `json:"windows" yaml:"windows"`
+	ClaudeAccounts      *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Modules             *map[string]bool         `json:"modules" yaml:"modules"`
 }
 
 type claudeAccountsOverrides struct {
@@ -492,6 +498,9 @@ func apply(result *Config, values overrides) {
 	}
 	if values.LocalObservation != nil {
 		result.LocalObservation = *values.LocalObservation
+	}
+	if values.RemoteControlOnOpen != nil {
+		result.RemoteControlOnOpen = *values.RemoteControlOnOpen
 	}
 	if values.MsgqRoot != nil {
 		result.MsgqRoot = *values.MsgqRoot

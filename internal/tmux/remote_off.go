@@ -123,17 +123,45 @@ func (c *Client) DisconnectRemoteControl(ctx context.Context, session string) (w
 	return wasOff, c.chooseDisconnect(ctx, session)
 }
 
-// sendRemoteControlCommand submits /remote-control, refusing a working pane or
-// a non-empty composer.
+// sendRemoteControlCommand submits /remote-control with exactly one Enter,
+// refusing a working pane or a non-empty composer.
+//
+// It does not use Send: Send presses Enter again when it cannot see the
+// composer clear, and in a connected session the menu opens fast enough that
+// this second Enter lands on the menu and picks "Continue" (seen on six
+// server-necati panes on 20 Oct: empty command output, menu gone). A command
+// still sitting whole in the composer afterwards is finished by SubmitStuck,
+// which refuses while any dialog (the menu) is on screen.
 func (c *Client) sendRemoteControlCommand(ctx context.Context, session string) error {
-	err := c.Send(ctx, session, "/remote-control")
-	if errors.Is(err, ErrUnverified) {
-		// The slash-command menu can swallow the first Enter; finish it only
-		// while the composer still holds exactly this command.
-		c.finishStartupCommand(ctx, session, "/remote-control")
+	const command = "/remote-control"
+	if err := c.requireAgentPane(ctx, session); err != nil {
+		return err
+	}
+	pane, err := c.CaptureAnsi(ctx, session)
+	if err != nil {
+		return err
+	}
+	if Busy(pane) {
+		return ErrBusy
+	}
+	if Typing(pane) {
+		return ErrTyping
+	}
+	target := "=" + session + ":"
+	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "-l", command); err != nil {
+		return err
+	}
+	// Let the slash-command list draw before Enter, or it swallows the key.
+	c.Sleep(800 * time.Millisecond)
+	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "Enter"); err != nil {
+		return err
+	}
+	c.Sleep(2 * time.Second)
+	if current, err := c.Capture(ctx, session); err == nil && RemoteControlMenu(current) {
 		return nil
 	}
-	return err
+	c.finishStartupCommand(ctx, session, command)
+	return nil
 }
 
 // waitRemoteControlReply waits for the menu (the session was connected) or a

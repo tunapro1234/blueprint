@@ -1,6 +1,11 @@
 package tmux
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
 
 // Captured from Claude Code 2.1.304 after /remote-control in a connected
 // session: the cursor starts on Continue, Disconnect is the first row.
@@ -77,5 +82,48 @@ func TestRemoteControlBannerConnected(t *testing.T) {
 	}
 	if RemoteControlBannerConnected(deep + "  quoting /x · /rc\n") {
 		t.Fatal("marker below the banner rows counted")
+	}
+}
+
+// A connected session opens the menu as soon as /remote-control is submitted.
+// bp must press Enter exactly once before navigating: a second Enter would
+// select "Continue" and close the menu (server-necati panes, 20 Oct).
+func TestDisconnectRemoteControlSendsOneEnterBeforeMenu(t *testing.T) {
+	const idle = "❯ \n"
+	pane := idle
+	var calls []string
+	client := New()
+	client.Sleep = func(time.Duration) {}
+	client.exec = func(_ context.Context, _ []byte, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		switch {
+		case strings.HasPrefix(joined, "display-message") && strings.Contains(joined, "#{pane_current_command}"):
+			return []byte("claude\n"), nil
+		case strings.HasPrefix(joined, "capture-pane"):
+			return []byte(pane), nil
+		case joined == "send-keys -t =s: Enter" && pane == idle:
+			pane = rcMenuOnContinue
+		case joined == "send-keys -t =s: Enter" && RemoteControlMenuSelection(pane) == "Continue":
+			pane = idle // the regression: Continue closes the menu
+		case joined == "send-keys -t =s: Enter" && RemoteControlMenuSelection(pane) != "":
+			pane = "❯ /remote-control\n  ⎿  Remote Control disconnected.\n❯ \n"
+		case joined == "send-keys -t =s: Up":
+			pane = rcMenuOnDisconnect
+		}
+		return nil, nil
+	}
+	wasOff, err := client.DisconnectRemoteControl(context.Background(), "s")
+	if err != nil || wasOff {
+		t.Fatalf("wasOff=%v err=%v\ncalls=%q", wasOff, err, calls)
+	}
+	enters := 0
+	for _, call := range calls {
+		if strings.HasPrefix(call, "send-keys") && strings.HasSuffix(call, " Enter") {
+			enters++
+		}
+	}
+	if enters != 2 {
+		t.Fatalf("Enter pressed %d times, want 2 (submit + Disconnect)\ncalls=%q", enters, calls)
 	}
 }

@@ -25,6 +25,10 @@ func TestClaudePreTurnRequiresWholeBoundMetadataOnlyTranscript(t *testing.T) {
 			`{"type":"system","subtype":"bridge_status","content":"/remote-control is active"}` + "\n" +
 			`{"type":"agent-color","sessionId":"` + id + `"}` + "\n" +
 			`{"type":"atis-latch","atis":"x","sessionId":"` + id + `"}` + "\n", true},
+		{"remote control after account change", `{"type":"system","subtype":"informational","content":"Remote Control disconnected — signed-in claude.ai account or organization changed on this machine"}` + "\n" +
+			`{"type":"history-suppression","sessionId":"` + id + `","cause":"chokepoint_veto","ts":"2026-10-20T10:03:00.738Z"}` + "\n" +
+			`{"type":"system","subtype":"local_command","content":"<command-name>/remote-control</command-name>\n<command-message>remote-control</command-message>"}` + "\n" +
+			`{"type":"system","subtype":"local_command","content":"<local-command-stdout>Remote Control disconnected.</local-command-stdout>"}` + "\n", true},
 		{"unknown system subtype", `{"type":"system","subtype":"turn_duration"}` + "\n", false},
 		{"actual user", `{"type":"user","message":{"content":"do work"}}` + "\n", false},
 		{"assistant unknown stop", `{"type":"assistant","message":{"stop_reason":null}}` + "\n", false},

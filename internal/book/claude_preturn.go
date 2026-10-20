@@ -50,7 +50,11 @@ func claudePreTurn(path, id, cwd string) bool {
 			return false
 		}
 		switch row.Type {
-		case "custom-title", "agent-name", "agent-color", "atis-latch", "ai-title", "mode", "permission-mode", "bridge-session", "file-history-snapshot":
+		// history-suppression is written when a Remote Control bridge is
+		// (re)registered after the signed-in account changed; it carries no turn.
+		// Missing it held compec-design's first message for 35 minutes on
+		// 2026-10-20 after bp remote --off reconnected and disconnected RC.
+		case "custom-title", "agent-name", "agent-color", "atis-latch", "ai-title", "mode", "permission-mode", "bridge-session", "file-history-snapshot", "history-suppression":
 		case "system":
 			// Startup notices carry no turn: "informational" is the instructions
 			// file banner and "bridge_status" is the reply to /remote-control, which

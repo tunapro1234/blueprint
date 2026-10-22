@@ -146,6 +146,11 @@ bp fed status|ping|token|log [n]
 bp daemon`
 
 type app struct {
+	// ownChannels holds the channels this command enqueued itself. When set,
+	// the delivery pass reports only their lines: the pass drains the whole
+	// queue, and other agents' "delivered: ... -> X" lines read to the caller
+	// as their own message having gone to X.
+	ownChannels   map[string]bool
 	resolveSender func() identity.Identity
 	// ancestors overrides the process chain used for uncertain sender labels.
 	ancestors   func() [][]string
@@ -2652,9 +2657,30 @@ func (a *app) dispatchNow() {
 	if a.queue == nil || a.tmux == nil {
 		return
 	}
-	if err := a.queue.Dispatch(a.ctx, a.tmux, func(line string) { fmt.Fprintln(a.err, line) }); err != nil {
+	if err := a.queue.Dispatch(a.ctx, a.tmux, a.reportDispatchLine); err != nil {
 		fmt.Fprintf(a.err, "WARNING: delivery pass could not run: %v\n", err)
 	}
+}
+
+// dispatchChannelID matches the queue channel ids that dispatch report lines
+// name: local "q" + digits, P2P "p" + hex.
+var dispatchChannelID = regexp.MustCompile(`\b(q[0-9]{6,}|p[0-9a-f]{24,})\b`)
+
+// reportDispatchLine prints a delivery-pass line, dropping lines about other
+// agents' records when the command enqueued its own (see app.ownChannels).
+// Those records are unaffected; bp qstat and the daemon still report them.
+func (a *app) reportDispatchLine(line string) {
+	if len(a.ownChannels) > 0 {
+		ids := dispatchChannelID.FindAllString(line, -1)
+		own := len(ids) == 0
+		for _, id := range ids {
+			own = own || a.ownChannels[id]
+		}
+		if !own {
+			return
+		}
+	}
+	fmt.Fprintln(a.err, line)
 }
 
 func (a *app) prepareDispatch() {
@@ -2846,6 +2872,10 @@ func (a *app) deliver(name, sender, message string) (queued bool, channelID stri
 	if err != nil {
 		return false, "", err
 	}
+	if a.ownChannels == nil {
+		a.ownChannels = map[string]bool{}
+	}
+	a.ownChannels[channelID] = true
 	a.dispatchNow()
 	record, readErr := a.queue.Record(channelID)
 	if readErr != nil {

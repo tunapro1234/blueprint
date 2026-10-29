@@ -26,6 +26,7 @@ const accountUsage = `usage:
   bp account remove N
   bp account alias N A | bp account alias N --unset
   bp account disable N | bp account enable N
+  bp account role N normal|backup | bp account priority N P
   bp account auto [--once] [--dry-run] [--threshold P] [--json]
   bp account keepalive [--once] [--model M] [--json]
   bp account bind <agent> N|email|alias|default
@@ -42,7 +43,11 @@ profile has its own login, made once with bp account login.
 bp account keepalive shows the plan that keeps every account's five-hour
 window running, staggered by 5h/N; --once sends the minimal prompt to the
 accounts that are due now. The daemon does this when claudeAccounts.keepAlive
-is on.`
+is on.
+
+A backup account is used by auto switching only when every normal account is
+used up, lowest priority first, and auto switching returns to a normal account
+once one has room again; keepalive alternates normal and backup windows.`
 
 // Exit codes of bp account auto --once.
 const (
@@ -100,6 +105,10 @@ func (a *app) account(args []string) error {
 		return a.accountRemove(manager, rest)
 	case "alias":
 		return a.accountAlias(manager, rest)
+	case "role":
+		return a.accountRole(manager, rest)
+	case "priority":
+		return a.accountPriority(manager, rest)
 	case "disable", "enable":
 		return a.accountSetDisabled(manager, command == "disable", rest)
 	case "auto":
@@ -270,6 +279,7 @@ func (a *app) accountStatus(m *claudeacct.Manager, args []string) error {
 		keep = "on (model " + cfg.KeepAliveModel + ")"
 	}
 	fmt.Fprintf(a.out, "keepalive: %s\n", keep)
+	fmt.Fprintf(a.out, "backup accounts: switch order %s, keepalive %t, stagger %s\n", cfg.Backup.SwitchOrder, cfg.Backup.KeepAliveBackups, cfg.Backup.Stagger)
 	return nil
 }
 
@@ -360,6 +370,45 @@ func (a *app) accountAlias(m *claudeacct.Manager, args []string) error {
 	return nil
 }
 
+func (a *app) accountRole(m *claudeacct.Manager, args []string) error {
+	if len(args) != 2 {
+		return errors.New(accountUsage)
+	}
+	n, err := slotNumber(args[0])
+	if err != nil {
+		return err
+	}
+	slot, err := m.SetRole(a.ctx, n, args[1])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "slot %d (%s) is now a %s account\n", slot.Number, slot.Email, slot.RoleName())
+	return nil
+}
+
+func (a *app) accountPriority(m *claudeacct.Manager, args []string) error {
+	if len(args) != 2 {
+		return errors.New(accountUsage)
+	}
+	n, err := slotNumber(args[0])
+	if err != nil {
+		return err
+	}
+	priority, err := strconv.Atoi(args[1])
+	if err != nil {
+		return fmt.Errorf("priority must be a number, got %q", args[1])
+	}
+	slot, err := m.SetPriority(a.ctx, n, priority)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.out, "slot %d (%s) has backup priority %d\n", slot.Number, slot.Email, slot.Priority)
+	if !slot.IsBackup() {
+		fmt.Fprintf(a.out, "note: slot %d is a normal account; priority applies once it is a backup (bp account role %d backup)\n", slot.Number, slot.Number)
+	}
+	return nil
+}
+
 func (a *app) accountSetDisabled(m *claudeacct.Manager, disabled bool, args []string) error {
 	if len(args) != 1 {
 		return errors.New(accountUsage)
@@ -389,7 +438,7 @@ func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
 		return errors.New(accountUsage)
 	}
 	cfg := a.config.ClaudeAccounts
-	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer}
+	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer, BackupOrder: cfg.Backup.SwitchOrder}
 	if text, ok := flags["--threshold"]; ok {
 		value, err := strconv.ParseFloat(strings.TrimSuffix(text, "%"), 64)
 		if err != nil || value <= 0 || value > 100 {
@@ -474,7 +523,9 @@ func (a *app) accountKeepAlive(m *claudeacct.Manager, args []string) error {
 	if len(positional) > 0 {
 		return errors.New(accountUsage)
 	}
-	opts := claudeacct.KeepAliveOptions{Model: a.config.ClaudeAccounts.KeepAliveModel, DryRun: flags["--once"] == ""}
+	backup := a.config.ClaudeAccounts.Backup
+	opts := claudeacct.KeepAliveOptions{Model: a.config.ClaudeAccounts.KeepAliveModel, DryRun: flags["--once"] == "",
+		SkipBackups: !backup.KeepAliveBackups, FlatStagger: backup.Stagger == "flat"}
 	if model, ok := flags["--model"]; ok {
 		if strings.TrimSpace(model) == "" || strings.HasPrefix(model, "-") {
 			return fmt.Errorf("invalid --model %q", model)
@@ -509,6 +560,7 @@ func (a *app) printKeepAlive(result claudeacct.KeepAliveResult, dryRun bool) {
 		if s.Alias != "" {
 			name = s.Alias + " (" + s.Email + ")"
 		}
+		name += " [" + s.Role + "]"
 		var window string
 		switch {
 		case !s.Known:

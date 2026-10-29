@@ -103,6 +103,21 @@ type ClaudeAccountsConfig struct {
 	// drains the account whose five-hour window resets soonest; "room" picks
 	// the account with the most room left under its limit.
 	SwitchPrefer string `json:"switchPrefer" yaml:"switchPrefer"`
+	// Backup controls backup accounts (bp account role N backup).
+	Backup ClaudeAccountsBackup `json:"backup" yaml:"backup"`
+}
+
+// ClaudeAccountsBackup controls how backup accounts are used.
+type ClaudeAccountsBackup struct {
+	// KeepAliveBackups keeps backup accounts' five-hour windows running too.
+	KeepAliveBackups bool `json:"keepAliveBackups" yaml:"keepAliveBackups"`
+	// Stagger is "interleave" (keepalive windows alternate normal and backup
+	// accounts) or "flat" (one grid regardless of role).
+	Stagger string `json:"stagger" yaml:"stagger"`
+	// SwitchOrder is "after-normals" (a backup only when every normal account
+	// is used up) or "interleave" (the next backup whenever the active normal
+	// account is used up: A1 B1 A2 B2 ...).
+	SwitchOrder string `json:"switchOrder" yaml:"switchOrder"`
 }
 
 // LimitPercents returns Limits as percentages for the account policy, or nil
@@ -120,7 +135,8 @@ func (c ClaudeAccountsConfig) LimitPercents() map[string]float64 {
 
 // DefaultClaudeAccounts is the claudeAccounts block used when none is set.
 func DefaultClaudeAccounts() ClaudeAccountsConfig {
-	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku", SwitchPrefer: "soonest-reset"}
+	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku", SwitchPrefer: "soonest-reset",
+		Backup: ClaudeAccountsBackup{KeepAliveBackups: true, Stagger: "interleave", SwitchOrder: "after-normals"}}
 }
 
 // BarConfig controls which metrics appear in the tmux status bar and their order.
@@ -230,6 +246,11 @@ type claudeAccountsOverrides struct {
 	KeepAlive       *bool           `json:"keepAlive" yaml:"keepAlive"`
 	KeepAliveModel  *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
 	SwitchPrefer    *string         `json:"switchPrefer" yaml:"switchPrefer"`
+	Backup          *struct {
+		KeepAliveBackups *bool   `json:"keepAliveBackups" yaml:"keepAliveBackups"`
+		Stagger          *string `json:"stagger" yaml:"stagger"`
+		SwitchOrder      *string `json:"switchOrder" yaml:"switchOrder"`
+	} `json:"backup" yaml:"backup"`
 }
 
 type lifecycleOverrides struct {
@@ -613,6 +634,17 @@ func apply(result *Config, values overrides) {
 		if accounts.SwitchPrefer != nil {
 			result.ClaudeAccounts.SwitchPrefer = *accounts.SwitchPrefer
 		}
+		if backup := accounts.Backup; backup != nil {
+			if backup.KeepAliveBackups != nil {
+				result.ClaudeAccounts.Backup.KeepAliveBackups = *backup.KeepAliveBackups
+			}
+			if backup.Stagger != nil {
+				result.ClaudeAccounts.Backup.Stagger = *backup.Stagger
+			}
+			if backup.SwitchOrder != nil {
+				result.ClaudeAccounts.Backup.SwitchOrder = *backup.SwitchOrder
+			}
+		}
 	}
 	if values.Windows != nil {
 		result.Windows = *values.Windows
@@ -647,6 +679,16 @@ func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 	case "", "room", "soonest-reset":
 	default:
 		return fmt.Errorf("switchPrefer must be \"room\" or \"soonest-reset\"")
+	}
+	switch value.Backup.Stagger {
+	case "", "interleave", "flat":
+	default:
+		return fmt.Errorf("backup.stagger must be \"interleave\" or \"flat\"")
+	}
+	switch value.Backup.SwitchOrder {
+	case "", "after-normals", "interleave":
+	default:
+		return fmt.Errorf("backup.switchOrder must be \"after-normals\" or \"interleave\"")
 	}
 	return nil
 }

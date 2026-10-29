@@ -45,7 +45,7 @@ func assertSpaced(t *testing.T, plan phasePlan, n int) {
 
 func TestPlanPhasesFourIdleAccountsStepOneFifteen(t *testing.T) {
 	now := time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC)
-	plan := planPhases([]keepMember{{4, now, true}, {2, now, true}, {1, now, true}, {3, now, true}})
+	plan := planPhases([]keepMember{{4, now, true, false}, {2, now, true, false}, {1, now, true, false}, {3, now, true, false}})
 	if plan.step != 75*time.Minute {
 		t.Fatalf("step %v", plan.step)
 	}
@@ -58,7 +58,7 @@ func TestPlanPhasesFourIdleAccountsStepOneFifteen(t *testing.T) {
 	}
 	assertSpaced(t, plan, 4)
 
-	two := planPhases([]keepMember{{1, now, true}, {2, now, true}})
+	two := planPhases([]keepMember{{1, now, true, false}, {2, now, true, false}})
 	if two.step != 150*time.Minute || offsets(two, now)[2] != 150*time.Minute {
 		t.Fatalf("two accounts: %v", offsets(two, now))
 	}
@@ -69,7 +69,7 @@ func TestPlanPhasesKeepsStaggeredWindows(t *testing.T) {
 	ready := []time.Duration{10 * time.Minute, 85 * time.Minute, 160 * time.Minute, 235 * time.Minute}
 	var members []keepMember
 	for i, r := range ready {
-		members = append(members, keepMember{i + 1, now.Add(r), true})
+		members = append(members, keepMember{i + 1, now.Add(r), true, false})
 	}
 	plan := planPhases(members)
 	if plan.idle != 0 {
@@ -93,10 +93,10 @@ func TestPlanPhasesKeepsStaggeredWindows(t *testing.T) {
 func TestPlanPhasesLiveLikeState(t *testing.T) {
 	now := time.Date(2030, 1, 1, 19, 52, 0, 0, time.UTC)
 	members := []keepMember{
-		{1, now.Add(4*time.Hour + 8*time.Minute), true},
-		{2, now, true},
-		{3, now.Add(4*time.Hour + 48*time.Minute), true},
-		{4, now, true},
+		{1, now.Add(4*time.Hour + 8*time.Minute), true, false},
+		{2, now, true, false},
+		{3, now.Add(4*time.Hour + 48*time.Minute), true, false},
+		{4, now, true, false},
 	}
 	plan := planPhases(members)
 	assertSpaced(t, plan, 4)
@@ -114,7 +114,7 @@ func TestPlanPhasesLiveLikeState(t *testing.T) {
 
 func TestPlanPhasesUnknownMembersTakeLeftoverPositions(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	plan := planPhases([]keepMember{{1, now, true}, {2, now, false}, {3, now.Add(100 * time.Minute), true}})
+	plan := planPhases([]keepMember{{1, now, true, false}, {2, now, false, false}, {3, now.Add(100 * time.Minute), true, false}})
 	if plan.idle != 0 {
 		t.Fatalf("idle %v", plan.idle)
 	}
@@ -122,7 +122,7 @@ func TestPlanPhasesUnknownMembersTakeLeftoverPositions(t *testing.T) {
 	if len(plan.start) != 3 {
 		t.Fatalf("unknown member has no position: %v", plan.start)
 	}
-	if empty := planPhases([]keepMember{{1, now, false}}); len(empty.start) != 0 {
+	if empty := planPhases([]keepMember{{1, now, false, false}}); len(empty.start) != 0 {
 		t.Fatalf("all-unknown plan should be empty: %v", empty.start)
 	}
 }
@@ -142,7 +142,7 @@ func TestPlanPhasesRotationMatchesBruteForce(t *testing.T) {
 			if rng.Intn(3) > 0 {
 				ready = now.Add(time.Duration(rng.Int63n(int64(KeepAlivePeriod))))
 			}
-			members = append(members, keepMember{i + 1, ready, !withUnknown || rng.Intn(4) > 0})
+			members = append(members, keepMember{i + 1, ready, !withUnknown || rng.Intn(4) > 0, false})
 		}
 		for _, m := range members {
 			if !m.known {
@@ -527,7 +527,7 @@ func TestPlanPhasesSimulatedDay(t *testing.T) {
 			if now.Before(resets[slot]) {
 				ready = resets[slot]
 			}
-			members = append(members, keepMember{slot, ready, true})
+			members = append(members, keepMember{slot, ready, true, false})
 		}
 		plan := planPhases(members)
 		for slot := 1; slot <= 4; slot++ {
@@ -566,7 +566,7 @@ func TestPlanPhasesSimulatedDay(t *testing.T) {
 
 func TestPlanKeepsPreviousGridWhileNearlyAsGood(t *testing.T) {
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	members := []keepMember{{1, now, true}, {2, now.Add(2*time.Hour + 20*time.Minute), true}}
+	members := []keepMember{{1, now, true, false}, {2, now.Add(2*time.Hour + 20*time.Minute), true, false}}
 	best := planPhasesNear(members, time.Time{})
 	if best.idle != 10*time.Minute || !best.anchor.Equal(now) {
 		t.Fatalf("best = idle %s anchor %s", best.idle, best.anchor)

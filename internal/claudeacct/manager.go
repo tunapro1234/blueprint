@@ -262,6 +262,31 @@ func (m *Manager) SetAlias(ctx context.Context, n int, alias string) (Slot, erro
 	})
 }
 
+// SetRole marks slot n as a normal or backup account (see RoleBackup).
+func (m *Manager) SetRole(ctx context.Context, n int, role string) (Slot, error) {
+	if !ValidRole(role) {
+		return Slot{}, fmt.Errorf("role must be %s or %s", RoleNormal, RoleBackup)
+	}
+	return m.mutateSlot(ctx, n, func(_ *Accounts, slot *Slot, _ *liveLogin) error {
+		slot.Role = ""
+		if role == RoleBackup {
+			slot.Role = RoleBackup
+		}
+		return nil
+	})
+}
+
+// SetPriority sets slot n's backup priority (lower is used first).
+func (m *Manager) SetPriority(ctx context.Context, n int, priority int) (Slot, error) {
+	if priority < 0 {
+		return Slot{}, fmt.Errorf("priority must be 0 or more")
+	}
+	return m.mutateSlot(ctx, n, func(_ *Accounts, slot *Slot, _ *liveLogin) error {
+		slot.Priority = priority
+		return nil
+	})
+}
+
 // SetDisabled disables or enables slot n for switching.
 func (m *Manager) SetDisabled(ctx context.Context, n int, disabled bool) (Slot, error) {
 	return m.mutateSlot(ctx, n, func(_ *Accounts, slot *Slot, _ *liveLogin) error {

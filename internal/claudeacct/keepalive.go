@@ -63,6 +63,10 @@ type keepMember struct {
 	// known is false when the account's five-hour window is unknown; it
 	// takes whichever position is left and costs nothing.
 	known bool
+	// backup marks a backup account: the plan alternates normal and backup
+	// windows around the cycle (see alternatingRoles), so a used-up normal
+	// account always has a backup with a fresh window close by.
+	backup bool
 }
 
 // phasePlan assigns each account the start of its next window.
@@ -168,7 +172,14 @@ func bestAssignment(members []keepMember, anchor time.Time, step time.Duration) 
 	}
 	best := time.Duration(-1)
 	var bestAssign []int
+	roles := make([]bool, len(members))
 	permute(positions, 0, func(p []int) {
+		for i, position := range p {
+			roles[position] = members[i].backup
+		}
+		if !alternatingRoles(roles) {
+			return
+		}
 		var total time.Duration
 		for i, position := range p {
 			total += positionCost(members[i], anchor, step, position)
@@ -182,7 +193,7 @@ func bestAssignment(members []keepMember, anchor time.Time, step time.Duration) 
 
 // rotatedAssignment keeps the order in which members become ready (after
 // the anchor) and tries each rotation of it, for counts too large to try
-// every assignment.
+// every assignment. It does not alternate normal and backup windows.
 func rotatedAssignment(members []keepMember, anchor time.Time, step time.Duration) ([]int, time.Duration) {
 	n := len(members)
 	order := make([]int, n)
@@ -417,6 +428,12 @@ type KeepAliveOptions struct {
 	Model string
 	// DryRun plans without pinging.
 	DryRun bool
+	// SkipBackups leaves backup accounts out of keepalive: they are not
+	// planned or pinged.
+	SkipBackups bool
+	// FlatStagger plans every account on one grid regardless of role, instead
+	// of alternating normal and backup windows.
+	FlatStagger bool
 }
 
 // KeepAliveSlotView is one account in a keepalive pass.
@@ -424,6 +441,7 @@ type KeepAliveSlotView struct {
 	Slot  int    `json:"slot"`
 	Email string `json:"email"`
 	Alias string `json:"alias,omitempty"`
+	Role  string `json:"role"`
 	// Known is false while the account's five-hour window is unknown.
 	Known    bool      `json:"known"`
 	Active   bool      `json:"active"`
@@ -571,11 +589,14 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 	if err != nil {
 		return KeepAliveResult{}, nil, KeepAliveState{}, err
 	}
-	result := buildKeepAlive(accounts, state, m.now())
+	result := buildKeepAlive(accounts, state, m.now(), opts)
 	if !opts.DryRun {
 		var stale []int
 		for _, view := range result.Slots {
 			pingable := view.Due && view.Skipped == ""
+			if opts.SkipBackups && view.Role == RoleBackup {
+				continue
+			}
 			if (pingable || !view.Known) && accounts.Slot(view.Slot).LastUsage.due(m.now(), keepAliveFresh) {
 				stale = append(stale, view.Slot)
 			}
@@ -585,7 +606,7 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 			if err := m.Store.Save(accounts); err != nil {
 				return result, nil, state, err
 			}
-			result = buildKeepAlive(accounts, state, m.now())
+			result = buildKeepAlive(accounts, state, m.now(), opts)
 		}
 	}
 	if opts.DryRun {
@@ -623,10 +644,10 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 
 // buildKeepAlive plans the usable accounts' next windows at now and marks
 // which are due for a ping.
-func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time) KeepAliveResult {
+func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time, opts KeepAliveOptions) KeepAliveResult {
 	var members []keepMember
 	for _, s := range accounts.Slots {
-		if !s.Usable() {
+		if !s.Usable() || opts.SkipBackups && s.IsBackup() {
 			continue
 		}
 		known, _, resetsAt := windowState(s, now)
@@ -634,7 +655,7 @@ func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time) Kee
 		if !resetsAt.IsZero() {
 			ready = resetsAt
 		}
-		members = append(members, keepMember{slot: s.Number, ready: ready, known: known})
+		members = append(members, keepMember{slot: s.Number, ready: ready, known: known, backup: s.IsBackup() && !opts.FlatStagger})
 	}
 	plan := planPhasesNear(members, state.Anchor)
 	result := KeepAliveResult{Step: plan.step, Anchor: plan.anchor, Idle: plan.idle}
@@ -644,7 +665,7 @@ func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time) Kee
 		}
 		known, active, resetsAt := windowState(s, now)
 		past := state.peek(s.Number)
-		view := KeepAliveSlotView{Slot: s.Number, Email: s.Email, Alias: s.Alias, Known: known, Active: active, ResetsAt: resetsAt,
+		view := KeepAliveSlotView{Slot: s.Number, Email: s.Email, Alias: s.Alias, Role: s.RoleName(), Known: known, Active: active, ResetsAt: resetsAt,
 			NextStart: plan.start[s.Number], LastPingAt: past.LastPingAt, Error: past.Error}
 		if active && past.Error != "" && !past.LastPingAt.After(resetsAt.Add(-KeepAlivePeriod)) {
 			// A failure from before the running window started is history,
@@ -652,6 +673,8 @@ func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time) Kee
 			view.Error = ""
 		}
 		switch {
+		case opts.SkipBackups && s.IsBackup():
+			view.Skipped = "backup account; keepalive for backups is off"
 		case !known:
 			view.Skipped = "five-hour window unknown until its usage is fetched"
 		case active:

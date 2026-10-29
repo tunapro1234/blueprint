@@ -10,6 +10,16 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- Backup Claude accounts: `bp account role N normal|backup` and
+  `bp account priority N P` (lower first); `bp account list` and the
+  keepalive plan show the role. Auto switching ignores backups while the
+  active normal account has room. `claudeAccounts.backup.switchOrder`
+  picks when a backup is used: `after-normals` (default; only when every
+  normal account is used up) or `interleave` (A1 B1 A2 B2 ...). On a
+  backup, auto switching returns to a normal account once a used-up one
+  has reset. `backup.stagger: interleave` (default) alternates normal and
+  backup keepalive windows; `backup.keepAliveBackups: false` leaves backups
+  out of keepalive.
 - `bp remote --off [--wait <duration>] [<agent>...]` turns Remote Control off
   in Claude sessions (every live one when no name is given). It opens the
   /remote-control menu, selects "Disconnect this session" and confirms the

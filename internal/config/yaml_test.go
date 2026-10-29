@@ -234,6 +234,8 @@ func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 		"claudeAccounts:\n  keepAliveModel: \"\"\n",
 		"claudeAccounts:\n  keepAliveModel: --bare\n",
 		"claudeAccounts:\n  switchPrefer: sooner\n",
+		"claudeAccounts:\n  backup:\n    stagger: zigzag\n",
+		"claudeAccounts:\n  backup:\n    switchOrder: first\n",
 	} {
 		if _, err := yamlConfig(t, "config.yaml", bad); err == nil {
 			t.Fatalf("accepted %q", bad)
@@ -241,6 +243,13 @@ func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 	}
 	if c, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  switchPrefer: room\n"); err != nil || c.ClaudeAccounts.SwitchPrefer != "room" {
 		t.Fatalf("switchPrefer override=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	if b := DefaultClaudeAccounts().Backup; !b.KeepAliveBackups || b.Stagger != "interleave" || b.SwitchOrder != "after-normals" {
+		t.Fatalf("default backup=%+v", b)
+	}
+	if c, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  backup:\n    switchOrder: interleave\n    keepAliveBackups: false\n"); err != nil ||
+		c.ClaudeAccounts.Backup != (ClaudeAccountsBackup{KeepAliveBackups: false, Stagger: "interleave", SwitchOrder: "interleave"}) {
+		t.Fatalf("backup override=%+v err=%v", c.ClaudeAccounts.Backup, err)
 	}
 	if DefaultClaudeAccounts().SwitchPrefer != "soonest-reset" {
 		t.Fatalf("default switchPrefer=%q", DefaultClaudeAccounts().SwitchPrefer)

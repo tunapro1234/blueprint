@@ -141,6 +141,10 @@ claudeAccounts:
     shared: 40
   keepAlive: false      # keep every account's five-hour window running
   keepAliveModel: haiku # model of the minimal keepalive prompt
+  backup:               # accounts marked with bp account role N backup
+    switchOrder: after-normals # or interleave
+    stagger: interleave        # or flat
+    keepAliveBackups: true     # keepalive pings backup accounts too
 ```
 
 When enabled, the daemon runs one pass a minute and fetches usage for at most
@@ -161,6 +165,18 @@ target above that. A slot number key wins over an alias, an alias over an
 email. Limits govern switching only; an agent bound to an account's profile
 keeps using it.
 
+Accounts are normal unless marked `bp account role N backup`; `bp account
+priority N P` orders backups (lower first) and `bp account list` shows both.
+While the active normal account has room, auto switching ignores backups. When
+it is used up, `switchOrder: after-normals` moves to another normal account and
+takes a backup, by priority, only when every normal account is used up (A1 A2
+A3 B1 B2 B3); `interleave` takes the next backup first (A1 B1 A2 B2 A3 B3). On a
+backup it returns to a normal account as soon as one whose window was used up
+has reset (with `after-normals`, any normal account with room), after
+`cooldownMinutes`; when the backup is used up it moves to the next normal
+account with room, else the next backup. Manual `bp account switch` may pick
+any account.
+
 A Claude five-hour window starts with the first request after the previous one
 ran out. With `keepAlive` on, each pass also sends a one-word prompt
 (`claude -p` with `keepAliveModel`, no tools, no session saved, in a private
@@ -172,7 +188,11 @@ the windows idle the least, so under heavy use another account resets within
 failed prompt is retried after 2 minutes, backing off to 30. The live account
 is prompted with the live token and is never refreshed by bp; stored accounts
 are refreshed like a switch would. `bp account keepalive` shows the plan and
-`--once` runs one pass by hand. Keepalive runs whether or not `autoSwitch` is
+`--once` runs one pass by hand. With backup accounts and `backup.stagger:
+interleave` the plan alternates normal and backup windows around the cycle, so a
+used-up normal account always has a backup with a fresh window close by;
+`backup.keepAliveBackups: false` leaves backups out of keepalive. Keepalive runs
+whether or not `autoSwitch` is
 on.
 
 ## Turning off new Codex sessions
@@ -223,7 +243,7 @@ windows:
 | `codex.sockets` | Read-only Codex app-server observation sockets |
 | `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
-| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel` | Claude account auto-switching, per-account caps and keepalive (see above) |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, backup accounts and keepalive (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

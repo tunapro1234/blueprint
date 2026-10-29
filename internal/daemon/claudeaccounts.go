@@ -59,10 +59,11 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 		},
 		options: claudeacct.AutoOptions{
 			Policy: claudeacct.AutoPolicy{
-				Threshold: float64(accounts.Threshold),
-				Cooldown:  time.Duration(accounts.CooldownMinutes) * time.Minute,
-				Limits:    accounts.LimitPercents(),
-				Prefer:    accounts.SwitchPrefer,
+				Threshold:   float64(accounts.Threshold),
+				Cooldown:    time.Duration(accounts.CooldownMinutes) * time.Minute,
+				Limits:      accounts.LimitPercents(),
+				Prefer:      accounts.SwitchPrefer,
+				BackupOrder: accounts.Backup.SwitchOrder,
 			},
 			PollEvery: time.Duration(accounts.PollMinutes) * time.Minute,
 			MaxPolls:  1,
@@ -74,7 +75,8 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 		keepErrors: map[int]quietError{},
 	}
 	if accounts.KeepAlive {
-		auto.keepAlive = &claudeacct.KeepAliveOptions{Model: accounts.KeepAliveModel}
+		auto.keepAlive = &claudeacct.KeepAliveOptions{Model: accounts.KeepAliveModel,
+			SkipBackups: !accounts.Backup.KeepAliveBackups, FlatStagger: accounts.Backup.Stagger == "flat"}
 	}
 	return auto
 }

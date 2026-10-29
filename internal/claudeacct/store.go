@@ -17,17 +17,21 @@ import (
 // slots/<n>/credentials.json and the identity object in
 // slots/<n>/oauthAccount.json.
 type Slot struct {
-	Number      int         `json:"number"`
-	Email       string      `json:"email"`
-	AccountUUID string      `json:"accountUuid"`
-	OrgUUID     string      `json:"orgUuid"`
-	OrgName     string      `json:"orgName,omitempty"`
-	Alias       string      `json:"alias,omitempty"`
-	Disabled    bool        `json:"disabled,omitempty"`
-	Dead        bool        `json:"dead,omitempty"`
-	DeadReason  string      `json:"deadReason,omitempty"`
-	AddedAt     time.Time   `json:"addedAt"`
-	LastUsage   *UsageCache `json:"lastUsage,omitempty"`
+	Number      int    `json:"number"`
+	Email       string `json:"email"`
+	AccountUUID string `json:"accountUuid"`
+	OrgUUID     string `json:"orgUuid"`
+	OrgName     string `json:"orgName,omitempty"`
+	Alias       string `json:"alias,omitempty"`
+	// Role is RoleBackup for a backup account; empty means normal.
+	Role string `json:"role,omitempty"`
+	// Priority orders backup accounts for auto switching, lower first.
+	Priority   int         `json:"priority,omitempty"`
+	Disabled   bool        `json:"disabled,omitempty"`
+	Dead       bool        `json:"dead,omitempty"`
+	DeadReason string      `json:"deadReason,omitempty"`
+	AddedAt    time.Time   `json:"addedAt"`
+	LastUsage  *UsageCache `json:"lastUsage,omitempty"`
 }
 
 // Identity returns the slot's account identity.
@@ -100,6 +104,11 @@ type AutoState struct {
 	LastFrom      int       `json:"lastFrom,omitempty"`
 	LastTo        int       `json:"lastTo,omitempty"`
 	CooldownUntil time.Time `json:"cooldownUntil,omitempty"`
+	// UsedUp records, per normal slot number, the five-hour reset of the
+	// window in which auto switching last saw it used up as the active
+	// account. The interleave switch order returns to such an account once
+	// that reset has passed.
+	UsedUp map[string]time.Time `json:"usedUp,omitempty"`
 }
 
 // Store is <stateDir>/claude-accounts.

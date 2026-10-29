@@ -38,6 +38,9 @@ type AutoPolicy struct {
 	// account whose five-hour window resets soonest; any other value (the
 	// default) picks the account with the most room left under its limit.
 	Prefer string
+	// BackupOrder is when backup accounts are used: SwitchOrderAfterNormals
+	// (the default) or SwitchOrderInterleave. See decideWithRoles.
+	BackupOrder string
 }
 
 // LimitFor is the utilization at which a slot counts as used up: the
@@ -89,6 +92,9 @@ type Decision struct {
 	ActiveMax   float64 `json:"activeMax,omitempty"`
 	ActiveLimit float64 `json:"activeLimit,omitempty"`
 	TargetMax   float64 `json:"targetMax,omitempty"`
+	// candidates, when set, are the switch targets best first; otherwise
+	// candidatesFor ranks them by the policy.
+	candidates []int
 }
 
 // Decide is the pure auto-switch decision table. Each account is measured
@@ -117,6 +123,9 @@ func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, 
 	}
 	limit := policy.LimitFor(*current)
 	d := Decision{From: active, ActiveMax: activeMax, ActiveLimit: limit}
+	if hasBackups(accounts) {
+		return decideWithRoles(accounts, active, *current, activeMax, limit, state, policy, now, d)
+	}
 	if policy.Prefer == StrategySoonestReset {
 		return decideSoonestReset(accounts, active, *current, activeMax, limit, state, policy, now, d)
 	}
@@ -283,6 +292,9 @@ func resetText(reset, now time.Time) string {
 
 // candidatesFor lists auto targets best first (the decision's pick first).
 func candidatesFor(accounts *Accounts, d Decision, policy AutoPolicy, now time.Time) []int {
+	if d.candidates != nil {
+		return d.candidates
+	}
 	var targets []rankedTarget
 	if policy.Prefer == StrategySoonestReset {
 		targets = soonestTargets(accounts, d.From, policy, now)
@@ -354,6 +366,11 @@ func (m *Manager) AutoOnce(ctx context.Context, opts AutoOptions) (AutoResult, e
 		}
 	}
 	now := m.now()
+	if !opts.DryRun && recordUsedUp(&state, accounts, active, opts.Policy, now) {
+		if err := m.Store.SaveAutoState(state); err != nil {
+			return result, err
+		}
+	}
 	result.Decision = Decide(accounts, active, state, opts.Policy, now)
 	if result.Decision.Action != AutoSwitch || opts.DryRun {
 		return result, nil

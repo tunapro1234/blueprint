@@ -408,7 +408,9 @@ func (m *Manager) activate(ctx context.Context, accounts *Accounts, n int, coold
 	if current != nil {
 		from = current.Number
 	}
-	_ = m.Store.SaveAutoState(AutoState{LastSwitchAt: now.UTC(), LastFrom: from, LastTo: n, CooldownUntil: now.Add(cooldown).UTC()})
+	state, _ := m.Store.LoadAutoState()
+	state.LastSwitchAt, state.LastFrom, state.LastTo, state.CooldownUntil = now.UTC(), from, n, now.Add(cooldown).UTC()
+	_ = m.Store.SaveAutoState(state)
 	result.To = *target
 	return result, nil
 }

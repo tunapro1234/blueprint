@@ -43,10 +43,14 @@ const (
 	keepAliveSlack = 30 * time.Second
 	// keepAliveSettle is how long a successful ping holds off another one
 	// while the usage endpoint catches up with the new window.
-	keepAliveSettle  = 10 * time.Minute
-	keepAliveRetry   = 2 * time.Minute
-	keepAliveMaxGap  = 30 * time.Minute
-	keepAliveTimeout = 2 * time.Minute
+	keepAliveSettle = 10 * time.Minute
+	// keepAliveConfirmSlack is how far before a full period after the ping a
+	// window may end and still count as the one the ping started: the usage
+	// endpoint rounds resets_at down (a 07:05 ping showed a 12:00 reset).
+	keepAliveConfirmSlack = time.Hour
+	keepAliveRetry        = 2 * time.Minute
+	keepAliveMaxGap       = 30 * time.Minute
+	keepAliveTimeout      = 2 * time.Minute
 	// keepAliveFresh is the oldest usage a ping is decided on.
 	keepAliveFresh = 2 * time.Minute
 	// keepAliveBruteForce is the largest account count whose plan is found
@@ -262,6 +266,9 @@ type KeepAliveSlot struct {
 	// HoldUntil keeps the account from being pinged again: after a ping
 	// while usage catches up, after a failure until the retry.
 	HoldUntil time.Time `json:"holdUntil,omitempty"`
+	// Unconfirmed marks an answered ping whose window usage did not show
+	// yet; it is judged once the hold has passed (settleKeepAlive).
+	Unconfirmed bool `json:"unconfirmed,omitempty"`
 }
 
 func (s *KeepAliveState) slot(n int) *KeepAliveSlot {
@@ -290,6 +297,48 @@ func (k *KeepAliveSlot) failed(now time.Time, reason string) {
 		wait = keepAliveMaxGap
 	}
 	k.HoldUntil = now.Add(wait)
+}
+
+// startedBy reports whether a window resetting at resetsAt is the one a
+// ping at pingAt started.
+func startedBy(resetsAt, pingAt time.Time) bool {
+	return !pingAt.IsZero() && resetsAt.After(pingAt.Add(KeepAlivePeriod-keepAliveConfirmSlack))
+}
+
+// settleKeepAlive judges answered pings whose window usage had not shown
+// right after them. The usage endpoint lags a fresh window by minutes, so
+// that check is made once the hold has passed: a window ending about a
+// period after the ping confirms it (clearing any failures), a known usage
+// with no such window is a failure. A recorded failure is also cleared when
+// the running window turns out to be the pinged one. It reports whether
+// state changed.
+func settleKeepAlive(state *KeepAliveState, accounts *Accounts, now time.Time) bool {
+	changed := false
+	for key, entry := range state.Slots {
+		if entry == nil || !entry.Unconfirmed && entry.Error == "" || now.Before(entry.HoldUntil) {
+			continue
+		}
+		n, err := strconv.Atoi(key)
+		if err != nil {
+			continue
+		}
+		slot := accounts.Slot(n)
+		if slot == nil {
+			continue
+		}
+		known, active, resetsAt := windowState(*slot, now)
+		switch {
+		case active && startedBy(resetsAt, entry.LastPingAt):
+			entry.Error, entry.Failures, entry.Unconfirmed = "", 0, false
+		case entry.Unconfirmed && known:
+			entry.Unconfirmed = false
+			entry.failed(now, "the prompt was answered but no five-hour window started")
+		default:
+			continue
+		}
+		changed = true
+	}
+	return changed
 }
 
 func (s *Store) keepAliveStateFile() string { return filepath.Join(s.root, "keepalive-state.json") }
@@ -547,18 +596,14 @@ func (m *Manager) KeepAliveOnce(ctx context.Context, opts KeepAliveOptions) (Kee
 		}
 		known, active, resetsAt := windowState(*slot, now)
 		view.Known, view.Active, view.ResetsAt = known, active, resetsAt
-		if active {
+		if active && startedBy(resetsAt, now) {
 			view.Started = true
-			entry.Error, entry.Failures, entry.HoldUntil = "", 0, now.Add(keepAliveSettle)
+			entry.Error, entry.Failures, entry.Unconfirmed, entry.HoldUntil = "", 0, false, now.Add(keepAliveSettle)
 			continue
 		}
-		if cache := slot.LastUsage; cache != nil && cache.Error != "" && !cache.AttemptAt.Before(now.Add(-time.Minute)) {
-			// The window may well have started; usage could not say.
-			entry.Error, entry.HoldUntil = "", now.Add(keepAliveSettle)
-			continue
-		}
-		entry.failed(now, "the prompt was answered but no five-hour window started")
-		view.Error = entry.Error
+		// The usage endpoint shows a fresh window only minutes later (or
+		// could not be read): the window is judged once the hold has passed.
+		entry.Error, entry.Unconfirmed, entry.HoldUntil = "", true, now.Add(keepAliveSettle)
 	}
 	if err := m.Store.SaveKeepAliveState(state); err != nil {
 		return result, err
@@ -611,6 +656,12 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 	}
 	if opts.DryRun {
 		return result, nil, state, nil
+	}
+	if settleKeepAlive(&state, accounts, m.now()) {
+		if err := m.Store.SaveKeepAliveState(state); err != nil {
+			return result, nil, state, err
+		}
+		result = buildKeepAlive(accounts, state, m.now(), opts)
 	}
 	if !result.Anchor.IsZero() && !result.Anchor.Equal(state.Anchor) {
 		state.Anchor = result.Anchor

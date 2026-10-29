@@ -408,8 +408,69 @@ func TestKeepAliveAnsweredWithoutWindowIsAnError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rec.tokens) != 1 || !strings.Contains(result.Slots[1].Error, "no five-hour window") {
-		t.Fatalf("view %+v", result.Slots[1])
+	// Right after the ping usage may not show the window yet: no verdict.
+	state, _ := f.m.Store.LoadKeepAliveState()
+	if entry := state.peek(2); len(rec.tokens) != 1 || result.Slots[1].Error != "" || !entry.Unconfirmed || entry.Failures != 0 {
+		t.Fatalf("view %+v entry %+v", result.Slots[1], entry)
+	}
+	// Past the hold usage still shows no window: now it is a failure.
+	f.now = f.now.Add(keepAliveSettle)
+	if _, err := f.m.KeepAliveOnce(testCtx(t), KeepAliveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = f.m.Store.LoadKeepAliveState()
+	if entry := state.peek(2); entry.Unconfirmed || entry.Failures != 1 || !strings.Contains(entry.Error, "no five-hour window") {
+		t.Fatalf("entry %+v", entry)
+	}
+}
+
+// The usage endpoint shows a fresh window minutes after the ping (29 Oct:
+// every slot logged a failure although its reset was ping+5h). The late
+// window confirms the ping: no failure, no second ping.
+func TestKeepAliveConfirmsWindowThatShowsLate(t *testing.T) {
+	f, rec := keepFixture(t, map[int]time.Duration{1: 75 * time.Minute, 3: 150 * time.Minute, 4: 225 * time.Minute})
+	rec.after = nil
+	if _, err := f.m.KeepAliveOnce(testCtx(t), KeepAliveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pingAt := f.now
+	// The endpoint rounds the reset down (a 07:05 ping showed 12:00).
+	f.api.mu.Lock()
+	f.api.usage[f.account(2).access] = fmt.Sprintf(`{"five_hour":{"utilization":0,"resets_at":%q},"seven_day":null}`, pingAt.Add(KeepAlivePeriod-5*time.Minute).Format(time.RFC3339))
+	f.api.mu.Unlock()
+	f.now = f.now.Add(keepAliveSettle)
+	result, err := f.m.KeepAliveOnce(testCtx(t), KeepAliveOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := f.m.Store.LoadKeepAliveState()
+	if entry := state.peek(2); len(rec.tokens) != 1 || entry.Unconfirmed || entry.Failures != 0 || entry.Error != "" {
+		t.Fatalf("pings %d entry %+v", len(rec.tokens), entry)
+	}
+	for _, view := range result.Slots {
+		if view.Slot == 2 && (!view.Active || view.Error != "") {
+			t.Fatalf("view %+v", view)
+		}
+	}
+}
+
+// Failures recorded by the old immediate check are cleared once the running
+// window proves the last ping started it.
+func TestKeepAliveClearsFailureTheWindowDisproves(t *testing.T) {
+	f, _ := keepFixture(t, map[int]time.Duration{1: KeepAlivePeriod - 5*time.Minute})
+	state := KeepAliveState{}
+	entry := state.slot(1)
+	entry.LastPingAt, entry.Failures, entry.HoldUntil = f.now.Add(-5*time.Minute), 38, f.now.Add(-time.Minute)
+	entry.Error = "the prompt was answered but no five-hour window started"
+	if err := f.m.Store.SaveKeepAliveState(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.KeepAliveOnce(testCtx(t), KeepAliveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = f.m.Store.LoadKeepAliveState()
+	if got := state.peek(1); got.Failures != 0 || got.Error != "" {
+		t.Fatalf("entry %+v", got)
 	}
 }
 

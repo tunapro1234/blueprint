@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"sort"
@@ -16,10 +17,11 @@ import (
 
 	"blueprint/internal/claudeacct"
 	bpconfig "blueprint/internal/config"
+	bptmux "blueprint/internal/tmux"
 )
 
 const accountUsage = `usage:
-  bp account add [--slot N] [--alias A]
+  bp account add [--slot N] [--alias A] [--login EMAIL]
   bp account list [--json] [--refresh]
   bp account status [--json]
   bp account switch [N|email|alias] [--strategy best|next-available|soonest-reset] [--dry-run]
@@ -39,6 +41,11 @@ An agent bound to an account runs in that account's profile home, and so do
 its descendants unless they are bound themselves; "default" stops a parent's
 binding. A binding applies when the agent is next opened or resumed. Each
 profile has its own login, made once with bp account login.
+
+bp account add stores the live Claude login. With --login EMAIL it signs that
+account in through Claude Code's own browser login in a separate home and
+stores it in a new slot; the live login and the active account stay as they
+are.
 
 bp account keepalive shows the plan that keeps every account's five-hour
 window running, staggered by 5h/N; --once sends the minimal prompt to the
@@ -183,7 +190,7 @@ func (a *app) accountJSON(value any) error {
 }
 
 func (a *app) accountAdd(m *claudeacct.Manager, args []string) error {
-	flags, positional, err := accountFlags(args, map[string]bool{"--slot": true, "--alias": true}, nil)
+	flags, positional, err := accountFlags(args, map[string]bool{"--slot": true, "--alias": true, "--login": true}, nil)
 	if err != nil {
 		return err
 	}
@@ -196,6 +203,9 @@ func (a *app) accountAdd(m *claudeacct.Manager, args []string) error {
 			return err
 		}
 	}
+	if email, ok := flags["--login"]; ok {
+		return a.accountAddLogin(m, number, flags["--alias"], email)
+	}
 	result, err := m.Add(a.ctx, number, flags["--alias"])
 	if err != nil {
 		return err
@@ -205,6 +215,50 @@ func (a *app) accountAdd(m *claudeacct.Manager, args []string) error {
 		verb = "updated"
 	}
 	fmt.Fprintf(a.out, "%s the live Claude login as slot %d (%s)\n", verb, result.Slot.Number, result.Slot.Email)
+	return nil
+}
+
+// accountAddLogin signs a new account in with `claude auth login` run in a
+// throwaway config home, so the live login every agent uses is not touched,
+// and stores that login in a slot. The home is removed afterwards: the slot
+// keeps the only copy, as two copies of one refresh token break each other.
+func (a *app) accountAddLogin(m *claudeacct.Manager, number int, alias, email string) error {
+	if !strings.Contains(email, "@") {
+		return fmt.Errorf("--login: %q is not an email address", email)
+	}
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		return errors.New("claude is not on PATH")
+	}
+	dir, err := os.MkdirTemp(m.Store.Root(), "login-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	fmt.Fprintf(a.out, "signing %s in; finish the login in the browser (the live login is not changed)\n", email)
+	cmd := exec.CommandContext(a.ctx, claude, "auth", "login", "--claudeai", "--email", email)
+	env, _ := bptmux.ScrubClaudeSessionEnv(os.Environ())
+	cmd.Env = append(withoutEnv(env, "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"), "CLAUDE_CONFIG_DIR="+dir)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, a.out, a.err
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("claude auth login: %w", err)
+	}
+	signedIn, err := claudeacct.LoginEmail(dir)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(signedIn, email) {
+		return fmt.Errorf("the browser signed in %s, not %s; nothing stored", signedIn, email)
+	}
+	result, err := m.AddFrom(a.ctx, number, alias, dir)
+	if err != nil {
+		return err
+	}
+	verb := "stored"
+	if result.Updated {
+		verb = "updated"
+	}
+	fmt.Fprintf(a.out, "%s %s as slot %d; the active account is unchanged\n", verb, result.Slot.Email, result.Slot.Number)
 	return nil
 }
 

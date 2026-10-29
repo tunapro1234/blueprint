@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,25 @@ func (m *Manager) readLive() (*liveLogin, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readLogin(paths)
+}
+
+// LoginEmail is the email of the login a Claude Code config home holds.
+func LoginEmail(dir string) (string, error) {
+	dir = filepath.Clean(dir)
+	login, err := readLogin(ClaudePaths{ConfigHome: dir, GlobalConfig: filepath.Join(dir, ".claude.json")})
+	if err != nil {
+		return "", err
+	}
+	if login.parsed == nil || !login.hasIdentity {
+		return "", fmt.Errorf("no completed Claude login in %s", dir)
+	}
+	return login.identity.Email, nil
+}
+
+// readLogin reads the Claude Code login kept at paths.
+func readLogin(paths ClaudePaths) (*liveLogin, error) {
+	var err error
 	live := &liveLogin{paths: paths}
 	if live.creds, err = snapshotFile(paths.CredentialsFile()); err != nil {
 		return nil, fmt.Errorf("read Claude credentials: %w", err)
@@ -137,6 +157,20 @@ type AddResult struct {
 // Add captures the current Claude Code login into a slot. The same account
 // and organization as an existing slot updates that slot.
 func (m *Manager) Add(ctx context.Context, number int, alias string) (AddResult, error) {
+	return m.addLogin(ctx, number, alias, "")
+}
+
+// AddFrom stores the login a separate Claude Code config home holds (one
+// `claude auth login` ran in) into a slot. The live login and the active
+// slot are left as they are.
+func (m *Manager) AddFrom(ctx context.Context, number int, alias, dir string) (AddResult, error) {
+	if dir == "" {
+		return AddResult{}, errors.New("no config home to add the login from")
+	}
+	return m.addLogin(ctx, number, alias, dir)
+}
+
+func (m *Manager) addLogin(ctx context.Context, number int, alias, dir string) (AddResult, error) {
 	if number < 0 {
 		return AddResult{}, errors.New("slot number must be positive")
 	}
@@ -149,7 +183,13 @@ func (m *Manager) Add(ctx context.Context, number int, alias string) (AddResult,
 	if err != nil {
 		return AddResult{}, err
 	}
-	live, err := m.readLive()
+	var live *liveLogin
+	if dir == "" {
+		live, err = m.readLive()
+	} else {
+		dir = filepath.Clean(dir)
+		live, err = readLogin(ClaudePaths{ConfigHome: dir, GlobalConfig: filepath.Join(dir, ".claude.json")})
+	}
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -200,7 +240,9 @@ func (m *Manager) Add(ctx context.Context, number int, alias string) (AddResult,
 	if err := m.Store.WriteAccount(slot.Number, live.account); err != nil {
 		return AddResult{}, fmt.Errorf("store slot %d account: %w", slot.Number, err)
 	}
-	accounts.Active = slot.Number
+	if dir == "" {
+		accounts.Active = slot.Number
+	}
 	result := AddResult{Slot: *slot, Updated: updated}
 	if err := m.Store.Save(accounts); err != nil {
 		return AddResult{}, err

@@ -10,6 +10,10 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- `bp account add --login EMAIL [--alias A] [--slot N]` signs a new Claude
+  account in through Claude Code's browser login in a throwaway config home
+  and stores it in a slot, without touching the live login or the active
+  account.
 - Backup Claude accounts: `bp account role N normal|backup` and
   `bp account priority N P` (lower first); `bp account list` and the
   keepalive plan show the role. Auto switching ignores backups while the

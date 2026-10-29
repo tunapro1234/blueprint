@@ -590,3 +590,45 @@ func TestStoreLockSerializes(t *testing.T) {
 	}
 	again()
 }
+
+// bp account add --login: a login made in a separate config home is stored
+// in a new slot while the live login and the active slot stay as they were.
+func TestAddFromSeparateHomeKeepsLiveLogin(t *testing.T) {
+	f := newFixture(t, false)
+	f.addAccounts(2)
+	liveBefore, err := os.ReadFile(f.paths.CredentialsFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	livePaths := f.paths
+	dir := filepath.Join(t.TempDir(), "login")
+	f.paths = ClaudePaths{ConfigHome: dir, GlobalConfig: filepath.Join(dir, ".claude.json")}
+	f.writeLive(f.account(3))
+	f.paths = livePaths
+
+	email, err := LoginEmail(dir)
+	if err != nil || email != f.account(3).email {
+		t.Fatalf("login email %q, %v", email, err)
+	}
+	result, err := f.m.AddFrom(testCtx(t), 0, "mami", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := f.m.Store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Slot.Number != 3 || result.Slot.Alias != "mami" || accounts.Active != 2 {
+		t.Fatalf("slot %d alias %q active %d", result.Slot.Number, result.Slot.Alias, accounts.Active)
+	}
+	if liveAfter, _ := os.ReadFile(f.paths.CredentialsFile()); string(liveAfter) != string(liveBefore) {
+		t.Fatalf("live login changed")
+	}
+	creds, err := f.m.Store.ReadCredentials(3)
+	if err != nil || creds.Tokens().RefreshToken != f.account(3).refresh {
+		t.Fatalf("slot 3 credentials %v", err)
+	}
+	if _, err := LoginEmail(t.TempDir()); err == nil {
+		t.Fatalf("empty home reported a login")
+	}
+}

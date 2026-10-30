@@ -3888,8 +3888,8 @@ func (a *app) whatsapp(args []string) error {
 		agent := who.Label
 		// "wa send probot-main <text>" reads the name as the first word of the
 		// message, and the phone gets "[probot-main] probot-main ...". A
-		// declared or guessed label carries a marker before the name.
-		name := agent[strings.LastIndex(agent, ":")+1:]
+		// declared or guessed label carries a marker around the name.
+		name := strings.TrimSuffix(agent[strings.LastIndex(agent, ":")+1:], identity.InferMark)
 		if !literal && index+1 < len(args) && args[index] == name {
 			return fmt.Errorf("the message starts with your own name %q as a separate word; to choose the chat use --to %s, to send it as text put -- before it", name, name)
 		}

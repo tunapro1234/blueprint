@@ -386,7 +386,14 @@ func runtimeBlockReason(name string, fleet Fleet, state cache.State, force bool)
 	if a.Reason == "" && a.ThreadID != "" && (a.State == "idle" || (force && a.State == "working" && state.Runtime != "hermes")) {
 		return ""
 	}
-	reason := "runtime " + a.State + ": " + a.Reason
+	reason := "runtime " + a.State
+	switch {
+	case a.Reason != "":
+		reason += ": " + a.Reason
+	case a.State == "working":
+		// A plain running turn carries no detail of its own.
+		reason += " (turn in progress)"
+	}
 	if a.RecoveryHint != "" {
 		reason += "; " + a.RecoveryHint
 	}

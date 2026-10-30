@@ -479,3 +479,10 @@ func TestStaleOpenTurnRescuedToIdleOnlyWhenPaneQuiet(t *testing.T) {
 		t.Fatalf("non-stale unknown wrongly rescued: %+v", other)
 	}
 }
+
+func TestRuntimeBlockReasonNamesARunningTurn(t *testing.T) {
+	state := cache.State{Activity: &cache.Activity{State: "working", ThreadID: "t1"}}
+	if got := runtimeBlockReason("agent", Fleet{}, state, false); got != "runtime working (turn in progress)" {
+		t.Fatalf("reason %q", got)
+	}
+}

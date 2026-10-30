@@ -1974,6 +1974,20 @@ func TestWhatsAppSendHelpAndDashParsing(t *testing.T) {
 		}
 	})
 
+	t.Run("own name as the first word is refused, or sent after --", func(t *testing.T) {
+		t.Setenv("TMUX", "")
+		a, outbox := newApp(t)
+		err := a.whatsapp([]string{"send", "--from", "probe-agent", "probe-agent", "done, see the log"})
+		if err == nil || !strings.Contains(err.Error(), "--to probe-agent") {
+			t.Fatalf("error=%v", err)
+		}
+		assertNoOutboxFiles(t, outbox)
+		if err := a.whatsapp([]string{"send", "--from", "probe-agent", "--", "probe-agent", "is back"}); err != nil {
+			t.Fatal(err)
+		}
+		assertQueuedBody(t, outbox, "probe-agent is back")
+	})
+
 	t.Run("double dash lets a message begin with a flag", func(t *testing.T) {
 		a, outbox := newApp(t)
 		if err := a.run([]string{"wa", "send", "--", "--help"}); err != nil {

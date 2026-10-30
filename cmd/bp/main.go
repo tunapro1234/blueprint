@@ -3809,7 +3809,7 @@ func (a *app) whatsapp(args []string) error {
 	case "send":
 		to, reply, from, index := "", "", "", 1
 		var rawMentions []string
-		mentionAll := false
+		mentionAll, literal := false, false
 		for index < len(args) {
 			switch args[index] {
 			case "-h", "--help":
@@ -3817,6 +3817,7 @@ func (a *app) whatsapp(args []string) error {
 				return nil
 			case "--":
 				index++
+				literal = true
 				goto message
 			case "--to":
 				if index+1 >= len(args) {
@@ -3885,6 +3886,13 @@ func (a *app) whatsapp(args []string) error {
 		identityOpts.From = from
 		who := wa.Agent(a.ctx, a.session(), identityOpts)
 		agent := who.Label
+		// "wa send probot-main <text>" reads the name as the first word of the
+		// message, and the phone gets "[probot-main] probot-main ...". A
+		// declared or guessed label carries a marker before the name.
+		name := agent[strings.LastIndex(agent, ":")+1:]
+		if !literal && index+1 < len(args) && args[index] == name {
+			return fmt.Errorf("the message starts with your own name %q as a separate word; to choose the chat use --to %s, to send it as text put -- before it", name, name)
+		}
 		if !who.Certain {
 			// The label is all the attribution a phone gets. Say so on stderr
 			// rather than let a guess pass for a signature.

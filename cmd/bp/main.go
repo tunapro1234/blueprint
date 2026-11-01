@@ -142,6 +142,7 @@ bp mcp [--as <name>]          # MCP server on stdio for any agent harness
 bp api token [--path] | bp api config <client> [--http]
 bp room list|join|post|read|leave   # shared threads: a post reaches every member's queue
 bp board list|get|put|history       # shared versioned key/value state for agents
+bp work project|task|finding|feed|brief|doctor   # tasks with owners, findings with evidence
 bp fed status|ping|token|log [n]
 bp daemon`
 
@@ -363,6 +364,14 @@ func helpRequested(args []string) bool {
 	switch args[0] {
 	case "run", "_session", "_local-worker":
 		return false // remaining flags belong to the wrapped CLI
+	case "work":
+		// After "--" the arguments are a validator's argv.
+		for index, arg := range rest {
+			if arg == "--" {
+				rest = rest[:index]
+				break
+			}
+		}
 	case "msg", "announce":
 		for index, arg := range rest {
 			if !strings.HasPrefix(arg, "-") {
@@ -582,6 +591,8 @@ func (a *app) run(args []string) error {
 		return a.roomCommand(args[1:])
 	case "board":
 		return a.boardCommand(args[1:])
+	case "work":
+		return a.workCommand(args[1:])
 	case "audit":
 		return a.auditCommand(args[1:])
 	case "messages":

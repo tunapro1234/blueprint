@@ -241,7 +241,7 @@ into `dev` changes the live site once the server pulls.
   [launch/product-hunt.md](docs/launch/product-hunt.md)
 - Usage and reference: [README](README.md), [usage.md](docs/usage.md),
   [api.md](docs/api.md), [configuration.md](docs/configuration.md),
-  [p2p.md](docs/p2p.md), [workflow.md](docs/workflow.md),
+  [p2p.md](docs/p2p.md), [workflow.md](docs/workflow.md), [work.md](docs/work.md),
   [windows.md](docs/windows.md)
 - Internals: [DESIGN.md](DESIGN.md),
   [message-delivery.md](docs/message-delivery.md),

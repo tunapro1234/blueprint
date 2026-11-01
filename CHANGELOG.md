@@ -10,6 +10,16 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- The work ledger: `bp work` (CLI), `bp_work_*` (MCP) and `POST /v1/work`
+  (REST). Projects with a lead, roots and pause/stop; tasks with one owner,
+  leases, fencing tokens, explicit recovery, dependencies with cycle
+  detection and attempt budgets; submissions with sha256-hashed artifacts
+  and verification by a different, proven identity (optionally backed by a
+  validator run with the workflow runner); findings and negative results
+  with sources whose change makes them stale; a cursor-based change feed
+  with filters, subscriptions and acks; and a deterministic, bounded brief
+  and doctor. A delivery receipt never verifies work. See docs/work.md.
+- `workflow.RunCommand` exposes the workflow validator runner for reuse.
 - `bp account add --login EMAIL [--alias A] [--slot N]` signs a new Claude
   account in through Claude Code's browser login in a throwaway config home
   and stores it in a slot, without touching the live login or the active

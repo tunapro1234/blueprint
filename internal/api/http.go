@@ -573,6 +573,25 @@ func (s *Server) serveREST(w http.ResponseWriter, r *http.Request, caller Caller
 			expect, _ = strconv.Atoi(v)
 		}
 		reply(s.Core.BoardPut(caller, parts[1], key, body.Value, expect, method == http.MethodDelete))
+	case len(parts) == 1 && parts[0] == "work" && method == http.MethodPost:
+		var body WorkRequest
+		if decodeBody(&body) {
+			reply(s.Core.Work(caller, body))
+		}
+	case len(parts) == 3 && parts[0] == "work" && parts[2] == "brief" && method == http.MethodGet:
+		items, _ := strconv.Atoi(query.Get("items"))
+		reply(s.Core.Work(caller, WorkRequest{Op: "brief", Project: parts[1], Items: items}))
+	case len(parts) == 3 && parts[0] == "work" && parts[2] == "feed" && method == http.MethodGet:
+		limit, _ := strconv.Atoi(query.Get("limit"))
+		req := WorkRequest{Op: "feed", Project: parts[1], After: query.Get("after"), Limit: limit, Summary: query.Get("summary") == "true"}
+		if k := query.Get("kinds"); k != "" {
+			req.Filter.Kinds = strings.Split(k, ",")
+		}
+		if ids := query.Get("ids"); ids != "" {
+			req.Filter.IDs = strings.Split(ids, ",")
+		}
+		req.Filter.Involving = query.Get("involving")
+		reply(s.Core.Work(caller, req))
 	default:
 		writeStatusError(w, http.StatusNotFound, "NOT_FOUND", "no such endpoint", "")
 	}

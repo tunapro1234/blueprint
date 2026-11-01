@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1180,6 +1181,74 @@ class LocalCLITest(unittest.TestCase):
         self.assertTrue(self.alive("codex-test"))
         os.write(fd, b"\x03")
         self.wait_closed("codex-test")
+
+    def test_work_ledger_writes_are_pane_proven_on_real_tmux(self):
+        # bp work writes take the caller from the calling pane, like bp board
+        # put: a stray shell or a forged TMUX_PANE must not act as an agent,
+        # and only a different proven agent can verify a submission.
+        env = {k: v for k, v in self.env.items() if k != "CODEX_THREAD_ID"}
+        work = self.root / "work"
+        work.mkdir()
+        (work / "out.txt").write_text("4\n")
+        tmux = str(self.bin / "tmux")
+        for name in ["lead", "ada", "bob"]:
+            subprocess.run([tmux, "new-session", "-d", "-s", name, "sleep 600"], env=env, check=True)
+        steps = iter(range(1, 100))
+
+        def pane(name, *args):
+            out = self.root / f"work-step-{next(steps)}"
+            command = "cd %s && bp work %s > %s.out 2>&1; echo $? > %s.rc" % (
+                shlex.quote(str(work)), " ".join(shlex.quote(a) for a in args), out, out)
+            subprocess.run([tmux, "new-window", "-d", "-t", "=" + name + ":", command], env=env, check=True)
+            rc = Path(str(out) + ".rc")
+            deadline = time.monotonic() + 10
+            while not (rc.exists() and rc.read_text().strip()):
+                if time.monotonic() > deadline:
+                    self.fail(f"bp work {args} in {name} did not finish")
+                time.sleep(0.05)
+            return int(rc.read_text()), Path(str(out) + ".out").read_text()
+
+        # A process outside every pane with no login name (a daemon, another
+        # tool's subprocess) has no identity at all.
+        anonymous = {k: v for k, v in env.items() if k not in ("USER", "LOGNAME", "SUDO_USER")}
+
+        def outside(*args, extra=None, base=anonymous):
+            return subprocess.run([self.binary, "work", *args], cwd=work, env=dict(base, **(extra or {})),
+                                  capture_output=True, text=True, timeout=20)
+
+        result = outside("project", "create", "p", "--goal", "g", "--root", str(work))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("needs a proven identity", result.stderr)
+        # A login shell acts as the person it names (bp's identity model, as
+        # for bp board put), never as an agent.
+        result = outside("project", "create", "q", "--goal", "g", "--root", str(work), "--json", base=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["lead"], "test-user")
+        self.assertEqual(pane("lead", "project", "create", "p", "--goal", "g", "--root", str(work))[0], 0)
+        self.assertEqual(pane("lead", "task", "add", "p", "count", "words")[0], 0)
+        rc, out = pane("ada", "task", "claim", "p", "t1", "--json")
+        self.assertEqual(rc, 0, out)
+        fence = str(json.loads(out)["fence"])
+        rc, out = pane("ada", "task", "submit", "p", "t1", "--fence", fence, "--artifact", "out.txt")
+        self.assertEqual(rc, 0, out)
+        # Borrowing bob's pane id from outside his pane is refused.
+        bob_pane = subprocess.check_output([self.tmux, "-S", self.socket, "display-message", "-p", "-t", "=bob:0", "#{pane_id}"],
+                                           text=True).strip()
+        result = outside("task", "verify", "p", "t1", "--pass", "--checks", "forged",
+                         extra={"TMUX": self.socket + ",1,0", "TMUX_PANE": bob_pane})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("needs a proven identity", result.stderr)
+        rc, out = pane("ada", "task", "verify", "p", "t1", "--pass", "--checks", "mine")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("verification must come from someone else", out)
+        rc, out = pane("bob", "task", "verify", "p", "t1", "--checks", "out.txt is 4", "--run", "--",
+                       "/bin/sh", "-c", 'test "$(cat out.txt)" = 4')
+        self.assertEqual(rc, 0, out)
+        task = json.loads(outside("task", "show", "p", "t1", "--json").stdout)
+        self.assertEqual(task["state"], "verified")
+        verification = task["verifications"][-1]
+        self.assertEqual((verification["by"], verification["byVerified"], verification["validator"]["exit"]), ("bob", True, 0))
+        self.assertNotIn("selfReported", verification["validator"])
 
     def test_local_bar_is_session_scoped_and_setup_repairs_open_session(self):
         def tmux(*args):

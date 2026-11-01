@@ -49,6 +49,11 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- A message pasted into a Claude pane is submitted again when Claude shows
+  "paste again to expand" under the composer instead of its usual status row.
+  bp did not recognise that footer, could not read the composer, and left the
+  message unsubmitted without pressing Enter.
+
 - `bp hop` reports a refusal (for example a peer without `allowHop`) at once.
   It used to hang until the timeout when the bundle was larger than the
   stream window, because the sender read the answer only after writing the

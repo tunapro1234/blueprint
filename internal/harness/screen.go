@@ -22,7 +22,8 @@ var ClaudeScreen = struct {
 	// PasteChip stands in for a large or multi-line paste ("[Pasted text #1 +2 lines]").
 	PasteChip *regexp.Regexp
 	// ComposerFooter markers sit on the status row directly below the composer
-	// box (vim mode, permission mode).
+	// box (vim mode, permission mode, or the hint Claude shows there for a few
+	// seconds after a paste).
 	ComposerFooter []string
 	// ComposerBorder are the runes the composer box is drawn with.
 	ComposerBorder string
@@ -54,7 +55,7 @@ var ClaudeScreen = struct {
 	LegacyBusyCounter:           regexp.MustCompile(`\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+(?:\.\d+)?s?\s*[·•]|⏵`),
 	LegacyBusyHint:              "esc to interrupt",
 	PasteChip:                   regexp.MustCompile(`\[Pasted text[^\]]*\]`),
-	ComposerFooter:              []string{"-- INSERT --", "-- NORMAL --", "bypass permissions"},
+	ComposerFooter:              []string{"-- INSERT --", "-- NORMAL --", "bypass permissions", "paste again to expand"},
 	ComposerBorder:              "─━",
 	DialogFooter:                []string{"Enter to select", "Esc to cancel"},
 	AuthExpired:                 []string{"login expired", "run /login"},

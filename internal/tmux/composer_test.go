@@ -158,6 +158,32 @@ func TestComposerBoxReadsTheWholeBox(t *testing.T) {
 	}
 }
 
+// Right after a paste Claude replaces the status row under the composer with
+// "paste again to expand". bp could not find the box, so it could not prove
+// the text was its own and never pressed Enter: the message hung in the
+// composer (probot-main 31 Oct, server-necati-revealed 24 Oct). The rows are
+// the frame bp logged for q593746440.
+func TestComposerBoxReadsThePasteHintFooter(t *testing.T) {
+	rule := strings.Repeat("─", 79)
+	message := "[whatsapp] [WA:probot-main|Hüseyin#AC40520847608A790F4F715EB09E5323] önerine göre yaz bişeyler"
+	pane := strings.Join([]string{
+		"    Sıradaki iş bölüm 2, şase.",
+		"✽ Osmosing… (4s · thinking with medium effort)",
+		"                                       ✔ Update installed · Restart to update",
+		rule,
+		"❯\u00a0[whatsapp] [WA:probot-main|Hüseyin#AC40520847608A790F4F715EB09E5323]",
+		"  önerine göre yaz bişeyler",
+		rule,
+		"  paste again to expand",
+	}, "\n")
+	if box, ok := composerBoxText(pane); !ok || box != stripSpace(message) {
+		t.Fatalf("box=%q ok=%v, want the whole message", box, ok)
+	}
+	if !composerHoldsMessageAtWidth(pane, message, 80) {
+		t.Fatal("the pasted message is not recognised as ours, so Enter would not be pressed")
+	}
+}
+
 func TestComposerBoxSingleRowMatchesTodaysReading(t *testing.T) {
 	// The one-row case must agree with composerContent, so the richer view can
 	// never disagree with the narrow one where both apply.

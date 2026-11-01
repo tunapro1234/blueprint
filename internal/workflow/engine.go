@@ -632,7 +632,19 @@ func (e *Engine) runValidator(ctx context.Context, run Run, d Definition, unit U
 			}
 		}
 	}
-	timeout := duration(d.Validate.Timeout, 5*time.Minute)
+	return RunCommand(ctx, run.Workdir, args, duration(d.Validate.Timeout, 5*time.Minute))
+}
+
+// RunCommand runs a validator argv in dir the way workflows do: no shell,
+// stdin closed, its own process group killed on timeout, and at most 8 KiB
+// of stdout and stderr kept. It returns the exit code (-1 when the process
+// did not exit normally) and an error only when the command could not run
+// or timed out. bp work task verify --run uses it, so a task verification
+// and a workflow unit judge a validator identically.
+func RunCommand(ctx context.Context, dir string, args []string, timeout time.Duration) (int, string, string, error) {
+	if len(args) == 0 {
+		return -1, "", "", errors.New("empty validator command")
+	}
 	validateCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var stdout, stderr limitedBuffer
@@ -645,7 +657,7 @@ func (e *Engine) runValidator(ctx context.Context, run Run, d Definition, unit U
 		}
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = run.Workdir, nil, &stdout, &stderr
+	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = dir, nil, &stdout, &stderr
 	err := cmd.Run()
 	if errors.Is(validateCtx.Err(), context.DeadlineExceeded) {
 		return -1, stdout.String(), stderr.String(), fmt.Errorf("%w after %s", ErrValidatorTimeout, timeout)

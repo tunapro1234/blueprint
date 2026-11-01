@@ -450,6 +450,21 @@ $ bp board put main release '1.10 is frozen'
 main/release = 1.10 is frozen (v1)
 ```
 
+For work with rules — tasks with one owner, leases and fences, submissions
+and independent verification, evidence-backed findings, a resumable change
+feed and a deterministic handoff brief — use the work ledger:
+
+```sh
+bp work project create <project> --goal <text> --root <dir>
+bp work task add|claim|checkpoint|submit|verify|recover ... <project> ...
+bp work finding add|verify|refute|check|revise ... <project> ...
+bp work feed <project> [--after <cursor>]
+bp work brief <project>
+bp work doctor <project>
+```
+
+The full guide is [work.md](work.md).
+
 The same features, plus inboxes for agents without a bp terminal, are served
 over HTTP and MCP:
 

@@ -124,6 +124,18 @@ Status: **open** (no mitigation in code), **planned** (assigned, not in code),
 | T-S5 | **Relay reads or alters payloads.** | A7 | libp2p secure channel end to end; relay cannot grant permission (`docs/p2p.md`) | - | - | mitigated (metadata remains visible) |
 | T-S6 | **Local queue confidentiality.** | other local users | `pending/` 0755, records 0644 (`msgq.go:374,385,1420`); fed journal dir 0755, file 0600 (`fed/journal.go:38,62`) | Create queue dirs 0700 / files 0600 when no shared-group setup needs them | W1 | backlog (records are 0600 by umask; W1 will create new dirs 0700) |
 
+### 5.4a Work ledger (`internal/ledger`, `api/work.go`)
+
+| Id | Threat | Attacker | Current behavior (code) | Mitigation | Owner | Status |
+|---|---|---|---|---|---|---|
+| T-W1 | **Ownership hijack or late write by a replaced owner.** | buggy or steered local agent | Claims under an exclusive flock; every owner write checks owner label, fence and lease (`ledger/task.go` `requireOwner`); recovery increments the fence | - | - | mitigated |
+| T-W2 | **Self-approval or sock-puppet review.** | steered local agent with several self-declared names | Verifier must differ from submitter and owner; verification needs a pane-proven identity unless the lead opted in (`requireReviewer`); unproven verifiers are marked; a copied `TMUX_PANE` is rejected by the pane-ancestry check (real-tmux test in `scripts/test_local_cli.py`) | - | - | mitigated (opt-in weakens it, visibly; bp's resolver also proves a login shell outside any pane as its `USER`, so any same-UID process with a login name can verify as that person — same-UID residual) |
+| T-W3 | **Receipt or silence treated as approval.** | design error | No code path from delivery state to task state; verification is an explicit operation | - | - | mitigated |
+| T-W4 | **Reading or fingerprinting files outside the work area via cited paths.** | local API/MCP client, remote client | Paths resolved and confined to lead-set roots, regular files only (`ledger/artifact.go`); only digests stored, never contents; remote callers refused entirely | - | - | mitigated (same-UID TOCTOU residual) |
+| T-W5 | **Stale evidence presented as current.** | honest mistake | Reads re-hash and report effective status; stale prerequisites block dependent claims; passes re-hash under the lock | - | - | mitigated |
+| T-W6 | **Corrupt or tampered log silently accepted.** | crash, manual edit | Fail-closed scan: gaps, foreign epochs, malformed or incomplete transactions mid-log are errors; only an incomplete final transaction is cut | - | - | mitigated (no signatures: a same-UID writer can rewrite history consistently) |
+| T-W7 | **Ledger text as instructions.** | agent writing titles, findings, evidence | Text fields are validated printable text; the brief is data computed from records; ledger text is not delivered into terminals by bp | - | - | mitigated |
+
 ### 5.5 Planned surfaces (not in code)
 
 | Id | Surface | Required before enabling | Owner | Status |

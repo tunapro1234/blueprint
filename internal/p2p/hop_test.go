@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 // hopPair wires a → b like pair() and opts b in to receive hops from a.
@@ -75,6 +77,24 @@ func TestSendHopRejectedWhenNotAllowed(t *testing.T) {
 	pending, _ := ListHopPending(b.Root)
 	if len(pending) != 0 {
 		t.Fatalf("nothing should be staged, got %d", len(pending))
+	}
+}
+
+// A receiver refuses before reading the body. With a body larger than the
+// stream window, a sender that only reads the answer after writing everything
+// hung until its timeout (laptop to server, 1 Nov 2026) instead of reporting
+// the refusal.
+func TestSendHopReportsRefusalOfALargeBody(t *testing.T) {
+	a, _ := hopPair(t, false, 0)
+	body := bytes.Repeat([]byte("x"), 16<<20)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	res, err := a.SendHop(ctx, "b", hopHeader(body), bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("want the refusal, got error %v", err)
+	}
+	if res.Accepted || !strings.Contains(res.Error, "not allowed") {
+		t.Fatalf("expected refusal, got %+v", res)
 	}
 }
 

@@ -132,6 +132,15 @@ deleted. Flags change the behaviour:
 A busy agent is not hopped; wait for it to go idle so its transcript and files
 are not captured mid-write.
 
+An agent can hop itself: run from inside its own turn, `bp hop <self> --to
+<peer>` (or a `--recursive` hop of a subtree that contains the caller) returns at
+once and hands the hop to a detached process. That process waits until every
+moved agent has been idle for three reads in a row (up to 30 minutes), then
+sends the bundle and, for a move, closes the caller's session. Its output goes to
+`state/hop/self-<agent>.log`; if the hop does not happen, the agent, still
+running, gets a `bp msg` saying why. Only a verified caller identity detaches; a
+`--dry-run` always runs in the foreground.
+
 An incoming bundle is **quarantined**, not applied. It lands under
 `state/p2p/hop/incoming/<id>/` with a pending record; nothing is written into a
 working directory, registered in the agentbook, or launched until the owner

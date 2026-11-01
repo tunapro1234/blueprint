@@ -10,6 +10,9 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- An agent can hop itself: `bp hop <self> --to <peer>` run inside its own turn
+  now detaches, waits for the turn to end, then moves the agent (log in
+  `state/hop/self-<agent>.log`; a failure comes back to the agent as a message).
 - The work ledger: `bp work` (CLI), `bp_work_*` (MCP) and `POST /v1/work`
   (REST). Projects with a lead, roots and pause/stop; tasks with one owner,
   leases, fencing tokens, explicit recovery, dependencies with cycle
@@ -53,6 +56,13 @@ Changes on `dev` since the 1.9.34 release.
   dropped Remote Control only when that setting is on or the agent is named.
 - The Claude account auto switch polls the active account every minute while
   its burn rate would carry it past its limit before the next regular poll.
+
+### Fixed
+
+- `bp hop` reports a refusal (for example a peer without `allowHop`) at once.
+  It used to hang until the timeout when the bundle was larger than the
+  stream window, because the sender read the answer only after writing the
+  whole body.
 
 ## [1.9.34] - 2026-10-15
 

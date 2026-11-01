@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"blueprint/internal/book"
 	"blueprint/internal/config"
 	"blueprint/internal/hop"
+	"blueprint/internal/identity"
 	"blueprint/internal/p2p"
 	bptmux "blueprint/internal/tmux"
 )
@@ -275,5 +277,52 @@ func TestMergeTree(t *testing.T) {
 	// A missing source is a no-op, not an error.
 	if err := mergeTree(filepath.Join(src, "nope"), dst); err != nil {
 		t.Fatalf("missing src should be a no-op: %v", err)
+	}
+}
+
+func TestHopCallerFindsTheMovingAgentItself(t *testing.T) {
+	who := identity.Identity{Label: "worker", Certain: true}
+	a := &app{resolveSender: func() identity.Identity { return who }}
+	if got := a.hopCaller([]string{"lead", "worker"}); got != "worker" {
+		t.Fatalf("caller inside the moved subtree = %q, want worker", got)
+	}
+	if got := a.hopCaller([]string{"lead"}); got != "" {
+		t.Fatalf("caller outside the move = %q, want none", got)
+	}
+	who = identity.Identity{Label: "worker", Certain: false}
+	if got := a.hopCaller([]string{"worker"}); got != "" {
+		t.Fatalf("an unverified caller must not detach a hop, got %q", got)
+	}
+}
+
+func TestWaitHopIdleNeedsConsecutiveIdleReads(t *testing.T) {
+	every, reads := hopSelfEvery, hopSelfIdleReads
+	hopSelfEvery, hopSelfIdleReads = time.Millisecond, 3
+	t.Cleanup(func() { hopSelfEvery, hopSelfIdleReads = every, reads })
+
+	// busy, idle, busy (a pause between tool calls), then idle for good
+	turns := []bool{true, false, true, false, false, false}
+	calls := 0
+	a := &app{
+		ctx:           context.Background(),
+		sessionExists: func(string) bool { return true },
+		capturePane:   func(string) (string, error) { return "", nil },
+		turnOpenProbe: func(string) bool {
+			busy := calls < len(turns) && turns[calls]
+			calls++
+			return busy
+		},
+	}
+	if err := a.waitHopIdle([]string{"worker"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 6 {
+		t.Fatalf("returned after %d reads, want 6 (three idle in a row after the last busy read)", calls)
+	}
+
+	a.turnOpenProbe = func(string) bool { return true }
+	err := a.waitHopIdle([]string{"worker"}, 5*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "worker still busy") {
+		t.Fatalf("a turn that never ends must fail the hop, got %v", err)
 	}
 }

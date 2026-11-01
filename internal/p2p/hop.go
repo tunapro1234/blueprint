@@ -135,24 +135,34 @@ func (n *Node) SendHop(ctx context.Context, alias string, header HopHeader, body
 	deadline, _ := ctx.Deadline()
 	_ = s.SetDeadline(deadline)
 
-	if err := writeFrame(s, header); err != nil {
-		_ = s.Reset()
-		return HopResult{}, err
-	}
-	if _, err := io.Copy(s, body); err != nil {
-		_ = s.Reset()
-		return HopResult{}, err
-	}
-	// Half-close so the receiver's body copy sees EOF while the read side stays
-	// open for the result frame.
-	if err := s.CloseWrite(); err != nil {
-		_ = s.Reset()
-		return HopResult{}, err
-	}
+	// The body is written while the answer is read: a receiver refuses
+	// before reading the body, and a sender that only listened after writing
+	// it all would block on a full stream window until the timeout.
+	sent := make(chan error, 1)
+	go func() {
+		if err := writeFrame(s, header); err != nil {
+			sent <- err
+			return
+		}
+		if _, err := io.Copy(s, body); err != nil {
+			sent <- err
+			return
+		}
+		// Half-close so the receiver's body copy sees EOF while the read side
+		// stays open for the result frame.
+		sent <- s.CloseWrite()
+	}()
 	var res HopResult
-	if err := readFrame(s, &res); err != nil {
-		_ = s.Reset()
-		return HopResult{}, err
+	readErr := readFrame(s, &res)
+	// An early answer leaves the writer blocked; the reset releases it. After a
+	// normal answer the writer has already finished.
+	_ = s.Reset()
+	sendErr := <-sent
+	if readErr != nil {
+		if sendErr != nil {
+			return HopResult{}, sendErr
+		}
+		return HopResult{}, readErr
 	}
 	return res, nil
 }

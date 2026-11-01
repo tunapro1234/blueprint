@@ -47,6 +47,13 @@ Changes on `dev` since the 1.9.34 release.
 - The Claude account auto switch polls the active account every minute while
   its burn rate would carry it past its limit before the next regular poll.
 
+### Fixed
+
+- `bp hop` reports a refusal (for example a peer without `allowHop`) at once.
+  It used to hang until the timeout when the bundle was larger than the
+  stream window, because the sender read the answer only after writing the
+  whole body.
+
 ## [1.9.34] - 2026-10-15
 
 ### Fixed

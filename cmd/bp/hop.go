@@ -7,8 +7,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"os/exec"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"blueprint/internal/book"
 	"blueprint/internal/hop"
@@ -16,7 +19,7 @@ import (
 	bptmux "blueprint/internal/tmux"
 )
 
-const hopUsage = "usage: bp hop <agent> --to <peer> [--recursive] [--no-files] [--copy] [--delete-source] [--raw] [--dry-run] | bp hop list [--json] | bp hop accept <id> [--dir <path>] [--parent <name>] [--resume] [--yes] | bp hop reject <id>"
+const hopUsage = "usage: bp hop <agent> --to <peer> [--recursive] [--no-files] [--copy] [--delete-source] [--raw] [--dry-run] (an agent may name itself) | bp hop list [--json] | bp hop accept <id> [--dir <path>] [--parent <name>] [--resume] [--yes] | bp hop reject <id>"
 
 func (a *app) hopCommand(args []string) error {
 	if len(args) == 0 {
@@ -37,12 +40,12 @@ func (a *app) hopCommand(args []string) error {
 // hopPush moves (or copies) an agent to a peer. The default is a move: the
 // bundle is delivered for the peer owner's review, then the source agent is
 // stopped and archived with its files kept (never deleted unless asked).
-func (a *app) hopPush(args []string) error {
+func (a *app) hopPush(args []string) (err error) {
 	name := args[0]
 	if err := rejectFlag("hop", name); err != nil {
 		return err
 	}
-	peer, includeFiles, move, deleteSource, raw, dryRun, recursive := "", true, true, false, false, false, false
+	peer, includeFiles, move, deleteSource, raw, dryRun, recursive, afterTurn := "", true, true, false, false, false, false, false
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--to":
@@ -63,6 +66,8 @@ func (a *app) hopPush(args []string) error {
 			dryRun = true
 		case "--recursive":
 			recursive = true
+		case hopAfterTurnFlag:
+			afterTurn = true
 		default:
 			return fmt.Errorf("unknown hop option: %s", args[i])
 		}
@@ -86,6 +91,31 @@ func (a *app) hopPush(args []string) error {
 	}
 	if _, ok := fleet.Agents[name]; !ok {
 		return fmt.Errorf("unknown agent: %s", name)
+	}
+	moving := []string{name}
+	if recursive {
+		moving = subtreeOrder(fleet, name)
+	}
+	if afterTurn {
+		// Nobody reads a detached hop's output; tell the agent, still running
+		// here, that it did not move.
+		if self := a.hopCaller(moving); self != "" {
+			defer func() {
+				if err != nil {
+					_ = a.message([]string{self, fmt.Sprintf("your hop to %s did not happen: %v", peer, err)})
+				}
+			}()
+		}
+		if err := a.waitHopIdle(moving, hopSelfWait); err != nil {
+			return err
+		}
+	} else if !dryRun {
+		// The caller is inside a turn while it runs this command, so it reads
+		// busy until it returns. Hand the hop to a detached process that waits
+		// for the turn to end.
+		if self := a.hopCaller(moving); self != "" {
+			return a.detachSelfHop(args, self)
+		}
 	}
 	if recursive {
 		return a.hopPushTree(fleet, name, peer, includeFiles, raw, move, deleteSource, dryRun)
@@ -182,6 +212,94 @@ func (a *app) hopPush(args []string) error {
 		fmt.Fprintf(a.out, "  source stopped and archived; files kept at %s\n", agent.Folder)
 	}
 	return nil
+}
+
+const hopAfterTurnFlag = "--after-turn"
+
+// A self-hop waits at most hopSelfWait for its agents to go idle, and needs
+// hopSelfIdleReads idle reads in a row, so a turn that pauses between tool
+// calls is not read as finished.
+var (
+	hopSelfWait      = 30 * time.Minute
+	hopSelfEvery     = 5 * time.Second
+	hopSelfIdleReads = 3
+)
+
+// hopCaller returns the calling agent when it is one of the agents being moved,
+// or "" when the caller is someone else or not certainly identified.
+func (a *app) hopCaller(moving []string) string {
+	who := a.senderIdentity()
+	if !who.Certain {
+		return ""
+	}
+	for _, name := range moving {
+		if name == who.Label {
+			return name
+		}
+	}
+	return ""
+}
+
+// detachSelfHop starts the same hop in its own session with --after-turn and
+// returns at once, so the calling agent can finish its turn. The detached
+// process outlives the agent's pane, which the move closes.
+func (a *app) detachSelfHop(args []string, self string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	logPath := filepath.Join(a.config.StateDir, "hop", "self-"+self+".log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
+		return err
+	}
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	defer log.Close()
+	fmt.Fprintf(log, "%s bp hop %s\n", time.Now().Format(time.RFC3339), strings.Join(args, " "))
+	cmd := exec.Command(exe, append(append([]string{"hop"}, args...), hopAfterTurnFlag)...)
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Env = append(os.Environ(), "BP_HOME="+a.config.Home)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	fmt.Fprintf(a.out, "%s: hop starts when your turn ends (waits up to %s); end your turn now\n", self, hopSelfWait)
+	fmt.Fprintf(a.out, "  this session will be closed after delivery; log: %s\n", logPath)
+	return nil
+}
+
+// waitHopIdle waits until none of the named agents with a live session is
+// busy for hopSelfIdleReads reads in a row.
+func (a *app) waitHopIdle(names []string, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	idle := 0
+	for {
+		busy := ""
+		for _, name := range names {
+			if a.hasSession(name) && a.paneBusy(name) {
+				busy = name
+				break
+			}
+		}
+		if busy == "" {
+			if idle++; idle >= hopSelfIdleReads {
+				return nil
+			}
+		} else {
+			idle = 0
+		}
+		if busy != "" && !time.Now().Before(deadline) {
+			return fmt.Errorf("%s still busy after %s; hop not sent", busy, limit)
+		}
+		select {
+		case <-a.ctx.Done():
+			return a.ctx.Err()
+		case <-time.After(hopSelfEvery):
+		}
+	}
 }
 
 // hopAgentPlan is one agent resolved for packing: its portable spec, the

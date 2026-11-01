@@ -10,6 +10,9 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- An agent can hop itself: `bp hop <self> --to <peer>` run inside its own turn
+  now detaches, waits for the turn to end, then moves the agent (log in
+  `state/hop/self-<agent>.log`; a failure comes back to the agent as a message).
 - `bp account add --login EMAIL [--alias A] [--slot N]` signs a new Claude
   account in through Claude Code's browser login in a throwaway config home
   and stores it in a slot, without touching the live login or the active

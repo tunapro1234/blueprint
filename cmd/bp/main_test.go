@@ -3328,3 +3328,61 @@ func TestLocalOpenParentDoesNotComeFromSharedFolder(t *testing.T) {
 		})
 	}
 }
+
+// A message to a closed ephemeral agent waits for a reopen that rarely comes
+// and blocks the agent's archive; after three days bp status names it with
+// the commands to inspect and cancel it. Younger ones and ones to open or
+// persistent agents stay out of the listing.
+func TestStatusListsStaleChannelsToClosedEphemerals(t *testing.T) {
+	out := testOutput(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "pending"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	old := float64(time.Now().Add(-5 * 24 * time.Hour).Unix())
+	young := float64(time.Now().Add(-time.Hour).Unix())
+	for _, m := range []msgq.Message{
+		{ID: "q100", To: "gone-worker", From: "root", Msg: "task", TS: old},
+		{ID: "q200", To: "gone-worker", From: "root", Msg: "task", TS: young},
+		{ID: "q300", To: "kept", From: "root", Msg: "task", TS: old},
+		{ID: "q400", To: "root", From: "kept", Msg: "task", TS: old},
+	} {
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "pending", m.ID+".json"), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fleet := book.Fleet{
+		Root:  "root",
+		Order: []string{"root", "gone-worker", "kept"},
+		Agents: map[string]book.Agent{
+			"root":        {Name: "root", Status: "open"},
+			"gone-worker": {Name: "gone-worker", Status: "closed", Lifetime: book.LifetimeEphemeral},
+			"kept":        {Name: "kept", Status: "closed", Lifetime: book.LifetimePersistent},
+		},
+		Parents: map[string]string{"root": "", "gone-worker": "root", "kept": "root"},
+	}
+	a := &app{
+		out:   out,
+		queue: msgq.New(root),
+		loadFleet: func() (book.Fleet, map[string]book.State, error) {
+			return fleet, map[string]book.State{"root": {Alive: true}}, nil
+		},
+		loadCache: func(map[string]string) map[string]bpcache.State { return nil },
+	}
+	if err := a.status(nil); err != nil {
+		t.Fatal(err)
+	}
+	got := readTestOutput(t, out)
+	if !strings.Contains(got, "stale -> closed agent: q100 waits for gone-worker for 5d (bp qstat q100; bp qcancel q100)\n") {
+		t.Fatalf("stale channel not listed:\n%s", got)
+	}
+	for _, id := range []string{"q200", "q300", "q400"} {
+		if strings.Contains(got, id) {
+			t.Fatalf("%s listed but should not be:\n%s", id, got)
+		}
+	}
+}

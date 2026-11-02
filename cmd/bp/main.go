@@ -857,6 +857,41 @@ func hiddenClosedEphemeral(agent book.Agent, states map[string]book.State) bool 
 	return agent.IsEphemeral() && agent.Status == "closed" && !alive
 }
 
+// staleClosedAge is how long a message may wait for a closed ephemeral agent
+// before bp status lists it. Such an agent is rarely reopened, so the message
+// would wait forever and block the agent's automatic archive.
+const staleClosedAge = 72 * time.Hour
+
+// renderStaleClosedChannels lists messages that have waited longer than
+// staleClosedAge for a closed ephemeral agent. Nothing expires on its own: the
+// operator reads the message (bp qstat) and decides whether to cancel it.
+func (a *app) renderStaleClosedChannels(fleet book.Fleet, states map[string]book.State) {
+	if a.queue == nil {
+		return
+	}
+	messages, err := a.queue.List()
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	printed := false
+	for _, m := range messages {
+		agent, ok := fleet.Agents[m.To]
+		if !ok || !hiddenClosedEphemeral(agent, states) {
+			continue
+		}
+		age := now.Sub(time.Unix(0, int64(m.TS*float64(time.Second))))
+		if age < staleClosedAge {
+			continue
+		}
+		if !printed {
+			fmt.Fprintln(a.out)
+			printed = true
+		}
+		fmt.Fprintf(a.out, "stale -> closed agent: %s waits for %s for %s (bp qstat %s; bp qcancel %s)\n", m.ID, m.To, shortAge(age), m.ID, m.ID)
+	}
+}
+
 // Mismatch kinds: the two ways tmux and the agentbook can contradict each other.
 // Both are reported rather than silently reconciled — bp cannot know which side
 // is stale, and a hidden disagreement is what let a running agent sit behind a
@@ -985,6 +1020,7 @@ func (a *app) status(args []string) error {
 			fmt.Fprintf(statusApp.out, "  recovery: %s\n", state.Runtime.Activity.RecoveryHint)
 		}
 	}
+	statusApp.renderStaleClosedChannels(fleet, states)
 	statusApp.renderInboxAgents()
 	statusApp.renderCodexStatus(statusApp.codexThreads())
 	return nil

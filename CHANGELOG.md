@@ -10,6 +10,10 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- `bp status` lists messages that have waited more than three days for a
+  closed ephemeral agent (`stale -> closed agent: <id> ... (bp qstat <id>;
+  bp qcancel <id>)`). They block the agent's automatic archive; nothing expires
+  them, the operator decides.
 - An agent can hop itself: `bp hop <self> --to <peer>` run inside its own turn
   now detaches, waits for the turn to end, then moves the agent (log in
   `state/hop/self-<agent>.log`; a failure comes back to the agent as a message).

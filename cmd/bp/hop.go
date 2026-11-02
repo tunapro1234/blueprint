@@ -6,8 +6,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -448,7 +448,7 @@ func (a *app) hopPushTree(fleet book.Fleet, root, peer string, includeFiles, raw
 	rootHarness := hopHarness(fleet.Agents[root].Launch)
 	header := p2p.HopHeader{
 		Channel: channel, Agent: root, Harness: rootHarness,
-		FolderBase: filepath.Base(fleet.Agents[root].Folder),
+		FolderBase:   filepath.Base(fleet.Agents[root].Folder),
 		IncludeFiles: manifest.IncludeFiles, TotalBytes: manifest.TotalBytes, FileCount: len(manifest.Files),
 		Format: hop.TreeFormat, SourceHost: source.Host, SourceAgent: root, Agents: len(order),
 	}

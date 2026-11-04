@@ -89,7 +89,9 @@ func observedRuntimeState(ctx context.Context, agent Agent, state cache.State, p
 		// rescued here.
 		rescueStaleOpenTurn(a, screen)
 	}
-	if bptmux.Dialog(pane) {
+	if summary, ok := bptmux.ClaudePermissionPrompt(pane); ok {
+		a.State, a.Source, a.Reason = "blocked", "pane", bptmux.BlockedByPermission+" ("+summary+")"
+	} else if bptmux.Dialog(pane) {
 		a.State, a.Source, a.Reason = "blocked", "pane", "dialog or navigation/search input"
 	}
 	a.DeliveryBlocked = a.State != "idle" || bptmux.Typing(pane)

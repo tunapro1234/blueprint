@@ -513,6 +513,11 @@ const (
 	// itself — it waits for a person, so `bp q` says so instead of implying
 	// patience will fix it.
 	BlockedByDialog = "confirmation/selection screen is open — only a human may answer"
+	// BlockedByPermission is Claude Code asking before a tool call ("Do you
+	// want to proceed? 1. Yes ... 3. No"), which it does for some commands even
+	// in bypass-permissions mode. The reason carries the prompt's heading and
+	// the command's first line so the operator knows what is being asked.
+	BlockedByPermission = "permission prompt is waiting — only a human may answer"
 )
 
 // ComposerBlockReason names why a pane cannot take a message, or "" when nothing
@@ -548,6 +553,9 @@ func ComposerContentBlockReason(pane string, texts []string) string {
 	// never "a human is being asked something".
 	if hermesDialog(pane) {
 		return BlockedByDialog
+	}
+	if summary, ok := ClaudePermissionPrompt(pane); ok {
+		return BlockedByPermission + " (" + summary + ")"
 	}
 	if !composerFilled(pane) {
 		return ""

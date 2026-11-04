@@ -53,6 +53,11 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- A Claude Code permission prompt ("Do you want to proceed? 1. Yes ... 3. No",
+  shown for some Bash commands even in bypass-permissions mode) is no longer
+  reported as "composer contains foreign text": the queue reason now says
+  "permission prompt is waiting" with the prompt heading and the command's
+  first line, and the pane counts as a dialog nobody may type into.
 - A message pasted into a Claude pane is submitted again when Claude shows
   "paste again to expand" under the composer instead of its usual status row.
   bp did not recognise that footer, could not read the composer, and left the

@@ -211,6 +211,9 @@ func paneDialog(pane string) bool {
 	if hermesDialog(pane) || codexSearchActive(pane) || codexNavigationMenu(pane) {
 		return true
 	}
+	if _, ok := ClaudePermissionPrompt(pane); ok {
+		return true
+	}
 	for _, line := range hermesRegion(pane) {
 		text := strings.ToLower(line)
 		if (strings.Contains(text, "esc to cancel") || strings.Contains(text, "esc to go back")) && (strings.Contains(text, "enter to") || strings.Contains(text, "confirm")) {

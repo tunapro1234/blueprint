@@ -482,6 +482,7 @@ func claudeRuntimeBound(agent Agent, a *cache.Activity, liveID string) cache.Sta
 	state.Runtime = "claude"
 	a.ThreadID, a.TranscriptPath, a.Binding = strings.TrimSuffix(filepath.Base(path), ".jsonl"), path, binding
 	phase, stamp, err := readTurnPhase(path)
+	phase = settleUnsent(phase, stamp, a.ObservedAt)
 	if !stamp.IsZero() {
 		a.LastEventAt = &stamp
 	}

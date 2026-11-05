@@ -146,6 +146,11 @@ const (
 	// decides the verdict may be one of those. 1 MiB covers the measured ones and
 	// keeps `bp status` at ~1 MiB per agent, read from page cache.
 	turnOpenTailBytes = 1024 * 1024
+	// turnUnsentGrace is how long a prompt with no API request after it still
+	// counts as a turn starting. Claude Code records the request within
+	// milliseconds of the prompt (measured 2026-11-04: 50-160 ms), so two
+	// minutes only covers a slow write, never a real turn.
+	turnUnsentGrace = 2 * time.Minute
 )
 
 // turn verdicts. none means "this record says nothing about the phase".
@@ -154,7 +159,26 @@ const (
 	turnOpenVerdict
 	turnClosedVerdict
 	turnUncertainVerdict
+	// turnUnsentVerdict: the last decisive record is a prompt, the transcript
+	// does record API requests, and none was made after the prompt. Claude Code
+	// writes such a prompt on its own after a resume (server-3dprinter,
+	// 2026-11-04 13:15: a <task-notification> about background tasks the
+	// reboot killed) and then waits at an empty composer; the agent read as
+	// working until someone forced a message through. See settleUnsent.
+	turnUnsentVerdict
 )
+
+// settleUnsent turns an unsent-prompt verdict into open while the prompt is
+// young enough to be a turn still starting, and closed after that.
+func settleUnsent(verdict int, stamp, now time.Time) int {
+	if verdict != turnUnsentVerdict {
+		return verdict
+	}
+	if !stamp.IsZero() && now.Sub(stamp) > turnUnsentGrace {
+		return turnClosedVerdict
+	}
+	return turnOpenVerdict
+}
 
 // tailTurnPhase reads the bounded tail and returns the verdict of the LAST
 // decisive record in it, aged against that record's OWN timestamp. Records are
@@ -174,6 +198,7 @@ func tailTurnPhase(path string, now time.Time) (open, decisive bool) {
 	if err != nil || verdict == turnNone {
 		return false, false
 	}
+	verdict = settleUnsent(verdict, stamp, now)
 	if verdict == turnUncertainVerdict {
 		return true, true
 	}
@@ -253,10 +278,23 @@ func scanTurnPhase(path string) (int, time.Time, error) {
 		scanner.Scan()
 	}
 	verdict, stamp := turnNone, time.Time{}
+	// lastRequest is the newest API request seen anywhere in the tail. Claude
+	// Code writes it just BEFORE the prompt line in file order, so it is
+	// compared by timestamp, not by position. prompt marks a decisive record
+	// that is a real prompt (not a tool_result, which is answered mid-turn).
+	var lastRequest time.Time
+	sawRequest, prompt := false, false
 	var manualCompactAt time.Time
 	compactSummary := false
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		if at, ok := apiRequestTime(line); ok {
+			sawRequest = true
+			if at.After(lastRequest) {
+				lastRequest = at
+			}
+			continue
+		}
 		if cache.DefinitelyOtherCompactRecordType(line, "system", "user", "assistant") {
 			continue
 		}
@@ -291,6 +329,7 @@ func scanTurnPhase(path string) (int, time.Time, error) {
 				if v, ts := classifyTurnRecordValue(row); v != turnNone {
 					verdict = v
 					stamp, _ = time.Parse(time.RFC3339Nano, ts)
+					prompt = row.Type == "user" && v == turnOpenVerdict && !toolResult(row.Message.Content)
 					if row.Type == "assistant" && v == turnOpenVerdict && row.Message.StopReason != "tool_use" {
 						verdict = turnUncertainVerdict
 					}
@@ -301,7 +340,45 @@ func scanTurnPhase(path string) (int, time.Time, error) {
 	if err := scanner.Err(); err != nil {
 		return turnNone, time.Time{}, err
 	}
+	if verdict == turnOpenVerdict && prompt && sawRequest && !stamp.IsZero() && lastRequest.Before(stamp) {
+		verdict = turnUnsentVerdict
+	}
 	return verdict, stamp, nil
+}
+
+// apiRequestPrefix opens every "api-request" record Claude Code writes when it
+// sends a request (2.1.309 onward). Older transcripts have none, and the
+// unsent-prompt rule then never applies.
+var apiRequestPrefix = []byte(`{"type":"api-request",`)
+
+func apiRequestTime(line []byte) (time.Time, bool) {
+	if !bytes.HasPrefix(bytes.TrimLeft(line, " \t"), apiRequestPrefix) {
+		return time.Time{}, false
+	}
+	var row struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &row) != nil {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, row.Timestamp)
+	return at, err == nil
+}
+
+// toolResult reports whether a user record's content is a tool result.
+func toolResult(content json.RawMessage) bool {
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Type == "tool_result" {
+			return true
+		}
+	}
+	return false
 }
 
 // turnRecord is the part of a transcript record this gate reads. Everything else

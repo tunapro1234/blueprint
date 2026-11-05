@@ -39,6 +39,7 @@ func localRuntime(binding *cache.LocalBinding, pid int, a *cache.Activity) cache
 		state = cache.ReadClaudePath(o.TranscriptPath)
 		state.Runtime = "claude"
 		phase, stamp, err := readTurnPhase(o.TranscriptPath)
+		phase = settleUnsent(phase, stamp, time.Now())
 		if err == nil && !stamp.IsZero() && (phase == turnOpenVerdict || phase == turnClosedVerdict) {
 			localPhase(a, phase == turnOpenVerdict, stamp, pid)
 		} else {

@@ -63,6 +63,11 @@ Changes on `dev` since the 1.9.34 release.
 - When the foreign text in a composer is only one to three characters, the
   queue reason names it ("only \"n\" — likely a stray keypress") so the
   operator knows how little there is to clear. bp still never erases it.
+- A Claude agent no longer reads as "working" when the last prompt in its
+  transcript was never sent: after a resume Claude Code can write a
+  `<task-notification>` prompt on its own and wait at an empty composer. A
+  prompt with no API request after it counts as a turn starting for two
+  minutes, then as idle (only for transcripts that record API requests).
 - A message pasted into a Claude pane is submitted again when Claude shows
   "paste again to expand" under the composer instead of its usual status row.
   bp did not recognise that footer, could not read the composer, and left the

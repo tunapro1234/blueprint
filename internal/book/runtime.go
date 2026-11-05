@@ -91,6 +91,8 @@ func observedRuntimeState(ctx context.Context, agent Agent, state cache.State, p
 	}
 	if summary, ok := bptmux.ClaudePermissionPrompt(pane); ok {
 		a.State, a.Source, a.Reason = "blocked", "pane", bptmux.BlockedByPermission+" ("+summary+")"
+	} else if bptmux.OpenRemoteControlMenu(pane) {
+		a.State, a.Source, a.Reason = "blocked", "pane", bptmux.BlockedByRemoteMenu
 	} else if bptmux.Dialog(pane) {
 		a.State, a.Source, a.Reason = "blocked", "pane", "dialog or navigation/search input"
 	}

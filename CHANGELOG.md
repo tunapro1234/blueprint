@@ -58,6 +58,11 @@ Changes on `dev` since the 1.9.34 release.
   reported as "composer contains foreign text": the queue reason now says
   "permission prompt is waiting" with the prompt heading and the command's
   first line, and the pane counts as a dialog nobody may type into.
+- An open Remote Control menu (Disconnect / Show QR / Continue) is reported as
+  "Remote Control menu is open" instead of "composer contains foreign text".
+- When the foreign text in a composer is only one to three characters, the
+  queue reason names it ("only \"n\" — likely a stray keypress") so the
+  operator knows how little there is to clear. bp still never erases it.
 - A message pasted into a Claude pane is submitted again when Claude shows
   "paste again to expand" under the composer instead of its usual status row.
   bp did not recognise that footer, could not read the composer, and left the

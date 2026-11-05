@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"blueprint/internal/harness"
+	"strconv"
 	"strings"
 )
 
@@ -557,6 +558,9 @@ func ComposerContentBlockReason(pane string, texts []string) string {
 	if summary, ok := ClaudePermissionPrompt(pane); ok {
 		return BlockedByPermission + " (" + summary + ")"
 	}
+	if OpenRemoteControlMenu(pane) {
+		return BlockedByRemoteMenu
+	}
 	if !composerFilled(pane) {
 		return ""
 	}
@@ -566,7 +570,26 @@ func ComposerContentBlockReason(pane string, texts []string) string {
 	if _, ours := StuckPaste(pane, texts); ours {
 		return ""
 	}
-	return BlockedByForeignText
+	return BlockedByForeignText + strayKeys(pane)
+}
+
+// strayKeysMax is the longest composer remnant reported as stray keypresses.
+const strayKeysMax = 3
+
+// strayKeys names a composer that holds only a character or two — almost
+// always a stray keypress in the pane (ts-eeg, 4 Nov 2026: a lone "n", then
+// "c", held 18 messages for 44 minutes). bp still never erases it; the reason
+// only tells the operator how little there is to clear.
+func strayKeys(pane string) string {
+	box, ok := composerJudgeText(pane)
+	if !ok {
+		return ""
+	}
+	text := strings.TrimSpace(box)
+	if n := len([]rune(text)); n == 0 || n > strayKeysMax || strings.Contains(text, "\n") {
+		return ""
+	}
+	return " (only " + strconv.Quote(text) + " — likely a stray keypress; clear it in the pane)"
 }
 
 // StuckPaste reports which of texts a non-empty composer is holding as OUR OWN

@@ -10,6 +10,9 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- `claudeAccounts.switchPrefer: "soonest-weekly-reset"`: auto switching uses
+  the account whose seven-day window resets soonest, steps off it while its
+  five-hour window is used up and returns once that window resets.
 - `bp status` lists messages that have waited more than three days for a
   closed ephemeral agent (`stale -> closed agent: <id> ... (bp qstat <id>;
   bp qcancel <id>)`). They block the agent's automatic archive; nothing expires

@@ -136,6 +136,15 @@ func (u *Usage) FiveHourResetAt(now time.Time) time.Time {
 	return r
 }
 
+// SevenDayResetAt is when the seven-day window resets, seen at now like
+// FiveHourResetAt: unknown or already passed reads as the zero time.
+func (u *Usage) SevenDayResetAt(now time.Time) time.Time {
+	if u == nil || u.SevenDay == nil || !u.SevenDay.ResetsAt.After(now) {
+		return time.Time{}
+	}
+	return u.SevenDay.ResetsAt
+}
+
 // Usage fetch backoff when the server gives no Retry-After.
 const (
 	backoffBase = time.Minute

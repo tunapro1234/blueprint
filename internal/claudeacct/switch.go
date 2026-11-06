@@ -21,6 +21,12 @@ const (
 	// least capacity and, because keepalive staggers the resets evenly, cycles
 	// through the accounts in reset order so each one's load stays low.
 	StrategySoonestReset = "soonest-reset"
+	// StrategySoonestWeeklyReset (auto switching only) prefers the usable
+	// account whose seven-day window resets soonest, so the weekly allowance
+	// that is about to be lost is spent first. An account whose five-hour
+	// window is used up has no room and is skipped until that window resets;
+	// then, still resetting soonest, it is taken back.
+	StrategySoonestWeeklyReset = "soonest-weekly-reset"
 )
 
 // SwitchOptions selects the target of a switch.

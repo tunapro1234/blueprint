@@ -73,7 +73,7 @@ func backupTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Tim
 			continue
 		}
 		priority[s.Number] = s.Priority
-		list = append(list, rankedTarget{n: s.Number, value: value, room: policy.LimitFor(s) - value, reset: slotUsage(s).FiveHourResetAt(now)})
+		list = append(list, rankedTarget{n: s.Number, value: value, room: policy.LimitFor(s) - value, reset: policy.resetOf(s, now)})
 	}
 	sort.SliceStable(list, func(i, j int) bool {
 		if priority[list[i].n] != priority[list[j].n] {
@@ -88,7 +88,7 @@ func backupTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Tim
 // best first by the policy (soonest reset, or most room).
 func normalTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Time) []rankedTarget {
 	list := soonestTargets(withRole(accounts, false), from, policy, now)
-	if policy.Prefer != StrategySoonestReset {
+	if !policy.soonest() {
 		sort.SliceStable(list, func(i, j int) bool { return list[i].room > list[j].room })
 	}
 	return list

@@ -101,7 +101,9 @@ type ClaudeAccountsConfig struct {
 	KeepAliveModel  string         `json:"keepAliveModel" yaml:"keepAliveModel"`
 	// SwitchPrefer picks the auto-switch target: "soonest-reset" (the default)
 	// drains the account whose five-hour window resets soonest; "room" picks
-	// the account with the most room left under its limit.
+	// the account with the most room left under its limit;
+	// "soonest-weekly-reset" drains the account whose seven-day window resets
+	// soonest, leaving it only while its five-hour window is used up.
 	SwitchPrefer string `json:"switchPrefer" yaml:"switchPrefer"`
 	// Backup controls backup accounts (bp account role N backup).
 	Backup ClaudeAccountsBackup `json:"backup" yaml:"backup"`
@@ -676,9 +678,9 @@ func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 		return fmt.Errorf("keepAliveModel must name a Claude model")
 	}
 	switch value.SwitchPrefer {
-	case "", "room", "soonest-reset":
+	case "", "room", "soonest-reset", "soonest-weekly-reset":
 	default:
-		return fmt.Errorf("switchPrefer must be \"room\" or \"soonest-reset\"")
+		return fmt.Errorf("switchPrefer must be \"room\", \"soonest-reset\" or \"soonest-weekly-reset\"")
 	}
 	switch value.Backup.Stagger {
 	case "", "interleave", "flat":

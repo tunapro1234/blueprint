@@ -361,6 +361,11 @@ func (m *Manager) AutoOnce(ctx context.Context, opts AutoOptions) (AutoResult, e
 	if err != nil {
 		return AutoResult{}, err
 	}
+	if !opts.DryRun {
+		if err := m.syncLive(accounts, live); err != nil {
+			return AutoResult{}, err
+		}
+	}
 	active := 0
 	if current := live.liveSlot(accounts); current != nil {
 		active = current.Number
@@ -422,6 +427,9 @@ func (m *Manager) PollOnce(ctx context.Context, every time.Duration, max int) ([
 	active := 0
 	if current := live.liveSlot(accounts); current != nil {
 		active = current.Number
+	}
+	if err := m.syncLive(accounts, live); err != nil {
+		return nil, err
 	}
 	polled := pollOrder(accounts, active, m.now(), every, max, 0)
 	if len(polled) == 0 {

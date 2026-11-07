@@ -568,3 +568,44 @@ func expiredAt(t Tokens, now time.Time) bool {
 func expiresWithin(t Tokens, now time.Time, margin time.Duration) bool {
 	return t.AccessToken == "" || t.ExpiresAt <= 0 || !now.Add(margin).Before(t.Expiry())
 }
+
+// syncLive copies the live login into the slot it belongs to when Claude Code
+// has refreshed it since bp last stored it. Refresh tokens rotate, so a slot
+// copy that only gets written at switch time goes stale while its account is
+// active: once anything replaces the live file (a /login, a switch that could
+// not capture first), the only valid refresh token is gone and the slot is
+// dead. The daemon calls this every pass. Caller holds the store lock and
+// saves accounts.
+func (m *Manager) syncLive(accounts *Accounts, live *liveLogin) error {
+	current := live.liveSlot(accounts)
+	if current == nil || live.parsed == nil {
+		return nil
+	}
+	tokens := live.parsed.Tokens()
+	if tokens.RefreshToken == "" {
+		return nil
+	}
+	if stored, err := m.Store.ReadCredentials(current.Number); err == nil {
+		have := stored.Tokens()
+		if have.RefreshToken == tokens.RefreshToken && have.ExpiresAt == tokens.ExpiresAt {
+			return nil
+		}
+		if have.ExpiresAt > tokens.ExpiresAt {
+			// The stored copy is newer; never overwrite it with an older login.
+			return nil
+		}
+	}
+	if err := m.Store.WriteCredentials(current.Number, live.parsed); err != nil {
+		return fmt.Errorf("sync the live login into slot %d: %w", current.Number, err)
+	}
+	if live.hasIdentity && len(live.account) > 0 {
+		if err := m.Store.WriteAccount(current.Number, live.account); err != nil {
+			return fmt.Errorf("sync the live account into slot %d: %w", current.Number, err)
+		}
+	}
+	if current.Dead && !expiredAt(tokens, m.now()) {
+		current.Dead, current.DeadReason = false, ""
+		return m.Store.Save(accounts)
+	}
+	return nil
+}

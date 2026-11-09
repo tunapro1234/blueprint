@@ -39,8 +39,11 @@ type fleetUpdateRow struct {
 	Live        bool   `json:"live"`
 	restart     bool
 	storeModels bool
-	launch      bptmux.OpenOptions
-	folder      string
+	// leftover marks a pane an earlier, interrupted restart left unusable:
+	// the exit prompt still open, or bp's own /exit unsent in the composer.
+	leftover bool
+	launch   bptmux.OpenOptions
+	folder   string
 }
 
 type fleetUpdateReport struct {
@@ -56,6 +59,9 @@ type fleetUpdateBackend interface {
 	UpdateCLI(context.Context, string, []string) error
 	Capture(string) (string, error)
 	Restart(string, string, bptmux.OpenOptions) error
+	// Settle puts a leftover pane back into a usable state without ending the
+	// session and returns what it found.
+	Settle(string) (string, error)
 	Verify(string, string, string, string) error
 	ApplyBar(string)
 }
@@ -159,6 +165,10 @@ func (a *app) fleetUpdate(args []string) error {
 		registered := fleet.Agents[row.Agent]
 		migration := nextFleetMigration(registered, *row, fleetMigrationModels(*row, opts.models), now)
 		if row.Status == "deferred" {
+			if row.leftover {
+				a.settleFleetLeftover(row, backend)
+				migration.DeferredReason = row.Reason
+			}
 			if err := book.SetFleetUpdate(a.config.Agentbooks, row.Agent, migration); err != nil {
 				return err
 			}
@@ -261,6 +271,8 @@ func (a *app) fleetUpdate(args []string) error {
 		}
 		if err != nil {
 			switch {
+			case errors.Is(err, bptmux.ErrBackgroundWork):
+				row.Status, row.Reason = "deferred", err.Error()
 			case errors.Is(err, bptmux.ErrTyping):
 				row.Status, row.Reason = "deferred", "unsent user text in composer"
 			case errors.Is(err, bptmux.ErrBusy):
@@ -407,8 +419,12 @@ func (a *app) planFleetUpdate(fleet book.Fleet, states map[string]book.State, op
 			row.Status, row.Reason = "deferred", "pane unreadable"
 		case strings.TrimSpace(pane) == "":
 			row.Status, row.Reason = "deferred", "pane unreadable"
+		case fleetExitPrompt(pane):
+			row.Status, row.Reason, row.leftover = "deferred", bptmux.ErrBackgroundWork.Error()+"; exit prompt is open", true
 		case bptmux.Dialog(pane):
 			row.Status, row.Reason = "deferred", "modal open"
+		case bptmux.ExactPaste(pane, []string{fleetExitCommand}):
+			row.Status, row.Reason, row.leftover = "deferred", "unsent "+fleetExitCommand+" left by an earlier update", true
 		case bptmux.Typing(pane):
 			row.Status, row.Reason = "deferred", "unsent user text in composer"
 		case state.ScreenBusy || state.TurnBusy || runtime.Activity.State != "idle" || bptmux.Busy(pane):
@@ -718,12 +734,25 @@ func (b *liveFleetUpdate) Restart(name, folder string, opts bptmux.OpenOptions) 
 	if !fleetRestartPaneMatches(launch, process.Command, pane) {
 		return fmt.Errorf("pane no longer matches the planned harness; refusing to exit it")
 	}
-	if err := b.app.tmux.Send(b.app.ctx, name, "/exit"); err != nil {
-		return fmt.Errorf("exit native CLI: %w", err)
+	sendErr := b.app.tmux.Send(b.app.ctx, name, fleetExitCommand)
+	wait := 20 * time.Second
+	if sendErr != nil {
+		// The command may still have gone in: Claude Code answers /exit with a
+		// prompt when the session has background work, and a prompt in place
+		// of the composer reads as an unverified submission.
+		wait = 5 * time.Second
 	}
-	exited, err := b.waitNativeExit(name, 20*time.Second)
+	exited, err := b.waitNativeExit(name, wait)
 	if err != nil {
 		return err
+	}
+	if !exited && sendErr != nil {
+		// Never leave bp's own command behind: an unsent /exit blocks every
+		// later message to this agent.
+		if _, clearErr := b.app.tmux.ClearDelivered(b.app.ctx, name, []string{fleetExitCommand}); clearErr != nil {
+			return fmt.Errorf("exit native CLI: %w; could not remove the unsent %s: %v", sendErr, fleetExitCommand, clearErr)
+		}
+		return fmt.Errorf("exit native CLI: %w", sendErr)
 	}
 	if !exited {
 		return fmt.Errorf("native CLI did not leave an exited pane; refusing to terminate a live pane")
@@ -740,6 +769,14 @@ func (b *liveFleetUpdate) Restart(name, folder string, opts bptmux.OpenOptions) 
 func (b *liveFleetUpdate) waitNativeExit(name string, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
+		if pane, err := b.app.tmux.CaptureAnsi(b.app.ctx, name); err == nil {
+			if work, _, ok := bptmux.ExitDialog(pane); ok {
+				if err := b.app.tmux.StayInExitDialog(b.app.ctx, name); err != nil {
+					return false, fmt.Errorf("%w; the exit prompt is still open: %v", bptmux.ErrBackgroundWork, err)
+				}
+				return false, fleetBackgroundWork{work: work}
+			}
+		}
 		dead, err := b.app.tmux.PaneDead(b.app.ctx, name)
 		if err != nil {
 			return false, fmt.Errorf("verify native CLI exit: %w", err)
@@ -754,6 +791,66 @@ func (b *liveFleetUpdate) waitNativeExit(name string, timeout time.Duration) (bo
 			return false, nil
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+const fleetExitCommand = "/exit"
+
+func fleetExitPrompt(pane string) bool {
+	_, _, ok := bptmux.ExitDialog(pane)
+	return ok
+}
+
+// fleetBackgroundWork is the result for a session that would not exit.
+type fleetBackgroundWork struct{ work []string }
+
+func (e fleetBackgroundWork) Error() string {
+	return bptmux.ErrBackgroundWork.Error() + " (" + strings.Join(e.work, "; ") + "); chose Stay, nothing was stopped"
+}
+
+func (e fleetBackgroundWork) Unwrap() error { return bptmux.ErrBackgroundWork }
+
+// Settle answers an open exit prompt with Stay, or removes bp's own unsent
+// /exit. It never ends the session and never stops its background work
+// (10 Nov 2026: three agents sat in the exit prompt for hours, unable to take
+// a message, after Claude Code began asking before it exits with background
+// shells or scheduled tasks).
+func (b *liveFleetUpdate) Settle(name string) (string, error) {
+	pane, err := b.app.tmux.CaptureAnsi(b.app.ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if work, _, ok := bptmux.ExitDialog(pane); ok {
+		if err := b.app.tmux.StayInExitDialog(b.app.ctx, name); err != nil {
+			return "", err
+		}
+		return fleetBackgroundWork{work: work}.Error(), nil
+	}
+	cleared, err := b.app.tmux.ClearDelivered(b.app.ctx, name, []string{fleetExitCommand})
+	if err != nil {
+		return "", err
+	}
+	if cleared {
+		return "removed the unsent " + fleetExitCommand + " an earlier update left in the composer; run the update again to restart", nil
+	}
+	return "", nil
+}
+
+// settleFleetLeftover runs Settle under the pane lock and puts its outcome in
+// the row. The row stays deferred either way.
+func (a *app) settleFleetLeftover(row *fleetUpdateRow, backend fleetUpdateBackend) {
+	release, err := a.lockPane(row.Agent)
+	if err != nil {
+		row.Reason += "; not settled: " + err.Error()
+		return
+	}
+	defer release()
+	note, err := backend.Settle(row.Agent)
+	switch {
+	case err != nil:
+		row.Reason += "; not settled: " + err.Error()
+	case note != "":
+		row.Reason = note
 	}
 }
 

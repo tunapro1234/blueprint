@@ -30,6 +30,9 @@ type fakeFleetUpdater struct {
 	bars       []string
 	restartErr error
 	verifyErr  error
+	settled    []string
+	settleNote string
+	settleErr  error
 }
 
 type fleetRestart struct {
@@ -61,6 +64,10 @@ func (f *fakeFleetUpdater) Capture(name string) (string, error) {
 func (f *fakeFleetUpdater) Restart(name, _ string, opts bptmux.OpenOptions) error {
 	f.restarts = append(f.restarts, fleetRestart{name: name, opts: opts})
 	return f.restartErr
+}
+func (f *fakeFleetUpdater) Settle(name string) (string, error) {
+	f.settled = append(f.settled, name)
+	return f.settleNote, f.settleErr
 }
 func (f *fakeFleetUpdater) Verify(name, _, _, _ string) error {
 	f.verified = append(f.verified, name)
@@ -545,5 +552,83 @@ func TestFleetUpdateWaitNativeExitAcceptsShell(t *testing.T) {
 		if err != nil || got != want {
 			t.Fatalf("%s: exited=%v err=%v, want %v", command, got, err, want)
 		}
+	}
+}
+
+const fleetExitPromptPane = "● earlier conversation\n\n" +
+	"   Background work is running\n" +
+	"   The following will stop when you exit:\n\n" +
+	"   shell · exec python3 daemon.py >> state/daemon.…\n\n" +
+	"   ❯ 1. Exit and stop tasks\n" +
+	"     2. Move to background and exit\n" +
+	"     3. Stay\n\n" +
+	"   Enter to confirm · Esc to cancel\n"
+
+var fleetUnsentExitPane = "● earlier conversation\n\n" +
+	strings.Repeat("─", 60) + " worker ─\n" +
+	"❯ /exit\n" +
+	strings.Repeat("─", 69) + "\n" +
+	"  -- INSERT -- ⏵⏵ bypass permissions on (shift+tab to cycle)\n"
+
+// Claude Code 2.1.32x answers /exit with a prompt while the session has
+// background work. An update must leave such a session running, and must
+// repair the panes an earlier update left in that prompt.
+func TestFleetUpdateSettlesPanesLeftByAnInterruptedRestart(t *testing.T) {
+	stayed := "background work is running (shell · exec python3 daemon.py >> state/daemon.…); chose Stay, nothing was stopped"
+	for _, tc := range []struct {
+		name, pane, note string
+		settleErr        error
+		args             []string
+		settled          int
+		want             string
+	}{
+		{"exit-prompt", fleetExitPromptPane, stayed, nil, []string{"--clis", "--yes"}, 1, "deferred (" + stayed + ")"},
+		{"exit-prompt-dry-run", fleetExitPromptPane, stayed, nil, []string{"--clis", "--dry-run"}, 0, "deferred (background work is running; exit prompt is open)"},
+		{"exit-prompt-not-settled", fleetExitPromptPane, "", bptmux.ErrDialog, []string{"--clis", "--yes"}, 1, "exit prompt is open; not settled: "},
+		{"unsent-exit", fleetUnsentExitPane, "removed the unsent /exit", nil, []string{"--clis", "--yes"}, 1, "deferred (removed the unsent /exit)"},
+		{"unsent-exit-dry-run", fleetUnsentExitPane, "", nil, []string{"--clis", "--dry-run"}, 0, "deferred (unsent /exit left by an earlier update)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fleet := testFleet("root")
+			states := map[string]book.State{"root": liveFleetState("claude", "idle", "claude-opus-5-5", "medium")}
+			backend := &fakeFleetUpdater{panes: map[string]string{"root": tc.pane}, settleNote: tc.note, settleErr: tc.settleErr}
+			a, bookPath := fleetUpdateApp(t, backend, fleet, states)
+			if err := a.fleetUpdate(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			if len(backend.restarts) != 0 || len(backend.settled) != tc.settled {
+				t.Fatalf("restarts=%d settled=%v", len(backend.restarts), backend.settled)
+			}
+			if output := readTestOutput(t, a.out); !strings.Contains(output, tc.want) {
+				t.Fatalf("output=%q, want %q", output, tc.want)
+			}
+			if tc.settled == 0 {
+				return
+			}
+			loaded, err := book.LoadFleet([]string{bookPath})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if update := loaded.Agents["root"].FleetUpdate; update == nil || !strings.Contains("deferred ("+update.DeferredReason+")", tc.want) {
+				t.Fatalf("recorded deferral=%+v, want %q", update, tc.want)
+			}
+		})
+	}
+}
+
+func TestFleetUpdateDefersSessionThatStayedForBackgroundWork(t *testing.T) {
+	fleet := testFleet("root")
+	states := map[string]book.State{"root": liveFleetState("codex", "idle", "gpt-old", "medium")}
+	backend := &fakeFleetUpdater{restartErr: fleetBackgroundWork{work: []string{"shell · sleep 600", "scheduled task · 7 * * * *"}}}
+	a, _ := fleetUpdateApp(t, backend, fleet, states)
+	if err := a.fleetUpdate([]string{"--clis", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "deferred (background work is running (shell · sleep 600; scheduled task · 7 * * * *); chose Stay, nothing was stopped)"
+	if output := readTestOutput(t, a.out); !strings.Contains(output, want) || strings.Contains(output, "failed") {
+		t.Fatalf("output=%q", output)
+	}
+	if len(backend.verified) != 0 {
+		t.Fatal("verified a restart that never happened")
 	}
 }

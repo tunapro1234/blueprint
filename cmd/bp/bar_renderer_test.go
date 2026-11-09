@@ -372,10 +372,9 @@ func TestBarModelCacheRetainsRolloutAndClaudeResultsUntilFileChanges(t *testing.
 		t.Fatalf("changed rollout retained stale cache: %q/%q", model, effort)
 	}
 
-	folder, home := filepath.Join(root, "agent"), filepath.Join(root, "home")
-	local := filepath.Join(folder, ".claude", "settings.local.json")
+	local := filepath.Join(root, "agent", ".claude", "settings.local.json")
 	writeBarTestFile(t, local, `{"model":"claude-sonnet-4","effortLevel":"low"}`)
-	if model, effort := cache.readClaude(folder, home); model != "claude-sonnet-4" || effort != "low" {
+	if model, effort, _ := cache.readClaudeFile(local); model != "claude-sonnet-4" || effort != "low" {
 		t.Fatalf("first Claude file values=%q/%q", model, effort)
 	}
 	if err := os.WriteFile(local, []byte(`{"model":"claude-opus-5","effortLevel":"high"}`), 0600); err != nil {
@@ -385,7 +384,7 @@ func TestBarModelCacheRetainsRolloutAndClaudeResultsUntilFileChanges(t *testing.
 	if err := os.Chtimes(local, changed, changed); err != nil {
 		t.Fatal(err)
 	}
-	if model, effort := cache.readClaude(folder, home); model != "claude-opus-5" || effort != "high" {
+	if model, effort, _ := cache.readClaudeFile(local); model != "claude-opus-5" || effort != "high" {
 		t.Fatalf("changed Claude file retained stale cache: %q/%q", model, effort)
 	}
 }

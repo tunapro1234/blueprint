@@ -102,20 +102,91 @@ func TestBarCacheTemperatureRequiresRecordedTTL(t *testing.T) {
 	}
 }
 
-func TestReadClaudeModelPrefersLocalSettings(t *testing.T) {
-	folder := t.TempDir()
-	home := t.TempDir()
-	writeBarTestFile(t, filepath.Join(folder, ".claude", "settings.local.json"),
-		`{"model":"claude-opus-4-1","effortLevel":"medium"}`)
-	writeBarTestFile(t, filepath.Join(home, ".claude", "settings.json"),
-		`{"model":"claude-sonnet-4","effortLevel":"low"}`)
-
-	model, effort := readClaudeModel(folder, home)
-	if model != "claude-opus-4-1" || effort != "medium" {
-		t.Fatalf("model/effort=%q/%q", model, effort)
+// The bar used to name whatever the last reply ran. A /model stayed invisible
+// until the next reply, a restarted agent kept its old model, and an agent that
+// had not answered yet showed none.
+func TestClaudeBarModelFollowsTheLiveSession(t *testing.T) {
+	started := time.Date(2026, 11, 9, 20, 0, 0, 0, time.UTC)
+	before, after := started.Add(-time.Hour), started.Add(time.Minute)
+	ran := func(at time.Time) cache.State {
+		return cache.State{Model: "claude-opus-5-5", Effort: "medium", ModelAt: at}
 	}
-	if got := modelLabel(model, effort); got != "opus med" {
-		t.Fatalf("model label=%q, want %q", got, "opus med")
+	picked := func(s cache.State, model, effort string) cache.State {
+		s.PickedModel, s.PickedEffort = model, effort
+		return s
+	}
+	for _, tc := range []struct {
+		name        string
+		live        cache.State
+		launch      claudeLaunch
+		pin, global string
+		want        string
+	}{
+		{"reply-from-this-process", ran(after), claudeLaunch{model: "claude-haiku-5-5", effort: "low", started: started},
+			`{"model":"sonnet","effortLevel":"high"}`, `{"model":"fable","effortLevel":"high"}`, "opus med"},
+		{"model-and-effort-picked", picked(ran(after), "Fable 5.2", "high"), claudeLaunch{started: started}, "", "", "fable high"},
+		{"model-picked-keeps-effort", picked(ran(after), "Fable 5.2", ""), claudeLaunch{started: started}, "", "", "fable med"},
+		{"effort-picked", picked(ran(after), "", "high"), claudeLaunch{started: started}, "", "", "opus high"},
+		{"restarted-with-flags", ran(before), claudeLaunch{model: "claude-haiku-5-5", effort: "medium", started: started},
+			`{"model":"sonnet","effortLevel":"high"}`, "", "haiku med"},
+		{"restarted-onto-pin", ran(before), claudeLaunch{started: started},
+			`{"model":"fable[1m]","effortLevel":"high"}`, `{"model":"sonnet","effortLevel":"low"}`, "fable high"},
+		{"restarted-fills-each-field", ran(before), claudeLaunch{model: "claude-fable-5-2", started: started},
+			`{"permissions":{}}`, `{"model":"sonnet","effortLevel":"low"}`, "fable low"},
+		{"restarted-with-nothing-configured", ran(before), claudeLaunch{started: started}, "", "", "opus med"},
+		{"pick-from-the-old-process", picked(ran(before), "Fable 5.2", "high"), claudeLaunch{model: "claude-opus-5-5", effort: "low", started: started},
+			"", "", "opus low"},
+		{"no-request-yet", cache.State{}, claudeLaunch{started: started}, "", `{"model":"fable","effortLevel":"high"}`, "fable high"},
+		{"no-request-yet-effort-picked", cache.State{PickedEffort: "low", ModelAt: after}, claudeLaunch{started: started},
+			"", `{"model":"fable","effortLevel":"high"}`, "fable low"},
+		{"process-unknown-trusts-the-record", ran(before), claudeLaunch{}, `{"model":"sonnet","effortLevel":"high"}`, "", "opus med"},
+		{"nothing-known", cache.State{}, claudeLaunch{}, "", "", ""},
+	} {
+		for _, cached := range []bool{false, true} {
+			t.Run(tc.name, func(t *testing.T) {
+				folder, home := t.TempDir(), t.TempDir()
+				t.Setenv("HOME", home)
+				if tc.pin != "" {
+					writeBarTestFile(t, filepath.Join(folder, ".claude", "settings.local.json"), tc.pin)
+				}
+				if tc.global != "" {
+					writeBarTestFile(t, filepath.Join(home, ".claude", "settings.json"), tc.global)
+				}
+				var models *barModelCache
+				if cached {
+					models = newBarModelCache()
+				}
+				if got := claudeBarModel(tc.live, tc.launch, folder, models); got != tc.want {
+					t.Fatalf("cached=%v label=%q, want %q", cached, got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestClaudeArgsModel(t *testing.T) {
+	for _, tc := range []struct {
+		argv          []string
+		model, effort string
+	}{
+		{[]string{"claude", "--model", "claude-haiku-5-5", "--effort", "medium", "--name", "a", "--resume", "id"}, "claude-haiku-5-5", "medium"},
+		{[]string{"claude", "--effort=high", "--model=opus[1m]"}, "opus[1m]", "high"},
+		{[]string{"claude", "--dangerously-skip-permissions", "--name", "server-main"}, "", ""},
+		{[]string{"claude", "--model"}, "", ""},
+	} {
+		if model, effort := claudeArgsModel(tc.argv); model != tc.model || effort != tc.effort {
+			t.Fatalf("%v: %q/%q", tc.argv, model, effort)
+		}
+	}
+}
+
+// A live pane: the label follows this very test process's launch line.
+func TestClaudeLaunchOfReadsProc(t *testing.T) {
+	if _, err := os.Stat("/proc/self/comm"); err != nil {
+		t.Skip("no /proc")
+	}
+	if launch := claudeLaunchOf(os.Getpid()); !launch.started.IsZero() || launch.model != "" {
+		t.Fatalf("a non-Claude process was taken for one: %+v", launch)
 	}
 }
 

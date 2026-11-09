@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -65,24 +64,6 @@ func (c *barModelCache) read(path string, read func(string) (string, string)) (s
 	if after, err := os.Stat(path); err == nil && after.Size() == info.Size() && after.ModTime().Equal(info.ModTime()) {
 		c.store(path, after, model, effort)
 	}
-	return model, effort
-}
-
-func (c *barModelCache) readClaude(folder, home string) (string, string) {
-	if folder != "" {
-		local := filepath.Join(folder, ".claude", "settings.local.json")
-		model, effort, err := c.readClaudeFile(local)
-		if err == nil && (model != "" || effort != "") {
-			return model, effort
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return "", ""
-		}
-	}
-	if home == "" {
-		return "", ""
-	}
-	model, effort, _ := c.readClaudeFile(filepath.Join(home, ".claude", "settings.json"))
 	return model, effort
 }
 

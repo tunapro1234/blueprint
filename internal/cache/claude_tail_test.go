@@ -38,6 +38,7 @@ func referenceReadClaudePath(path string) State {
 	messageStarts := make(map[string]time.Time)
 	ctxTokens := 0
 	model, effort := "", ""
+	var modelTime time.Time
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
@@ -103,6 +104,9 @@ func referenceReadClaudePath(path string) State {
 			if record.Type == "assistant" || message.Role == "assistant" {
 				_ = json.Unmarshal(record.Effort, &effort)
 			}
+			if stamp, ok := parseTime(record.Timestamp); ok {
+				modelTime = stamp
+			}
 		}
 		if message.Usage != nil {
 			if timestamp, ok := parseTime(record.Timestamp); ok && (compactTime.IsZero() || timestamp.After(compactTime)) {
@@ -138,7 +142,7 @@ func referenceReadClaudePath(path string) State {
 		}
 	}
 
-	result := State{CtxTokens: ctxTokens, LastHumanAge: -1, Model: model, Effort: effort, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: usageTime}
+	result := State{CtxTokens: ctxTokens, LastHumanAge: -1, Model: model, Effort: effort, ModelAt: modelTime, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: usageTime}
 	now := referenceNow
 	if cacheTTL > 0 {
 		result.CacheTTL, result.CacheAge = cacheTTL, age(now, cacheTime)

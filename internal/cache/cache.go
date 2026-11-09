@@ -81,8 +81,16 @@ type State struct {
 	// Model is what the session actually ran last, read from the assistant
 	// records. Settings files only hold the configured default: /model changes
 	// a live session without touching them, so they cannot be trusted for this.
-	Model        string
-	Effort       string
+	Model  string
+	Effort string
+	// PickedModel and PickedEffort are what a /model or /effort command chose
+	// after the last request went out: the session's next request uses them,
+	// but nothing has run with them yet. PickedModel is the display name the
+	// command printed ("Fable 5.2"), not a model id.
+	PickedModel  string
+	PickedEffort string
+	// ModelAt is when the newest model or effort evidence was written.
+	ModelAt      time.Time
 	ServiceTier  string
 	ThreadID     string
 	Path         string
@@ -165,6 +173,12 @@ type claudeRow struct {
 	id         string
 	model      string
 	effort     string
+	// request marks an api-request record: the model and effort of a request
+	// as it leaves, before any response exists.
+	request bool
+	// pickModel and pickEffort come from a /model or /effort command's output.
+	pickModel  string
+	pickEffort string
 	usage      bool
 	ctx        int
 	ttl        time.Duration
@@ -186,12 +200,43 @@ func decodeClaudeRow(line []byte) claudeRow {
 		Role      string          `json:"role"`
 		Content   json.RawMessage `json:"content"`
 		Effort    json.RawMessage `json:"effort"`
+		// api-request records only.
+		QuerySource string `json:"querySource"`
+		Params      *struct {
+			Model        string `json:"model"`
+			OutputConfig struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		} `json:"params"`
 	}
 	if json.Unmarshal(line, &record) != nil || record.IsSidechain {
 		row.ignored = true
 		return row
 	}
 	row.stamp, row.stamped = parseTime(record.Timestamp)
+	if record.Type == "api-request" {
+		// Written when a request leaves, so it shows a /model or picker change
+		// seconds to minutes before the first assistant record does. Only the
+		// conversation's own requests count; helper requests (titles and the
+		// like) may run another model.
+		if record.Params != nil && record.Params.Model != "" && (record.QuerySource == "repl_main_thread" || record.QuerySource == "sdk") {
+			row.request = true
+			row.model, row.effort = record.Params.Model, record.Params.OutputConfig.Effort
+		}
+		return row
+	}
+	if record.Type == "user" || (record.Type == "system" && record.Subtype == "local_command") {
+		source := record.Content
+		if record.Type == "user" {
+			var outer struct {
+				Content json.RawMessage `json:"content"`
+			}
+			if json.Unmarshal(record.Message, &outer) == nil && len(outer.Content) > 0 {
+				source = outer.Content
+			}
+		}
+		row.pickModel, row.pickEffort = localCommandPick(source)
+	}
 	if record.Type == "system" && record.Subtype == "compact_boundary" {
 		row.boundary = true
 		if record.CompactMetadata != nil && record.CompactMetadata.PostTokens != nil && *record.CompactMetadata.PostTokens >= 0 {
@@ -258,6 +303,9 @@ type claudeMetrics struct {
 	cacheTTL                        time.Duration
 	ctxTokens                       int
 	model, effort                   string
+	pickedModel, pickedEffort       string
+	modelTime                       time.Time
+	sawRequest                      bool
 }
 
 type claudeFold struct {
@@ -290,6 +338,30 @@ func (f *claudeFold) add(row claudeRow) {
 	}
 	if row.model != "" {
 		f.model, f.effort = row.model, row.effort
+		if row.stamped {
+			f.modelTime = row.stamp
+		}
+		// A request that left after the pick ran with it, so the pick is
+		// spent. An assistant record may still belong to a request that left
+		// before the pick; it only spends the pick in transcripts that carry
+		// no request records at all (older Claude Code).
+		if row.request {
+			f.sawRequest = true
+			f.pickedModel, f.pickedEffort = "", ""
+		} else if !f.sawRequest {
+			f.pickedModel, f.pickedEffort = "", ""
+		}
+	}
+	if row.pickModel != "" || row.pickEffort != "" {
+		if row.pickModel != "" {
+			f.pickedModel = row.pickModel
+		}
+		if row.pickEffort != "" {
+			f.pickedEffort = row.pickEffort
+		}
+		if row.stamped {
+			f.modelTime = row.stamp
+		}
 	}
 	if row.usage && row.stamped && (f.compactTime.IsZero() || row.stamp.After(f.compactTime)) {
 		f.usageTime = row.stamp
@@ -307,7 +379,7 @@ func (f *claudeFold) add(row claudeRow) {
 func (f *claudeFold) metrics() claudeMetrics { return f.claudeMetrics }
 
 func (m claudeMetrics) state(path string, now time.Time) State {
-	result := State{CtxTokens: m.ctxTokens, LastHumanAge: -1, Model: m.model, Effort: m.effort, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: m.usageTime}
+	result := State{CtxTokens: m.ctxTokens, LastHumanAge: -1, Model: m.model, Effort: m.effort, PickedModel: m.pickedModel, PickedEffort: m.pickedEffort, ModelAt: m.modelTime, Path: path, ThreadID: strings.TrimSuffix(filepath.Base(path), ".jsonl"), UsageAt: m.usageTime}
 	if m.cacheTTL > 0 {
 		result.CacheTTL, result.CacheAge = m.cacheTTL, age(now, m.cacheTime)
 	}
@@ -328,6 +400,58 @@ func Fleet(projectsRoot string, folders map[string]string) map[string]State {
 	}
 	return states
 }
+
+// localCommandPick reads the choice a /model or /effort command printed. The
+// command's output is its own record (or its own text block), so only text
+// that starts with the stdout tag counts; a prompt that merely quotes one
+// does not.
+func localCommandPick(raw json.RawMessage) (model, effort string) {
+	var texts []string
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		texts = []string{text}
+	} else {
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(raw, &parts) != nil {
+			return "", ""
+		}
+		for _, part := range parts {
+			texts = append(texts, part.Text)
+		}
+	}
+	for _, text := range texts {
+		body, ok := strings.CutPrefix(strings.TrimSpace(text), "<local-command-stdout>")
+		if !ok {
+			continue
+		}
+		body, _, _ = strings.Cut(body, "</local-command-stdout>")
+		body = strings.ReplaceAll(ansiStyle.ReplaceAllString(body, ""), "`", "")
+		if line, _, _ := strings.Cut(body, "\n"); line != "" {
+			body = line
+		}
+		if match := pickedModelText.FindStringSubmatch(body); match != nil {
+			model = strings.TrimSpace(match[1])
+			if with := pickedModelEffort.FindStringSubmatch(body); with != nil {
+				effort = with[1]
+			}
+		} else if match := pickedEffortText.FindStringSubmatch(body); match != nil {
+			effort = match[1]
+		}
+	}
+	return model, effort
+}
+
+var (
+	ansiStyle = regexp.MustCompile("\\x1b\\[[0-9;]*m")
+	// "Set model to Fable 5.2 and saved as your default for new sessions with
+	// high effort; <note about a pin>", "Set model to Opus 5.5 (1M context)",
+	// "Kept model as Opus 5".
+	pickedModelText   = regexp.MustCompile(`^(?:Set model to|Kept model as) (.+?)(?: and saved\b| with (?:low|medium|high|xhigh|max) effort\b|;|\s*$)`)
+	pickedModelEffort = regexp.MustCompile(`\bwith (low|medium|high|xhigh|max) effort\b`)
+	pickedEffortText  = regexp.MustCompile(`^(?:Set effort level to|Kept effort level as) (low|medium|high|xhigh|max)\b`)
+)
 
 func contentText(raw json.RawMessage) string {
 	var text string

@@ -10,6 +10,7 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- Bar: the model segment of a Claude agent now follows the session as it changes. A `/model` or `/effort` shows on the next refresh, and a request shows its model when it leaves; before, the label changed only with the first reply after the switch. A restarted agent shows what its new process was started with (launch flags, then the folder pin, then the user default) instead of the model of the previous process, and an agent that has not sent a request yet shows that same starting model instead of nothing.
 - `bp close`: an agent registered in more than one agentbook, open in one and closed in a stale copy, now closes normally. Before, the command stopped with "multiple registrations with different statuses".
 - `bp update --clis`: a pane that returns to its shell after `/exit` now counts as an exited CLI and the agent is reopened in place. Before, only a dead pane counted, so an agent launched through a shell was left at the prompt and reported as a failed restart. The wait for the exit is 20 seconds instead of 10.
 - Delivery: a fresh Claude pane whose session has no transcript file yet (nothing typed, no /rename) is now deliverable when its composer is empty. Before, bp reported the runtime as unknown because the file was missing, and the first message, which is what creates the file, never went out.

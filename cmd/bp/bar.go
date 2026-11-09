@@ -343,6 +343,9 @@ func (a *app) barModel(agent string, process bptmux.PaneProcess, folder string, 
 
 func (a *app) barModelWithCache(agent string, process bptmux.PaneProcess, folder string, state func() cache.State, models *barModelCache) string {
 	if live := state(); live.Activity != nil {
+		if live.Runtime == "claude" {
+			return claudeBarModel(live, claudeLaunchOf(process.PID), folder, models)
+		}
 		model, effort := live.Model, live.Effort
 		if models != nil && live.Activity.TranscriptPath != "" && strings.HasPrefix(live.Runtime, "codex") {
 			model, effort = models.remember(live.Activity.TranscriptPath, model, effort)
@@ -352,7 +355,6 @@ func (a *app) barModelWithCache(agent string, process bptmux.PaneProcess, folder
 		}
 		return modelLabel(model, effort)
 	}
-	home, _ := os.UserHomeDir()
 	var model, effort string
 	if a.codexPane(agent, process) {
 		live := state()
@@ -403,20 +405,122 @@ func (a *app) barModelWithCache(agent string, process bptmux.PaneProcess, folder
 		}
 		return modelLabel(model, effort)
 	}
-	switch process.Command {
-	case "claude":
-		if models == nil {
-			model, effort = readClaudeModel(folder, home)
+	if process.Command == "claude" {
+		return claudeBarModel(state(), claudeLaunchOf(process.PID), folder, models)
+	}
+	return ""
+}
+
+// claudeLaunch is what the Claude process under a pane was started with.
+type claudeLaunch struct {
+	model, effort string
+	// started is zero when the process could not be found.
+	started time.Time
+}
+
+// claudeLaunchOf finds the Claude process of a pane: the pane's own process
+// or, as bp launches it, a direct child of the pane's shell.
+var claudeLaunchOf = func(panePID int) claudeLaunch {
+	if panePID <= 0 {
+		return claudeLaunch{}
+	}
+	for _, pid := range append([]int{panePID}, childPIDs(panePID)...) {
+		comm, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "comm"))
+		if err != nil || strings.TrimSpace(string(comm)) != "claude" {
+			continue
+		}
+		launch := claudeLaunch{}
+		launch.model, launch.effort = claudeArgsModel(procArgs(pid))
+		launch.started, _ = book.ProcessStartedAt(pid)
+		return launch
+	}
+	return claudeLaunch{}
+}
+
+// claudeArgsModel reads --model and --effort from a Claude launch line.
+func claudeArgsModel(argv []string) (model, effort string) {
+	for i := 1; i < len(argv); i++ {
+		name, value, joined := strings.Cut(argv[i], "=")
+		if name != "--model" && name != "--effort" {
+			continue
+		}
+		if !joined {
+			if i+1 >= len(argv) {
+				break
+			}
+			i++
+			value = argv[i]
+		}
+		if name == "--model" {
+			model = value
 		} else {
-			model, effort = models.readClaude(folder, home)
+			effort = value
 		}
-		// The session record beats every settings file: /model switches a live
-		// agent without touching its pin, and writes the GLOBAL default, so the
-		// settings answer can be wrong in both directions at once.
-		if live := state().Model; live != "" {
-			model = live
+	}
+	return model, effort
+}
+
+// claudeBarModel names the model and effort a Claude pane is on.
+//
+// The session record is the best witness, read in the order the session wrote
+// it: a /model or /effort choice, then the request that left with it, then the
+// reply. That record only speaks for the process that wrote it. After a
+// restart nothing has run yet, and what will run is what the new process was
+// started with: its launch line, then the folder pin, then the user default,
+// each filling only what the one before left open. The same holds for a
+// session that has not sent a request at all.
+func claudeBarModel(live cache.State, launch claudeLaunch, folder string, models *barModelCache) string {
+	recorded := live.Model != "" || live.PickedModel != "" || live.PickedEffort != ""
+	current := recorded && (launch.started.IsZero() || live.ModelAt.IsZero() || !live.ModelAt.Before(launch.started))
+	if current {
+		model, effort := live.Model, live.Effort
+		if live.PickedModel != "" {
+			model = live.PickedModel
 		}
-	default:
+		if live.PickedEffort != "" {
+			effort = live.PickedEffort
+		}
+		if model != "" {
+			return modelLabel(model, effort)
+		}
+	}
+	var paths []string
+	if folder != "" {
+		paths = append(paths, filepath.Join(folder, ".claude", "settings.local.json"))
+	}
+	if home, _ := os.UserHomeDir(); home != "" {
+		paths = append(paths, filepath.Join(home, ".claude", "settings.json"))
+	}
+	model, effort := launch.model, launch.effort
+	for _, path := range paths {
+		if model != "" && effort != "" {
+			break
+		}
+		var fileModel, fileEffort string
+		if models == nil {
+			if data, err := os.ReadFile(path); err == nil {
+				fileModel, fileEffort = parseClaudeModel(data)
+			}
+		} else {
+			fileModel, fileEffort, _ = models.readClaudeFile(path)
+		}
+		if model == "" {
+			model = fileModel
+		}
+		if effort == "" {
+			effort = fileEffort
+		}
+	}
+	if current && live.PickedEffort != "" {
+		// Only an /effort so far: the model is still the one it started with.
+		effort = live.PickedEffort
+	}
+	if model == "" {
+		// Nothing says what this process starts with; the last thing the
+		// session ran is the best remaining answer.
+		model, effort = live.Model, live.Effort
+	}
+	if model == "" {
 		return ""
 	}
 	return modelLabel(model, effort)
@@ -458,30 +562,6 @@ func codexHome(pid int) string {
 		return filepath.Join(user, ".codex")
 	}
 	return ""
-}
-
-func readClaudeModel(folder, home string) (string, string) {
-	if folder != "" {
-		local := filepath.Join(folder, ".claude", "settings.local.json")
-		data, err := os.ReadFile(local)
-		if err == nil {
-			// A settings.local.json often carries only a permissions allowlist,
-			// no model pin - that agent runs the global default, so fall through.
-			if model, effort := parseClaudeModel(data); model != "" || effort != "" {
-				return model, effort
-			}
-		} else if !os.IsNotExist(err) {
-			return "", ""
-		}
-	}
-	if home == "" {
-		return "", ""
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
-	if err != nil {
-		return "", ""
-	}
-	return parseClaudeModel(data)
 }
 
 func parseClaudeModel(data []byte) (string, string) {

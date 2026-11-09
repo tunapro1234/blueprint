@@ -170,6 +170,9 @@ func localCodexObservation(binding *cache.LocalBinding, pid int) (cache.LocalObs
 	return found, nil
 }
 
+// ProcessStartedAt reports when pid started; false where /proc cannot say.
+func ProcessStartedAt(pid int) (time.Time, bool) { return processStartedAt(pid) }
+
 // processStartedAt reports when pid started, from /proc/<pid>/stat field 22
 // (clock ticks since boot) and the boot time in /proc/stat.
 var processStartedAt = func(pid int) (time.Time, bool) {

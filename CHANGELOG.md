@@ -10,6 +10,7 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Added
 
+- `bp close`: an agent registered in more than one agentbook, open in one and closed in a stale copy, now closes normally. Before, the command stopped with "multiple registrations with different statuses".
 - `bp update --clis`: a pane that returns to its shell after `/exit` now counts as an exited CLI and the agent is reopened in place. Before, only a dead pane counted, so an agent launched through a shell was left at the prompt and reported as a failed restart. The wait for the exit is 20 seconds instead of 10.
 - Delivery: a fresh Claude pane whose session has no transcript file yet (nothing typed, no /rename) is now deliverable when its composer is empty. Before, bp reported the runtime as unknown because the file was missing, and the first message, which is what creates the file, never went out.
 - Claude accounts: the daemon now copies the active account's login into its slot whenever Claude Code has refreshed it. Refresh tokens rotate, so a slot copy written only at switch time went stale; replacing the live login (a `/login` for another account) then lost the only valid token and the slot died with invalid_grant.

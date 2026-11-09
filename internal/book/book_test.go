@@ -374,3 +374,26 @@ func TestRoleChangeDoesNotRemoveRuntimeBinding(t *testing.T) {
 		t.Fatal("explicit observation reset did not clear runtime")
 	}
 }
+
+// A stale closed copy in one book beside the live registration in another is
+// normal (SetStatus updates one book). bp close must see the agent as open,
+// not fail on the disagreement (probot-business, 9 Nov 2026).
+func TestRecordStatusLiveRegistrationWinsOverStaleClosedCopy(t *testing.T) {
+	dir := t.TempDir()
+	stale, live := filepath.Join(dir, "main.json"), filepath.Join(dir, "team.json")
+	writeBookFile(t, stale, map[string]any{"agents": []map[string]any{{"name": "worker", "status": "closed", "folder": "/w"}, {"name": "gone", "status": "closed", "folder": "/g"}}})
+	writeBookFile(t, live, map[string]any{"agents": []map[string]any{{"name": "worker", "status": "open", "folder": "/w"}, {"name": "gone", "status": "closed", "folder": "/g"}}})
+	for _, paths := range [][]string{{stale, live}, {live, stale}} {
+		status, found, err := RecordStatus(paths, "worker")
+		if err != nil || !found || status != "open" {
+			t.Fatalf("worker: status=%q found=%v err=%v, want open", status, found, err)
+		}
+		status, found, err = RecordStatus(paths, "gone")
+		if err != nil || !found || status != "closed" {
+			t.Fatalf("gone: status=%q found=%v err=%v, want closed", status, found, err)
+		}
+	}
+	if _, found, err := RecordStatus([]string{stale, live}, "nobody"); err != nil || found {
+		t.Fatalf("nobody: found=%v err=%v", found, err)
+	}
+}

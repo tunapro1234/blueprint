@@ -124,7 +124,8 @@ func IsArchived(paths []string, name string) (bool, error) {
 	return false, nil
 }
 
-// RecordStatus returns the visible registration's status when one exists. It
+// RecordStatus returns the visible registration's status when one exists;
+// across several registrations a non-closed status wins. It
 // reads archived rows too: close/reporting must be based on the stored state,
 // not on Fleet's intentional archive filter.
 func RecordStatus(paths []string, name string) (string, bool, error) {
@@ -137,8 +138,13 @@ func RecordStatus(paths []string, name string) (string, bool, error) {
 		if record.Agent.Name != name {
 			continue
 		}
-		if found && record.Agent.Status != status {
-			return "", true, fmt.Errorf("%s has multiple registrations with different statuses", name)
+		// The same agent can be registered in more than one book, and
+		// SetStatus only updates one of them, so a stale "closed" copy beside
+		// a live one is normal. Any registration that is not closed wins: the
+		// only caller (bp close) uses this to skip an already closed agent,
+		// and a live registration must never be skipped or refused.
+		if found && status != "closed" {
+			continue
 		}
 		status, found = record.Agent.Status, true
 	}

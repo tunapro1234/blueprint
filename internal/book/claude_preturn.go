@@ -3,6 +3,7 @@ package book
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,7 +90,7 @@ func applyClaudePreTurn(state cache.State, a *cache.Activity, name, cwd, pane st
 	if state.Runtime != "claude" || a.State != "unknown" || a.ThreadID == "" {
 		return
 	}
-	if a.Reason != "no readable decisive turn event" && a.Reason != "waiting for decisive Claude turn event" {
+	if a.Reason != "no readable decisive turn event" && a.Reason != "waiting for decisive Claude turn event" && a.Reason != reasonNoTranscriptYet {
 		return
 	}
 	if a.Binding != "claude-process-session" && a.Binding != "local-launch-observer" {
@@ -98,10 +99,24 @@ func applyClaudePreTurn(state cache.State, a *cache.Activity, name, cwd, pane st
 	// bp open's own onboarding prompt left unsubmitted counts as empty: it is
 	// bp's text, and the send path submits it (2026-10-08, probot-equity).
 	empty := bptmux.ClaudeEmptyComposer(pane) || bptmux.ClaudeComposerHoldsOnboarding(pane, name)
-	if !empty || !claudePreTurn(a.TranscriptPath, a.ThreadID, cwd) {
+	if !empty || !(claudePreTurn(a.TranscriptPath, a.ThreadID, cwd) || noTranscriptYet(a)) {
 		return
 	}
 	a.State, a.Source, a.Reason = "idle", "claude-pre-turn", ""
+}
+
+// reasonNoTranscriptYet marks a live Claude process whose own session has no
+// transcript file yet: nothing, not even a /rename, has happened in it.
+const reasonNoTranscriptYet = "no Claude transcript yet"
+
+// noTranscriptYet holds only while the bound session's file is still absent;
+// once it exists the full pre-turn scan decides.
+func noTranscriptYet(a *cache.Activity) bool {
+	if a.Reason != reasonNoTranscriptYet || a.TranscriptPath == "" {
+		return false
+	}
+	_, err := os.Lstat(a.TranscriptPath)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func claudeInitialCommand(content string) bool {

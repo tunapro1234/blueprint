@@ -5,6 +5,7 @@ import (
 	"blueprint/internal/codexrpc"
 	bptmux "blueprint/internal/tmux"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -473,6 +474,18 @@ func claudeRuntimeBound(agent Agent, a *cache.Activity, liveID string) cache.Sta
 		path, err = bptmux.ClaudeSessionPathForID(bptmux.ClaudeProjectsRoot(), FirstPath(agent.Folder), liveID)
 	} else {
 		path, err = bptmux.ResolveSessionPath(bptmux.ClaudeProjectsRoot(), FirstPath(agent.Folder), agent.Name, id)
+	}
+	if err != nil && liveID != "" && errors.Is(err, os.ErrNotExist) {
+		// The process names its own session, but Claude Code writes the
+		// transcript only with the first message. Bind to where it will
+		// appear; applyClaudePreTurn decides from the screen whether the pane
+		// is a fresh, deliverable one (9 Nov 2026: cfv-site held 4 messages
+		// for 74 minutes because the file the first message creates was
+		// missing).
+		a.ThreadID, a.Binding = liveID, binding
+		a.TranscriptPath = filepath.Join(bptmux.ClaudeProjectDir(FirstPath(agent.Folder)), liveID+".jsonl")
+		a.Reason = reasonNoTranscriptYet
+		return state
 	}
 	if err != nil {
 		a.Reason = err.Error()

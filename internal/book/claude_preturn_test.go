@@ -83,3 +83,34 @@ func TestClaudePreTurnDoesNotOverrideBusyDraftModalStaleOrWeakBinding(t *testing
 		})
 	}
 }
+
+// A fresh pane whose session has no transcript file at all (no /rename, no
+// message yet) is deliverable when its composer is empty (cfv-site, 9 Nov
+// 2026). Once the file exists, the full transcript scan decides again.
+func TestClaudePreTurnWithoutTranscriptFile(t *testing.T) {
+	id := "64377c54-8ecd-435e-b2a7-6d6be55731bc"
+	path := filepath.Join(t.TempDir(), "-srv-cfv-site", id+".jsonl")
+	pane := "──────────────────── cfv-site ──\n❯ \n────────────────────────────────────────\n  -- INSERT -- ⏵⏵ bypass permissions on (shift+tab to cycle)"
+	for _, mode := range []string{"ready", "draft", "working", "weak", "file-appeared"} {
+		t.Run(mode, func(t *testing.T) {
+			a := &cache.Activity{State: "unknown", Reason: reasonNoTranscriptYet, ThreadID: id, TranscriptPath: path, Binding: "claude-process-session"}
+			screen := pane
+			switch mode {
+			case "draft":
+				screen = strings.Replace(pane, "❯ ", "❯ user draft", 1)
+			case "working":
+				screen = "✻ Working… (23s · esc to interrupt)\n" + pane
+			case "weak":
+				a.Binding = "claude-session-name"
+			case "file-appeared":
+				_ = os.MkdirAll(filepath.Dir(path), 0o700)
+				_ = os.WriteFile(path, []byte(`{"type":"user","sessionId":"`+id+`","message":{"content":"real work"}}`+"\n"), 0o600)
+				defer os.Remove(path)
+			}
+			applyClaudePreTurn(cache.State{Runtime: "claude"}, a, "cfv-site", "/srv/cfv/site", screen)
+			if (a.State == "idle") != (mode == "ready") {
+				t.Fatal(mode, a)
+			}
+		})
+	}
+}

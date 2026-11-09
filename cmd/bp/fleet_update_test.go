@@ -528,3 +528,22 @@ func TestStoredFleetMigrationAppliesOnClosedResume(t *testing.T) {
 		t.Fatalf("resume args=%q", got)
 	}
 }
+
+// After /exit the managed launcher's shell comes back to the foreground; the
+// pane never dies. That is an exited CLI, not a live pane to refuse
+// (probot-tg-site, 9 Nov 2026). A CLI still in the foreground is not.
+func TestFleetUpdateWaitNativeExitAcceptsShell(t *testing.T) {
+	for command, want := range map[string]bool{"zsh": true, "bash": true, "claude": false} {
+		root := t.TempDir()
+		tmuxBin := filepath.Join(root, "tmux")
+		script := "#!/bin/sh\ncase \"$1\" in\nlist-panes) printf '1\\t" + command + "\\t4242\\n' ;;\ndisplay-message) printf '0\\n' ;;\n*) exit 1 ;;\nesac\n"
+		if err := os.WriteFile(tmuxBin, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		backend := &liveFleetUpdate{app: &app{ctx: context.Background(), tmux: &bptmux.Client{Bin: tmuxBin}}}
+		got, err := backend.waitNativeExit("worker", 200*time.Millisecond)
+		if err != nil || got != want {
+			t.Fatalf("%s: exited=%v err=%v, want %v", command, got, err, want)
+		}
+	}
+}

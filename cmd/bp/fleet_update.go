@@ -721,24 +721,40 @@ func (b *liveFleetUpdate) Restart(name, folder string, opts bptmux.OpenOptions) 
 	if err := b.app.tmux.Send(b.app.ctx, name, "/exit"); err != nil {
 		return fmt.Errorf("exit native CLI: %w", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	dead := false
-	for time.Now().Before(deadline) {
-		var err error
-		dead, err = b.app.tmux.PaneDead(b.app.ctx, name)
-		if err != nil {
-			return fmt.Errorf("verify native CLI exit: %w", err)
-		}
-		if dead {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+	exited, err := b.waitNativeExit(name, 20*time.Second)
+	if err != nil {
+		return err
 	}
-	if !dead {
+	if !exited {
 		return fmt.Errorf("native CLI did not leave an exited pane; refusing to terminate a live pane")
 	}
 	launch.RemoteControl = b.app.config.RemoteControlOnOpen
 	return b.app.tmux.Open(b.app.ctx, name, folder, launch, func(message string) { fmt.Fprintln(b.app.out, message) })
+}
+
+// waitNativeExit waits for the CLI to leave the pane after /exit. A pane
+// launched through a shell (managed launcher, interactive zsh) does not die
+// when the CLI exits: the shell comes back to the foreground. Both count as
+// exited; tmux.Open relaunches either in place (9 Nov 2026: probot-tg-site
+// was left at a zsh prompt and reported as a failed restart).
+func (b *liveFleetUpdate) waitNativeExit(name string, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		dead, err := b.app.tmux.PaneDead(b.app.ctx, name)
+		if err != nil {
+			return false, fmt.Errorf("verify native CLI exit: %w", err)
+		}
+		if dead {
+			return true, nil
+		}
+		if after, err := b.app.tmux.PaneProcess(b.app.ctx, name); err == nil && bptmux.IsShellCommand(after.Command) {
+			return true, nil
+		}
+		if !time.Now().Before(deadline) {
+			return false, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func fleetRestartPaneMatches(opts bptmux.OpenOptions, command, pane string) bool {

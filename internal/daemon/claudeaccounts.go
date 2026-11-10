@@ -76,7 +76,8 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 	}
 	if accounts.KeepAlive {
 		auto.keepAlive = &claudeacct.KeepAliveOptions{Model: accounts.KeepAliveModel,
-			SkipBackups: !accounts.Backup.KeepAliveBackups, FlatStagger: accounts.Backup.Stagger == "flat"}
+			SkipBackups: !accounts.Backup.KeepAliveBackups, FlatStagger: accounts.Backup.Stagger == "flat",
+			Scope: accounts.KeepAliveScope, Policy: auto.options.Policy, Weekly: accounts.KeepAliveWeekly}
 	}
 	return auto
 }
@@ -138,7 +139,8 @@ func (c *claudeAccountAuto) quiet(ctx context.Context, err error) error {
 	return err
 }
 
-// keepAlivePass pings the accounts whose staggered window start has come and
+// keepAlivePass pings the accounts whose window start has come (or whose
+// seven-day window is not running, with weekly pings on) and
 // logs each ping and, at most hourly, each account's repeating error.
 func (c *claudeAccountAuto) keepAlivePass(ctx context.Context) error {
 	result, err := c.manager.KeepAliveOnce(ctx, *c.keepAlive)
@@ -152,6 +154,9 @@ func (c *claudeAccountAuto) keepAlivePass(ctx context.Context) error {
 	for _, view := range result.Slots {
 		name := fmt.Sprintf("slot %d (%s)", view.Slot, view.Email)
 		switch {
+		case view.Pinged && view.Started && view.DueReason == claudeacct.KeepAliveDueWeekly:
+			c.log.Printf("%s: keepalive started the seven-day window of %s; it resets at %s", claudeAccountJob, name, view.WeeklyResetsAt.Local().Format("Mon 15:04"))
+			delete(c.keepErrors, view.Slot)
 		case view.Pinged && view.Started:
 			c.log.Printf("%s: keepalive started the five-hour window of %s; it resets at %s", claudeAccountJob, name, view.ResetsAt.Local().Format("15:04"))
 			delete(c.keepErrors, view.Slot)

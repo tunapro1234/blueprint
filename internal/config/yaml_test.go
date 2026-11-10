@@ -210,6 +210,34 @@ func TestDefaultColorConfig(t *testing.T) {
 	}
 }
 
+func TestClaudeAccountsKeepAliveScopeAndWeekly(t *testing.T) {
+	if d := DefaultClaudeAccounts(); d.KeepAliveScope != "all" || d.KeepAliveWeekly {
+		t.Fatalf("defaults scope=%q weekly=%t", d.KeepAliveScope, d.KeepAliveWeekly)
+	}
+	c, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  keepAlive: true\n")
+	if err != nil || c.ClaudeAccounts.KeepAliveScope != "all" || c.ClaudeAccounts.KeepAliveWeekly {
+		t.Fatalf("unset=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	c, err = yamlConfig(t, "config.yaml", "claudeAccounts:\n  keepAliveScope: weekly-active\n  keepAliveWeekly: true\n")
+	if err != nil || c.ClaudeAccounts.KeepAliveScope != "weekly-active" || !c.ClaudeAccounts.KeepAliveWeekly || c.ClaudeAccounts.KeepAliveModel != "haiku" {
+		t.Fatalf("override=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	for _, bad := range []string{"weekly", "\"\"", "Weekly-Active", "none"} {
+		if _, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  keepAliveScope: "+bad+"\n"); err == nil || !strings.Contains(err.Error(), "keepAliveScope") {
+			t.Fatalf("accepted keepAliveScope %s: %v", bad, err)
+		}
+	}
+	home := t.TempDir()
+	t.Setenv("BP_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"keepAlive":true,"keepAliveScope":"weekly-active","keepAliveWeekly":true}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load()
+	if err != nil || c.ClaudeAccounts.KeepAliveScope != "weekly-active" || !c.ClaudeAccounts.KeepAliveWeekly || c.ClaudeAccounts.Threshold != 90 {
+		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
+	}
+}
+
 func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 	c, err := yamlConfig(t, "config.yaml", "{}")
 	if err != nil || !reflect.DeepEqual(c.ClaudeAccounts, DefaultClaudeAccounts()) || c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.Threshold != 90 || c.ClaudeAccounts.KeepAlive || c.ClaudeAccounts.KeepAliveModel != "haiku" {

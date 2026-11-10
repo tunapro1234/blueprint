@@ -99,6 +99,15 @@ type ClaudeAccountsConfig struct {
 	Limits          map[string]int `json:"limits,omitempty" yaml:"limits,omitempty"`
 	KeepAlive       bool           `json:"keepAlive" yaml:"keepAlive"`
 	KeepAliveModel  string         `json:"keepAliveModel" yaml:"keepAliveModel"`
+	// KeepAliveScope is which accounts get five-hour keepalive pings: "all"
+	// (the default) keeps every usable account's five-hour window running on
+	// a staggered grid; "weekly-active" keeps only the weekly-active account
+	// running, the one soonest-weekly-reset switching drains, its windows
+	// back to back.
+	KeepAliveScope string `json:"keepAliveScope" yaml:"keepAliveScope"`
+	// KeepAliveWeekly (with KeepAlive on) also pings every usable account
+	// whose seven-day window is not running, once, to start it.
+	KeepAliveWeekly bool `json:"keepAliveWeekly" yaml:"keepAliveWeekly"`
 	// SwitchPrefer picks the auto-switch target: "soonest-reset" (the default)
 	// drains the account whose five-hour window resets soonest; "room" picks
 	// the account with the most room left under its limit;
@@ -137,7 +146,7 @@ func (c ClaudeAccountsConfig) LimitPercents() map[string]float64 {
 
 // DefaultClaudeAccounts is the claudeAccounts block used when none is set.
 func DefaultClaudeAccounts() ClaudeAccountsConfig {
-	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku", SwitchPrefer: "soonest-reset",
+	return ClaudeAccountsConfig{AutoSwitch: false, Threshold: 90, CooldownMinutes: 5, PollMinutes: 5, KeepAliveModel: "haiku", KeepAliveScope: "all", SwitchPrefer: "soonest-reset",
 		Backup: ClaudeAccountsBackup{KeepAliveBackups: true, Stagger: "interleave", SwitchOrder: "after-normals"}}
 }
 
@@ -247,6 +256,8 @@ type claudeAccountsOverrides struct {
 	Limits          *map[string]int `json:"limits" yaml:"limits"`
 	KeepAlive       *bool           `json:"keepAlive" yaml:"keepAlive"`
 	KeepAliveModel  *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
+	KeepAliveScope  *string         `json:"keepAliveScope" yaml:"keepAliveScope"`
+	KeepAliveWeekly *bool           `json:"keepAliveWeekly" yaml:"keepAliveWeekly"`
 	SwitchPrefer    *string         `json:"switchPrefer" yaml:"switchPrefer"`
 	Backup          *struct {
 		KeepAliveBackups *bool   `json:"keepAliveBackups" yaml:"keepAliveBackups"`
@@ -633,6 +644,12 @@ func apply(result *Config, values overrides) {
 		if accounts.KeepAliveModel != nil {
 			result.ClaudeAccounts.KeepAliveModel = *accounts.KeepAliveModel
 		}
+		if accounts.KeepAliveScope != nil {
+			result.ClaudeAccounts.KeepAliveScope = *accounts.KeepAliveScope
+		}
+		if accounts.KeepAliveWeekly != nil {
+			result.ClaudeAccounts.KeepAliveWeekly = *accounts.KeepAliveWeekly
+		}
 		if accounts.SwitchPrefer != nil {
 			result.ClaudeAccounts.SwitchPrefer = *accounts.SwitchPrefer
 		}
@@ -676,6 +693,11 @@ func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 	}
 	if strings.TrimSpace(value.KeepAliveModel) == "" || strings.HasPrefix(strings.TrimSpace(value.KeepAliveModel), "-") {
 		return fmt.Errorf("keepAliveModel must name a Claude model")
+	}
+	switch value.KeepAliveScope {
+	case "all", "weekly-active":
+	default:
+		return fmt.Errorf("keepAliveScope must be \"all\" or \"weekly-active\"")
 	}
 	switch value.SwitchPrefer {
 	case "", "room", "soonest-reset", "soonest-weekly-reset":

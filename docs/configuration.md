@@ -141,6 +141,8 @@ claudeAccounts:
     shared: 40
   keepAlive: false      # keep every account's five-hour window running
   keepAliveModel: haiku # model of the minimal keepalive prompt
+  keepAliveScope: all   # or weekly-active: five-hour pings for the weekly-active account only
+  keepAliveWeekly: false # also start every account's seven-day window when it is not running
   backup:               # accounts marked with bp account role N backup
     switchOrder: after-normals # or interleave
     stagger: interleave        # or flat
@@ -195,6 +197,46 @@ used-up normal account always has a backup with a fresh window close by;
 whether or not `autoSwitch` is
 on.
 
+`keepAliveScope: weekly-active` gives five-hour pings to one account only:
+the weekly-active account, the one `switchPrefer: soonest-weekly-reset`
+drains. It is chosen the way that strategy orders accounts, on the seven-day
+window alone: among enabled normal accounts below their limit (`threshold`, or
+the account's own `limits` entry) on the seven-day window, the one whose
+seven-day window resets soonest; a backup, by priority, only when no normal
+account qualifies and `backup.keepAliveBackups` is on. An account whose
+seven-day usage is unknown is not a candidate. Its five-hour windows run back
+to back: it is prompted as soon as a window has run out, without the grid. The
+other accounts get no five-hour pings and `bp account keepalive` lists each
+with the reason. When no account qualifies no five-hour ping is sent. The scope
+applies whatever `switchPrefer` is set to. Usage of the other accounts is
+fetched only while their seven-day window is unknown or past its reset, at most
+every 5 minutes.
+
+`keepAliveWeekly: true` (with `keepAlive` on) adds weekly pings, in either
+scope: every enabled account whose seven-day window is not running (its usage
+shows no reset in the future) is prompted once to start it, so its weekly
+windows run back to back and each weekly reset comes as early as possible. The
+prompt also starts a five-hour window. An account whose seven-day usage is
+unknown (never fetched, or no seven-day window reported) is fetched first and
+never prompted while it stays unknown. A prompt counts as confirmed when usage
+shows a seven-day window ending about a week after it; until usage has caught
+up (10 minutes) the account is held. A prompt that was answered but whose
+seven-day window still does not show is retried after an hour, doubling up to
+24 hours, so it never turns into five-hour keepalive for that account; this
+hold covers weekly prompts only, and a due five-hour prompt (the weekly-active
+account's) still goes. A prompt that could not be sent is retried after 2
+minutes, backing off to 30, as five-hour prompts are. A running seven-day
+window ends the hourly backoff. Backups follow `backup.keepAliveBackups`. In the `all` scope the five-hour
+pings already start weekly windows, so this adds prompts only for accounts
+that five-hour keepalive is not prompting now.
+
+`bp account keepalive --scope all|weekly-active` and `--weekly` /
+`--no-weekly` override the settings for one run; `--once --dry-run` shows what
+a pass would do without fetching usage or prompting. `bp account keepalive`
+shows, per account, why it is due (`five-hour window not running` or `weekly
+window not running`) and, with weekly pings or the weekly-active scope, when
+its seven-day window resets.
+
 ## Turning off new Codex sessions
 
 An installation that has moved its agents off Codex can say so once:
@@ -243,7 +285,7 @@ windows:
 | `codex.sockets` | Read-only Codex app-server observation sockets |
 | `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
-| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, backup accounts and keepalive (see above) |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, backup accounts and keepalive (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

@@ -68,7 +68,7 @@ func backupTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Tim
 		if s.Number == from || !s.IsBackup() || !s.Usable() {
 			continue
 		}
-		value, known := slotUsage(s).Max(now)
+		value, known := policy.used(s, now)
 		if !known || policy.LimitFor(s)-value <= 0 {
 			continue
 		}

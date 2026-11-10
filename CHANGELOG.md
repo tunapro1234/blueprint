@@ -22,6 +22,30 @@ Changes on `dev` since the 1.9.34 release.
 - `claudeAccounts.switchPrefer: "soonest-weekly-reset"`: auto switching uses
   the account whose seven-day window resets soonest, steps off it while its
   five-hour window is used up and returns once that window resets.
+- `claudeAccounts.keepAliveScope: "weekly-active"` (default `"all"`,
+  unchanged): five-hour keepalive pings go only to the weekly-active
+  account, the one `soonest-weekly-reset` drains (chosen on its seven-day
+  window alone, normal accounts before backups), as soon as each five-hour
+  window runs out, so its windows run back to back. The other accounts get
+  no five-hour pings, and their usage is fetched only while their seven-day
+  window is unknown. `bp account keepalive` marks the target
+  `[weekly-active]` and gives each other account the reason it is left
+  alone.
+- `claudeAccounts.keepAliveWeekly` (default `false`, needs `keepAlive`):
+  every account whose seven-day window is not running gets one keepalive
+  ping to start it, in either scope, so weekly windows run back to back. A
+  ping is confirmed by a seven-day window ending about a week later; until
+  then the account is held (10 minutes). A ping that was answered but
+  started no seven-day window is retried after 1h, 2h, 4h, 8h, 16h, then
+  every 24h (state `weeklyFailures` / `weeklyHoldUntil`), which holds weekly
+  pings only, never the weekly-active account's five-hour ping; a ping that
+  could not be sent keeps the 2 to 30 minute retry. Unknown seven-day usage
+  is fetched first and never pinged on. `bp account keepalive` shows why each due
+  account is due (`five-hour window not running` / `weekly window not
+  running`) and the seven-day reset.
+- `bp account keepalive`: `--scope all|weekly-active` and `--weekly` /
+  `--no-weekly` override the settings for one run, and the new `--dry-run`
+  plans a `--once` pass without fetching usage or pinging.
 - `bp status` lists messages that have waited more than three days for a
   closed ephemeral agent (`stale -> closed agent: <id> ... (bp qstat <id>;
   bp qcancel <id>)`). They block the agent's automatic archive; nothing expires

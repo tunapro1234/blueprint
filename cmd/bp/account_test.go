@@ -376,3 +376,93 @@ func TestAccountCLIRefusesMacOS(t *testing.T) {
 		t.Fatalf("code=%d out=%s", code, out)
 	}
 }
+
+func TestAccountCLIKeepAliveScopeWeeklyAndDryRun(t *testing.T) {
+	e := newAccountEnv(t)
+	e.now = time.Now().Truncate(time.Second)
+	a := e.app(0)
+	for n := 1; n <= 2; n++ {
+		e.login(n)
+		if out, code := e.run(a, "add"); code != 0 {
+			t.Fatalf("add %d: %s", n, out)
+		}
+	}
+	// Both weeks reset at the same instant; slot 1 has more room, so it is
+	// the weekly-active account. Its five-hour window is idle.
+	e.api.set(1, 0, 10)
+	e.api.set(2, 30, 50)
+	e.api.idle[accountToken("access", 1)] = true
+	if out, code := e.run(a, "list", "--refresh"); code != 0 {
+		t.Fatalf("list: %s", out)
+	}
+
+	out, code := e.run(a, "keepalive", "--scope", "weekly-active", "--once", "--dry-run")
+	for _, want := range []string{
+		"weekly-active scope: five-hour pings go only to slot 1",
+		"user1@example.com [normal] [weekly-active]",
+		"due now (dry run: not pinged): five-hour window not running",
+		"skipped: not the weekly-active account",
+	} {
+		if code != 0 || !strings.Contains(out, want) {
+			t.Fatalf("weekly-active dry run lacks %q: code=%d %s", want, code, out)
+		}
+	}
+	if len(e.pinged) != 0 {
+		t.Fatalf("--dry-run pinged %v", e.pinged)
+	}
+	out, code = e.run(a, "keepalive", "--scope=weekly-active", "--once", "--dry-run", "--json")
+	var result claudeacct.KeepAliveResult
+	if err := json.Unmarshal([]byte(out), &result); code != 0 || err != nil || result.Scope != claudeacct.KeepAliveScopeWeeklyActive || result.Target != 1 || len(e.pinged) != 0 {
+		t.Fatalf("weekly-active --json code=%d err=%v target=%d pinged=%v: %s", code, err, result.Target, e.pinged, out)
+	}
+
+	// The configured scope is the default; --scope all overrides it.
+	a.config.ClaudeAccounts.KeepAliveScope = claudeacct.KeepAliveScopeWeeklyActive
+	if out, code = e.run(a, "keepalive"); code != 0 || !strings.Contains(out, "weekly-active scope") {
+		t.Fatalf("configured scope: code=%d %s", code, out)
+	}
+	if out, code = e.run(a, "keepalive", "--scope", "all"); code != 0 || !strings.Contains(out, "windows staggered every") || strings.Contains(out, "weekly-active") {
+		t.Fatalf("--scope all: code=%d %s", code, out)
+	}
+	for _, bad := range [][]string{{"--scope", "weekly"}, {"--scope", ""}, {"--weekly", "--no-weekly"}} {
+		if out, code = e.run(a, append([]string{"keepalive"}, bad...)...); code != 1 {
+			t.Fatalf("%v accepted: %s", bad, out)
+		}
+	}
+
+	// Weekly pings: slot 2's seven-day window has no reset (not running).
+	store := claudeacct.NewStore(e.state)
+	accounts, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts.Slot(2).LastUsage.Usage.SevenDay.ResetsAt = time.Time{}
+	if err := store.Save(accounts); err != nil {
+		t.Fatal(err)
+	}
+	out, code = e.run(a, "keepalive", "--weekly", "--once", "--dry-run")
+	for _, want := range []string{
+		"weekly pings on",
+		"user2@example.com [normal]: active, resets",
+		"week not running; due now (dry run: not pinged): weekly window not running",
+		"week resets ",
+	} {
+		if code != 0 || !strings.Contains(out, want) {
+			t.Fatalf("weekly dry run lacks %q: code=%d %s", want, code, out)
+		}
+	}
+	a.config.ClaudeAccounts.KeepAliveWeekly = true
+	if out, code = e.run(a, "keepalive", "--no-weekly", "--once", "--dry-run"); code != 0 || strings.Contains(out, "weekly window not running") || strings.Contains(out, "weekly pings on") {
+		t.Fatalf("--no-weekly: code=%d %s", code, out)
+	}
+	if len(e.pinged) != 0 {
+		t.Fatalf("dry runs pinged %v", e.pinged)
+	}
+	a.config.ClaudeAccounts.KeepAlive = true
+	if out, code = e.run(a, "status"); code != 0 || !strings.Contains(out, "keepalive: on (model haiku, scope weekly-active, weekly pings on)") {
+		t.Fatalf("status: %s", out)
+	}
+	if strings.Contains(e.transcript.String(), accountSecret) {
+		t.Fatalf("a token value reached command output:\n%s", e.transcript.String())
+	}
+}

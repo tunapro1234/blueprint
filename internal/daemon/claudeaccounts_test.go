@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -220,5 +221,23 @@ func TestClaudeAccountKeepAliveWithoutAutoSwitch(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), daemonTokenMarker) {
 		t.Fatalf("token value in daemon log: %q", logs.String())
+	}
+}
+
+func TestClaudeAccountKeepAliveOptionsCarryScopeAndWeekly(t *testing.T) {
+	cfg := config.Config{StateDir: t.TempDir(), ClaudeAccounts: config.DefaultClaudeAccounts()}
+	cfg.ClaudeAccounts.KeepAlive = true
+	cfg.ClaudeAccounts.KeepAliveScope = claudeacct.KeepAliveScopeWeeklyActive
+	cfg.ClaudeAccounts.KeepAliveWeekly = true
+	cfg.ClaudeAccounts.Threshold = 80
+	cfg.ClaudeAccounts.Limits = map[string]int{"2": 30}
+	auto := newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0))
+	k := auto.keepAlive
+	if k == nil || k.Scope != claudeacct.KeepAliveScopeWeeklyActive || !k.Weekly || k.Policy.Threshold != 80 || k.Policy.Limits["2"] != 30 {
+		t.Fatalf("keepalive options %+v", k)
+	}
+	cfg.ClaudeAccounts.KeepAliveScope, cfg.ClaudeAccounts.KeepAliveWeekly = "all", false
+	if k := newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0)).keepAlive; k.Scope != "all" || k.Weekly {
+		t.Fatalf("default keepalive options %+v", k)
 	}
 }

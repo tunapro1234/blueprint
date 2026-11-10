@@ -32,6 +32,18 @@ import (
 // takes the one that keeps accounts idle for the least total time. When the
 // windows are already staggered that grid is the current one and idle
 // accounts are pinged as soon as their window runs out.
+//
+// The weekly-active scope (KeepAliveScopeWeeklyActive) keeps only one
+// account's five-hour window running: the one soonest-weekly-reset auto
+// switching is draining, chosen on its seven-day window alone (see
+// weeklyTarget). Its windows run back to back, each pinged the moment the
+// previous one ends, with no grid; every other account gets no five-hour
+// pings.
+//
+// Weekly pings (KeepAliveOptions.Weekly) are separate from the scope: every
+// usable account whose seven-day window is not running gets one ping to start
+// it, so each account's weekly windows run back to back too. Such a ping also
+// starts a five-hour window.
 
 const (
 	// KeepAlivePeriod is the length of the five-hour window.
@@ -50,6 +62,12 @@ const (
 	keepAliveConfirmSlack = time.Hour
 	keepAliveRetry        = 2 * time.Minute
 	keepAliveMaxGap       = 30 * time.Minute
+	// keepAliveWeeklyRetry and keepAliveWeeklyMaxGap back off a weekly ping
+	// that was answered but started no seven-day window. Each such ping also
+	// starts a five-hour window, so retrying it at the five-hour pace would
+	// turn it into five-hour keepalive for an account the scope leaves alone.
+	keepAliveWeeklyRetry  = time.Hour
+	keepAliveWeeklyMaxGap = 24 * time.Hour
 	keepAliveTimeout      = 2 * time.Minute
 	// keepAliveFresh is the oldest usage a ping is decided on.
 	keepAliveFresh = 2 * time.Minute
@@ -57,6 +75,30 @@ const (
 	// by trying every assignment; larger counts keep the accounts' order.
 	keepAliveBruteForce = 7
 )
+
+// Keepalive scopes (KeepAliveOptions.Scope).
+const (
+	// KeepAliveScopeAll keeps every usable account's window running on the
+	// staggered grid (the default; "" means the same).
+	KeepAliveScopeAll = "all"
+	// KeepAliveScopeWeeklyActive keeps only the weekly-active account's
+	// five-hour window running, back to back.
+	KeepAliveScopeWeeklyActive = "weekly-active"
+)
+
+// ValidKeepAliveScope reports whether scope names a keepalive scope.
+func ValidKeepAliveScope(scope string) bool {
+	return scope == "" || scope == KeepAliveScopeAll || scope == KeepAliveScopeWeeklyActive
+}
+
+// Why an account is due (KeepAliveSlotView.DueReason).
+const (
+	KeepAliveDueFiveHour = "five-hour window not running"
+	KeepAliveDueWeekly   = "weekly window not running"
+)
+
+// keepAliveWeek is the length of the seven-day window.
+const keepAliveWeek = 7 * 24 * time.Hour
 
 // keepMember is one account in the phase plan.
 type keepMember struct {
@@ -250,6 +292,22 @@ func windowState(s Slot, now time.Time) (known, active bool, resetsAt time.Time)
 	return true, true, w.ResetsAt
 }
 
+// weekState reads a slot's seven-day window at now, the twin of windowState.
+// A seven-day window with no reset, or one already past, is known and not
+// running. A missing seven-day window (seven_day null, as Team seats
+// reported, or usage never fetched) is unknown: a ping is never decided on it.
+func weekState(s Slot, now time.Time) (known, active bool, resetsAt time.Time) {
+	u := slotUsage(s)
+	if u == nil || u.SevenDay == nil {
+		return false, false, time.Time{}
+	}
+	w := u.SevenDay
+	if w.ResetsAt.IsZero() || !now.Before(w.ResetsAt) {
+		return true, false, time.Time{}
+	}
+	return true, true, w.ResetsAt
+}
+
 // KeepAliveState is keepalive-state.json: the outcome of past pings.
 type KeepAliveState struct {
 	Slots map[string]*KeepAliveSlot `json:"slots,omitempty"`
@@ -269,6 +327,16 @@ type KeepAliveSlot struct {
 	// Unconfirmed marks an answered ping whose window usage did not show
 	// yet; it is judged once the hold has passed (settleKeepAlive).
 	Unconfirmed bool `json:"unconfirmed,omitempty"`
+	// Weekly marks the last ping as a weekly ping: it is confirmed by the
+	// seven-day window it started, not the five-hour one.
+	Weekly bool `json:"weekly,omitempty"`
+	// WeeklyFailures counts answered weekly pings that started no seven-day
+	// window; WeeklyHoldUntil keeps weekly pings off until the next retry
+	// (keepAliveWeeklyRetry doubling, up to keepAliveWeeklyMaxGap). It holds
+	// weekly pings only: a due five-hour ping still goes. Both clear once a
+	// seven-day window is seen running.
+	WeeklyFailures  int       `json:"weeklyFailures,omitempty"`
+	WeeklyHoldUntil time.Time `json:"weeklyHoldUntil,omitzero"`
 }
 
 func (s *KeepAliveState) slot(n int) *KeepAliveSlot {
@@ -299,10 +367,39 @@ func (k *KeepAliveSlot) failed(now time.Time, reason string) {
 	k.HoldUntil = now.Add(wait)
 }
 
+// weeklyFailed records an answered weekly ping that started no seven-day
+// window and holds weekly pings off for the weekly backoff.
+func (k *KeepAliveSlot) weeklyFailed(now time.Time, reason string) {
+	k.WeeklyFailures++
+	k.Error = reason
+	wait := keepAliveWeeklyRetry << min(k.WeeklyFailures-1, 5)
+	if wait > keepAliveWeeklyMaxGap {
+		wait = keepAliveWeeklyMaxGap
+	}
+	k.WeeklyHoldUntil = now.Add(wait)
+}
+
 // startedBy reports whether a window resetting at resetsAt is the one a
 // ping at pingAt started.
 func startedBy(resetsAt, pingAt time.Time) bool {
 	return !pingAt.IsZero() && resetsAt.After(pingAt.Add(KeepAlivePeriod-keepAliveConfirmSlack))
+}
+
+// weekStartedBy is startedBy for the seven-day window.
+func weekStartedBy(resetsAt, pingAt time.Time) bool {
+	return !pingAt.IsZero() && resetsAt.After(pingAt.Add(keepAliveWeek-keepAliveConfirmSlack))
+}
+
+// pingStarted reports whether a slot's usage at now shows the window a ping
+// at pingAt was for: the seven-day window for a weekly ping, else the
+// five-hour one. known is false while that window is unknown.
+func pingStarted(s Slot, now, pingAt time.Time, weekly bool) (known, started bool) {
+	if weekly {
+		known, active, resetsAt := weekState(s, now)
+		return known, active && weekStartedBy(resetsAt, pingAt)
+	}
+	known, active, resetsAt := windowState(s, now)
+	return known, active && startedBy(resetsAt, pingAt)
 }
 
 // settleKeepAlive judges answered pings whose window usage had not shown
@@ -315,7 +412,7 @@ func startedBy(resetsAt, pingAt time.Time) bool {
 func settleKeepAlive(state *KeepAliveState, accounts *Accounts, now time.Time) bool {
 	changed := false
 	for key, entry := range state.Slots {
-		if entry == nil || !entry.Unconfirmed && entry.Error == "" || now.Before(entry.HoldUntil) {
+		if entry == nil {
 			continue
 		}
 		n, err := strconv.Atoi(key)
@@ -326,10 +423,24 @@ func settleKeepAlive(state *KeepAliveState, accounts *Accounts, now time.Time) b
 		if slot == nil {
 			continue
 		}
-		known, active, resetsAt := windowState(*slot, now)
+		if entry.WeeklyFailures > 0 || !entry.WeeklyHoldUntil.IsZero() {
+			// A running seven-day window ends the weekly backoff, whoever
+			// started it.
+			if _, active, _ := weekState(*slot, now); active {
+				entry.WeeklyFailures, entry.WeeklyHoldUntil = 0, time.Time{}
+				changed = true
+			}
+		}
+		if !entry.Unconfirmed && entry.Error == "" || now.Before(entry.HoldUntil) {
+			continue
+		}
+		known, started := pingStarted(*slot, now, entry.LastPingAt, entry.Weekly)
 		switch {
-		case active && startedBy(resetsAt, entry.LastPingAt):
+		case started:
 			entry.Error, entry.Failures, entry.Unconfirmed = "", 0, false
+		case entry.Unconfirmed && known && entry.Weekly:
+			entry.Unconfirmed = false
+			entry.weeklyFailed(now, "the prompt was answered but no seven-day window started")
 		case entry.Unconfirmed && known:
 			entry.Unconfirmed = false
 			entry.failed(now, "the prompt was answered but no five-hour window started")
@@ -483,7 +594,19 @@ type KeepAliveOptions struct {
 	// FlatStagger plans every account on one grid regardless of role, instead
 	// of alternating normal and backup windows.
 	FlatStagger bool
+	// Scope is KeepAliveScopeAll (or empty) or KeepAliveScopeWeeklyActive;
+	// it governs five-hour pings only.
+	Scope string
+	// Policy supplies the threshold and per-account limits the weekly-active
+	// scope measures seven-day room against, as auto switching does. Prefer,
+	// Cooldown and BackupOrder are not used. Ignored in the all scope.
+	Policy AutoPolicy
+	// Weekly also pings every usable account (backups as SkipBackups says)
+	// whose seven-day window is not running, in either scope.
+	Weekly bool
 }
+
+func (o KeepAliveOptions) weeklyActive() bool { return o.Scope == KeepAliveScopeWeeklyActive }
 
 // KeepAliveSlotView is one account in a keepalive pass.
 type KeepAliveSlotView struct {
@@ -502,15 +625,32 @@ type KeepAliveSlotView struct {
 	// answered.
 	Attempted bool `json:"attempted,omitempty"`
 	Pinged    bool `json:"pinged,omitempty"`
-	// Started is set when usage confirmed the pinged window.
-	Started    bool      `json:"started,omitempty"`
-	Skipped    string    `json:"skipped,omitempty"`
-	LastPingAt time.Time `json:"lastPingAt,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	// Started is set when usage confirmed the pinged window (the seven-day
+	// one for a weekly ping).
+	Started bool `json:"started,omitempty"`
+	// DueReason says why a due account is pinged: KeepAliveDueFiveHour or
+	// KeepAliveDueWeekly (a ping for both is a weekly ping).
+	DueReason string `json:"dueReason,omitempty"`
+	// WeeklyKnown is false while the seven-day window is unknown;
+	// WeeklyActive and WeeklyResetsAt describe a running one.
+	WeeklyKnown    bool      `json:"weeklyKnown,omitempty"`
+	WeeklyActive   bool      `json:"weeklyActive,omitempty"`
+	WeeklyResetsAt time.Time `json:"weeklyResetsAt,omitempty"`
+	Skipped        string    `json:"skipped,omitempty"`
+	LastPingAt     time.Time `json:"lastPingAt,omitempty"`
+	Error          string    `json:"error,omitempty"`
 }
 
 // KeepAliveResult is the plan and what a pass did.
 type KeepAliveResult struct {
+	// Scope is set to KeepAliveScopeWeeklyActive for a weekly-active pass;
+	// it is empty for the all scope.
+	Scope string `json:"scope,omitempty"`
+	// Target is the weekly-active account in the weekly-active scope; 0 when
+	// no account qualifies (or in the all scope).
+	Target int `json:"target,omitempty"`
+	// Weekly is set when weekly pings are on.
+	Weekly bool                `json:"weekly,omitempty"`
 	Step   time.Duration       `json:"step"`
 	Anchor time.Time           `json:"anchor,omitempty"`
 	Idle   time.Duration       `json:"idle"`
@@ -528,9 +668,17 @@ type keepAliveJob struct {
 // token and never refreshed; while that token is expired the account is
 // skipped (Claude Code refreshes it on its next request). Pings run outside
 // the store lock; their usage is fetched afterwards to confirm the window.
+//
+// In the weekly-active scope only the weekly-active account is planned for
+// five-hour pings (see weeklyTarget); the others are listed with the reason
+// they are left alone. With Weekly, an account whose seven-day window is not
+// running is pinged as well, in either scope.
 func (m *Manager) KeepAliveOnce(ctx context.Context, opts KeepAliveOptions) (KeepAliveResult, error) {
 	if opts.Model == "" {
 		opts.Model = DefaultKeepAliveModel
+	}
+	if !ValidKeepAliveScope(opts.Scope) {
+		return KeepAliveResult{}, fmt.Errorf("unknown keepalive scope %q (use all or weekly-active)", opts.Scope)
 	}
 	result, jobs, state, err := m.planKeepAlive(ctx, opts)
 	if err != nil || opts.DryRun || len(jobs) == 0 {
@@ -590,15 +738,20 @@ func (m *Manager) KeepAliveOnce(ctx context.Context, opts KeepAliveOptions) (Kee
 			continue
 		}
 		view.Pinged = true
+		weekly := view.DueReason == KeepAliveDueWeekly
+		entry.Weekly = weekly
 		slot := accounts.Slot(view.Slot)
 		if slot == nil {
 			continue
 		}
-		known, active, resetsAt := windowState(*slot, now)
-		view.Known, view.Active, view.ResetsAt = known, active, resetsAt
-		if active && startedBy(resetsAt, now) {
+		view.Known, view.Active, view.ResetsAt = windowState(*slot, now)
+		view.WeeklyKnown, view.WeeklyActive, view.WeeklyResetsAt = weekState(*slot, now)
+		if _, started := pingStarted(*slot, now, now, weekly); started {
 			view.Started = true
 			entry.Error, entry.Failures, entry.Unconfirmed, entry.HoldUntil = "", 0, false, now.Add(keepAliveSettle)
+			if weekly {
+				entry.WeeklyFailures, entry.WeeklyHoldUntil = 0, time.Time{}
+			}
 			continue
 		}
 		// The usage endpoint shows a fresh window only minutes later (or
@@ -615,7 +768,8 @@ func (m *Manager) KeepAliveOnce(ctx context.Context, opts KeepAliveOptions) (Kee
 // of the accounts to ping (refreshing a stored login that is about to expire,
 // as a usage fetch would). An account that looks due on usage older than
 // keepAliveFresh is refetched first, so a window someone has started since is
-// not pinged again, and the plan is rebuilt on the fresh data.
+// not pinged again, and the plan is rebuilt on the fresh data (see
+// keepAliveStale for what the weekly-active scope and weekly pings refetch).
 func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (KeepAliveResult, []keepAliveJob, KeepAliveState, error) {
 	unlock, err := m.lockStore(ctx)
 	if err != nil {
@@ -636,22 +790,26 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 	}
 	result := buildKeepAlive(accounts, state, m.now(), opts)
 	if !opts.DryRun {
-		var stale []int
-		for _, view := range result.Slots {
-			pingable := view.Due && view.Skipped == ""
-			if opts.SkipBackups && view.Role == RoleBackup {
-				continue
+		// The all scope refetches once. The weekly-active scope may pick
+		// another target on the fresh data, which is then checked in turn; no
+		// account is refetched twice, so this ends.
+		refetched := map[int]bool{}
+		for {
+			stale := keepAliveStale(result, accounts, opts, m.now(), refetched)
+			if len(stale) == 0 {
+				break
 			}
-			if (pingable || !view.Known) && accounts.Slot(view.Slot).LastUsage.due(m.now(), keepAliveFresh) {
-				stale = append(stale, view.Slot)
-			}
-		}
-		if len(stale) > 0 {
 			m.refreshUsage(ctx, accounts, live, stale)
 			if err := m.Store.Save(accounts); err != nil {
 				return result, nil, state, err
 			}
 			result = buildKeepAlive(accounts, state, m.now(), opts)
+			if !opts.weeklyActive() {
+				break
+			}
+			for _, n := range stale {
+				refetched[n] = true
+			}
 		}
 	}
 	if opts.DryRun {
@@ -693,9 +851,87 @@ func (m *Manager) planKeepAlive(ctx context.Context, opts KeepAliveOptions) (Kee
 	return result, jobs, state, nil
 }
 
+// keepAliveStale lists the accounts whose usage a pass refetches before it
+// pings (skipping those in done). An account that looks due is refetched once
+// its usage is older than keepAliveFresh, so a window someone has started
+// since is not pinged again; so is one whose five-hour window is unknown,
+// except an account the weekly-active scope gives no five-hour pings. The
+// seven-day window is needed for the weekly-active choice of target (of every
+// account but the target) and for weekly pings (of every account): while it
+// is unknown or past its reset the account is refetched, no more often than
+// auto switching refetches before a choice (ListMaxAge). Known seven-day
+// windows are used as stored, as auto switching uses them.
+func keepAliveStale(result KeepAliveResult, accounts *Accounts, opts KeepAliveOptions, now time.Time, done map[int]bool) []int {
+	var stale []int
+	for _, view := range result.Slots {
+		if done[view.Slot] || opts.SkipBackups && view.Role == RoleBackup {
+			continue
+		}
+		slot := accounts.Slot(view.Slot)
+		nonTarget := opts.weeklyActive() && view.Slot != result.Target
+		fresh := view.Due && view.Skipped == "" || !view.Known && !nonTarget
+		if fresh && slot.LastUsage.due(now, keepAliveFresh) {
+			stale = append(stale, view.Slot)
+			continue
+		}
+		if (opts.Weekly || nonTarget) && slotUsage(*slot).SevenDayResetAt(now).IsZero() && slot.LastUsage.due(now, ListMaxAge) {
+			stale = append(stale, view.Slot)
+		}
+	}
+	return stale
+}
+
+// weeklyTarget is the weekly-active scope's account: the one
+// soonest-weekly-reset auto switching drains, with its five-hour state left
+// out. It takes the switch strategy's own order: among usable normal accounts
+// with room under their limit on the seven-day window, the one whose
+// seven-day window resets soonest (normalTargets); only when no normal account
+// has room, the first backup by priority (backupTargets), unless backups are
+// skipped. An account whose seven-day window is unknown has no measured room
+// and is not a candidate. 0 means no account qualifies.
+func weeklyTarget(accounts *Accounts, opts KeepAliveOptions, now time.Time) int {
+	policy := weeklyPolicy(opts)
+	if normals := normalTargets(accounts, 0, policy, now); len(normals) > 0 {
+		return normals[0].n
+	}
+	if opts.SkipBackups {
+		return 0
+	}
+	if backups := backupTargets(accounts, 0, policy, now); len(backups) > 0 {
+		return backups[0].n
+	}
+	return 0
+}
+
+// weeklyPolicy is the options' policy as soonest-weekly-reset measuring the
+// seven-day window alone.
+func weeklyPolicy(opts KeepAliveOptions) AutoPolicy {
+	policy := opts.Policy
+	policy.Prefer, policy.sevenDayOnly = StrategySoonestWeeklyReset, true
+	return policy
+}
+
+// weeklyActiveSkip is why the weekly-active scope gives a usable account no
+// five-hour pings.
+func weeklyActiveSkip(s Slot, opts KeepAliveOptions, now time.Time) string {
+	policy := weeklyPolicy(opts)
+	value, known := policy.used(s, now)
+	switch {
+	case !known:
+		return "not the weekly-active account; seven-day window unknown"
+	case value >= policy.LimitFor(s):
+		return fmt.Sprintf("not the weekly-active account; seven-day usage %.0f%% is at its %.0f%% limit", value, policy.LimitFor(s))
+	default:
+		return "not the weekly-active account"
+	}
+}
+
 // buildKeepAlive plans the usable accounts' next windows at now and marks
 // which are due for a ping.
 func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time, opts KeepAliveOptions) KeepAliveResult {
+	if opts.weeklyActive() {
+		return buildWeeklyActiveKeepAlive(accounts, state, now, opts)
+	}
 	var members []keepMember
 	for _, s := range accounts.Slots {
 		if !s.Usable() || opts.SkipBackups && s.IsBackup() {
@@ -709,36 +945,107 @@ func buildKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time, opt
 		members = append(members, keepMember{slot: s.Number, ready: ready, known: known, backup: s.IsBackup() && !opts.FlatStagger})
 	}
 	plan := planPhasesNear(members, state.Anchor)
-	result := KeepAliveResult{Step: plan.step, Anchor: plan.anchor, Idle: plan.idle}
+	result := KeepAliveResult{Step: plan.step, Anchor: plan.anchor, Idle: plan.idle, Weekly: opts.Weekly}
+	result.Slots = keepAliveViews(accounts, state, now, opts, plan.start, nil)
+	return result
+}
+
+// buildWeeklyActiveKeepAlive is buildKeepAlive in the weekly-active scope.
+// Only the target is planned, with no grid: its next window starts the moment
+// it can, now when idle and at its reset while one runs. The grid anchor is
+// left as it is, so the all scope resumes on its old grid.
+func buildWeeklyActiveKeepAlive(accounts *Accounts, state KeepAliveState, now time.Time, opts KeepAliveOptions) KeepAliveResult {
+	result := KeepAliveResult{Scope: KeepAliveScopeWeeklyActive, Target: weeklyTarget(accounts, opts, now), Weekly: opts.Weekly}
+	start := map[int]time.Time{}
+	if target := accounts.Slot(result.Target); target != nil {
+		known, _, resetsAt := windowState(*target, now)
+		switch {
+		case !known:
+		case resetsAt.IsZero():
+			start[target.Number] = now
+		default:
+			start[target.Number] = resetsAt
+		}
+	}
+	result.Slots = keepAliveViews(accounts, state, now, opts, start, func(s Slot) string {
+		if s.Number == result.Target {
+			return ""
+		}
+		return weeklyActiveSkip(s, opts, now)
+	})
+	return result
+}
+
+// keepAliveViews lists the usable accounts with their planned starts and
+// marks which are due. leftOut, when set, gives the reason an account gets no
+// five-hour pings in this scope ("" for one that does). With opts.Weekly an
+// account whose seven-day window is known and not running is due as well,
+// whatever its five-hour plan; while that window is unknown it is never
+// pinged for it.
+func keepAliveViews(accounts *Accounts, state KeepAliveState, now time.Time, opts KeepAliveOptions, start map[int]time.Time, leftOut func(Slot) string) []KeepAliveSlotView {
+	var views []KeepAliveSlotView
 	for _, s := range accounts.Slots {
 		if !s.Usable() {
 			continue
 		}
 		known, active, resetsAt := windowState(s, now)
+		weekKnown, weekActive, weekResetsAt := weekState(s, now)
 		past := state.peek(s.Number)
 		view := KeepAliveSlotView{Slot: s.Number, Email: s.Email, Alias: s.Alias, Role: s.RoleName(), Known: known, Active: active, ResetsAt: resetsAt,
-			NextStart: plan.start[s.Number], LastPingAt: past.LastPingAt, Error: past.Error}
+			NextStart: start[s.Number], LastPingAt: past.LastPingAt, Error: past.Error,
+			WeeklyKnown: weekKnown, WeeklyActive: weekActive, WeeklyResetsAt: weekResetsAt}
+		reason := ""
+		if leftOut != nil {
+			reason = leftOut(s)
+		}
 		if active && past.Error != "" && !past.LastPingAt.After(resetsAt.Add(-KeepAlivePeriod)) {
 			// A failure from before the running window started is history,
 			// not the account's state.
 			view.Error = ""
 		}
+		fiveDue := false
 		switch {
 		case opts.SkipBackups && s.IsBackup():
 			view.Skipped = "backup account; keepalive for backups is off"
+		case reason != "":
+			view.Skipped = reason
 		case !known:
 			view.Skipped = "five-hour window unknown until its usage is fetched"
 		case active:
 		case view.NextStart.After(now.Add(keepAliveSlack)):
-		case now.Before(past.HoldUntil):
-			view.Due = true
-			view.Skipped = "held until " + past.HoldUntil.Format(time.RFC3339)
 		default:
-			view.Due = true
+			fiveDue = true
 		}
-		result.Slots = append(result.Slots, view)
+		weekDue := opts.Weekly && weekKnown && !weekActive && !(opts.SkipBackups && s.IsBackup())
+		// HoldUntil holds every ping; WeeklyHoldUntil holds weekly pings
+		// only, so a due five-hour ping goes through a weekly backoff (as a
+		// five-hour ping).
+		fiveHeld := now.Before(past.HoldUntil)
+		weekHeld := fiveHeld || now.Before(past.WeeklyHoldUntil)
+		hold := past.HoldUntil
+		switch {
+		case weekDue && !weekHeld:
+			view.DueReason = KeepAliveDueWeekly
+		case fiveDue && !fiveHeld:
+			view.DueReason = KeepAliveDueFiveHour
+		case weekDue:
+			view.DueReason = KeepAliveDueWeekly
+			if past.WeeklyHoldUntil.After(hold) {
+				hold = past.WeeklyHoldUntil
+			}
+		case fiveDue:
+			view.DueReason = KeepAliveDueFiveHour
+		default:
+			views = append(views, view)
+			continue
+		}
+		view.Due, view.Skipped = true, ""
+		if now.Before(hold) {
+			view.Skipped = "held until " + hold.Format(time.RFC3339)
+		}
+		views = append(views, view)
 	}
-	return result
+	return views
 }
 
 // keepAliveToken returns the access token to ping a slot with, or why it

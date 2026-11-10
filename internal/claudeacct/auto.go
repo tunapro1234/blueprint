@@ -55,6 +55,25 @@ type AutoPolicy struct {
 	// BackupOrder is when backup accounts are used: SwitchOrderAfterNormals
 	// (the default) or SwitchOrderInterleave. See decideWithRoles.
 	BackupOrder string
+	// sevenDayOnly measures room on the seven-day window alone, leaving the
+	// five-hour window out. Auto switching never sets it; keepalive's
+	// weekly-active scope does, to find the account the weekly policy is draining
+	// whatever its five-hour state (see weeklyTarget).
+	sevenDayOnly bool
+}
+
+// used is the utilization a slot's room is measured on: the higher of its
+// five-hour and seven-day windows, or with sevenDayOnly the seven-day window
+// alone. ok is false when no measured window is known.
+func (p AutoPolicy) used(s Slot, now time.Time) (value float64, ok bool) {
+	if !p.sevenDayOnly {
+		return slotUsage(s).Max(now)
+	}
+	u := slotUsage(s)
+	if u == nil || u.SevenDay == nil {
+		return 0, false
+	}
+	return u.SevenDay.effective(now), true
 }
 
 // LimitFor is the utilization at which a slot counts as used up: the
@@ -259,7 +278,7 @@ func soonestTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Ti
 		if s.Number == from || !s.Usable() {
 			continue
 		}
-		value, known := slotUsage(s).Max(now)
+		value, known := policy.used(s, now)
 		if !known {
 			continue
 		}

@@ -30,7 +30,7 @@ const accountUsage = `usage:
   bp account disable N | bp account enable N
   bp account role N normal|backup | bp account priority N P
   bp account auto [--once] [--dry-run] [--threshold P] [--json]
-  bp account keepalive [--once] [--model M] [--json]
+  bp account keepalive [--once] [--dry-run] [--scope all|weekly-active] [--weekly|--no-weekly] [--model M] [--json]
   bp account bind <agent> N|email|alias|default
   bp account unbind <agent>
   bp account bindings [--json]
@@ -49,8 +49,15 @@ are.
 
 bp account keepalive shows the plan that keeps every account's five-hour
 window running, staggered by 5h/N; --once sends the minimal prompt to the
-accounts that are due now. The daemon does this when claudeAccounts.keepAlive
-is on.
+accounts that are due now (with --dry-run it plans the same pass without
+fetching usage or pinging). The daemon does this when claudeAccounts.keepAlive
+is on. --scope overrides claudeAccounts.keepAliveScope for one run:
+weekly-active gives five-hour pings only to the weekly-active account (the one
+soonest-weekly-reset switching drains, chosen on its seven-day window), its
+windows back to back, and none to the other accounts. --weekly and
+--no-weekly override claudeAccounts.keepAliveWeekly for one run: with weekly
+pings every account whose seven-day window is not running is pinged once to
+start it.
 
 A backup account is used by auto switching only when every normal account is
 used up, lowest priority first, and auto switching returns to a normal account
@@ -330,7 +337,15 @@ func (a *app) accountStatus(m *claudeacct.Manager, args []string) error {
 	}
 	keep := "off"
 	if cfg.KeepAlive {
-		keep = "on (model " + cfg.KeepAliveModel + ")"
+		scope := cfg.KeepAliveScope
+		if scope == "" {
+			scope = claudeacct.KeepAliveScopeAll
+		}
+		weekly := "off"
+		if cfg.KeepAliveWeekly {
+			weekly = "on"
+		}
+		keep = "on (model " + cfg.KeepAliveModel + ", scope " + scope + ", weekly pings " + weekly + ")"
 	}
 	fmt.Fprintf(a.out, "keepalive: %s\n", keep)
 	fmt.Fprintf(a.out, "backup accounts: switch order %s, keepalive %t, stagger %s\n", cfg.Backup.SwitchOrder, cfg.Backup.KeepAliveBackups, cfg.Backup.Stagger)
@@ -570,16 +585,33 @@ func (a *app) printAutoResult(result claudeacct.AutoResult, dryRun bool) {
 }
 
 func (a *app) accountKeepAlive(m *claudeacct.Manager, args []string) error {
-	flags, positional, err := accountFlags(args, map[string]bool{"--model": true}, map[string]bool{"--once": true, "--json": true})
+	flags, positional, err := accountFlags(args, map[string]bool{"--model": true, "--scope": true},
+		map[string]bool{"--once": true, "--dry-run": true, "--json": true, "--weekly": true, "--no-weekly": true})
 	if err != nil {
 		return err
 	}
 	if len(positional) > 0 {
 		return errors.New(accountUsage)
 	}
-	backup := a.config.ClaudeAccounts.Backup
-	opts := claudeacct.KeepAliveOptions{Model: a.config.ClaudeAccounts.KeepAliveModel, DryRun: flags["--once"] == "",
-		SkipBackups: !backup.KeepAliveBackups, FlatStagger: backup.Stagger == "flat"}
+	cfg := a.config.ClaudeAccounts
+	backup := cfg.Backup
+	opts := claudeacct.KeepAliveOptions{Model: cfg.KeepAliveModel, DryRun: flags["--once"] == "" || flags["--dry-run"] != "",
+		SkipBackups: !backup.KeepAliveBackups, FlatStagger: backup.Stagger == "flat", Scope: cfg.KeepAliveScope,
+		Policy: claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Limits: cfg.LimitPercents()}, Weekly: cfg.KeepAliveWeekly}
+	if scope, ok := flags["--scope"]; ok {
+		if scope != claudeacct.KeepAliveScopeAll && scope != claudeacct.KeepAliveScopeWeeklyActive {
+			return fmt.Errorf("invalid --scope %q: expected all or weekly-active", scope)
+		}
+		opts.Scope = scope
+	}
+	switch {
+	case flags["--weekly"] != "" && flags["--no-weekly"] != "":
+		return errors.New("give --weekly or --no-weekly, not both")
+	case flags["--weekly"] != "":
+		opts.Weekly = true
+	case flags["--no-weekly"] != "":
+		opts.Weekly = false
+	}
 	if model, ok := flags["--model"]; ok {
 		if strings.TrimSpace(model) == "" || strings.HasPrefix(model, "-") {
 			return fmt.Errorf("invalid --model %q", model)
@@ -593,28 +625,49 @@ func (a *app) accountKeepAlive(m *claudeacct.Manager, args []string) error {
 	if flags["--json"] != "" {
 		return a.accountJSON(result)
 	}
-	a.printKeepAlive(result, opts.DryRun)
+	dueNote := "due now (--once pings it)"
+	if flags["--dry-run"] != "" {
+		dueNote = "due now (dry run: not pinged)"
+	}
+	a.printKeepAlive(result, opts.DryRun, dueNote)
 	return nil
 }
 
-func (a *app) printKeepAlive(result claudeacct.KeepAliveResult, dryRun bool) {
+// printKeepAlive renders a keepalive pass; dueNote is the action shown for a
+// due account in a dry run.
+func (a *app) printKeepAlive(result claudeacct.KeepAliveResult, dryRun bool, dueNote string) {
 	if len(result.Slots) == 0 {
 		fmt.Fprintln(a.out, "no stored accounts to keep alive")
 		return
 	}
-	fmt.Fprintf(a.out, "windows staggered every %s; planned idle %s in total\n", claudeacct.FormatDuration(result.Step), claudeacct.FormatDuration(result.Idle))
+	weeklyActive := result.Scope == claudeacct.KeepAliveScopeWeeklyActive
+	switch {
+	case weeklyActive && result.Target != 0:
+		fmt.Fprintf(a.out, "weekly-active scope: five-hour pings go only to slot %d, the weekly-active account, its windows back to back\n", result.Target)
+	case weeklyActive:
+		fmt.Fprintln(a.out, "weekly-active scope: no account has seven-day room under its limit; no five-hour pings")
+	default:
+		fmt.Fprintf(a.out, "windows staggered every %s; planned idle %s in total\n", claudeacct.FormatDuration(result.Step), claudeacct.FormatDuration(result.Idle))
+	}
+	if result.Weekly {
+		fmt.Fprintln(a.out, "weekly pings on: an account whose seven-day window is not running is pinged once to start it")
+	}
 	clock := func(t time.Time) string {
 		if t.IsZero() {
 			return "-"
 		}
 		return t.Local().Format("15:04")
 	}
+	day := func(t time.Time) string { return t.Local().Format("Mon 15:04") }
 	for _, s := range result.Slots {
 		name := s.Email
 		if s.Alias != "" {
 			name = s.Alias + " (" + s.Email + ")"
 		}
 		name += " [" + s.Role + "]"
+		if weeklyActive && s.Slot == result.Target {
+			name += " [weekly-active]"
+		}
 		var window string
 		switch {
 		case !s.Known:
@@ -624,10 +677,28 @@ func (a *app) printKeepAlive(result claudeacct.KeepAliveResult, dryRun bool) {
 		default:
 			window = "idle"
 		}
+		if result.Weekly || weeklyActive {
+			switch {
+			case !s.WeeklyKnown:
+				window += ", week unknown"
+			case s.WeeklyActive:
+				window += ", week resets " + day(s.WeeklyResetsAt)
+			default:
+				window += ", week not running"
+			}
+		}
+		due := func(text string) string {
+			if s.DueReason == "" {
+				return text
+			}
+			return text + ": " + s.DueReason
+		}
 		var action string
 		switch {
 		case s.Skipped != "":
 			action = "skipped: " + s.Skipped
+		case s.Started && s.DueReason == claudeacct.KeepAliveDueWeekly:
+			action = "started its seven-day window"
 		case s.Started:
 			action = "started its window"
 		case s.Attempted && s.Error != "":
@@ -635,9 +706,9 @@ func (a *app) printKeepAlive(result claudeacct.KeepAliveResult, dryRun bool) {
 		case s.Pinged:
 			action = "pinged; window not confirmed yet"
 		case s.Due && dryRun:
-			action = "due now (--once pings it)"
+			action = due(dueNote)
 		case s.Due:
-			action = "due now"
+			action = due("due now")
 		case !s.NextStart.IsZero():
 			action = "next start " + clock(s.NextStart)
 		}

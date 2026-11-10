@@ -735,6 +735,7 @@ bp account list                # slots, token status and 5h/7d usage
 bp account switch work         # install another slot as the live login
 bp account auto --once         # switch only if the active account is near its limit
 bp account keepalive           # the staggered five-hour window plan; --once pings due accounts
+bp account keepalive --scope weekly-active --weekly --once --dry-run  # preview, no ping
 ```
 
 A switch rewrites Claude Code's credentials file and the `oauthAccount` key of

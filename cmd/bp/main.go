@@ -89,8 +89,11 @@ bp rename <old-name> <new-name> [--dry-run] [--no-retitle] [--archived]
                              # The Codex title stays old and bp warns after the rename.
                              # The Claude transcript keeps its old title until it types
                              # /rename <new>; CACHE and --resume depend on that title.
-bp msg [--force|--force-busy] <name> <message...>
+bp msg [--force|--force-busy] [--from <label>] <name> <message...>
                              # bp stamps a [sender] envelope; never write your own
+                             # outside a pane: --from <label> shows as declared?:<label>
+                             # (service:<unit>/<label> in a systemd unit); BP_OWNER=<agent>
+                             # limits targets to that agent and the agents below it
                              # a /slash command goes bare, and only down the hierarchy
                              # --force-busy jumps the queue on a busy agent (root/bp/wa only)
 bp announce <message...> [--dry-run]
@@ -153,7 +156,14 @@ type app struct {
 	ownChannels   map[string]bool
 	resolveSender func() identity.Identity
 	// ancestors overrides the process chain used for uncertain sender labels.
-	ancestors   func() [][]string
+	ancestors func() [][]string
+	// cgroup and hostUnit override the systemd-unit evidence (see
+	// identity.Options); nil uses cgroupProbe and the live check.
+	cgroup   func() string
+	hostUnit func(cgroup, unit string) bool
+	// msgFrom is bp msg's --from label for this command, shown as a
+	// declaration (identity.Options.FromMarked); empty when not given.
+	msgFrom     string
 	originProbe func(context.Context) identity.Origin
 	ctx         context.Context
 	config      bpconfig.Config
@@ -448,10 +458,19 @@ func (a *app) run(args []string) error {
 			return fmt.Errorf("usage: bp whoami")
 		}
 		who := a.senderIdentity()
-		return json.NewEncoder(a.out).Encode(struct {
+		result := struct {
 			identity.Identity
 			Authority bool `json:"authority"`
-		}{who, who.Authoritative()})
+			// Scope is the BP_OWNER owner limiting bp msg targets, when active.
+			Scope      string `json:"scope,omitempty"`
+			ScopeError string `json:"scope_error,omitempty"`
+		}{Identity: who, Authority: who.Authoritative()}
+		if owner, err := a.ownerScope(who); err != nil {
+			result.ScopeError = err.Error()
+		} else if owner != "" {
+			result.Scope = "BP_OWNER=" + owner + ": bp msg may only reach " + owner + " or agents below it"
+		}
+		return json.NewEncoder(a.out).Encode(result)
 	case "update":
 		return a.update(args[1:])
 	case "onboard":
@@ -2118,9 +2137,17 @@ func (a *app) close(args []string) error {
 // sender uses the same verified identity for envelopes and hierarchy gates.
 func (a *app) sender() string { return a.senderIdentity().Label }
 
+// cgroupProbe is the default for app.cgroup. Nil reads /proc/self/cgroup; the
+// test binary replaces it so no case depends on the unit running the suite.
+var cgroupProbe func() string
+
 func (a *app) identityOptions() identity.Options {
+	cgroup := a.cgroup
+	if cgroup == nil {
+		cgroup = cgroupProbe
+	}
 	// Inferred process ancestry supplies an explicitly uncertain script/cron label.
-	return identity.Options{Infer: true, Ancestors: a.ancestors, Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
+	opts := identity.Options{Infer: true, Ancestors: a.ancestors, Known: a.knownAgent, Origin: a.originProbe, Pane: func(ctx context.Context) (string, error) {
 		if a.tmux == nil {
 			return "", fmt.Errorf("tmux client unavailable")
 		}
@@ -2135,6 +2162,11 @@ func (a *app) identityOptions() identity.Options {
 		}
 		return who
 	}, DaemonChild: identity.DaemonChild}
+	// bp msg --from is always shown as a declaration; wa send sets its own
+	// unmarked From on the returned options.
+	opts.From, opts.FromMarked = a.msgFrom, a.msgFrom != ""
+	opts.Cgroup, opts.HostUnit = cgroup, a.hostUnit
+	return opts
 }
 
 func (a *app) senderIdentity() identity.Identity {
@@ -2353,23 +2385,43 @@ func shortAge(value time.Duration) string {
 // typed deliberately.
 const forceBusyFlag = "--force-busy"
 
-// cutForceBusy takes the flag out of msg's arguments, wherever it stands BEFORE
-// the message text begins.
+// cutMsgOptions takes msg's own options (--force/--force-busy, --from <label>)
+// out of its arguments, wherever they stand BEFORE the message text begins.
 //
 // The window closes after the target name: the first non-flag argument is the
 // name, the second is the first word of the message, and from there on nothing
 // is read as an option. So `bp msg ada try this command: --force-busy` delivers
 // those words verbatim instead of quietly forcing itself.
-func cutForceBusy(args []string) ([]string, bool) {
-	rest, force := make([]string, 0, len(args)), false
-	for _, arg := range args {
-		if len(rest) < 2 && (arg == forceBusyFlag || arg == "--force") {
-			force = true
-			continue
+func cutMsgOptions(args []string) (rest []string, force bool, from string, err error) {
+	rest = make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if len(rest) < 2 {
+			switch {
+			case arg == forceBusyFlag || arg == "--force":
+				force = true
+				continue
+			case arg == "--from":
+				if index+1 >= len(args) {
+					return nil, false, "", fmt.Errorf("--from requires a label")
+				}
+				index++
+				from = args[index]
+				if err := identity.ValidFrom(from); err != nil {
+					return nil, false, "", err
+				}
+				continue
+			case strings.HasPrefix(arg, "--from="):
+				from = strings.TrimPrefix(arg, "--from=")
+				if err := identity.ValidFrom(from); err != nil {
+					return nil, false, "", err
+				}
+				continue
+			}
 		}
 		rest = append(rest, arg)
 	}
-	return rest, force
+	return rest, force, from, nil
 }
 
 func (a *app) neutralizeImagePaths(text string) string {
@@ -2380,11 +2432,19 @@ func (a *app) neutralizeImagePaths(text string) string {
 	return neutralized
 }
 
+const msgUsage = "usage: bp msg [--force|--force-busy] [--from <label>] <name> <message...>"
+
 func (a *app) message(args []string) error {
-	args, force := cutForceBusy(args)
-	if len(args) < 2 {
-		return fmt.Errorf("usage: bp msg [--force|--force-busy] <name> <message...>")
+	args, force, from, err := cutMsgOptions(args)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, msgUsage)
 	}
+	if len(args) < 2 {
+		return fmt.Errorf("%s", msgUsage)
+	}
+	// Every identity read below, including the federated and P2P paths, sees
+	// the same declared label.
+	a.msgFrom = from
 	name, raw := args[0], strings.Join(args[1:], " ")
 	if err := messagetext.Validate(raw); err != nil {
 		return err
@@ -2416,6 +2476,7 @@ func (a *app) message(args []string) error {
 	}
 	name = resolved
 	who := a.senderIdentity()
+	a.noteIgnoredFrom(who)
 	sender := who.Label
 	if err := messagetext.Label(sender); err != nil {
 		return err
@@ -2427,6 +2488,9 @@ func (a *app) message(args []string) error {
 	}
 	if sender == "" || sender == identity.Unknown {
 		return fmt.Errorf("sender identity unavailable (%s: %s); message not sent or queued; inspect bp whoami", who.Source, who.Reason)
+	}
+	if err := a.checkOwnerScope(who, name); err != nil {
+		return err
 	}
 	if a.inboxTarget(name) {
 		return a.inboxMessage(who, name, message, force)
@@ -2855,8 +2919,16 @@ func (a *app) resultLine(verdict, channel string) {
 
 func (a *app) federatedMessage(target, peer, message string) error {
 	who := a.senderIdentity()
+	a.noteIgnoredFrom(who)
 	if who.Label == "" || who.Label == identity.Unknown {
 		return fmt.Errorf("sender identity unavailable (%s: %s); message not sent or queued; inspect bp whoami", who.Source, who.Reason)
+	}
+	// A remote agent is not in the local tree, so a declared owner's scope
+	// can never contain it.
+	if owner, err := a.ownerScope(who); err != nil {
+		return err
+	} else if owner != "" {
+		return fmt.Errorf("refused: %s is declared for %s (BP_OWNER) and may only message %s or agents below it; %s@%s is on another machine", who.Label, owner, owner, target, peer)
 	}
 	if a.config.P2P != nil && a.config.P2P.Enabled {
 		return a.p2pMessage(target, peer, message)

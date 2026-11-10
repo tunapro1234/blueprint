@@ -52,6 +52,10 @@ type Identity struct {
 	// Source names the signal that won, for diagnostics and warnings.
 	Source string
 	Reason string
+	// Declared is the caller-stated --from value when it shaped Label. It is
+	// empty when a stronger signal (a pane, a thread, the daemon) won and the
+	// stated value was ignored, so a call site can say so.
+	Declared string `json:"Declared,omitempty"`
 }
 
 // Inferred reports whether the label confesses a guess.
@@ -68,6 +72,20 @@ type Options struct {
 	// cannot sign as somebody else. An invalid value is ignored here; call
 	// sites reject it loudly with ValidFrom before getting this far.
 	From string
+	// FromMarked asks for From to be shown as a declaration, never as a bare
+	// signature: "declared?:<label>", or "service:<unit>/<label>" when the
+	// caller runs in a system service unit. A verified daemon child also
+	// outranks it. bp msg sets it; bp wa send keeps the historical bare form.
+	FromMarked bool
+	// Cgroup returns this process's cgroup path ("/system.slice/x.service").
+	// Nil reads /proc/self/cgroup. Tests inject their own so no result depends
+	// on where the suite runs.
+	Cgroup func() string
+	// HostUnit reports whether the system unit at the given cgroup path only
+	// hosts other people's processes (cron, ssh, the tmux server or the bp
+	// daemon), so being inside it says nothing about who is calling. Nil uses
+	// hostsOthers.
+	HostUnit func(cgroup, unit string) bool
 	// Known reports agentbook membership. A derived name (a login name) that
 	// collides with a real agent is downgraded to a guess instead of claiming
 	// that agent's identity: a plausible-but-wrong name is more dangerous than
@@ -130,6 +148,11 @@ func ValidFrom(value string) error {
 // Resolve separates a verified pane/thread from a self-declared label. Codex
 // never falls back to inherited tmux, AGENT or login names. Other unverified
 // agent claims are visibly marked and cannot carry hierarchy authority.
+//
+// Order: Codex thread, tmux pane, pane process context, --from, AGENT (daemon
+// child or guess), login name, system service unit ("service:<unit>"), the
+// process-tree guess, a transient unit's generated name, then Fallback or
+// Unknown. A unit label is certain attribution but never Authoritative.
 func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 	probe := opts.Origin
 	if probe == nil {
@@ -194,21 +217,41 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 			reason = err.Error()
 		}
 	}
-	if opts.From != "" && ValidFrom(opts.From) == nil {
-		if ValidName(opts.From) {
-			return Identity{Label: "declared?:" + opts.From, Source: "--from"}
-		}
-		return Identity{Label: opts.From, Certain: true, Source: "--from"}
+	agent := os.Getenv("AGENT")
+	if agent != "" && !ValidName(agent) {
+		agent = ""
 	}
-	if value := os.Getenv("AGENT"); value != "" && ValidName(value) {
+	daemonChild := func() bool {
 		isDaemonChild := opts.DaemonChild
 		if isDaemonChild == nil {
 			isDaemonChild = DaemonChild
 		}
-		if isDaemonChild(os.Getpid()) {
-			return Identity{Label: value, Certain: true, Source: "bp-daemon-child"}
+		return isDaemonChild(os.Getpid())
+	}
+	if opts.From != "" && ValidFrom(opts.From) == nil {
+		if opts.FromMarked {
+			// A verified daemon child is the daemon's own process: like a pane,
+			// it cannot sign as somebody else.
+			if agent != "" && daemonChild() {
+				return Identity{Label: agent, Certain: true, Source: "bp-daemon-child"}
+			}
+			if unit, _, ok := systemUnit(opts); ok {
+				// The unit is kernel evidence; the label after it is what the
+				// unit says about itself, and it stays inside the unit's name.
+				return Identity{Label: unitPrefix + unit + "/" + opts.From, Certain: true, Source: "systemd-unit", Declared: opts.From}
+			}
+			return Identity{Label: "declared" + InferMark + ":" + opts.From, Source: "--from", Declared: opts.From}
 		}
-		return Identity{Label: "agent?:" + value, Source: "AGENT"}
+		if ValidName(opts.From) {
+			return Identity{Label: "declared?:" + opts.From, Source: "--from", Declared: opts.From}
+		}
+		return Identity{Label: opts.From, Certain: true, Source: "--from", Declared: opts.From}
+	}
+	if agent != "" {
+		if daemonChild() {
+			return Identity{Label: agent, Certain: true, Source: "bp-daemon-child"}
+		}
+		return Identity{Label: "agent?:" + agent, Source: "AGENT"}
 	}
 	// Root login is disabled on the box, so people SSH as themselves and reach
 	// bp through sudo: these name that human.
@@ -224,10 +267,20 @@ func Resolve(ctx context.Context, client Sessioner, opts Options) Identity {
 		}
 		return Identity{Label: value, Certain: true, Source: key}
 	}
+	// A named system unit is kernel evidence of who is calling. A transient
+	// unit's generated name (systemd-run without --unit) says less than the
+	// script it runs, so a process-tree guess outranks it.
+	unit, transient, inUnit := systemUnit(opts)
+	if inUnit && !transient {
+		return Identity{Label: unitPrefix + unit, Certain: true, Source: "systemd-unit"}
+	}
 	if opts.Infer {
 		if label := inferred(opts.Ancestors); label != "" {
 			return Identity{Label: label, Source: "process-tree"}
 		}
+	}
+	if inUnit {
+		return Identity{Label: unitPrefix + unit, Certain: true, Source: "systemd-unit"}
 	}
 	if opts.Fallback != "" {
 		return Identity{Label: "fallback?:" + sanitize(opts.Fallback), Source: "fallback"}
@@ -441,4 +494,164 @@ func daemonChildAt(procRoot string, pid int) bool {
 // agents. A subagent can be attributed without inheriting its parent's powers.
 func (i Identity) Authoritative() bool {
 	return i.Certain && i.Parent == "" && (i.Source == "tmux" || i.Source == "codex-thread")
+}
+
+// unitPrefix starts every label built from a systemd unit. Its ":" keeps the
+// label from ever having agent-name shape.
+const unitPrefix = "service:"
+
+// maxUnit bounds the unit part of a label; real unit names are far shorter.
+const maxUnit = 64
+
+// hostUnits are system units whose processes belong to whoever logged in or
+// scheduled the job, not to the unit: cron and at run other people's jobs, ssh
+// hosts their shells, and blueprint is the conventional unit of the bp daemon,
+// whose tmux server parents every agent pane. hostsOthers also detects the
+// last case live, so a renamed daemon unit is covered too.
+var hostUnits = map[string]bool{
+	"cron": true, "crond": true, "cronie": true, "anacron": true, "atd": true,
+	"ssh": true, "sshd": true, "blueprint": true,
+}
+
+// transientUnit matches the names systemd-run generates when no --unit is
+// given: run-u<n> (older systemd), run-r<hex>, run-p<pid>-i<n>.
+var transientUnit = regexp.MustCompile(`^run-(u[0-9]+|r[0-9a-f]+|p[0-9]+-i[0-9]+)$`)
+
+// systemUnit names the system service the caller runs in, if that is
+// evidence of who is calling. It reports false for scopes, for user@N.service
+// subtrees and user.slice, for a delegated sub-cgroup of a service, and for
+// units that only host other people's processes (see HostUnit).
+func systemUnit(opts Options) (unit string, transient, ok bool) {
+	read := opts.Cgroup
+	if read == nil {
+		read = selfCgroup
+	}
+	path := strings.TrimSpace(read())
+	unit, ok = parseSystemUnit(path)
+	if !ok {
+		return "", false, false
+	}
+	host := opts.HostUnit
+	if host == nil {
+		host = hostsOthers
+	}
+	if host(path, unit) {
+		return "", false, false
+	}
+	return unit, transientUnit.MatchString(unit), true
+}
+
+// parseSystemUnit accepts "/system.slice/[<sub>.slice/...]<name>.service"
+// and returns the sanitized <name>. Anything else is not a system service.
+func parseSystemUnit(path string) (string, bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "system.slice" {
+		return "", false
+	}
+	for _, part := range parts[1 : len(parts)-1] {
+		if !strings.HasSuffix(part, ".slice") {
+			return "", false // a sub-cgroup inside a service is not the service
+		}
+	}
+	name, ok := strings.CutSuffix(parts[len(parts)-1], ".service")
+	if !ok || name == "" || strings.HasPrefix(name, "user@") {
+		return "", false
+	}
+	unit := sanitizeUnit(name)
+	if unit == "" || ValidName(unitPrefix+unit) {
+		return "", false // belt and braces: never an agent-shaped label
+	}
+	return unit, true
+}
+
+// sanitizeUnit keeps a unit name to label-safe characters and a bounded
+// length. systemd's escapes ("\x2d") are decoded first; "@" (template
+// instances) becomes "-" because "@" separates agent from peer in federated
+// addresses.
+func sanitizeUnit(name string) string {
+	name = strings.ReplaceAll(name, `\x2d`, "-")
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		case r == '@':
+			b.WriteByte('-')
+		}
+		if b.Len() >= maxUnit {
+			break
+		}
+	}
+	return strings.Trim(b.String(), ".-_")
+}
+
+// selfCgroup is the default Options.Cgroup. It is a variable so a test binary
+// can make sure no case reads the cgroup of whatever runs the suite.
+var selfCgroup = readSelfCgroup
+
+// readSelfCgroup reads this process's cgroup v2 path, or the systemd
+// hierarchy's path on a hybrid v1 host. Empty when neither is present.
+func readSelfCgroup() string {
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return ""
+	}
+	return parseCgroupFile(string(data))
+}
+
+func parseCgroupFile(data string) string {
+	fallback := ""
+	for _, line := range strings.Split(data, "\n") {
+		if path, ok := strings.CutPrefix(line, "0::"); ok {
+			return path
+		}
+		if _, rest, ok := strings.Cut(line, ":name=systemd:"); ok && fallback == "" {
+			fallback = rest
+		}
+	}
+	return fallback
+}
+
+// hostsOthers reports whether a system unit hosts processes that belong to
+// somebody else: a known host unit by name, or a unit that holds a tmux server
+// or a bp daemon (every agent pane, and every background job an agent leaves
+// behind, sits in that unit's cgroup).
+func hostsOthers(cgroup, unit string) bool {
+	return hostsOthersAt("/sys/fs/cgroup", "/proc", cgroup, unit)
+}
+
+func hostsOthersAt(cgroupRoot, procRoot, cgroup, unit string) bool {
+	if hostUnits[unit] {
+		return true
+	}
+	data, err := os.ReadFile(filepath.Join(cgroupRoot, filepath.Clean("/"+cgroup), "cgroup.procs"))
+	if err != nil {
+		return false
+	}
+	self := strconv.Itoa(os.Getpid())
+	for _, pid := range strings.Fields(string(data)) {
+		if pid == self {
+			continue
+		}
+		comm, err := os.ReadFile(filepath.Join(procRoot, pid, "comm"))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(comm)) == "tmux: server" {
+			return true
+		}
+		exe, err := os.Readlink(filepath.Join(procRoot, pid, "exe"))
+		if err != nil || filepath.Base(strings.TrimSuffix(exe, " (deleted)")) != "bp" {
+			continue
+		}
+		command, err := os.ReadFile(filepath.Join(procRoot, pid, "cmdline"))
+		if err != nil {
+			continue
+		}
+		if args := strings.Split(string(command), "\x00"); len(args) > 1 && args[1] == "daemon" {
+			return true
+		}
+	}
+	return false
 }

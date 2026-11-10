@@ -53,6 +53,15 @@ Runtime binding is distinct from sender authority. Cwd, inherited tmux variables
 display names and model labels do not prove identity. Native renames are convenience
 aliases; canonical queue targets and hierarchy remain stable.
 
+Outside a pane, a systemd system service is named by its cgroup
+(`service:<unit>`, source `systemd-unit`). It ranks after `--from`, `AGENT` and
+login names and before the process-tree guess; a transient unit's generated
+name ranks after the guess. Units that host other people's processes (cron,
+at, ssh, and any unit holding a tmux server or the bp daemon) are skipped. The
+label is certain attribution without authority. `bp msg --from` is always a
+declaration (`declared?:<label>`, or `service:<unit>/<label>` inside a unit),
+and `BP_OWNER` limits an unverified sender's targets to one agent's subtree.
+
 ## Delivery
 
 The sender receives a channel ID. The receiving machine's queue evaluates runtime,

@@ -12,6 +12,9 @@ import (
 // /etc/blueprint/home and would reach the server's config and state.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv("CODEX_THREAD_ID")
+	_ = os.Unsetenv("BP_OWNER")
+	// The suite's own systemd unit must not become a sender in any test.
+	cgroupProbe = func() string { return "" }
 	// A test binary re-run as a child process keeps the temporary BP_HOME its
 	// parent test gave it; anything else is replaced by a sandbox.
 	if home := os.Getenv("BP_HOME"); home != "" && strings.HasPrefix(filepath.Clean(home), filepath.Clean(os.TempDir())+string(filepath.Separator)) {

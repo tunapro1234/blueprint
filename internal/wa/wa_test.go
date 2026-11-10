@@ -218,6 +218,8 @@ func TestAgentLabelReachingThePhone(t *testing.T) {
 				Known:     test.known,
 				Ancestors: test.ancestors,
 				Origin:    func(context.Context) identity.Origin { return identity.Origin{} },
+				// The suite's own systemd unit must not sign these messages.
+				Cgroup: func() string { return "" },
 			})
 			text := strings.SplitN(test.wantText, "] ", 2)[1]
 			if got := Format(who.Label, text); got != test.wantText {

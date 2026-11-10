@@ -167,6 +167,53 @@ alice reads `[http:ci] Build finished: 0 failures`; the `http:` prefix marks a
 name bp could not verify. `GET /v1/messages/<id>` returns the receipt, and A2A
 clients start at `/.well-known/agent-card.json`. See [docs/api.md](docs/api.md).
 
+### Messaging from services and timers
+
+A `bp msg` run by a systemd system service signs as the unit, read from the
+process's cgroup: `[service:<unit>]`. The label is attributed but carries no
+authority: no `/` commands, no `--force-busy`, no hierarchy rights. Units that
+only host other people's processes (cron, at, ssh, and the unit of the bp
+daemon and its tmux server) say nothing about the sender, so a job started
+from them keeps the script guess (`cron?:job.py`) as before. A transient
+`systemd-run` unit without `--unit` uses its generated name (`run-u123`) only
+when there is no script to name. A unit with `User=<login>` still signs as
+that login name, as before, not as `service:<unit>`.
+
+```ini
+# report.service, started by report.timer
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bp msg alice "nightly report is ready"
+# alice reads: [service:report] nightly report is ready
+```
+
+```sh
+systemd-run --unit=reindex --wait bp msg alice "reindex finished"
+# [service:reindex] reindex finished
+```
+
+`--from <label>` adds what the unit says about itself:
+`bp msg --from backup alice done` reads `[service:report/backup] done`.
+Outside a service it reads `[declared?:backup] done`, marked as unverified;
+inside an agent's terminal it is ignored with a note, because the terminal
+already proves who is speaking. `service:` senders, and `--from` labels that
+are not plain agent names, cannot reach HTTP/MCP inbox agents yet; `bp msg`
+refuses those targets for them.
+
+`BP_OWNER=<agent>` declares which agent a service or script works for. bp then
+refuses any target other than that agent and the agents below it, and refuses
+addresses on other machines. It never changes the label or grants authority,
+and an agent's own terminal ignores it.
+
+```ini
+[Service]
+Environment=BP_OWNER=alice
+ExecStart=/usr/local/bin/bp msg alice-worker "queue drained"
+```
+
+`bp whoami` shows the label, its source (`systemd-unit`, `process-tree`,
+`--from`) and whether a `BP_OWNER` scope is active.
+
 ## Safety model
 
 1. Installing adds only the bp binary, bp's own state and a short skill note for Claude Code and Codex; every behavior that touches your environment is a module that `bp disable` or `bp uninstall` undoes.

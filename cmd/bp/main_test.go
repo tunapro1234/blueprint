@@ -3021,9 +3021,9 @@ func TestCutForceBusyOnlyReadsTheFlagBeforeTheMessage(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rest, force := cutForceBusy(test.args)
-			if force != test.force || strings.Join(rest, " ") != strings.Join(test.rest, " ") {
-				t.Fatalf("cutForceBusy(%v)=%v,%v want %v,%v", test.args, rest, force, test.rest, test.force)
+			rest, force, _, err := cutMsgOptions(test.args)
+			if err != nil || force != test.force || strings.Join(rest, " ") != strings.Join(test.rest, " ") {
+				t.Fatalf("cutMsgOptions(%v)=%v,%v,%v want %v,%v", test.args, rest, force, err, test.rest, test.force)
 			}
 		})
 	}

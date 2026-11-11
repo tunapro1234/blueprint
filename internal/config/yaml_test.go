@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -293,6 +294,38 @@ func TestClaudeAccountsDefaultsOverridesAndValidation(t *testing.T) {
 	}
 	c, err = Load()
 	if err != nil || !c.ClaudeAccounts.AutoSwitch || c.ClaudeAccounts.PollMinutes != 3 || c.ClaudeAccounts.Threshold != 90 || c.ClaudeAccounts.Limits["cerci"] != 40 {
+		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
+	}
+}
+
+func TestClaudeAccountsWeeklyThreshold(t *testing.T) {
+	if d := DefaultClaudeAccounts(); d.WeeklyThreshold != 0 || d.WeeklyThresholdPercent() != 90 {
+		t.Fatalf("default weeklyThreshold=%d effective=%d", d.WeeklyThreshold, d.WeeklyThresholdPercent())
+	}
+	c, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  threshold: 80\n")
+	if err != nil || c.ClaudeAccounts.WeeklyThreshold != 0 || c.ClaudeAccounts.WeeklyThresholdPercent() != 80 {
+		t.Fatalf("unset follows threshold: %+v err=%v", c.ClaudeAccounts, err)
+	}
+	// 0 is unset; 1-100 is accepted, below the threshold too (a stricter
+	// seven-day window).
+	for _, value := range []int{0, 1, 70, 95, 100} {
+		c, err := yamlConfig(t, "config.yaml", fmt.Sprintf("claudeAccounts:\n  weeklyThreshold: %d\n", value))
+		if err != nil || c.ClaudeAccounts.WeeklyThreshold != value || c.ClaudeAccounts.Threshold != 90 {
+			t.Fatalf("weeklyThreshold %d: %+v err=%v", value, c.ClaudeAccounts, err)
+		}
+	}
+	for _, value := range []string{"-1", "101", "150"} {
+		if _, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  weeklyThreshold: "+value+"\n"); err == nil || !strings.Contains(err.Error(), "weeklyThreshold") {
+			t.Fatalf("accepted weeklyThreshold %s: %v", value, err)
+		}
+	}
+	home := t.TempDir()
+	t.Setenv("BP_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"autoSwitch":true,"weeklyThreshold":95}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load()
+	if err != nil || c.ClaudeAccounts.WeeklyThreshold != 95 || c.ClaudeAccounts.WeeklyThresholdPercent() != 95 || c.ClaudeAccounts.Threshold != 90 || !c.ClaudeAccounts.AutoSwitch {
 		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
 	}
 }

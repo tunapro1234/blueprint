@@ -19,6 +19,15 @@ Changes on `dev` since the 1.9.34 release.
 - `bp update --clis`: a pane that returns to its shell after `/exit` now counts as an exited CLI and the agent is reopened in place. Before, only a dead pane counted, so an agent launched through a shell was left at the prompt and reported as a failed restart. The wait for the exit is 20 seconds instead of 10.
 - Delivery: a fresh Claude pane whose session has no transcript file yet (nothing typed, no /rename) is now deliverable when its composer is empty. Before, bp reported the runtime as unknown because the file was missing, and the first message, which is what creates the file, never went out.
 - Claude accounts: the daemon now copies the active account's login into its slot whenever Claude Code has refreshed it. Refresh tokens rotate, so a slot copy written only at switch time went stale; replacing the live login (a `/login` for another account) then lost the only valid token and the slot died with invalid_grant.
+- `claudeAccounts.weeklyThreshold` (default unset = `threshold`, unchanged):
+  the seven-day window's own auto-switch threshold, so the weekly allowance
+  can be used up to e.g. 95% while the five-hour window still switches at
+  `threshold`. Per-account `limits` cap both windows. Auto switching,
+  backup ordering, the weekly-active keepalive target and `bp account
+  keepalive` measure each window against its own limit; decision reasons
+  name the deciding window when the limits differ. `bp account auto
+  --weekly-threshold P` overrides it for one run, and `bp account status`
+  shows both thresholds when they differ.
 - `claudeAccounts.switchPrefer: "soonest-weekly-reset"`: auto switching uses
   the account whose seven-day window resets soonest, steps off it while its
   five-hour window is used up and returns once that window resets.

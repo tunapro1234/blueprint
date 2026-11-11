@@ -135,6 +135,7 @@ Automatic switching and keepalive by the daemon are opt-in:
 claudeAccounts:
   autoSwitch: false     # run the claude-account-auto daemon job
   threshold: 90         # switch away when the active 5h or 7d usage reaches this percent
+  weeklyThreshold: 95   # optional: the 7d window's own threshold (unset = threshold)
   cooldownMinutes: 5    # minimum time between switches, manual ones included
   pollMinutes: 5        # how old cached usage of an account may be before it is fetched again
   limits:               # optional per-account caps below threshold (slot number, alias or email)
@@ -152,7 +153,19 @@ claudeAccounts:
 When enabled, the daemon runs one pass a minute and fetches usage for at most
 one account per pass. It switches only to an enabled account whose usage is
 below `threshold` and at least 10 points below the active account, and never
-within `cooldownMinutes` of the previous switch. Each switch writes one daemon
+within `cooldownMinutes` of the previous switch.
+
+`weeklyThreshold` gives the seven-day window its own threshold; `threshold`
+then governs the five-hour window alone. With `threshold: 90` and
+`weeklyThreshold: 95` an account counts as used up when its five-hour usage
+reaches 90% or its seven-day usage reaches 95%, and its room is the smaller of
+the two distances to those limits (a target needs 10 more points of that room
+than the active account). Unset, or equal to `threshold`, both windows use
+`threshold` as before. A value below `threshold` is allowed and makes the
+seven-day window the stricter one. When the two limits differ, decision
+reasons name the window that decided, for example `active account at seven-day
+92%, below weekly threshold 95%`. `bp account status` shows both thresholds
+when they differ. Each switch writes one daemon
 log line and sends one notification through the configured `ntfy` settings (none
 when `ntfy` is unset). When every account is exhausted the daemon stays on the
 active account and logs that at most once an hour. `bp account auto --once`
@@ -160,8 +173,9 @@ runs the same decision by hand; it exits 0 after a switch, 2 when nothing is to
 be done, 3 when no account is viable and 1 on error. The job and the command
 are not available on macOS.
 
-`limits` lowers the threshold for single accounts: an account with `40` counts
-as used up at 40% of its 5h or 7d window, so switching (manual `best` and
+`limits` lowers the thresholds for single accounts: an account with `40` counts
+as used up at 40% of its 5h or 7d window (an entry caps both windows, below
+`threshold` and `weeklyThreshold` alike), so switching (manual `best` and
 `next-available` included) leaves it once it gets there and never picks it as a
 target above that. A slot number key wins over an alias, an alias over an
 email. Limits govern switching only; an agent bound to an account's profile
@@ -200,8 +214,8 @@ on.
 `keepAliveScope: weekly-active` gives five-hour pings to one account only:
 the weekly-active account, the one `switchPrefer: soonest-weekly-reset`
 drains. It is chosen the way that strategy orders accounts, on the seven-day
-window alone: among enabled normal accounts below their limit (`threshold`, or
-the account's own `limits` entry) on the seven-day window, the one whose
+window alone: among enabled normal accounts below their seven-day limit
+(`weeklyThreshold`, else `threshold`, or the account's lower `limits` entry), the one whose
 seven-day window resets soonest; a backup, by priority, only when no normal
 account qualifies and `backup.keepAliveBackups` is on. An account whose
 seven-day usage is unknown is not a candidate. Its five-hour windows run back
@@ -285,7 +299,7 @@ windows:
 | `codex.sockets` | Read-only Codex app-server observation sockets |
 | `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
-| `claudeAccounts.autoSwitch`, `.threshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, backup accounts and keepalive (see above) |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.weeklyThreshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, backup accounts and keepalive (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

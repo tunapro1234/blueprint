@@ -466,3 +466,82 @@ func TestAccountCLIKeepAliveScopeWeeklyAndDryRun(t *testing.T) {
 		t.Fatalf("a token value reached command output:\n%s", e.transcript.String())
 	}
 }
+
+func TestAccountCLIWeeklyThreshold(t *testing.T) {
+	e := newAccountEnv(t)
+	a := e.app(0)
+	for n := 1; n <= 2; n++ {
+		e.login(n)
+		if out, code := e.run(a, "add"); code != 0 {
+			t.Fatalf("add %d: %s", n, out)
+		}
+	}
+	// Slot 2 is live at 5h 50% / 7d 92%. The room strategy states the
+	// deciding window in its "nothing to do" reason.
+	a.config.ClaudeAccounts.SwitchPrefer = "room"
+	e.api.set(1, 10, 10)
+	e.api.set(2, 50, 92)
+	if out, code := e.run(a, "list", "--refresh"); code != 0 {
+		t.Fatalf("list: %s", out)
+	}
+
+	out, code := e.run(a, "status")
+	if code != 0 || !strings.Contains(out, "auto switch: off (threshold 90%, cooldown") {
+		t.Fatalf("status without weekly threshold: %s", out)
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoSwitched || !strings.Contains(out, "would switch from slot 2 (92%) to slot 1") {
+		t.Fatalf("7d 92%% over threshold 90%%: code=%d %s", code, out)
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run", "--weekly-threshold", "95")
+	if code != accountAutoNothing || !strings.Contains(out, "seven-day 92%") || !strings.Contains(out, "weekly threshold 95%") {
+		t.Fatalf("--weekly-threshold 95: code=%d %s", code, out)
+	}
+	out, code = e.run(a, "auto", "--once", "--weekly-threshold", "abc")
+	if code != 1 || !strings.Contains(out, "invalid --weekly-threshold") {
+		t.Fatalf("bad --weekly-threshold: code=%d %s", code, out)
+	}
+	out, code = e.run(a, "auto", "--once", "--weekly-threshold", "101")
+	if code != 1 || !strings.Contains(out, "invalid --weekly-threshold") {
+		t.Fatalf("out-of-range --weekly-threshold: code=%d %s", code, out)
+	}
+
+	// The configured weekly threshold is the default; the flag overrides it.
+	a.config.ClaudeAccounts.WeeklyThreshold = 95
+	out, code = e.run(a, "status")
+	if code != 0 || !strings.Contains(out, "auto switch: off (threshold 90% five-hour, 95% seven-day, cooldown") {
+		t.Fatalf("status with weekly threshold: %s", out)
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoNothing || !strings.Contains(out, "seven-day 92%, below weekly threshold 95%") {
+		t.Fatalf("configured weekly threshold: code=%d %s", code, out)
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run", "--weekly-threshold", "90")
+	if code != accountAutoSwitched || !strings.Contains(out, "would switch from slot 2 (92%) to slot 1 (10%)") {
+		t.Fatalf("--weekly-threshold 90 over a configured 95: code=%d %s", code, out)
+	}
+	// Over the weekly threshold the switch line names the deciding windows.
+	e.api.set(2, 50, 96)
+	if out, code := e.run(a, "list", "--refresh"); code != 0 {
+		t.Fatalf("list: %s", out)
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoSwitched || !strings.Contains(out, "would switch from slot 2 (seven-day 96%) to slot 1 (five-hour 10%): active account at seven-day 96% (weekly threshold 95%)") {
+		t.Fatalf("seven-day switch line: code=%d %s", code, out)
+	}
+	e.api.set(2, 50, 92)
+	if out, code := e.run(a, "list", "--refresh"); code != 0 {
+		t.Fatalf("list: %s", out)
+	}
+
+	// Keepalive's weekly-active scope reads the configured weekly threshold.
+	out, code = e.run(a, "keepalive", "--scope", "weekly-active", "--dry-run")
+	if code != 0 || strings.Contains(out, "is at its") {
+		t.Fatalf("keepalive with weekly threshold 95: code=%d %s", code, out)
+	}
+	a.config.ClaudeAccounts.WeeklyThreshold = 0
+	out, code = e.run(a, "keepalive", "--scope", "weekly-active", "--dry-run")
+	if code != 0 || !strings.Contains(out, "seven-day usage 92% is at its 90% limit") {
+		t.Fatalf("keepalive without weekly threshold: code=%d %s", code, out)
+	}
+}

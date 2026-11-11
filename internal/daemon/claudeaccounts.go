@@ -59,11 +59,12 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 		},
 		options: claudeacct.AutoOptions{
 			Policy: claudeacct.AutoPolicy{
-				Threshold:   float64(accounts.Threshold),
-				Cooldown:    time.Duration(accounts.CooldownMinutes) * time.Minute,
-				Limits:      accounts.LimitPercents(),
-				Prefer:      accounts.SwitchPrefer,
-				BackupOrder: accounts.Backup.SwitchOrder,
+				Threshold:       float64(accounts.Threshold),
+				WeeklyThreshold: float64(accounts.WeeklyThreshold),
+				Cooldown:        time.Duration(accounts.CooldownMinutes) * time.Minute,
+				Limits:          accounts.LimitPercents(),
+				Prefer:          accounts.SwitchPrefer,
+				BackupOrder:     accounts.Backup.SwitchOrder,
 			},
 			PollEvery: time.Duration(accounts.PollMinutes) * time.Minute,
 			MaxPolls:  1,
@@ -192,9 +193,7 @@ func (c *claudeAccountAuto) switchPass(ctx context.Context) error {
 		if result.Switched == nil {
 			return nil
 		}
-		to := result.Switched.To
-		message := fmt.Sprintf("Claude account switched from slot %d (%.0f%%) to slot %d (%s, %.0f%%); running Claude agents pick it up on their next request",
-			d.From, d.ActiveMax, to.Number, to.Email, d.TargetMax)
+		message := switchMessage(d, result.Switched.To)
 		c.log.Printf("%s: %s", claudeAccountJob, message)
 		if err := c.notify(ctx, message); err != nil {
 			c.log.Printf("%s: notification failed: %v", claudeAccountJob, err)
@@ -208,6 +207,15 @@ func (c *claudeAccountAuto) switchPass(ctx context.Context) error {
 		c.exhaustedAt = time.Time{}
 	}
 	return nil
+}
+
+// switchMessage is the log line and notification of an auto switch. Its shape
+// ("switched from slot A (...) to slot B (...)") is parsed by log readers; the
+// usages name their window only when an account's five-hour and seven-day
+// limits differ.
+func switchMessage(d claudeacct.Decision, to claudeacct.Slot) string {
+	return fmt.Sprintf("Claude account switched from slot %d (%s) to slot %d (%s, %s); running Claude agents pick it up on their next request",
+		d.From, d.ActiveUsage(), to.Number, to.Email, d.TargetUsage())
 }
 
 // keepaliveAccount puts the coordinator back on its bound Claude account. A

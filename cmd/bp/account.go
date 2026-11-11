@@ -29,7 +29,7 @@ const accountUsage = `usage:
   bp account alias N A | bp account alias N --unset
   bp account disable N | bp account enable N
   bp account role N normal|backup | bp account priority N P
-  bp account auto [--once] [--dry-run] [--threshold P] [--json]
+  bp account auto [--once] [--dry-run] [--threshold P] [--weekly-threshold P] [--json]
   bp account keepalive [--once] [--dry-run] [--scope all|weekly-active] [--weekly|--no-weekly] [--model M] [--json]
   bp account bind <agent> N|email|alias|default
   bp account unbind <agent>
@@ -58,6 +58,12 @@ windows back to back, and none to the other accounts. --weekly and
 --no-weekly override claudeAccounts.keepAliveWeekly for one run: with weekly
 pings every account whose seven-day window is not running is pinged once to
 start it.
+
+bp account auto runs the daemon's auto-switch decision by hand. An account
+counts as used up when its five-hour usage reaches claudeAccounts.threshold or
+its seven-day usage reaches claudeAccounts.weeklyThreshold (the threshold when
+unset), each lowered by the account's own limit; --threshold and
+--weekly-threshold override them for one run.
 
 A backup account is used by auto switching only when every normal account is
 used up, lowest priority first, and auto switching returns to a normal account
@@ -322,7 +328,11 @@ func (a *app) accountStatus(m *claudeacct.Manager, args []string) error {
 	if prefer == "" {
 		prefer = "room"
 	}
-	fmt.Fprintf(a.out, "auto switch: %s (threshold %d%%, cooldown %dm, poll every %dm, prefer %s)\n", mode, cfg.Threshold, cfg.CooldownMinutes, cfg.PollMinutes, prefer)
+	threshold := fmt.Sprintf("threshold %d%%", cfg.Threshold)
+	if weekly := cfg.WeeklyThresholdPercent(); weekly != cfg.Threshold {
+		threshold = fmt.Sprintf("threshold %d%% five-hour, %d%% seven-day", cfg.Threshold, weekly)
+	}
+	fmt.Fprintf(a.out, "auto switch: %s (%s, cooldown %dm, poll every %dm, prefer %s)\n", mode, threshold, cfg.CooldownMinutes, cfg.PollMinutes, prefer)
 	if len(cfg.Limits) > 0 {
 		keys := make([]string, 0, len(cfg.Limits))
 		for key := range cfg.Limits {
@@ -499,7 +509,7 @@ func (a *app) accountSetDisabled(m *claudeacct.Manager, disabled bool, args []st
 }
 
 func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
-	flags, positional, err := accountFlags(args, map[string]bool{"--threshold": true}, map[string]bool{"--once": true, "--dry-run": true, "--json": true})
+	flags, positional, err := accountFlags(args, map[string]bool{"--threshold": true, "--weekly-threshold": true}, map[string]bool{"--once": true, "--dry-run": true, "--json": true})
 	if err != nil {
 		return err
 	}
@@ -507,13 +517,21 @@ func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
 		return errors.New(accountUsage)
 	}
 	cfg := a.config.ClaudeAccounts
-	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer, BackupOrder: cfg.Backup.SwitchOrder}
-	if text, ok := flags["--threshold"]; ok {
+	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), WeeklyThreshold: float64(cfg.WeeklyThreshold),
+		Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer, BackupOrder: cfg.Backup.SwitchOrder}
+	for _, flag := range []struct {
+		name   string
+		target *float64
+	}{{"--threshold", &policy.Threshold}, {"--weekly-threshold", &policy.WeeklyThreshold}} {
+		text, ok := flags[flag.name]
+		if !ok {
+			continue
+		}
 		value, err := strconv.ParseFloat(strings.TrimSuffix(text, "%"), 64)
 		if err != nil || value <= 0 || value > 100 {
-			return fmt.Errorf("invalid --threshold %q: expected a percentage in (0, 100]", text)
+			return fmt.Errorf("invalid %s %q: expected a percentage in (0, 100]", flag.name, text)
 		}
-		policy.Threshold = value
+		*flag.target = value
 	}
 	opts := claudeacct.AutoOptions{Policy: policy, DryRun: flags["--dry-run"] != "", PollEvery: time.Duration(cfg.PollMinutes) * time.Minute}
 	jsonOutput := flags["--json"] != ""
@@ -543,7 +561,11 @@ func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
 	opts.MaxPolls = 1
 	ctx, stop := signal.NotifyContext(a.ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	fmt.Fprintf(a.err, "auto switching at %.0f%% every %s; Ctrl-C stops\n", policy.Threshold, accountAutoTick)
+	at := fmt.Sprintf("%.0f%%", policy.Threshold)
+	if policy.WeeklyThreshold > 0 && policy.WeeklyThreshold != policy.Threshold {
+		at = fmt.Sprintf("%.0f%% five-hour, %.0f%% seven-day", policy.Threshold, policy.WeeklyThreshold)
+	}
+	fmt.Fprintf(a.err, "auto switching at %s every %s; Ctrl-C stops\n", at, accountAutoTick)
 	ticker := time.NewTicker(accountAutoTick)
 	defer ticker.Stop()
 	for {
@@ -571,12 +593,12 @@ func (a *app) printAutoResult(result claudeacct.AutoResult, dryRun bool) {
 	switch d.Action {
 	case claudeacct.AutoSwitch:
 		if dryRun || result.Switched == nil {
-			fmt.Fprintf(a.out, "would switch from slot %d (%.0f%%) to slot %d (%.0f%%): %s\n", d.From, d.ActiveMax, d.To, d.TargetMax, d.Reason)
+			fmt.Fprintf(a.out, "would switch from slot %d (%s) to slot %d (%s): %s\n", d.From, d.ActiveUsage(), d.To, d.TargetUsage(), d.Reason)
 			return
 		}
 		a.printSwitchNotes(*result.Switched)
-		fmt.Fprintf(a.out, "switched from slot %d (%.0f%%) to slot %d (%s); running Claude agents pick it up on their next request\n",
-			d.From, d.ActiveMax, result.Switched.To.Number, result.Switched.To.Email)
+		fmt.Fprintf(a.out, "switched from slot %d (%s) to slot %d (%s); running Claude agents pick it up on their next request\n",
+			d.From, d.ActiveUsage(), result.Switched.To.Number, result.Switched.To.Email)
 	case claudeacct.AutoNoTarget:
 		fmt.Fprintf(a.out, "no viable account to switch to: %s\n", d.Reason)
 	default:
@@ -597,7 +619,8 @@ func (a *app) accountKeepAlive(m *claudeacct.Manager, args []string) error {
 	backup := cfg.Backup
 	opts := claudeacct.KeepAliveOptions{Model: cfg.KeepAliveModel, DryRun: flags["--once"] == "" || flags["--dry-run"] != "",
 		SkipBackups: !backup.KeepAliveBackups, FlatStagger: backup.Stagger == "flat", Scope: cfg.KeepAliveScope,
-		Policy: claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), Limits: cfg.LimitPercents()}, Weekly: cfg.KeepAliveWeekly}
+		Policy: claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), WeeklyThreshold: float64(cfg.WeeklyThreshold), Limits: cfg.LimitPercents()},
+		Weekly: cfg.KeepAliveWeekly}
 	if scope, ok := flags["--scope"]; ok {
 		if scope != claudeacct.KeepAliveScopeAll && scope != claudeacct.KeepAliveScopeWeeklyActive {
 			return fmt.Errorf("invalid --scope %q: expected all or weekly-active", scope)

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -239,5 +240,43 @@ func TestClaudeAccountKeepAliveOptionsCarryScopeAndWeekly(t *testing.T) {
 	cfg.ClaudeAccounts.KeepAliveScope, cfg.ClaudeAccounts.KeepAliveWeekly = "all", false
 	if k := newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0)).keepAlive; k.Scope != "all" || k.Weekly {
 		t.Fatalf("default keepalive options %+v", k)
+	}
+}
+
+func TestClaudeAccountPolicyCarriesWeeklyThreshold(t *testing.T) {
+	cfg := config.Config{StateDir: t.TempDir(), ClaudeAccounts: config.DefaultClaudeAccounts()}
+	cfg.ClaudeAccounts.AutoSwitch, cfg.ClaudeAccounts.KeepAlive = true, true
+	auto := newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0))
+	if p := auto.options.Policy; p.Threshold != 90 || p.WeeklyThreshold != 0 {
+		t.Fatalf("default policy %+v", p)
+	}
+	cfg.ClaudeAccounts.WeeklyThreshold = 95
+	auto = newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0))
+	if p := auto.options.Policy; p.Threshold != 90 || p.WeeklyThreshold != 95 {
+		t.Fatalf("auto policy %+v", p)
+	}
+	if k := auto.keepAlive; k == nil || k.Policy.WeeklyThreshold != 95 {
+		t.Fatalf("keepalive options %+v", k)
+	}
+}
+
+// The switch line keeps the shape tokenwatch/report.py parses; with a weekly
+// threshold that differs from the threshold the usages name their window.
+func TestClaudeAccountSwitchMessageShape(t *testing.T) {
+	to := claudeacct.Slot{Number: 4, Email: "u4@example.com"}
+	plain := switchMessage(claudeacct.Decision{From: 2, To: 4, ActiveMax: 95, TargetMax: 20}, to)
+	if plain != "Claude account switched from slot 2 (95%) to slot 4 (u4@example.com, 20%); running Claude agents pick it up on their next request" {
+		t.Fatalf("plain message %q", plain)
+	}
+	split := switchMessage(claudeacct.Decision{From: 2, To: 4, ActiveMax: 96, ActiveWindow: "seven-day", TargetMax: 10, TargetWindow: "five-hour"}, to)
+	if split != "Claude account switched from slot 2 (seven-day 96%) to slot 4 (u4@example.com, five-hour 10%); running Claude agents pick it up on their next request" {
+		t.Fatalf("split message %q", split)
+	}
+	report := regexp.MustCompile(`(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d) claude-account-auto: Claude account switched from slot (\d+) .*? to slot (\d+)`)
+	for _, message := range []string{plain, split} {
+		m := report.FindStringSubmatch("2030/01/01 00:00:00 " + claudeAccountJob + ": " + message)
+		if m == nil || m[2] != "2" || m[3] != "4" {
+			t.Fatalf("report.py pattern does not read %q: %v", message, m)
+		}
 	}
 }

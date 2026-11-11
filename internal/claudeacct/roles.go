@@ -68,12 +68,12 @@ func backupTargets(accounts *Accounts, from int, policy AutoPolicy, now time.Tim
 		if s.Number == from || !s.IsBackup() || !s.Usable() {
 			continue
 		}
-		value, known := policy.used(s, now)
-		if !known || policy.LimitFor(s)-value <= 0 {
+		use, known := policy.use(s, now)
+		if !known || use.room() <= 0 {
 			continue
 		}
 		priority[s.Number] = s.Priority
-		list = append(list, rankedTarget{n: s.Number, value: value, room: policy.LimitFor(s) - value, reset: policy.resetOf(s, now)})
+		list = append(list, newRankedTarget(s.Number, use, policy.resetOf(s, now)))
 	}
 	sort.SliceStable(list, func(i, j int) bool {
 		if priority[list[i].n] != priority[list[j].n] {
@@ -110,8 +110,7 @@ func recordUsedUp(state *AutoState, accounts *Accounts, active int, policy AutoP
 	if current == nil || current.IsBackup() || !hasBackups(accounts) {
 		return false
 	}
-	value, known := slotUsage(*current).Max(now)
-	if !known || value < policy.LimitFor(*current) {
+	if !policy.usedUp(*current, now) {
 		return false
 	}
 	reset := slotUsage(*current).FiveHourResetAt(now)
@@ -152,7 +151,7 @@ func resetNormals(normals []rankedTarget, state AutoState, now time.Time) []rank
 // with room (they were all used up), with interleave one that was seen used up
 // and has reset since. Otherwise it stays until the backup is used up, then
 // takes the next normal account with room, else the next backup by priority.
-func decideWithRoles(accounts *Accounts, active int, current Slot, activeMax, limit float64, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
+func decideWithRoles(accounts *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
 	interleave := policy.BackupOrder == SwitchOrderInterleave
 	normalsOnly := withRole(accounts, false)
 	switchTo := func(list []rankedTarget, reason string) Decision {
@@ -161,8 +160,9 @@ func decideWithRoles(accounts *Accounts, active int, current Slot, activeMax, li
 			d.Reason = "cooling down for " + FormatDuration(state.LastSwitchAt.Add(policy.Cooldown).Sub(now)) + " after the last switch"
 			return d
 		}
-		d.Action, d.To, d.TargetMax, d.candidates = AutoSwitch, list[0].n, list[0].value, targetNumbers(list)
-		d.Reason = reason + fmt.Sprintf("; slot %d at %.0f%%", d.To, d.TargetMax)
+		d.Action, d.candidates = AutoSwitch, targetNumbers(list)
+		d.target(list[0])
+		d.Reason = reason + fmt.Sprintf("; slot %d at %s", d.To, d.TargetUsage())
 		if target := accounts.Slot(d.To); target != nil && target.IsBackup() {
 			d.Reason += fmt.Sprintf(" (backup, priority %d)", target.Priority)
 		}
@@ -176,13 +176,13 @@ func decideWithRoles(accounts *Accounts, active int, current Slot, activeMax, li
 	backups := backupTargets(accounts, active, policy, now)
 	if !current.IsBackup() {
 		normal := Decide(normalsOnly, active, state, policy, now)
-		if activeMax < limit || normal.Action == AutoNone && !interleave {
+		if use.room() > 0 || normal.Action == AutoNone && !interleave {
 			if normal.Action == AutoSwitch {
 				normal.candidates = candidatesFor(normalsOnly, normal, policy, now)
 			}
 			return normal
 		}
-		why := fmt.Sprintf("active account at %.0f%% (%s)", activeMax, limitText(limit, policy))
+		why := fmt.Sprintf("active account at %s (%s)", use.valueText(), use.limitText())
 		if interleave && len(backups) > 0 {
 			return switchTo(backups, why+", interleaving: next backup")
 		}
@@ -205,12 +205,12 @@ func decideWithRoles(accounts *Accounts, active int, current Slot, activeMax, li
 	if len(back) > 0 {
 		return switchTo(back, fmt.Sprintf("on backup slot %d; a normal account has room again", active))
 	}
-	if activeMax < limit {
+	if use.room() > 0 {
 		d.Action = AutoNone
-		d.Reason = fmt.Sprintf("on backup slot %d at %.0f%%; no used-up normal account has reset yet", active, activeMax)
+		d.Reason = fmt.Sprintf("on backup slot %d at %s; no used-up normal account has reset yet", active, use.valueText())
 		return d
 	}
-	why := fmt.Sprintf("backup slot %d at %.0f%% (%s)", active, activeMax, limitText(limit, policy))
+	why := fmt.Sprintf("backup slot %d at %s (%s)", active, use.valueText(), use.limitText())
 	if len(normals) > 0 {
 		return switchTo(normals, why+", next normal account")
 	}

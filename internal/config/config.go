@@ -88,12 +88,18 @@ type LifecycleConfig struct {
 // ClaudeAccountsConfig controls the daemon's automatic Claude account switch
 // and keepalive. The switch itself is always available through
 // `bp account switch`; the daemon only switches when AutoSwitch is enabled
-// and only pings when KeepAlive is enabled. Threshold and the Limits values
-// are utilization percentages (1-100); the minute values must be at least
-// one. Limits keys are a slot number, an alias or an email.
+// and only pings when KeepAlive is enabled. Threshold, WeeklyThreshold and
+// the Limits values are utilization percentages (1-100); the minute values
+// must be at least one. Limits keys are a slot number, an alias or an email.
 type ClaudeAccountsConfig struct {
-	AutoSwitch      bool           `json:"autoSwitch" yaml:"autoSwitch"`
-	Threshold       int            `json:"threshold" yaml:"threshold"`
+	AutoSwitch bool `json:"autoSwitch" yaml:"autoSwitch"`
+	// Threshold is where an account counts as used up: on both windows, or
+	// on the five-hour window alone when WeeklyThreshold is set.
+	Threshold int `json:"threshold" yaml:"threshold"`
+	// WeeklyThreshold is the seven-day window's threshold; 0 (unset) means
+	// Threshold. It may be above Threshold (the weekly allowance is used
+	// further) or below it (the seven-day window switches earlier).
+	WeeklyThreshold int            `json:"weeklyThreshold,omitempty" yaml:"weeklyThreshold,omitempty"`
 	CooldownMinutes int            `json:"cooldownMinutes" yaml:"cooldownMinutes"`
 	PollMinutes     int            `json:"pollMinutes" yaml:"pollMinutes"`
 	Limits          map[string]int `json:"limits,omitempty" yaml:"limits,omitempty"`
@@ -129,6 +135,15 @@ type ClaudeAccountsBackup struct {
 	// is used up) or "interleave" (the next backup whenever the active normal
 	// account is used up: A1 B1 A2 B2 ...).
 	SwitchOrder string `json:"switchOrder" yaml:"switchOrder"`
+}
+
+// WeeklyThresholdPercent is the seven-day threshold in effect: WeeklyThreshold,
+// or Threshold when it is unset.
+func (c ClaudeAccountsConfig) WeeklyThresholdPercent() int {
+	if c.WeeklyThreshold == 0 {
+		return c.Threshold
+	}
+	return c.WeeklyThreshold
 }
 
 // LimitPercents returns Limits as percentages for the account policy, or nil
@@ -251,6 +266,7 @@ type overrides struct {
 type claudeAccountsOverrides struct {
 	AutoSwitch      *bool           `json:"autoSwitch" yaml:"autoSwitch"`
 	Threshold       *int            `json:"threshold" yaml:"threshold"`
+	WeeklyThreshold *int            `json:"weeklyThreshold" yaml:"weeklyThreshold"`
 	CooldownMinutes *int            `json:"cooldownMinutes" yaml:"cooldownMinutes"`
 	PollMinutes     *int            `json:"pollMinutes" yaml:"pollMinutes"`
 	Limits          *map[string]int `json:"limits" yaml:"limits"`
@@ -625,6 +641,9 @@ func apply(result *Config, values overrides) {
 		if accounts.Threshold != nil {
 			result.ClaudeAccounts.Threshold = *accounts.Threshold
 		}
+		if accounts.WeeklyThreshold != nil {
+			result.ClaudeAccounts.WeeklyThreshold = *accounts.WeeklyThreshold
+		}
 		if accounts.CooldownMinutes != nil {
 			result.ClaudeAccounts.CooldownMinutes = *accounts.CooldownMinutes
 		}
@@ -676,6 +695,9 @@ func apply(result *Config, values overrides) {
 func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 	if value.Threshold < 1 || value.Threshold > 100 {
 		return fmt.Errorf("threshold must be between 1 and 100")
+	}
+	if value.WeeklyThreshold != 0 && (value.WeeklyThreshold < 1 || value.WeeklyThreshold > 100) {
+		return fmt.Errorf("weeklyThreshold must be between 1 and 100, or 0 to use threshold")
 	}
 	if value.CooldownMinutes < 1 {
 		return fmt.Errorf("cooldownMinutes must be at least 1")

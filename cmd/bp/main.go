@@ -120,7 +120,7 @@ bp policy status|override <hours>
 bp account add [--slot N] [--alias A] | list [--json] [--refresh] | status [--json]
 bp account switch [N|email|alias] [--strategy best|next-available] [--dry-run]
 bp account remove N | alias N A|--unset | disable N | enable N
-bp account auto [--once] [--dry-run] [--threshold P] [--json]
+bp account auto [--once] [--dry-run] [--threshold P] [--weekly-threshold P] [--json]
 bp account bind <agent> <N|email|alias|default> | unbind <agent> | bindings [--json]
 bp account login <N|email|alias> | profile [N|email|alias] [--json]
 bp service

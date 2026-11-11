@@ -207,7 +207,8 @@ func rotation(accounts *Accounts, live *liveLogin) []Slot {
 }
 
 // strategyCandidates orders candidate slots for a strategy. An account's
-// cap is its own limit, or 100% without one.
+// cap is its own limit, or 100% without one, on both windows (the threshold
+// and weekly threshold do not apply to manual switching).
 //   - rotation: the next usable slot after the active one, wrapping.
 //   - best: most room left under the cap (max of 5h and 7d); accounts
 //     without usage come last.
@@ -217,12 +218,7 @@ func rotation(accounts *Accounts, live *liveLogin) []Slot {
 //     skipping accounts known to be at their cap.
 func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, limits map[string]float64, now time.Time) []int {
 	order := rotation(accounts, live)
-	capOf := func(s Slot) float64 {
-		if own, ok := SlotLimit(limits, s); ok && own < 100 {
-			return own
-		}
-		return 100
-	}
+	caps := AutoPolicy{Limits: limits}
 	var out []int
 	switch strategy {
 	case StrategyBest:
@@ -233,8 +229,8 @@ func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, li
 		}
 		var list []ranked
 		for _, s := range order {
-			value, known := slotUsage(s).Max(now)
-			list = append(list, ranked{s.Number, capOf(s) - value, known})
+			room, known := caps.room(s, now)
+			list = append(list, ranked{s.Number, room, known})
 		}
 		sort.SliceStable(list, func(i, j int) bool {
 			if list[i].known != list[j].known {
@@ -247,7 +243,7 @@ func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, li
 		}
 	case StrategyNextAvailable:
 		for _, s := range order {
-			if value, known := slotUsage(s).Max(now); known && value >= capOf(s) {
+			if caps.usedUp(s, now) {
 				continue
 			}
 			out = append(out, s.Number)
@@ -259,7 +255,7 @@ func strategyCandidates(accounts *Accounts, live *liveLogin, strategy string, li
 		}
 		var list []timed
 		for _, s := range order {
-			if value, known := slotUsage(s).Max(now); known && value >= capOf(s) {
+			if caps.usedUp(s, now) {
 				continue
 			}
 			list = append(list, timed{s.Number, slotUsage(s).FiveHourResetAt(now)})

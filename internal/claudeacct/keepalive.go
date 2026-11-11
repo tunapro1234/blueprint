@@ -597,8 +597,9 @@ type KeepAliveOptions struct {
 	// Scope is KeepAliveScopeAll (or empty) or KeepAliveScopeWeeklyActive;
 	// it governs five-hour pings only.
 	Scope string
-	// Policy supplies the threshold and per-account limits the weekly-active
-	// scope measures seven-day room against, as auto switching does. Prefer,
+	// Policy supplies the weekly threshold (the threshold when unset) and
+	// per-account limits the weekly-active scope measures seven-day room
+	// against, as auto switching does. Prefer,
 	// Cooldown and BackupOrder are not used. Ignored in the all scope.
 	Policy AutoPolicy
 	// Weekly also pings every usable account (backups as SkipBackups says)
@@ -884,8 +885,8 @@ func keepAliveStale(result KeepAliveResult, accounts *Accounts, opts KeepAliveOp
 // weeklyTarget is the weekly-active scope's account: the one
 // soonest-weekly-reset auto switching drains, with its five-hour state left
 // out. It takes the switch strategy's own order: among usable normal accounts
-// with room under their limit on the seven-day window, the one whose
-// seven-day window resets soonest (normalTargets); only when no normal account
+// with room under their seven-day limit (AutoPolicy.WeeklyLimitFor), the one
+// whose seven-day window resets soonest (normalTargets); only when no normal account
 // has room, the first backup by priority (backupTargets), unless backups are
 // skipped. An account whose seven-day window is unknown has no measured room
 // and is not a candidate. 0 means no account qualifies.
@@ -915,12 +916,12 @@ func weeklyPolicy(opts KeepAliveOptions) AutoPolicy {
 // five-hour pings.
 func weeklyActiveSkip(s Slot, opts KeepAliveOptions, now time.Time) string {
 	policy := weeklyPolicy(opts)
-	value, known := policy.used(s, now)
+	use, known := policy.use(s, now)
 	switch {
 	case !known:
 		return "not the weekly-active account; seven-day window unknown"
-	case value >= policy.LimitFor(s):
-		return fmt.Sprintf("not the weekly-active account; seven-day usage %.0f%% is at its %.0f%% limit", value, policy.LimitFor(s))
+	case use.room() <= 0:
+		return fmt.Sprintf("not the weekly-active account; seven-day usage %.0f%% is at its %.0f%% limit", use.value, use.limit)
 	default:
 		return "not the weekly-active account"
 	}

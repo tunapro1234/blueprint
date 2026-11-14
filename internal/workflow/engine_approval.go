@@ -12,12 +12,20 @@ import (
 // event carries the row the unit would have written, so a decision can
 // finish it later without the worker. The agent is released exactly as after
 // a finished unit.
+//
+// In a workflow with steps, proposed is the parked step's own result and the
+// unit-level proposal is metrics.step's final result when set; the park
+// keeps the step's record so a revision continues that step.
 func (e *Engine) parkUnit(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, proposed, reason string, round int, lastFinished *time.Time) error {
-	metrics.approval.Proposed = proposed
-	event, row := e.outcome(run, unit, agent, metrics, proposed, reason, round, nil, *lastFinished)
-	output, _ := renderOutput(d, unit, run.Workdir, run.ID, metrics.started.Format(time.RFC3339Nano))
+	unitProposed := proposed
+	if metrics.step.hasFinal {
+		unitProposed = metrics.step.finalResult
+	}
+	metrics.approval.Proposed = unitProposed
+	event, row, record := e.unitOutcome(run, unit, agent, metrics, proposed, reason, round, nil, *lastFinished)
+	output, _ := renderOutput(d, unit, run.Workdir, run.ID, metrics.started.Format(time.RFC3339Nano), metrics.stepData())
 	event.State = StateAwaitingApproval
-	event.Park = &ParkRecord{Proposed: proposed, Output: output, Started: metrics.started, Row: row}
+	event.Park = &ParkRecord{Proposed: unitProposed, Output: output, Started: metrics.started, Row: row, StepRecord: record}
 	if err := e.Store.AppendEvent(run.ID, event); err != nil {
 		return err
 	}
@@ -126,34 +134,60 @@ func (e *Engine) processRevision(ctx context.Context, run Run, d Definition, age
 		return err
 	}
 	park := *claim.Park
+	step, err := e.revisionStep(run, d, unit.Key, claim)
+	if err != nil {
+		return err
+	}
+	d = d.forStep(step.index)
 	metrics := metricsFromPark(park, idle)
+	metrics.step = step
 	metrics.tokenSince = e.now()
-	metrics.prior = e.priorTokens(agent, park.Row)
+	metrics.prior = e.priorTokens(agent, park.stepRow())
 	e.markInflight(agent, metrics.tokenSince)
-	round := max(1, park.Row.Rounds) + 1
+	round := max(1, park.stepRow().Rounds) + 1
 	started := metrics.started.Format(time.RFC3339Nano)
-	output, err := renderOutput(d, unit, run.Workdir, run.ID, started)
+	output, err := renderOutput(d, unit, run.Workdir, run.ID, started, metrics.stepData())
 	if err != nil {
 		return e.unjudged(ctx, run, d, unit, agent, metrics, err.Error(), round-1, nil, completed, lastFinished)
 	}
+	metrics.step.output = output
 	text := ""
 	if claim.Decision != nil {
 		text = claim.Decision.Text
 	}
-	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, unit, run, round, text, output, started)
+	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, unit, run, round, text, output, started, metrics.stepData())
 	if err != nil {
 		return e.unjudged(ctx, run, d, unit, agent, metrics, "render follow-up: "+err.Error(), round-1, nil, completed, lastFinished)
 	}
 	metrics.controls += controls
-	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sending", Round: round, ControlReplaced: controls, LastObservation: idle}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sending", Round: round, ControlReplaced: controls, LastObservation: idle})); err != nil {
 		return err
 	}
 	return e.sendAndWork(ctx, run, d, unit, agent, metrics, round, prompt, output, completed, lastFinished)
 }
 
+// revisionStep is the step a revision continues: the parked step, with its
+// attempt (a revision is not a new attempt).
+func (e *Engine) revisionStep(run Run, d Definition, key string, claim Event) (stepRun, error) {
+	if !d.MultiStep() {
+		return stepRun{}, nil
+	}
+	index := d.StepIndex(claim.Step)
+	if index < 0 {
+		return stepRun{}, fmt.Errorf("unit %q was parked at unknown step %q", key, claim.Step)
+	}
+	events, _, err := e.Store.Events(run.ID)
+	if err != nil {
+		return stepRun{}, err
+	}
+	progress := progressOf(d, events, key)
+	return stepRun{multi: true, index: index, name: claim.Step, attempt: max(1, claim.Attempt), pass: recordsBefore(d, progress.pass, index)}, nil
+}
+
 // metricsFromPark continues a parked unit's metrics in its revision round.
+// In a workflow with steps they are the parked step's metrics.
 func metricsFromPark(park ParkRecord, last Observation) unitMetrics {
-	row := park.Row
+	row := park.stepRow()
 	metrics := unitMetrics{started: park.Started, model: row.Model, last: last, work: row.WorkSeconds, validate: row.ValidateSeconds, wait: row.WaitSeconds,
 		roundWork: append([]float64(nil), row.RoundSeconds...), compact: row.CompactSeconds, compactResult: row.CompactResult,
 		compactBefore: row.CompactCtxBefore, compactAfter: row.CompactCtxAfter, ctxStart: row.CtxStart, revision: &park}
@@ -189,7 +223,7 @@ func (e *Engine) seedRevision(run Run, agent, key string, metrics *unitMetrics) 
 			continue
 		}
 		switch {
-		case terminalState(event.State) || parkedState(event.State):
+		case terminalState(event.State) || parkedState(event.State) || event.State == StateStepDone:
 			claim, sentAt = nil, time.Time{}
 		case event.State == StateRevising && event.Park != nil:
 			copied := event
@@ -203,11 +237,12 @@ func (e *Engine) seedRevision(run Run, agent, key string, metrics *unitMetrics) 
 	}
 	seeded := metricsFromPark(*claim.Park, metrics.last)
 	seeded.channel = metrics.channel
+	seeded.step = metrics.step
 	seeded.tokenSince = sentAt
 	if seeded.tokenSince.IsZero() {
 		seeded.tokenSince = claim.At
 	}
-	seeded.prior = e.priorTokens(agent, claim.Park.Row)
+	seeded.prior = e.priorTokens(agent, claim.Park.stepRow())
 	*metrics = seeded
 	return nil
 }

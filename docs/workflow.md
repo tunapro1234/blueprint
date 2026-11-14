@@ -12,7 +12,7 @@ validator files named in validate.command. Paths in the definition are relative
 and may not traverse outside that directory. YAML uses the strict schema:
 unknown keys are errors. Templates use Go text/template with missingkey=error;
 they receive only .Unit, .Key, .Round, .Problems, .Output, .Started, .Workdir,
-and .Run.
+and .Run (plus .Step and .Steps in a workflow with steps; see Steps and roles).
 
 Example settings (see docs/examples/workflow/workflow.yaml for the complete
 generic example):
@@ -84,6 +84,121 @@ instead.
 Control characters in rendered prompts are replaced with U+FFFD, except for
 newlines and tabs. The replacement count is recorded with the unit transition.
 
+## Steps and roles
+
+A unit can go through several steps, each with its own prompt, output and
+validator, run by agents of the step's role. A typical pipeline has a coder
+write a change and a reviewer check it:
+
+    steps:
+      - name: code
+        agent: coder
+        prompt:
+          template: prompts/code.md
+          followup: prompts/code-fix.md
+        output:
+          path: "work/{{.Key}}.txt"
+        validate:
+          command: ["python3", "./check_code.py", "{{.Output}}"]
+          rounds: 3
+          weak_after: 2
+      - name: review
+        agent: reviewer
+        prompt:
+          template: prompts/review.md
+          followup: prompts/review-fix.md
+        output:
+          path: "reviews/{{.Key}}.json"
+          format: json
+        validate:
+          command: ["python3", "./check_review.py", "{{.Output}}", "{{.Steps.code.Output}}"]
+
+steps is optional. It replaces the top-level prompt, output and validate keys:
+a definition sets either steps or those keys, never both (check names the
+keys that clash). It lists 1 to 16 steps. Each step has:
+
+- name: required, unique, lowercase letters, digits, '-' and '_', starting
+  with a letter or digit.
+- agent: the role that runs the step, same characters as a name; a step
+  without it has the role default.
+- prompt, output, validate: exactly the rules of the top-level keys
+  described above, for this step only. timeout, rounds and weak_after apply
+  per step.
+
+compact, timeouts, notify, supervise, budget, approve and guardrails stay at
+the top level and apply to every step. A definition without steps behaves,
+and records its runs, exactly as before.
+
+Templates of a step (prompt, follow-up, output.path, validator arguments)
+also receive .Step, the current step's name, and .Steps, the steps of this
+unit that already finished, by name: .Steps.code.Output (the step's rendered
+output path, empty without output.path), .Result (done or weak), .Agent,
+.Rounds and .Reason. A template may only refer to steps that finish before
+its own step; check and add reject a reference to a later step, to the step
+itself or to an unknown step, and to .Steps in a definition without steps.
+.Started is the current step's first send.
+
+Roles. bp workflow start --agent <name> gives an agent the role default;
+--agent <role>=<name> gives it that role. Each agent has exactly one role,
+every role a step uses needs at least one agent, and every agent's role must
+be used by a step; start (and --dry-run) refuses anything else with the role
+named. run.json records the roles of a run with steps.
+
+    bp workflow start code-review --workdir /path/to/project \
+      --agent coder=worker-a --agent coder=worker-b --agent reviewer=worker-c
+
+Scheduling. A work item is one step of one unit. Steps run in order; a step
+that ends done or weak hands the unit to the next step, a step that ends
+failed ends the unit failed and later steps never run. When a step ended
+weak the unit's result is weak, with the reason "step <name> weak: ...". A
+free agent takes, in this order: a revision of its own (approve --edit), the
+oldest unit that waits for a step of its role, and a new unit when its role
+runs the first step. When the next step has the same role, the agent that
+finished a step continues the unit at once (no other agent can take it in
+between), unless a stop or pause was requested or its breaker is not closed.
+An agent with nothing to take waits and polls as long as some unit can still
+reach a step of its role, and stops when none can (every remaining unit is
+finished, parked or past its role's steps) or on a stop or pause request.
+Compaction never happens between two steps of one unit on the same agent,
+also after a restart; compact.every_units counts work items per agent.
+timeouts.start and timeouts.unit apply to each step attempt. A stop or pause
+takes effect at step boundaries: the step in flight finishes, the unit waits
+between steps, and resume continues it with its next step. --limit counts
+units.
+
+Records. Every unit event in units.jsonl of a run with steps carries step and
+attempt (how many times this step ran for the unit). A step that finishes and
+hands on writes a step_done event with the step's record; it is not terminal.
+The unit's terminal event (or awaiting_approval) carries the step it ended at.
+Resume reads the log: a unit between steps continues with its next step, a
+step in flight is observed and validated without being sent again, and
+--retry-failed restarts a failed unit at the step that failed, keeping the
+results and outputs of the steps before it. times.jsonl has one row per
+unit attempt, written when the unit ends (or is decided): its result and
+reason are the unit's, its other top-level fields describe the step attempts
+of that attempt (rounds and work, wait and validation seconds summed over
+them, round_s concatenated, start and queue times of the first, agent, model
+and finish of the last, tokens summed), and steps lists each of them with
+name, attempt, agent, model, result, reason, rounds, output, work_s,
+validate_s, wait_s, queued_s (how long the unit waited, ready, for an agent of
+the step's role; 0 for the first step), started_at, finished_at, tokens and
+activity. A retried unit has one row per attempt: the row of a --retry-failed
+restart lists only the steps run since the restart, and the steps it kept
+stay in the earlier row, so no step attempt appears in two rows. Parking,
+approve and --edit write no extra row; the unit's single row is written when
+it ends. bp workflow times counts every row, one per unit attempt, as it does
+for retried units without steps. Rows without steps (runs without steps,
+older runs) still load.
+
+bp workflow status names each agent's role and step, for example
+"worker-c[reviewer]:unit-7@review (3m2s)", and counts units waiting between
+steps per next step, for example ready=[review=4]. bp workflow times adds one
+line per step: "step review: units=N failed=F median_work=... p90_work=...
+median_queue=...". bp workflow show prints the steps and roles, and check
+prints "steps: code (role coder) -> review (role reviewer)".
+
+See docs/examples/workflow-steps/ for a complete generic example.
+
 ## Save and run
 
     bp workflow check docs/examples/workflow --workdir /path/to/project
@@ -123,6 +238,8 @@ Stopping a run in awaiting-approval changes nothing either and reports how many
 units wait for a decision. --retry-failed also retries rejected units (a
 rejection is a failed result), but only while the run is not done: once the
 last parked unit is decided the run is done and cannot be resumed.
+In a workflow with steps a stop or pause acts at step boundaries and
+--retry-failed restarts a unit at its failed step (see Steps and roles).
 
 Run statuses: running; waiting: <reason> (an agent is blocked, or every agent's
 breaker is open); stopping and pausing (a stop or a pause was requested and
@@ -172,13 +289,22 @@ is not stored separately: it is rebuilt from units.jsonl, so a restarted worker
 continues where the old one stopped, and a torn log line is skipped. Resume
 resets every breaker.
 
+With steps, the breaker counts work items: a step that ends failed counts
+against the agent that ran that step only, and a step that finishes done or
+weak (and hands the unit on) resets that agent's count. A half-open agent's
+trial is its next work item, whatever the step. When every agent of one role
+is open, units wait for that role and the run shows "waiting: all agent
+breakers open for role <role>; next trial <agent> at <time>" while agents of
+other roles keep working.
+
 Meltdown. When failures units end failed within window, counted across all
 agents and starting no earlier than the run start or the last resume, the run
 pauses. A pause works like a stop: no new unit is dispatched, in-flight units
 finish their wait and validation, and the run ends with status paused and a
 reason such as "meltdown: 5 units failed within 30m; last: <unit> on <agent>:
 <reason>". The owner is notified once. bp workflow resume continues the run and
-starts a new window.
+starts a new window. With steps, meltdown counts units that end failed; a
+finished step is neither a failure nor a success for it.
 
 Token budget. Every finished unit records its token usage in times.jsonl when
 the usage is known, with or without a budget. The budget measure is
@@ -193,6 +319,15 @@ budget exhausted (spent X of Y)". A follow-up for a unit already in flight is
 not blocked by run_tokens. bp workflow resume <run-id> --run-tokens N stores a
 new ceiling in run.json; resuming without raising it pauses again before the
 next unit, and resume says so.
+
+With steps, unit_tokens covers the whole unit attempt: the steps it already
+finished plus the current one, so a later step can end the unit at the
+ceiling. After a --retry-failed restart the steps kept from the earlier
+attempt do not count, as a retried unit without steps starts with a fresh
+budget. The
+run_tokens admission happens before every work item's first prompt, a new
+unit or the next step of a unit (including an agent continuing its own unit),
+but not before follow-ups or revisions.
 
 Token counts come from bp's token collector (bp tokens), the same data
 bp tokens reports: the agent's own transcript plus the subagents it spawned,
@@ -314,6 +449,19 @@ unit or revision only prints that the run waits for decisions.
 bp workflow times reports approvals: approved, rejected and revised counts and
 the median decision wait, plus the number of units still awaiting approval.
 
+With steps, a unit parks when its last step finishes with a result approve.on
+lists, or when any step ends failed and on lists failed; a weak or done step
+before the last one always hands on. approvals shows the step
+("step=review"). Approving the last step finishes the unit as above.
+Approving a failed step before the last one accepts that step as weak: the
+unit continues with its next step (its result will be weak) and approve
+prints "approved <unit> (<agent>) at step <step> as weak; continues with step
+<next>"; without a running worker, bp workflow resume continues it. reject
+ends the unit failed at that step. approve --edit sends the revision to the
+agent of the parked step through that step's prompt.followup (the step needs
+one); after the round the step finishes, parks again or fails as usual, and a
+finished step hands the unit on.
+
 ## Guardrails
 
 The optional guardrails key watches what an agent does while it works on a
@@ -397,6 +545,14 @@ Restarts. A restarted worker rebuilds which levels were already announced
 from units.jsonl, so it does not notify twice, and recomputes the verdict from
 the transcript.
 
+Steps. With steps the window is one step attempt: it starts at the step's
+first send, so each step of a unit is measured on its own and announced
+levels start over at the next step. guardrail_warn and guardrail_halt events
+and their notices name the step. A halt ends the unit failed at that step
+(or parks it when approve.on lists failed). Each steps entry of the times row
+carries that step's activity; the unit-level activity adds the tool calls of
+all steps and keeps the longest streaks and the worst verdict.
+
 Records. With guardrails set, each times.jsonl row whose activity was known
 carries activity: tool_calls, longest_repeat, longest_failures, and verdict
 plus rule when the unit ended at warn or halt (the row of a parked unit too).
@@ -414,7 +570,7 @@ Runs live below <state-dir>/workflow-runs/<run-id>/. run.json contains the
 workflow snapshot hash, a workflow directory copy, workdir, agents, owner,
 status, and restart metadata. units.jsonl records append-only state transitions;
 times.jsonl has one row per finished unit (a parked unit gets its row when it
-is decided). Both logs use append writes plus
+is decided; a unit with steps gets one row, with a steps array, when it ends). Both logs use append writes plus
 fsync. An incomplete or malformed record is skipped and surfaced as torn_log
 by bp workflow status.
 
@@ -433,7 +589,8 @@ units, all settled as described in Supervision and budgets. A workflow name aggr
 bp workflow status shows pause_reason for a paused run, breakers=[...] with
 each open breaker's reopen time, run_tokens=<spent>/<ceiling> when a run
 budget is set, and a [guardrail <rule> <level>] mark on an in-flight unit
-that reached a guardrail level.
+that reached a guardrail level. With steps it also shows each agent's role and
+current step and ready=[<step>=N ...] (see Steps and roles).
 
 bp wait <agent> --until idle|working [--confirm N] [--timeout 5m] [--json] is
 the read-only wait primitive for external runners. Idle defaults to two
@@ -444,3 +601,7 @@ timed out, and 2 means the agent is closed or its runtime is unknown.
 
 docs/examples/workflow/ is a generic, fictional workflow. Copy its records.json
 into the selected project workdir before starting it.
+
+docs/examples/workflow-steps/ is a generic two-step pipeline: a coder writes a
+short note per record and a reviewer checks it. Copy its records.json into the
+workdir and start it with --agent coder=<name> --agent reviewer=<name>.

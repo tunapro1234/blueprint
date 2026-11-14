@@ -45,6 +45,18 @@ type Run struct {
 	SupervisedSince time.Time `json:"supervised_since,omitempty"`
 	// RunTokens overrides budget.run_tokens (bp workflow resume --run-tokens).
 	RunTokens int64 `json:"run_tokens,omitempty"`
+	// Roles maps each agent to its role. It is written only for a workflow
+	// with steps; an agent missing from it (every agent of an older run) has
+	// the default role.
+	Roles map[string]string `json:"roles,omitempty"`
+}
+
+// RoleOf returns the agent's role in this run.
+func (r Run) RoleOf(agent string) string {
+	if role := r.Roles[agent]; role != "" {
+		return role
+	}
+	return DefaultRole
 }
 
 // SupervisionStart is the lower bound for breaker and meltdown counting.
@@ -80,6 +92,14 @@ type Event struct {
 	Decision *DecisionRecord `json:"decision,omitempty"`
 	// Guardrail is set on guardrail_warn and guardrail_halt events.
 	Guardrail *GuardrailRecord `json:"guardrail,omitempty"`
+	// Step and Attempt name the step a unit event of a workflow with steps
+	// belongs to; Attempt counts the step's dispatches for this unit from 1.
+	// Both are omitted in a workflow without steps.
+	Step    string `json:"step,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	// StepRecord is carried by step_done events: the finished step's
+	// result, output and its own times row.
+	StepRecord *StepRecord `json:"step_record,omitempty"`
 }
 
 type CompactRecord struct {
@@ -122,6 +142,10 @@ type TimeRow struct {
 	// Activity is present when guardrails are configured and the unit's
 	// tool activity was known at finish.
 	Activity *RowActivity `json:"activity,omitempty"`
+	// Steps is present only in a workflow with steps: one entry per step
+	// the unit went through, in order. The top-level fields then describe
+	// the whole unit.
+	Steps []StepRow `json:"steps,omitempty"`
 }
 
 // UnitTokens is one unit's token usage from its first send to its finish,
@@ -267,6 +291,18 @@ func (s *Store) ResolveWorkflow(value string) (string, Definition, error) {
 }
 
 func (s *Store) CreateRun(source string, d Definition, workdir string, agents []string, owner string) (Run, error) {
+	return s.CreateRunWithRoles(source, d, workdir, agents, nil, owner)
+}
+
+// CreateRunWithRoles is CreateRun with each agent's role (agent to role;
+// missing agents have the default role). The roles must fit the pipeline;
+// they are recorded only for a workflow with steps.
+func (s *Store) CreateRunWithRoles(source string, d Definition, workdir string, agents []string, roles map[string]string, owner string) (Run, error) {
+	if d.MultiStep() || len(roles) > 0 {
+		if err := ValidateRoles(d, agents, roles); err != nil {
+			return Run{}, err
+		}
+	}
 	workdir, err := filepath.Abs(workdir)
 	if err != nil {
 		return Run{}, err
@@ -327,6 +363,16 @@ func (s *Store) CreateRun(source string, d Definition, workdir string, agents []
 		keys[i] = unit.Key
 	}
 	run := Run{ID: id, Workflow: d.Name, SnapshotHash: hash, Workdir: workdir, Agents: append([]string(nil), agents...), UnitKeys: keys, Owner: owner, Status: "running", CreatedAt: now, UpdatedAt: now, Current: map[string]string{}}
+	if d.MultiStep() {
+		run.Roles = map[string]string{}
+		for _, agent := range agents {
+			role := roles[agent]
+			if role == "" {
+				role = DefaultRole
+			}
+			run.Roles[agent] = role
+		}
+	}
 	data, err := json.MarshalIndent(run, "", "  ")
 	if err != nil {
 		return Run{}, err

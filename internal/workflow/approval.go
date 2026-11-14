@@ -47,6 +47,9 @@ type ParkRecord struct {
 	Output   string    `json:"output,omitempty"`
 	Started  time.Time `json:"started"`
 	Row      TimeRow   `json:"row"`
+	// StepRecord is the parked step's own record in a workflow with steps;
+	// Row then describes the whole unit.
+	StepRecord *StepRecord `json:"step_record,omitempty"`
 }
 
 // DecisionRecord is a human decision on a parked unit.
@@ -87,6 +90,8 @@ type Approval struct {
 	Reason   string    `json:"reason,omitempty"`
 	Output   string    `json:"output,omitempty"`
 	ParkedAt time.Time `json:"parked_at"`
+	// Step is the step the unit parked at (workflows with steps).
+	Step string `json:"step,omitempty"`
 	// RevisionBy and RevisionText describe a pending revision.
 	RevisionBy   string `json:"revision_by,omitempty"`
 	RevisionText string `json:"revision_text,omitempty"`
@@ -129,7 +134,7 @@ func approvalsFrom(events []Event) []Approval {
 		if event.Park == nil || (!parkedState(event.State) && !revisionState(event.State)) {
 			continue
 		}
-		item := Approval{Unit: key, Agent: event.Agent, State: event.State, Proposed: event.Park.Proposed, Round: event.Round, Reason: event.Reason, Output: event.Park.Output, ParkedAt: event.At}
+		item := Approval{Unit: key, Agent: event.Agent, State: event.State, Proposed: event.Park.Proposed, Round: event.Round, Reason: event.Reason, Output: event.Park.Output, ParkedAt: event.At, Step: event.Step}
 		if event.Decision != nil {
 			item.ParkedAt = event.Decision.ParkedAt
 			item.RevisionBy, item.RevisionText = event.Decision.By, event.Decision.Text
@@ -270,6 +275,11 @@ type DecideOutcome struct {
 	// CancelledRevision is set when the decision cancelled a pending
 	// revision request.
 	CancelledRevision bool `json:"cancelled_revision,omitempty"`
+	// Step is the step the unit was parked at (workflows with steps).
+	Step string `json:"step,omitempty"`
+	// NextStep is set when an approval accepted a failed step before the
+	// last one as weak: the unit continues with this step.
+	NextStep string `json:"next_step,omitempty"`
 }
 
 // DecideReport is the result of Decide.
@@ -310,14 +320,16 @@ func (s *Store) Decide(id string, options DecideOptions) (DecideReport, error) {
 		if err != nil {
 			return err
 		}
+		var definition *Definition
 		if options.Action == DecisionRevise {
 			d, err := ReadDefinition(s.SnapshotDir(id))
 			if err != nil {
 				return fmt.Errorf("read workflow snapshot: %w", err)
 			}
-			if d.Prompt.Followup == "" {
+			if !d.MultiStep() && d.Prompt.Followup == "" {
 				return errors.New("this workflow has no prompt.followup; --edit sends its text through the follow-up template")
 			}
+			definition = &d
 		}
 		events, _, err := s.Events(id)
 		if err != nil {
@@ -369,9 +381,31 @@ func (s *Store) Decide(id string, options DecideOptions) (DecideReport, error) {
 				}
 			}
 		}
+		for _, parked := range targets {
+			if parked.Step == "" {
+				continue
+			}
+			if definition == nil {
+				d, err := ReadDefinition(s.SnapshotDir(id))
+				if err != nil {
+					return fmt.Errorf("read workflow snapshot: %w", err)
+				}
+				definition = &d
+			}
+			if options.Action == DecisionRevise {
+				// The revision goes through the parked step's follow-up.
+				index := definition.StepIndex(parked.Step)
+				if index < 0 {
+					return fmt.Errorf("unit %q was parked at unknown step %q", parked.Key, parked.Step)
+				}
+				if definition.Steps[index].Prompt.Followup == "" {
+					return fmt.Errorf("step %s has no prompt.followup; --edit sends its text through that step's follow-up template", parked.Step)
+				}
+			}
+		}
 		now := s.now()
 		for _, parked := range targets {
-			outcome, err := s.writeDecision(run, parked, options, now)
+			outcome, err := s.writeDecision(run, definition, parked, options, now)
 			if err != nil {
 				return err
 			}
@@ -400,7 +434,7 @@ func (s *Store) Decide(id string, options DecideOptions) (DecideReport, error) {
 	return report, err
 }
 
-func (s *Store) writeDecision(run Run, parked Event, options DecideOptions, now time.Time) (DecideOutcome, error) {
+func (s *Store) writeDecision(run Run, d *Definition, parked Event, options DecideOptions, now time.Time) (DecideOutcome, error) {
 	park := *parked.Park
 	// parked is an awaiting_approval event or, when a decision cancels a
 	// pending revision, its revise event. Either way the wait since that
@@ -416,14 +450,46 @@ func (s *Store) writeDecision(run Run, parked Event, options DecideOptions, now 
 		approval.Proposed = park.Proposed
 	}
 	approval.WaitSeconds += wait
-	outcome := DecideOutcome{Unit: parked.Key, Agent: parked.Agent, Proposed: park.Proposed, Wait: approval.WaitSeconds, CancelledRevision: cancelled}
+	outcome := DecideOutcome{Unit: parked.Key, Agent: parked.Agent, Proposed: park.Proposed, Wait: approval.WaitSeconds, CancelledRevision: cancelled, Step: parked.Step}
+	// In a workflow with steps the parked step's own record carries the
+	// step's approval history, which the unit row sums over its steps.
+	var stepApproval RowApproval
+	if park.StepRecord != nil {
+		record := *park.StepRecord
+		stepApproval = RowApproval{Proposed: park.Proposed}
+		if record.Row.Approval != nil {
+			stepApproval = *record.Row.Approval
+			stepApproval.Proposed = park.Proposed
+		}
+		stepApproval.WaitSeconds += wait
+		park.StepRecord = &record
+	}
 	if options.Action == DecisionRevise {
 		approval.Revisions++
 		row.Approval = &approval
 		park.Row = row
+		if park.StepRecord != nil {
+			stepApproval.Revisions++
+			park.StepRecord.Row.Approval = &stepApproval
+		}
 		event := Event{At: now, Unit: parked.Key, Key: parked.Key, Agent: parked.Agent, State: StateRevise, Round: parked.Round, Reason: "revision requested by " + options.By, Park: &park, Decision: decision,
-			DeliveryID: parked.DeliveryID, DeliveryStatus: parked.DeliveryStatus, QueuedAt: parked.QueuedAt, DeliveredAt: parked.DeliveredAt}
+			DeliveryID: parked.DeliveryID, DeliveryStatus: parked.DeliveryStatus, QueuedAt: parked.QueuedAt, DeliveredAt: parked.DeliveredAt, Step: parked.Step, Attempt: parked.Attempt}
 		outcome.Result = StateRevise
+		return outcome, s.AppendEvent(run.ID, event)
+	}
+	if index := stepIndexOf(d, parked.Step); options.Action == DecisionApprove && park.StepRecord != nil && index >= 0 && index < len(d.Steps)-1 {
+		// A failed step before the last one, approved: its output is
+		// accepted as weak and the unit continues with the next step.
+		record := park.StepRecord
+		stepApproval.Decision, stepApproval.By, stepApproval.Note, stepApproval.DecidedAt = "approved", options.By, options.Text, timePointer(now)
+		record.Row.Approval = &stepApproval
+		if record.Row.Result == "failed" {
+			record.Row.Result = "weak"
+		}
+		next := d.Steps[index+1].Name
+		event := Event{At: now, Unit: parked.Key, Key: parked.Key, Agent: parked.Agent, State: StateStepDone, Round: parked.Round, Reason: fmt.Sprintf("approved by %s as weak; continues with step %s", options.By, next),
+			DeliveryID: parked.DeliveryID, DeliveryStatus: parked.DeliveryStatus, QueuedAt: parked.QueuedAt, DeliveredAt: parked.DeliveredAt, Decision: decision, Step: parked.Step, Attempt: parked.Attempt, StepRecord: record}
+		outcome.Result, outcome.NextStep = record.Row.Result, next
 		return outcome, s.AppendEvent(run.ID, event)
 	}
 	result, reason := "weak", row.Reason
@@ -442,8 +508,19 @@ func (s *Store) writeDecision(run Run, parked Event, options DecideOptions, now 
 	}
 	approval.By, approval.DecidedAt = options.By, timePointer(now)
 	row.Result, row.Reason, row.Approval = result, reason, &approval
+	if count := len(row.Steps); count > 0 {
+		// The decided step's entry follows the decision: a rejected step
+		// failed, an approved failed step is weak.
+		row.Steps = append([]StepRow(nil), row.Steps...)
+		switch {
+		case result == "failed":
+			row.Steps[count-1].Result = "failed"
+		case row.Steps[count-1].Result == "failed":
+			row.Steps[count-1].Result = "weak"
+		}
+	}
 	event := Event{At: now, Unit: parked.Key, Key: parked.Key, Agent: parked.Agent, State: result, Round: parked.Round, Reason: reason,
-		DeliveryID: parked.DeliveryID, DeliveryStatus: parked.DeliveryStatus, QueuedAt: parked.QueuedAt, DeliveredAt: parked.DeliveredAt, Decision: decision}
+		DeliveryID: parked.DeliveryID, DeliveryStatus: parked.DeliveryStatus, QueuedAt: parked.QueuedAt, DeliveredAt: parked.DeliveredAt, Decision: decision, Step: parked.Step, Attempt: parked.Attempt}
 	// The terminal event is the source of truth; it is written before the
 	// times row, as the engine does.
 	if err := s.AppendEvent(run.ID, event); err != nil {
@@ -454,6 +531,13 @@ func (s *Store) writeDecision(run Run, parked Event, options DecideOptions, now 
 	}
 	outcome.Result = result
 	return outcome, nil
+}
+
+func stepIndexOf(d *Definition, step string) int {
+	if d == nil || step == "" {
+		return -1
+	}
+	return d.StepIndex(step)
 }
 
 // claimRevision marks a pending revision as taken by agent's worker. It

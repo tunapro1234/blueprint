@@ -330,12 +330,17 @@ func (a *app) workflow(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.out, "name: %s\nversion: %d\ndescription: %s\nunits: %s (key %s)\nprompt: %s\n", definition.Name, definition.Version, definition.Description, definition.Units.File, definition.Units.Key, definition.Prompt.Template)
-		if definition.Output.Path != "" {
-			fmt.Fprintf(a.out, "output: %s (%s, fresh=%t)\n", definition.Output.Path, outputFormat(definition), definition.Output.RequireFresh)
-		}
-		if len(definition.Validate.Command) > 0 {
-			fmt.Fprintf(a.out, "validator: %s\n", strings.Join(definition.Validate.Command, " "))
+		if definition.MultiStep() {
+			fmt.Fprintf(a.out, "name: %s\nversion: %d\ndescription: %s\nunits: %s (key %s)\n", definition.Name, definition.Version, definition.Description, definition.Units.File, definition.Units.Key)
+			printWorkflowSteps(a.out, definition)
+		} else {
+			fmt.Fprintf(a.out, "name: %s\nversion: %d\ndescription: %s\nunits: %s (key %s)\nprompt: %s\n", definition.Name, definition.Version, definition.Description, definition.Units.File, definition.Units.Key, definition.Prompt.Template)
+			if definition.Output.Path != "" {
+				fmt.Fprintf(a.out, "output: %s (%s, fresh=%t)\n", definition.Output.Path, outputFormat(definition), definition.Output.RequireFresh)
+			}
+			if len(definition.Validate.Command) > 0 {
+				fmt.Fprintf(a.out, "validator: %s\n", strings.Join(definition.Validate.Command, " "))
+			}
 		}
 		printWorkflowSupervision(a.out, definition)
 		return nil
@@ -422,8 +427,37 @@ func (a *app) workflowCheck(store *workflow.Store, args []string) error {
 	if definition.Guardrails != nil {
 		fmt.Fprintln(a.out, guardrailsCheckWarning)
 	}
+	if definition.MultiStep() {
+		parts := make([]string, 0, len(definition.Steps))
+		for _, step := range definition.Steps {
+			parts = append(parts, fmt.Sprintf("%s (role %s)", step.Name, step.Role()))
+		}
+		fmt.Fprintf(a.out, "steps: %s\n", strings.Join(parts, " -> "))
+	}
 	fmt.Fprintf(a.out, "OK: workflow %s\n", definition.Name)
 	return nil
+}
+
+// printWorkflowSteps prints a pipeline's steps for bp workflow show.
+func printWorkflowSteps(out *os.File, definition workflow.Definition) {
+	fmt.Fprintf(out, "steps: %d (roles: %s)\n", len(definition.Steps), strings.Join(definition.Roles(), ", "))
+	for index, step := range definition.Steps {
+		line := fmt.Sprintf("step %d %s: role=%s prompt=%s", index+1, step.Name, step.Role(), step.Prompt.Template)
+		if step.Prompt.Followup != "" {
+			line += " followup=" + step.Prompt.Followup
+		}
+		fmt.Fprintln(out, line)
+		if step.Output.Path != "" {
+			format := step.Output.Format
+			if format == "" {
+				format = "any"
+			}
+			fmt.Fprintf(out, "  output: %s (%s, fresh=%t)\n", step.Output.Path, format, step.Output.RequireFresh)
+		}
+		if len(step.Validate.Command) > 0 {
+			fmt.Fprintf(out, "  validator: %s\n", strings.Join(step.Validate.Command, " "))
+		}
+	}
 }
 
 func printWorkflowSupervision(out *os.File, definition workflow.Definition) {
@@ -467,9 +501,14 @@ type workflowStartOptions struct {
 	name    string
 	workdir string
 	agents  []string
-	limit   int
-	dryRun  bool
+	// roles maps an agent given as --agent <role>=<name> to its role;
+	// agents given as a plain name have the default role.
+	roles  map[string]string
+	limit  int
+	dryRun bool
 }
+
+const workflowStartUsage = "usage: bp workflow start <name> --workdir <dir> --agent [<role>=]<name> [--agent [<role>=]<name> ...] [--limit N] [--dry-run]"
 
 func parseWorkflowStart(args []string) (workflowStartOptions, error) {
 	var options workflowStartOptions
@@ -486,7 +525,23 @@ func parseWorkflowStart(args []string) (workflowStartOptions, error) {
 			case "--workdir":
 				options.workdir = value
 			case "--agent":
-				options.agents = append(options.agents, value)
+				agent := value
+				if role, name, ok := strings.Cut(value, "="); ok {
+					if role == "" || name == "" {
+						return options, fmt.Errorf("--agent %q needs both a role and an agent name: --agent <role>=<name>", value)
+					}
+					if !workflow.ValidRole(role) {
+						return options, fmt.Errorf("--agent %q: invalid role %q; use lowercase letters, digits, '-' and '_', starting with a letter or digit", value, role)
+					}
+					if options.roles == nil {
+						options.roles = map[string]string{}
+					}
+					if _, seen := options.roles[name]; !seen {
+						options.roles[name] = role
+					}
+					agent = name
+				}
+				options.agents = append(options.agents, agent)
 			case "--limit":
 				limit, err := strconv.Atoi(value)
 				if err != nil || limit <= 0 {
@@ -504,7 +559,7 @@ func parseWorkflowStart(args []string) (workflowStartOptions, error) {
 		}
 	}
 	if options.name == "" || options.workdir == "" || len(options.agents) == 0 {
-		return options, errors.New("usage: bp workflow start <name> --workdir <dir> --agent <name> [--agent <name> ...] [--limit N] [--dry-run]")
+		return options, errors.New(workflowStartUsage)
 	}
 	seen := map[string]bool{}
 	for _, agent := range options.agents {
@@ -561,8 +616,17 @@ func (a *app) workflowStart(store *workflow.Store, args []string) error {
 			return fmt.Errorf("workflow agent %s is outside owner %s's hierarchy", agent, who.Label)
 		}
 	}
+	if definition.MultiStep() || len(options.roles) > 0 {
+		if err := workflow.ValidateRoles(definition, options.agents, options.roles); err != nil {
+			return err
+		}
+	}
 	if options.dryRun {
-		fmt.Fprintf(a.out, "would run %s: units=%d agents=%s\n", definition.Name, len(units), strings.Join(options.agents, ","))
+		line := fmt.Sprintf("would run %s: units=%d agents=%s", definition.Name, len(units), strings.Join(options.agents, ","))
+		if definition.MultiStep() {
+			line += " roles=" + formatWorkflowRoles(definition, options.agents, options.roles)
+		}
+		fmt.Fprintln(a.out, line)
 		return nil
 	}
 	checkCtx, cancel := context.WithTimeout(a.ctx, 3*time.Second)
@@ -570,7 +634,7 @@ func (a *app) workflowStart(store *workflow.Store, args []string) error {
 	if err := workflow.CheckDaemon(checkCtx, a.config.StateDir); err != nil {
 		return fmt.Errorf("workflow start requires the bp daemon: %w", err)
 	}
-	run, err := store.CreateRun(path, definition, workdir, options.agents, who.Label)
+	run, err := store.CreateRunWithRoles(path, definition, workdir, options.agents, options.roles, who.Label)
 	if err != nil {
 		return err
 	}
@@ -645,7 +709,14 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 		if current == "" {
 			current = "-"
 		}
-		entry := agent.Agent + ":" + current
+		name := agent.Agent
+		if agent.Role != "" {
+			name += "[" + agent.Role + "]"
+		}
+		entry := name + ":" + current
+		if agent.CurrentStep != "" && agent.CurrentUnit != "" {
+			entry += "@" + agent.CurrentStep
+		}
 		if agent.Elapsed > 0 {
 			entry += " (" + agent.Elapsed.Round(time.Second).String() + ")"
 		}
@@ -655,6 +726,18 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 	line := fmt.Sprintf("%s %s owner=%s status=%s done=%d weak=%d failed=%d pending=%d", status.ID, status.Workflow, status.Owner, status.Status, status.Counts.Done, status.Counts.Weak, status.Counts.Failed, status.Counts.Pending)
 	if status.Counts.AwaitingApproval > 0 {
 		line += fmt.Sprintf(" awaiting_approval=%d", status.Counts.AwaitingApproval)
+	}
+	if len(status.Counts.Ready) > 0 {
+		steps := make([]string, 0, len(status.Counts.Ready))
+		for step := range status.Counts.Ready {
+			steps = append(steps, step)
+		}
+		sort.Strings(steps)
+		ready := make([]string, 0, len(steps))
+		for _, step := range steps {
+			ready = append(ready, fmt.Sprintf("%s=%d", step, status.Counts.Ready[step]))
+		}
+		line += " ready=[" + strings.Join(ready, ", ") + "]"
 	}
 	line += " agents=[" + strings.Join(agents, ", ") + "]"
 	if status.LastError != "" {
@@ -833,9 +916,32 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 			fmt.Fprintf(a.out, "tokens not final yet: %d units (the token collector has not caught up with their finish; run again in a few minutes)\n", t.Unsettled)
 		}
 	}
+	for _, step := range stats.Steps {
+		fmt.Fprintf(a.out, "step %s: units=%d failed=%d median_work=%.1fs p90_work=%.1fs median_queue=%.1fs\n", step.Name, step.Units, step.Failed, step.MedianWork, step.P90Work, step.MedianQueue)
+	}
 	printApprovalStats(a.out, stats.Approvals)
 	printActivityStats(a.out, stats.Count, stats.Activity)
 	return nil
+}
+
+// formatWorkflowRoles lists each role of a pipeline with its agents, in step
+// order: "coder=agent-a,agent-c reviewer=agent-b".
+func formatWorkflowRoles(definition workflow.Definition, agents []string, roles map[string]string) string {
+	parts := make([]string, 0, len(definition.Roles()))
+	for _, role := range definition.Roles() {
+		var names []string
+		for _, agent := range agents {
+			own := roles[agent]
+			if own == "" {
+				own = workflow.DefaultRole
+			}
+			if own == role {
+				names = append(names, agent)
+			}
+		}
+		parts = append(parts, role+"="+strings.Join(names, ","))
+	}
+	return strings.Join(parts, " ")
 }
 
 func sortedTokenKeys(values map[string]workflow.TokenGroup) []string {

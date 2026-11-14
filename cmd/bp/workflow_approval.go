@@ -53,7 +53,11 @@ func (a *app) workflowApprovals(store *workflow.Store, args []string) error {
 }
 
 func approvalLine(item workflow.Approval) string {
-	parts := []string{item.Unit, "agent=" + item.Agent, "proposed=" + item.Proposed, fmt.Sprintf("round=%d", item.Round), "parked_at=" + item.ParkedAt.UTC().Format(time.RFC3339)}
+	parts := []string{item.Unit, "agent=" + item.Agent}
+	if item.Step != "" {
+		parts = append(parts, "step="+item.Step)
+	}
+	parts = append(parts, "proposed="+item.Proposed, fmt.Sprintf("round=%d", item.Round), "parked_at="+item.ParkedAt.UTC().Format(time.RFC3339))
 	if item.Output != "" {
 		parts = append(parts, "output="+item.Output)
 	}
@@ -199,8 +203,19 @@ func (a *app) workflowDecide(store *workflow.Store, command string, args []strin
 		case "failed":
 			fmt.Fprintf(a.out, "rejected %s (%s): proposed %s, result failed (waited %s)\n", outcome.Unit, outcome.Agent, outcome.Proposed, wait)
 		default:
+			if outcome.NextStep != "" {
+				fmt.Fprintf(a.out, "approved %s (%s) at step %s as weak; continues with step %s (waited %s)\n", outcome.Unit, outcome.Agent, outcome.Step, outcome.NextStep, wait)
+				continue
+			}
 			fmt.Fprintf(a.out, "approved %s (%s): proposed %s, result %s (waited %s)\n", outcome.Unit, outcome.Agent, outcome.Proposed, outcome.Result, wait)
 		}
+	}
+	continued := false
+	for _, outcome := range report.Outcomes {
+		continued = continued || outcome.NextStep != ""
+	}
+	if continued && report.Run.Status != "running" && !strings.HasPrefix(report.Run.Status, "waiting:") {
+		fmt.Fprintf(a.out, "run %s has no worker (status %s); continue it with: bp workflow resume %s\n", report.Run.ID, report.Run.Status, report.Run.ID)
 	}
 	if options.Action == workflow.DecisionRevise {
 		a.printRevisionNext(store, report)

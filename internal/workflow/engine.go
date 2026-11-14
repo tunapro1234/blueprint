@@ -82,6 +82,9 @@ type Engine struct {
 	// parkMu guards parkNotice, the last parked-unit notification.
 	parkMu     sync.Mutex
 	parkNotice time.Time
+	// steps schedules the work items of a workflow with steps while its
+	// workers run; nil otherwise.
+	steps *stepScheduler
 }
 
 var ErrCompactBusy = errors.New("agent became busy before compact")
@@ -93,6 +96,12 @@ type unitTask struct {
 	unit        Unit
 	previous    Event
 	hasPrevious bool
+	// step is the step a fresh work item of a workflow with steps runs;
+	// queued is how long it waited ready; sticky marks a continuation the
+	// agent took right after finishing the unit's previous step.
+	step   int
+	queued float64
+	sticky bool
 }
 
 type unitMetrics struct {
@@ -125,6 +134,8 @@ type unitMetrics struct {
 	// guard is the unit's guardrail state, shared by its rounds; nil
 	// without guardrails.
 	guard *unitGuard
+	// step is the step this work item runs (zero without steps).
+	step stepRun
 }
 
 // tokenStart is the start of the unit's current token interval.
@@ -194,6 +205,11 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	if err != nil {
 		return e.fail(id, fmt.Errorf("read workflow snapshot: %w", err))
 	}
+	if d.MultiStep() {
+		if err := ValidateRoles(d, run.Agents, run.Roles); err != nil {
+			return e.fail(id, err)
+		}
+	}
 	units, err := LoadUnits(d, run.Workdir)
 	if err != nil {
 		return e.fail(id, err)
@@ -249,6 +265,7 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	}
 	recovery := make(map[string][]unitTask)
 	var pending []unitTask
+	seeds := map[string]stepSeed{}
 	unitsByKey := make(map[string]Unit, len(units))
 	for _, unit := range units {
 		unitsByKey[unit.Key] = unit
@@ -257,10 +274,20 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 			if previous.State != "failed" || !retryFailed {
 				continue
 			}
+			if index := d.StepIndex(previous.Step); d.MultiStep() && index > 0 {
+				// --retry-failed restarts the unit at its failed step; the
+				// steps before it keep their results and outputs.
+				seeds[unit.Key] = stepSeed{step: index, readyAt: previous.At}
+				continue
+			}
 		}
 		if ok && (parkedState(previous.State) || revisionState(previous.State)) {
 			// Parked units wait for a decision; revisions are claimed by
 			// their agent's worker loop ahead of new units.
+			continue
+		}
+		if ok && previous.State == StateStepDone {
+			// Between steps: the step scheduler finds it in the log.
 			continue
 		}
 		task := unitTask{unit: unit, previous: previous, hasPrevious: ok}
@@ -284,7 +311,13 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	}
 	parked := 0
 	for {
-		if err := e.runWorkers(ctx, run, d, pending, recovery, unitsByKey, &completed); err != nil {
+		work := e.runWorkers
+		if d.MultiStep() {
+			work = func(ctx context.Context, run Run, d Definition, pending []unitTask, recovery map[string][]unitTask, unitsByKey map[string]Unit, completed *atomic.Int64) error {
+				return e.runStepWorkers(ctx, run, d, pending, recovery, seeds, unitsByKey, completed)
+			}
+		}
+		if err := work(ctx, run, d, pending, recovery, unitsByKey, &completed); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -295,7 +328,8 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 			return e.fail(id, err)
 		}
 		if again {
-			// A revision was requested after this agent's loop ended.
+			// A revision was requested, or a decision continued a unit
+			// with its next step, after the workers' loops ended.
 			pending, recovery = nil, nil
 			continue
 		}
@@ -324,7 +358,7 @@ func (e *Engine) finalize(run Run, units []Unit) (again bool, final Run, parked 
 		}
 		latest := latestEvents(events)
 		allFinished, allSettled := true, true
-		revisions := 0
+		revisions, continuations := 0, 0
 		for _, unit := range units {
 			event := latest[unit.Key]
 			switch {
@@ -340,6 +374,9 @@ func (e *Engine) finalize(run Run, units []Unit) (again bool, final Run, parked 
 			case revisionState(event.State):
 				allFinished, allSettled = false, false
 				revisions++
+			case event.State == StateStepDone:
+				allFinished, allSettled = false, false
+				continuations++
 			default:
 				allFinished, allSettled = false, false
 			}
@@ -348,7 +385,7 @@ func (e *Engine) finalize(run Run, units []Unit) (again bool, final Run, parked 
 		if err != nil {
 			return err
 		}
-		if revisions > 0 && !haltRequested(current) {
+		if (revisions > 0 || continuations > 0) && !haltRequested(current) {
 			again = true
 			return nil
 		}
@@ -484,18 +521,27 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 			return fmt.Errorf("authority lost before unit %q on %s: %w", task.unit.Key, agent, err)
 		}
 	}
+	// A fresh work item starts a unit, the next step of a unit between
+	// steps, or a retry; anything else resumes an in-flight step.
+	fresh := !task.hasPrevious || terminalState(task.previous.State) || task.previous.State == StateStepDone
 	if stop, err := e.stopRequested(run.ID); err != nil {
 		return err
-	} else if stop && (!task.hasPrevious || terminalState(task.previous.State)) {
+	} else if stop && fresh {
 		return nil
 	}
 	if err := e.setCurrent(run.ID, agent, task.unit.Key); err != nil {
 		return err
 	}
 	defer func() { _ = e.setCurrent(run.ID, agent, "") }()
-	if task.hasPrevious && !terminalState(task.previous.State) {
-		return e.resumeTask(ctx, run, d, agent, task, lastFinished, completed)
+	step, err := e.stepFor(run, d, task, fresh)
+	if err != nil {
+		return err
 	}
+	unitDef := d.forStep(step.index)
+	if !fresh {
+		return e.resumeTask(ctx, run, unitDef, agent, task, step, lastFinished, completed)
+	}
+	d = unitDef
 	idle, err := e.waitIdle(ctx, run.ID, agent, 0)
 	if errors.Is(err, errStopBoundary) {
 		return nil
@@ -503,7 +549,7 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	if err != nil {
 		return err
 	}
-	metrics := unitMetrics{model: idle.Model, last: idle}
+	metrics := unitMetrics{model: idle.Model, last: idle, step: step}
 	if idle.ContextKnown {
 		value := idle.ContextTokens
 		metrics.ctxStart = &value
@@ -512,10 +558,15 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	if err != nil {
 		return err
 	}
-	if err := e.compactIfNeeded(ctx, run.ID, agent, d, updated.AgentUnits[agent], &metrics); errors.Is(err, errStopBoundary) {
-		return nil
-	} else if err != nil {
-		return err
+	// Never compact between two steps of one unit on the same agent: the
+	// next step may rely on the conversation.
+	sameAgent := task.sticky || (len(step.pass) > 0 && step.pass[len(step.pass)-1].Row.Agent == agent)
+	if !sameAgent {
+		if err := e.compactIfNeeded(ctx, run.ID, agent, d, updated.AgentUnits[agent], &metrics); errors.Is(err, errStopBoundary) {
+			return nil
+		} else if err != nil {
+			return err
+		}
 	}
 	if stop, err := e.stopRequested(run.ID); err != nil {
 		return err
@@ -525,24 +576,25 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	metrics.started = e.now()
 	e.markInflight(agent, metrics.started)
 	startedText := metrics.started.Format(time.RFC3339Nano)
-	output, err := renderOutput(d, task.unit, run.Workdir, run.ID, startedText)
+	output, err := renderOutput(d, task.unit, run.Workdir, run.ID, startedText, metrics.stepData())
 	if err != nil {
 		return e.unjudged(ctx, run, d, task.unit, agent, metrics, err.Error(), 1, nil, completed, lastFinished)
 	}
-	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, task.unit, run, 1, "", output, startedText)
+	metrics.step.output = output
+	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, task.unit, run, 1, "", output, startedText, metrics.stepData())
 	if err != nil {
 		return e.unjudged(ctx, run, d, task.unit, agent, metrics, "render prompt: "+err.Error(), 1, nil, completed, lastFinished)
 	}
 	metrics.controls = controls
-	if err := e.appendEvent(run.ID, Event{Unit: task.unit.Key, Key: task.unit.Key, Agent: agent, State: "sending", Round: 1, ControlReplaced: controls, LastObservation: idle}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: task.unit.Key, Key: task.unit.Key, Agent: agent, State: "sending", Round: 1, ControlReplaced: controls, LastObservation: idle})); err != nil {
 		return err
 	}
 	return e.sendAndWork(ctx, run, d, task.unit, agent, metrics, 1, prompt, output, completed, lastFinished)
 }
 
-func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent string, task unitTask, lastFinished *time.Time, completed *atomic.Int64) error {
+func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent string, task unitTask, step stepRun, lastFinished *time.Time, completed *atomic.Int64) error {
 	previous := task.previous
-	metrics := unitMetrics{started: previous.At, channel: previous.DeliveryID, model: previous.LastObservation.Model, last: previous.LastObservation}
+	metrics := unitMetrics{started: previous.At, channel: previous.DeliveryID, model: previous.LastObservation.Model, last: previous.LastObservation, step: step}
 	if metrics.started.IsZero() {
 		metrics.started = e.now()
 	}
@@ -550,7 +602,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		value := previous.LastObservation.ContextTokens
 		metrics.ctxStart = &value
 	}
-	first, err := e.firstSend(task.unit.Key, run.ID)
+	first, err := e.firstSend(task.unit.Key, run.ID, step)
 	if err != nil {
 		return err
 	}
@@ -592,7 +644,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 			return e.unjudged(ctx, run, d, task.unit, agent, metrics, "never started after verified delivery (last observation: "+observationSummary(observation)+")", max(1, previous.Round), nil, completed, lastFinished)
 		}
 	} else {
-		startedAt, err = e.firstWorking(task.unit.Key, run.ID)
+		startedAt, err = e.firstWorking(task.unit.Key, run.ID, step)
 		if err != nil {
 			return err
 		}
@@ -610,7 +662,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		metrics.work += seconds
 		metrics.roundWork = append(metrics.roundWork, seconds)
 	}
-	if err := e.appendEvent(run.ID, Event{Unit: task.unit.Key, Key: task.unit.Key, Agent: agent, State: "validating", Round: max(1, previous.Round), DeliveryID: previous.DeliveryID, LastObservation: idle}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: task.unit.Key, Key: task.unit.Key, Agent: agent, State: "validating", Round: max(1, previous.Round), DeliveryID: previous.DeliveryID, LastObservation: idle})); err != nil {
 		return err
 	}
 	return e.validateLoop(ctx, run, d, task.unit, agent, metrics, max(1, previous.Round), previous.DeliveryID, completed, lastFinished)
@@ -662,7 +714,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 		metrics.channel = delivery.ChannelID
 	}
 	metrics.wait += delivery.DeliveredAt.Sub(delivery.QueuedAt).Seconds()
-	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sent", Round: round, DeliveryID: delivery.ChannelID, DeliveryStatus: string(delivery.Status), QueuedAt: timePointer(delivery.QueuedAt), DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: metrics.last}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sent", Round: round, DeliveryID: delivery.ChannelID, DeliveryStatus: string(delivery.Status), QueuedAt: timePointer(delivery.QueuedAt), DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: metrics.last})); err != nil {
 		return err
 	}
 	startedAt, observation, err := e.waitForStart(ctx, agent, delivery.DeliveredAt, d.Timeouts.Start)
@@ -677,7 +729,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 		reason := fmt.Sprintf("never started after verified delivery (delivery record %s; last observation: %s)", delivery.ChannelID, observationSummary(observation))
 		return e.unjudged(ctx, run, d, unit, agent, metrics, reason, round, &delivery, completed, lastFinished)
 	}
-	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "working", Round: round, DeliveryID: delivery.ChannelID, DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: observation}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "working", Round: round, DeliveryID: delivery.ChannelID, DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: observation})); err != nil {
 		return err
 	}
 	done, seconds, idle, err := e.waitUnitIdle(ctx, run.ID, agent, d.Timeouts.Unit, metrics.guard)
@@ -689,7 +741,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 	if !done {
 		return e.unjudged(ctx, run, d, unit, agent, metrics, "unit timed out before idle", round, &delivery, completed, lastFinished)
 	}
-	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "validating", Round: round, DeliveryID: delivery.ChannelID, LastObservation: idle}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "validating", Round: round, DeliveryID: delivery.ChannelID, LastObservation: idle})); err != nil {
 		return err
 	}
 	return e.validateLoop(ctx, run, d, unit, agent, metrics, round, delivery.ChannelID, completed, lastFinished)
@@ -697,10 +749,11 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 
 func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, round int, deliveryID string, completed *atomic.Int64, lastFinished *time.Time) error {
 	started := metrics.started.Format(time.RFC3339Nano)
-	output, err := renderOutput(d, unit, run.Workdir, run.ID, started)
+	output, err := renderOutput(d, unit, run.Workdir, run.ID, started, metrics.stepData())
 	if err != nil {
 		return e.unjudged(ctx, run, d, unit, agent, metrics, err.Error(), round, nil, completed, lastFinished)
 	}
+	metrics.step.output = output
 	// From here on the agent finished a turn: every result is a judgment of
 	// its work and parks when approve.on lists it.
 	if err := validateOutput(d, run.Workdir, output, started); err != nil {
@@ -719,7 +772,7 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 		return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, err.Error(), output, completed, lastFinished)
 	}
 	begin := e.now()
-	code, stdout, stderr, runErr := e.runValidator(ctx, run, d, unit, output, started, round)
+	code, stdout, stderr, runErr := e.runStepValidator(ctx, run, d, unit, output, started, round, metrics.stepData())
 	metrics.validate += e.now().Sub(begin).Seconds()
 	if runErr != nil {
 		reason := "validator failed: " + runErr.Error()
@@ -768,32 +821,38 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 }
 
 func (e *Engine) sendFollowup(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, round int, problems, output string, completed *atomic.Int64, lastFinished *time.Time) error {
-	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, unit, run, round, problems, output, metrics.started.Format(time.RFC3339Nano))
+	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, unit, run, round, problems, output, metrics.started.Format(time.RFC3339Nano), metrics.stepData())
 	if err != nil {
 		return e.unjudged(ctx, run, d, unit, agent, metrics, "render follow-up: "+err.Error(), round-1, nil, completed, lastFinished)
 	}
 	metrics.controls += controls
-	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sending", Round: round, ControlReplaced: controls, LastObservation: metrics.last}); err != nil {
+	if err := e.appendEvent(run.ID, metrics.stamp(Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sending", Round: round, ControlReplaced: controls, LastObservation: metrics.last})); err != nil {
 		return err
 	}
 	return e.sendAndWork(ctx, run, d, unit, agent, metrics, round, prompt, output, completed, lastFinished)
 }
 
 func (e *Engine) runValidator(ctx context.Context, run Run, d Definition, unit Unit, output, started string, round int) (int, string, string, error) {
-	if e.Validator != nil {
-		return e.Validator(ctx, run.Workdir, d.Validate.Command, duration(d.Validate.Timeout, 5*time.Minute))
-	}
-	if len(d.Validate.Command) == 0 {
-		return 0, "", "", nil
-	}
-	data := TemplateData{Unit: unit.Data, Key: unit.Key, Round: round, Output: output, Started: started, Workdir: run.Workdir, Run: run.ID}
-	args := make([]string, len(d.Validate.Command))
+	return e.runStepValidator(ctx, run, d, unit, output, started, round, stepData{})
+}
+
+// runStepValidator renders the validator arguments (the Validator hook
+// receives them rendered) and runs the validator.
+func (e *Engine) runStepValidator(ctx context.Context, run Run, d Definition, unit Unit, output, started string, round int, steps stepData) (int, string, string, error) {
+	data := templateData(unit, run.Workdir, run.ID, round, "", output, started, steps)
+	var args []string
 	for index, raw := range d.Validate.Command {
 		value, err := RenderText(fmt.Sprintf("validate.command[%d]", index), raw, data)
 		if err != nil {
 			return -1, "", "", err
 		}
-		args[index] = value
+		args = append(args, value)
+	}
+	if e.Validator != nil {
+		return e.Validator(ctx, run.Workdir, args, duration(d.Validate.Timeout, 5*time.Minute))
+	}
+	if len(args) == 0 {
+		return 0, "", "", nil
 	}
 	for index := 1; index < len(args); index++ {
 		if filepath.IsAbs(args[index]) || strings.HasPrefix(args[index], "-") || strings.Contains(args[index], "{{") {
@@ -929,11 +988,20 @@ func workflowOutputPath(workdir, relative string) (string, error) {
 	return path, nil
 }
 
-func renderOutput(d Definition, unit Unit, workdir, runID, started string) (string, error) {
+// templateData is what every template of a unit sees. Steps is never nil.
+func templateData(unit Unit, workdir, runID string, round int, problems, output, started string, steps stepData) TemplateData {
+	results := steps.results
+	if results == nil {
+		results = map[string]StepResult{}
+	}
+	return TemplateData{Unit: unit.Data, Key: unit.Key, Round: round, Problems: problems, Output: output, Started: started, Workdir: workdir, Run: runID, Step: steps.name, Steps: results}
+}
+
+func renderOutput(d Definition, unit Unit, workdir, runID, started string, steps stepData) (string, error) {
 	if d.Output.Path == "" {
 		return "", nil
 	}
-	data := TemplateData{Unit: unit.Data, Key: unit.Key, Round: 1, Workdir: workdir, Run: runID, Started: started}
+	data := templateData(unit, workdir, runID, 1, "", "", started, steps)
 	rendered, err := RenderText("output.path", d.Output.Path, data)
 	if err != nil {
 		return "", err
@@ -949,12 +1017,12 @@ func renderOutput(d Definition, unit Unit, workdir, runID, started string) (stri
 	return filepath.ToSlash(rel), nil
 }
 
-func renderPrompt(snapshot string, d Definition, unit Unit, run Run, round int, problems, output, started string) (string, int, error) {
+func renderPrompt(snapshot string, d Definition, unit Unit, run Run, round int, problems, output, started string, steps stepData) (string, int, error) {
 	path := d.Prompt.Template
 	if round > 1 {
 		path = d.Prompt.Followup
 	}
-	data := TemplateData{Unit: unit.Data, Key: unit.Key, Round: round, Problems: problems, Output: output, Started: started, Workdir: run.Workdir, Run: run.ID}
+	data := templateData(unit, run.Workdir, run.ID, round, problems, output, started, steps)
 	text, err := RenderFile(snapshot, path, data)
 	if err != nil {
 		return "", 0, err
@@ -1255,8 +1323,16 @@ func (e *Engine) compactIfNeeded(ctx context.Context, runID, agent string, d Def
 	return resetAgentUnits()
 }
 
-// outcome builds the terminal event and times row a unit ends with.
+// outcome builds the terminal event and times row a unit ends with. In a
+// workflow with steps they describe the whole unit (see unitOutcome).
 func (e *Engine) outcome(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, lastFinished time.Time) (Event, TimeRow) {
+	event, row, _ := e.unitOutcome(run, unit, agent, metrics, result, reason, round, delivery, lastFinished)
+	return event, row
+}
+
+// stepOutcome builds the event and times row of the work that ends here: a
+// unit without steps, or one step.
+func (e *Engine) stepOutcome(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, lastFinished time.Time) (Event, TimeRow) {
 	finished := e.now()
 	channel, deliveryStatus := metrics.channel, ""
 	if channel != "" {
@@ -1312,7 +1388,7 @@ func (e *Engine) outcome(run Run, unit Unit, agent string, metrics unitMetrics, 
 	switch {
 	case metrics.revision != nil:
 		// The idle gap belongs to the unit's first dispatch.
-		row.IdleGapSeconds = metrics.revision.Row.IdleGapSeconds
+		row.IdleGapSeconds = metrics.revision.stepRow().IdleGapSeconds
 	case !lastFinished.IsZero() && !queuedAt.IsZero():
 		gap := queuedAt.Sub(lastFinished).Seconds()
 		if gap < 0 {
@@ -1330,6 +1406,9 @@ func (e *Engine) outcome(run Run, unit Unit, agent string, metrics unitMetrics, 
 // judged ends a unit whose finished turn was judged by the output checks or
 // the validator: it parks when approve.on lists the result.
 func (e *Engine) judged(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, completed *atomic.Int64, lastFinished *time.Time) error {
+	if metrics.step.multi {
+		return e.judgedStep(ctx, run, d, unit, agent, metrics, result, reason, round, completed, lastFinished)
+	}
 	if d.Approves(result) {
 		return e.parkUnit(ctx, run, d, unit, agent, metrics, result, reason, round, lastFinished)
 	}
@@ -1342,7 +1421,13 @@ func (e *Engine) judged(ctx context.Context, run Run, d Definition, unit Unit, a
 // awaits a human decision.
 func (e *Engine) unjudged(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
 	if metrics.revision != nil {
-		reason = "revision round failed: " + reason + "; the earlier result is still proposed (" + oneLine(metrics.revision.Row.Reason) + ")"
+		reason = "revision round failed: " + reason + "; the earlier result is still proposed (" + oneLine(metrics.revision.stepRow().Reason) + ")"
+		if metrics.step.multi {
+			// The parked step keeps its own earlier result; the unit keeps
+			// its earlier proposal.
+			metrics.setFinal(metrics.revision.Proposed, reason)
+			return e.parkUnit(ctx, run, d, unit, agent, metrics, metrics.revision.stepRow().Result, reason, round, lastFinished)
+		}
 		return e.parkUnit(ctx, run, d, unit, agent, metrics, metrics.revision.Proposed, reason, round, lastFinished)
 	}
 	return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, delivery, completed, lastFinished)
@@ -1380,26 +1465,28 @@ func (e *Engine) countAgentUnit(runID, agent string) error {
 
 func (e *Engine) appendEvent(id string, event Event) error { return e.Store.AppendEvent(id, event) }
 
-func (e *Engine) firstSend(unitKey, runID string) (time.Time, error) {
+// firstSend finds the first send of the unit, or of the step attempt in a
+// workflow with steps.
+func (e *Engine) firstSend(unitKey, runID string, step stepRun) (time.Time, error) {
 	events, _, err := e.Store.Events(runID)
 	if err != nil {
 		return time.Time{}, err
 	}
 	for _, event := range events {
-		if event.Key == unitKey && event.State == "sending" {
+		if event.Key == unitKey && event.State == "sending" && event.Step == step.name && event.Attempt == step.attempt {
 			return event.At, nil
 		}
 	}
 	return time.Time{}, nil
 }
 
-func (e *Engine) firstWorking(unitKey, runID string) (time.Time, error) {
+func (e *Engine) firstWorking(unitKey, runID string, step stepRun) (time.Time, error) {
 	events, _, err := e.Store.Events(runID)
 	if err != nil {
 		return time.Time{}, err
 	}
 	for _, event := range events {
-		if event.Key == unitKey && event.State == "working" {
+		if event.Key == unitKey && event.State == "working" && event.Step == step.name && event.Attempt == step.attempt {
 			return event.At, nil
 		}
 	}
@@ -1507,9 +1594,10 @@ func agentUnitCounts(events []Event) map[string]int {
 	for _, event := range events {
 		if strings.HasPrefix(event.State, "compact_") {
 			counts[event.Agent] = 0
-		} else if event.Agent != "" && event.Decision == nil && (terminalState(event.State) || parkedState(event.State)) {
+		} else if event.Agent != "" && event.Decision == nil && (terminalState(event.State) || parkedState(event.State) || event.State == StateStepDone) {
 			// A parked unit was work done by the agent; the human decision
-			// that later finishes it is not.
+			// that later finishes it is not. A finished step is a finished
+			// work item.
 			counts[event.Agent]++
 		}
 	}

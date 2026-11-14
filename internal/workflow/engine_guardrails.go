@@ -17,6 +17,8 @@ type unitGuard struct {
 	def   Definition
 	unit  string
 	agent string
+	// step is the step the window belongs to; empty without steps.
+	step string
 	// since starts the activity window: the unit's first send, or the send
 	// of a human-requested revision round.
 	since time.Time
@@ -42,9 +44,9 @@ func (e *Engine) ensureGuard(run Run, d Definition, unit, agent string, metrics 
 	if err != nil {
 		return err
 	}
-	guard := &unitGuard{run: run, def: d, unit: unit, agent: agent, since: metrics.tokenStart(), announced: announcedGuardrails(events, unit)}
+	guard := &unitGuard{run: run, def: d, unit: unit, agent: agent, step: metrics.step.name, since: metrics.tokenStart(), announced: announcedGuardrails(events, unit)}
 	if metrics.revision != nil {
-		guard.prior = metrics.revision.Row.Activity
+		guard.prior = metrics.revision.stepRow().Activity
 	}
 	metrics.guard = guard
 	return nil
@@ -149,13 +151,19 @@ func (e *Engine) announceGuardrails(ctx context.Context, guard *unitGuard, verdi
 		if verdict.Level == GuardHalt {
 			state, label = eventGuardrailHalt, "halt"
 		}
-		record := &GuardrailRecord{Unit: guard.unit, Rule: verdict.Rule, Level: verdict.Level.String(), Value: verdict.Value, Limit: verdict.Limit}
-		if err := e.Store.AppendEvent(run.ID, Event{At: e.now(), Agent: guard.agent, State: state, Reason: verdict.Explanation, Guardrail: record}); err != nil {
+		record := &GuardrailRecord{Unit: guard.unit, Step: guard.step, Rule: verdict.Rule, Level: verdict.Level.String(), Value: verdict.Value, Limit: verdict.Limit}
+		if err := e.Store.AppendEvent(run.ID, Event{At: e.now(), Agent: guard.agent, State: state, Reason: verdict.Explanation, Guardrail: record, Step: guard.step}); err != nil {
 			return err
 		}
 		guard.announced[verdict.Rule] = verdict.Level
-		message := fmt.Sprintf("workflow %s run %s: guardrail %s on unit %s (agent %s): %s (%s %s at %d)", run.Workflow, run.ID, label, guard.unit, guard.agent, verdict.Explanation, verdict.Rule, verdict.Level, verdict.Limit)
+		where := guard.unit
+		if guard.step != "" {
+			where += " step " + guard.step
+		}
+		message := fmt.Sprintf("workflow %s run %s: guardrail %s on unit %s (agent %s): %s (%s %s at %d)", run.Workflow, run.ID, label, where, guard.agent, verdict.Explanation, verdict.Rule, verdict.Level, verdict.Limit)
 		switch {
+		case verdict.Level == GuardHalt && boundary && guard.step != "":
+			message += ". The agent is idle; no follow-up is sent and the step ends the unit failed."
 		case verdict.Level == GuardHalt && boundary:
 			message += ". The agent is idle; no follow-up is sent and the unit ends failed."
 		case verdict.Level == GuardHalt:
@@ -172,7 +180,7 @@ func (e *Engine) rowActivity(metrics unitMetrics) *RowActivity {
 	guard := metrics.guard
 	if guard == nil {
 		if metrics.revision != nil {
-			return metrics.revision.Row.Activity
+			return metrics.revision.stepRow().Activity
 		}
 		return nil
 	}

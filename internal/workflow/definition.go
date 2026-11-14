@@ -23,16 +23,21 @@ const SchemaVersion = 1
 var workflowNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 type Definition struct {
-	Name        string       `yaml:"name" json:"name"`
-	Version     int          `yaml:"version" json:"version"`
-	Description string       `yaml:"description,omitempty" json:"description,omitempty"`
-	Units       UnitSpec     `yaml:"units" json:"units"`
-	Prompt      PromptSpec   `yaml:"prompt" json:"prompt"`
-	Output      OutputSpec   `yaml:"output,omitempty" json:"output,omitempty"`
-	Validate    ValidateSpec `yaml:"validate,omitempty" json:"validate,omitempty"`
-	Compact     CompactSpec  `yaml:"compact,omitempty" json:"compact,omitempty"`
-	Timeouts    TimeoutSpec  `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
-	Notify      string       `yaml:"notify,omitempty" json:"notify,omitempty"`
+	Name        string   `yaml:"name" json:"name"`
+	Version     int      `yaml:"version" json:"version"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Units       UnitSpec `yaml:"units" json:"units"`
+	// Steps is optional. A definition with steps sends every unit through
+	// them in order, each step on an agent of its role; it has no top-level
+	// prompt, output or validate. Without steps a unit is one prompt with
+	// its follow-up rounds, as before steps existed.
+	Steps    []StepSpec   `yaml:"steps,omitempty" json:"steps,omitempty"`
+	Prompt   PromptSpec   `yaml:"prompt,omitempty" json:"prompt,omitempty"`
+	Output   OutputSpec   `yaml:"output,omitempty" json:"output,omitempty"`
+	Validate ValidateSpec `yaml:"validate,omitempty" json:"validate,omitempty"`
+	Compact  CompactSpec  `yaml:"compact,omitempty" json:"compact,omitempty"`
+	Timeouts TimeoutSpec  `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
+	Notify   string       `yaml:"notify,omitempty" json:"notify,omitempty"`
 	// Supervise and Budget are optional. A definition without them behaves
 	// exactly as before they existed.
 	Supervise *SuperviseSpec `yaml:"supervise,omitempty" json:"supervise,omitempty"`
@@ -155,6 +160,12 @@ type TemplateData struct {
 	Started  string
 	Workdir  string
 	Run      string
+	// Step is the current step's name; empty in a definition without
+	// steps.
+	Step string
+	// Steps maps the names of the steps already finished for this unit to
+	// their results. It is empty (never nil) in a definition without steps.
+	Steps map[string]StepResult
 }
 
 func ReadDefinition(dir string) (Definition, error) {
@@ -175,6 +186,9 @@ func ReadDefinition(dir string) (Definition, error) {
 			return Definition{}, errors.New("workflow.yaml must contain one document")
 		}
 		return Definition{}, fmt.Errorf("parse trailing workflow document: %w", err)
+	}
+	if err := checkStepKeys(data); err != nil {
+		return Definition{}, err
 	}
 	if err := ValidateDefinition(definition); err != nil {
 		return Definition{}, err
@@ -205,48 +219,17 @@ func ValidateDefinition(d Definition) error {
 	if ext != ".txt" && strings.TrimSpace(d.Units.Key) == "" {
 		return errors.New("units.key is required for JSON and JSONL unit files")
 	}
-	if strings.TrimSpace(d.Prompt.Template) == "" {
-		return errors.New("prompt.template is required")
-	}
-	if err := validateRelativePath("prompt.template", d.Prompt.Template); err != nil {
-		return err
-	}
-	if d.Prompt.Followup != "" {
-		if err := validateRelativePath("prompt.followup", d.Prompt.Followup); err != nil {
+	if len(d.Steps) > 0 {
+		if err := validateSteps(d); err != nil {
 			return err
 		}
-	}
-	if d.Output.Format == "" {
-		d.Output.Format = "any"
-	}
-	if d.Output.Format != "json" && d.Output.Format != "any" {
-		return fmt.Errorf("output.format must be json or any, got %q", d.Output.Format)
-	}
-	if d.Output.Path != "" {
-		if err := validateRelativePath("output.path", d.Output.Path); err != nil {
-			return fmt.Errorf("output.path must be relative to the run workdir: %w", err)
+	} else {
+		if err := validateStage("", d.Prompt, d.Output, d.Validate); err != nil {
+			return err
 		}
-		if _, err := template.New("output.path").Option("missingkey=error").Parse(d.Output.Path); err != nil {
-			return fmt.Errorf("parse output.path template: %w", err)
+		if err := checkStageReferences("", nil, -1, d.Output, d.Validate); err != nil {
+			return err
 		}
-	}
-	if len(d.Validate.Command) > 0 {
-		if strings.TrimSpace(d.Validate.Command[0]) == "" {
-			return errors.New("validate.command[0] must name an executable")
-		}
-		for i, arg := range d.Validate.Command {
-			if _, err := template.New(fmt.Sprintf("validate.command[%d]", i)).Option("missingkey=error").Parse(arg); err != nil {
-				return fmt.Errorf("parse validate.command[%d]: %w", i, err)
-			}
-		}
-	}
-	if d.Validate.Timeout != "" {
-		if timeout, err := time.ParseDuration(d.Validate.Timeout); err != nil || timeout <= 0 {
-			return fmt.Errorf("validate.timeout must be a positive duration: %q", d.Validate.Timeout)
-		}
-	}
-	if d.Validate.Rounds < 0 || d.Validate.WeakAfter < 0 {
-		return errors.New("validate.rounds and validate.weak_after cannot be negative")
 	}
 	if d.Compact.ContextAbove < 0 || d.Compact.EveryUnits < 0 {
 		return errors.New("compact thresholds cannot be negative")
@@ -272,6 +255,53 @@ func ValidateDefinition(d Definition) error {
 		return err
 	}
 	return validateBudget(d.Budget)
+}
+
+// validateStage checks one prompt/output/validate group: the top-level keys
+// of a definition without steps, or one step. prefix names the step in
+// errors ("steps.review."); it is empty for the top-level keys.
+func validateStage(prefix string, prompt PromptSpec, output OutputSpec, validate ValidateSpec) error {
+	if strings.TrimSpace(prompt.Template) == "" {
+		return fmt.Errorf("%sprompt.template is required", prefix)
+	}
+	if err := validateRelativePath(prefix+"prompt.template", prompt.Template); err != nil {
+		return err
+	}
+	if prompt.Followup != "" {
+		if err := validateRelativePath(prefix+"prompt.followup", prompt.Followup); err != nil {
+			return err
+		}
+	}
+	if output.Format != "" && output.Format != "json" && output.Format != "any" {
+		return fmt.Errorf("%soutput.format must be json or any, got %q", prefix, output.Format)
+	}
+	if output.Path != "" {
+		if err := validateRelativePath(prefix+"output.path", output.Path); err != nil {
+			return fmt.Errorf("%soutput.path must be relative to the run workdir: %w", prefix, err)
+		}
+		if _, err := template.New("output.path").Option("missingkey=error").Parse(output.Path); err != nil {
+			return fmt.Errorf("parse %soutput.path template: %w", prefix, err)
+		}
+	}
+	if len(validate.Command) > 0 {
+		if strings.TrimSpace(validate.Command[0]) == "" {
+			return fmt.Errorf("%svalidate.command[0] must name an executable", prefix)
+		}
+		for i, arg := range validate.Command {
+			if _, err := template.New(fmt.Sprintf("validate.command[%d]", i)).Option("missingkey=error").Parse(arg); err != nil {
+				return fmt.Errorf("parse %svalidate.command[%d]: %w", prefix, i, err)
+			}
+		}
+	}
+	if validate.Timeout != "" {
+		if timeout, err := time.ParseDuration(validate.Timeout); err != nil || timeout <= 0 {
+			return fmt.Errorf("%svalidate.timeout must be a positive duration: %q", prefix, validate.Timeout)
+		}
+	}
+	if validate.Rounds < 0 || validate.WeakAfter < 0 {
+		return fmt.Errorf("%svalidate.rounds and %svalidate.weak_after cannot be negative", prefix, prefix)
+	}
+	return nil
 }
 
 func validateApprove(spec *ApproveSpec) error {
@@ -368,7 +398,25 @@ func validateRelativePath(field, value string) error {
 }
 
 func CheckReferences(dir string, d Definition) error {
-	for field, relative := range map[string]string{"prompt.template": d.Prompt.Template, "prompt.followup": d.Prompt.Followup} {
+	names := d.stepNames()
+	for index, step := range d.Pipeline() {
+		prefix, position := "", -1
+		if len(d.Steps) > 0 {
+			prefix, position = stepPrefix(step.Name), index
+		}
+		if err := checkStageFiles(dir, prefix, names, position, step.Prompt, step.Validate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkStageFiles checks the files one prompt/validate group names: the
+// prompt templates parse and refer only to earlier steps, and validator
+// files exist inside the workflow directory.
+func checkStageFiles(dir, prefix string, names []string, position int, prompt PromptSpec, validate ValidateSpec) error {
+	for _, item := range []struct{ field, relative string }{{prefix + "prompt.template", prompt.Template}, {prefix + "prompt.followup", prompt.Followup}} {
+		field, relative := item.field, item.relative
 		if relative == "" {
 			continue
 		}
@@ -379,13 +427,17 @@ func CheckReferences(dir string, d Definition) error {
 		if _, err := os.Stat(path); err != nil {
 			return fmt.Errorf("%s %q: %w", field, relative, err)
 		}
-		if _, err := readTemplate(path); err != nil {
+		tmpl, err := readTemplate(path)
+		if err != nil {
 			return fmt.Errorf("%s %q: %w", field, relative, err)
 		}
+		if err := checkTemplateSteps(field, tmpl, names, position); err != nil {
+			return err
+		}
 	}
-	for index, argument := range d.Validate.Command {
+	for index, argument := range validate.Command {
 		if filepath.IsAbs(argument) {
-			return fmt.Errorf("validate.command[%d] must not contain an absolute path", index)
+			return fmt.Errorf("%svalidate.command[%d] must not contain an absolute path", prefix, index)
 		}
 		if strings.HasPrefix(argument, "-") || strings.Contains(argument, "{{") {
 			continue
@@ -398,14 +450,14 @@ func CheckReferences(dir string, d Definition) error {
 		}
 		path, err := containedFile(dir, argument)
 		if err != nil {
-			return fmt.Errorf("validate.command[%d]: %w", index, err)
+			return fmt.Errorf("%svalidate.command[%d]: %w", prefix, index, err)
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			return fmt.Errorf("validate.command[%d] referenced file %q: %w", index, argument, err)
+			return fmt.Errorf("%svalidate.command[%d] referenced file %q: %w", prefix, index, argument, err)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("validate.command[%d] referenced path %q is not a file", index, argument)
+			return fmt.Errorf("%svalidate.command[%d] referenced path %q is not a file", prefix, index, argument)
 		}
 	}
 	return nil
@@ -591,37 +643,4 @@ func scalarKey(value any) (string, error) {
 	default:
 		return "", fmt.Errorf("key must be a scalar, got %T", value)
 	}
-}
-
-func CheckSampleTemplates(workflowDir, workdir string, d Definition) error {
-	units, err := LoadUnits(d, workdir)
-	if err != nil {
-		return err
-	}
-	if len(units) == 0 {
-		return errors.New("units file contains no units")
-	}
-	unit := units[0]
-	data := TemplateData{Unit: unit.Data, Key: unit.Key, Round: 1, Workdir: workdir, Started: time.Now().UTC().Format(time.RFC3339)}
-	if _, err := RenderFile(workflowDir, d.Prompt.Template, data); err != nil {
-		return fmt.Errorf("render prompt with first unit: %w", err)
-	}
-	if d.Output.Path != "" {
-		out, err := RenderText("output.path", d.Output.Path, data)
-		if err != nil {
-			return fmt.Errorf("render output.path with first unit: %w", err)
-		}
-		data.Output = out
-	}
-	if d.Prompt.Followup != "" {
-		if _, err := RenderFile(workflowDir, d.Prompt.Followup, data); err != nil {
-			return fmt.Errorf("render followup with first unit: %w", err)
-		}
-	}
-	for index, arg := range d.Validate.Command {
-		if _, err := RenderText(fmt.Sprintf("validate.command[%d]", index), arg, data); err != nil {
-			return fmt.Errorf("render validate.command[%d] with first unit: %w", index, err)
-		}
-	}
-	return nil
 }

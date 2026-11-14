@@ -1,0 +1,49 @@
+name: sample-code-review
+version: 1
+description: Write a short note per fictional record, then review it
+units:
+  file: records.json
+  key: slug
+# Two steps on two roles. Start with:
+#   bp workflow start sample-code-review --workdir <dir> \
+#     --agent coder=<name> --agent reviewer=<name>
+steps:
+  - name: code
+    agent: coder
+    prompt:
+      template: prompts/code.md
+      followup: prompts/code-fix.md
+    output:
+      path: "notes/{{.Key}}.md"
+      require_fresh: true
+    validate:
+      command: ["python3", "./check_note.py", "{{.Output}}"]
+      timeout: 1m
+      rounds: 3
+      weak_after: 2
+  - name: review
+    agent: reviewer
+    prompt:
+      template: prompts/review.md
+      followup: prompts/review-fix.md
+    output:
+      path: "reviews/{{.Key}}.json"
+      format: json
+      require_fresh: true
+    validate:
+      command: ["python3", "./check_review.py", "{{.Output}}", "{{.Steps.code.Output}}"]
+      timeout: 1m
+      rounds: 2
+      weak_after: 2
+timeouts:
+  start: 3m
+  unit: 30m
+notify: none
+supervise:
+  breaker:
+    failures: 3
+    open_for: 15m
+# Optional: hold failed steps for a human decision. Approving a failed code
+# step lets the unit continue to review as weak.
+# approve:
+#   on: [failed]

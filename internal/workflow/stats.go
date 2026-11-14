@@ -15,11 +15,18 @@ type Counts struct {
 	// AwaitingApproval counts parked units waiting for a human decision.
 	// A unit with a pending revision counts as pending.
 	AwaitingApproval int `json:"awaiting_approval,omitempty"`
+	// Ready counts, per next step, the units between steps (workflows with
+	// steps only). They are included in Pending.
+	Ready map[string]int `json:"ready,omitempty"`
 }
 
 type AgentStatus struct {
-	Agent       string        `json:"agent"`
-	CurrentUnit string        `json:"current_unit,omitempty"`
+	Agent       string `json:"agent"`
+	CurrentUnit string `json:"current_unit,omitempty"`
+	// Role is the agent's role (workflows with steps).
+	Role string `json:"role,omitempty"`
+	// CurrentStep is the step of the current unit (workflows with steps).
+	CurrentStep string        `json:"current_step,omitempty"`
 	Elapsed     time.Duration `json:"elapsed,omitempty"`
 	// Guardrails lists the warn and halt levels announced for the current
 	// unit, most severe first.
@@ -62,10 +69,12 @@ func (s *Store) Status(id string) (RunStatus, error) {
 	latest := latestEvents(events)
 	view := RunStatus{ID: run.ID, Workflow: run.Workflow, Owner: run.Owner, Status: run.Status, LastError: run.LastError, UpdatedAt: run.UpdatedAt, TornLog: unitsTorn || timesTorn, PauseReason: run.PauseReason}
 	// A snapshot that no longer parses only hides the supervision view.
+	var definition *Definition
 	if d, err := ReadDefinition(s.SnapshotDir(id)); err == nil {
+		definition = &d
 		view.Breakers = OpenBreakers(d, run, events, s.now())
 		if ceiling := runCeiling(d, run); ceiling > 0 {
-			settled, _ := SettleTokens(append(times, parkedRows(events)...), d.CacheReadWeight(), s.Measure)
+			settled, _ := SettleTokens(spendRowsFrom(times, events), d.CacheReadWeight(), s.Measure)
 			view.RunTokens, view.RunTokensSpent = ceiling, weightedSpend(settled)
 		}
 	}
@@ -76,7 +85,7 @@ func (s *Store) Status(id string) (RunStatus, error) {
 			continue
 		}
 		switch {
-		case parkedState(event.State):
+		case parkedState(event.State) || event.State == StateStepDone:
 			if current, ok := active[event.Agent]; ok && current.Key == event.Key {
 				delete(active, event.Agent)
 			}
@@ -88,6 +97,9 @@ func (s *Store) Status(id string) (RunStatus, error) {
 	}
 	for _, agent := range run.Agents {
 		item := AgentStatus{Agent: agent, CurrentUnit: run.Current[agent]}
+		if run.Roles != nil {
+			item.Role = run.RoleOf(agent)
+		}
 		if event, ok := active[agent]; ok && !event.At.IsZero() {
 			item.Elapsed = s.now().Sub(event.At)
 			if item.Elapsed < 0 {
@@ -96,6 +108,9 @@ func (s *Store) Status(id string) (RunStatus, error) {
 		}
 		if event, ok := active[agent]; ok {
 			item.Guardrails = guardrailMarks(events, event.Key)
+			if event.Key == item.CurrentUnit {
+				item.CurrentStep = event.Step
+			}
 		}
 		view.Agents = append(view.Agents, item)
 	}
@@ -109,6 +124,16 @@ func (s *Store) Status(id string) (RunStatus, error) {
 			view.Counts.Failed++
 		case StateAwaitingApproval:
 			view.Counts.AwaitingApproval++
+		case StateStepDone:
+			view.Counts.Pending++
+			if definition != nil {
+				if next := definition.StepIndex(latest[key].Step) + 1; next > 0 && next < len(definition.Steps) {
+					if view.Counts.Ready == nil {
+						view.Counts.Ready = map[string]int{}
+					}
+					view.Counts.Ready[definition.Steps[next].Name]++
+				}
+			}
 		default:
 			view.Counts.Pending++
 		}
@@ -151,6 +176,53 @@ type TimeStats struct {
 	Approvals *ApprovalStats `json:"approvals,omitempty"`
 	// Activity is present when at least one row has tool activity.
 	Activity *ActivityStats `json:"activity,omitempty"`
+	// Steps is present when rows carry steps, one entry per step in order
+	// of first appearance.
+	Steps []StepStats `json:"steps,omitempty"`
+}
+
+// StepStats summarizes one step over the rows that carry steps. Units counts
+// the units that went through the step (each step attempt once); Failed
+// counts the attempts that failed there; MedianQueue is the median time a
+// unit waited, ready, for an agent of the step's role.
+type StepStats struct {
+	Name        string  `json:"name"`
+	Units       int     `json:"units"`
+	Failed      int     `json:"failed"`
+	MedianWork  float64 `json:"median_work_s"`
+	P90Work     float64 `json:"p90_work_s"`
+	MedianQueue float64 `json:"median_queue_s"`
+}
+
+func summarizeSteps(rows []TimeRow) []StepStats {
+	var order []string
+	work, queue := map[string][]float64{}, map[string][]float64{}
+	failed := map[string]int{}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		for _, step := range row.Steps {
+			// Each step attempt is in one row; count it once even if a
+			// hand-edited log repeats it.
+			id := row.Run + "\x00" + stepSpendID(row.Unit, step.Name, step.Attempt)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if _, ok := work[step.Name]; !ok {
+				order = append(order, step.Name)
+			}
+			work[step.Name] = append(work[step.Name], step.WorkSeconds)
+			queue[step.Name] = append(queue[step.Name], step.QueuedSeconds)
+			if step.Result == "failed" {
+				failed[step.Name]++
+			}
+		}
+	}
+	var stats []StepStats
+	for _, name := range order {
+		stats = append(stats, StepStats{Name: name, Units: len(work[name]), Failed: failed[name], MedianWork: median(work[name]), P90Work: percentile(work[name], .90), MedianQueue: median(queue[name])})
+	}
+	return stats
 }
 
 // ApprovalStats counts decided units in times.jsonl. A revised unit counts
@@ -331,6 +403,7 @@ func SummarizeTimes(rows []TimeRow) TimeStats {
 	stats.Tokens = summarizeTokens(rows)
 	stats.Approvals = summarizeApprovals(rows)
 	stats.Activity = summarizeActivity(rows)
+	stats.Steps = summarizeSteps(rows)
 	return stats
 }
 

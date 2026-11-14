@@ -60,10 +60,17 @@ func (e *Engine) breakerWait(ctx context.Context, run Run, agent string) (bool, 
 				return false, err
 			}
 		}
-		return false, e.clearBreakerWaiting(run.ID)
+		return false, e.clearBreakerWaiting(run, agent)
 	}
-	if all, next, at := e.sup.allOpen(run.Agents, now); all {
-		status := fmt.Sprintf("%s; next trial %s at %s", statusBreakersWaiting, next, at.UTC().Format(time.RFC3339))
+	agents, label := run.Agents, ""
+	if e.steps != nil {
+		// With steps, a role whose agents are all open has no live path:
+		// the status names the role.
+		role := run.RoleOf(agent)
+		agents, label = agentsOfRole(run, role), " for role "+role
+	}
+	if all, next, at := e.sup.allOpen(agents, now); all {
+		status := fmt.Sprintf("%s%s; next trial %s at %s", statusBreakersWaiting, label, next, at.UTC().Format(time.RFC3339))
 		e.mu.Lock()
 		current := ""
 		if e.active != nil {
@@ -86,14 +93,32 @@ func (e *Engine) breakerWait(ctx context.Context, run Run, agent string) (bool, 
 	return true, nil
 }
 
-func (e *Engine) clearBreakerWaiting(runID string) error {
+// agentsOfRole lists the run's agents of one role.
+func agentsOfRole(run Run, role string) []string {
+	var agents []string
+	for _, agent := range run.Agents {
+		if run.RoleOf(agent) == role {
+			agents = append(agents, agent)
+		}
+	}
+	return agents
+}
+
+// clearBreakerWaiting clears the all-breakers-open status once agent may
+// work. With steps only the status naming agent's role is cleared.
+func (e *Engine) clearBreakerWaiting(active Run, agent string) error {
+	runID := active.ID
+	prefix := statusBreakersWaiting
+	if e.steps != nil {
+		prefix += " for role " + active.RoleOf(agent) + ";"
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.active != nil && e.active.ID == runID && !strings.HasPrefix(e.active.Status, statusBreakersWaiting) {
+	if e.active != nil && e.active.ID == runID && !strings.HasPrefix(e.active.Status, prefix) {
 		return nil
 	}
 	run, err := e.Store.UpdateRun(runID, func(current *Run) error {
-		if strings.HasPrefix(current.Status, statusBreakersWaiting) {
+		if strings.HasPrefix(current.Status, prefix) {
 			current.Status, current.LastError = "running", ""
 		}
 		return nil
@@ -180,6 +205,9 @@ func (e *Engine) unitBudgetExhausted(_ context.Context, run Run, agent string, m
 	if metrics.prior != nil {
 		spent += metrics.prior.Weighted
 	}
+	// unit_tokens covers the whole unit: the steps it finished before this
+	// one, on whichever agents ran them.
+	spent += metrics.step.earlierWeighted()
 	if spent >= e.sup.unitCeiling {
 		return UnitBudgetReason(spent, e.sup.unitCeiling)
 	}
@@ -222,9 +250,7 @@ func (e *Engine) afterPark(row TimeRow) {
 		return
 	}
 	e.sup.setInflight(row.Agent, time.Time{})
-	if row.Tokens != nil {
-		e.sup.addSpent(row, true)
-	}
+	e.sup.addSpent(row, true)
 }
 
 // afterFinish feeds a written terminal event to the breaker, meltdown and
@@ -235,9 +261,7 @@ func (e *Engine) afterFinish(run Run, row TimeRow) error {
 	}
 	unit, agent, result, reason, finished := row.Unit, row.Agent, row.Result, row.Reason, row.FinishedAt
 	e.sup.setInflight(agent, time.Time{})
-	if row.Tokens != nil {
-		e.sup.addSpent(row, false)
-	}
+	e.sup.addSpent(row, false)
 	if e.sup.breaker == nil && e.sup.meltdown == nil {
 		return nil
 	}

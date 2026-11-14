@@ -62,6 +62,14 @@ func SettleTokens(rows []TimeRow, percent int, measure TokenMeasure) ([]TimeRow,
 	copy(settled, rows)
 	unsettled := 0
 	for index, row := range settled {
+		if len(row.Steps) > 0 {
+			// A unit with steps is settled step by step, each over its
+			// own agent and interval; the unit total is their sum.
+			if !settleSteps(&settled[index], percent, measure) {
+				unsettled++
+			}
+			continue
+		}
 		if row.Tokens == nil || row.Tokens.Settled(row.FinishedAt) {
 			continue
 		}
@@ -85,6 +93,43 @@ func SettleTokens(rows []TimeRow, percent int, measure TokenMeasure) ([]TimeRow,
 		}
 	}
 	return settled, unsettled
+}
+
+// settleSteps settles each step of a row with steps and recomputes the unit
+// total. It reports whether every known step is final.
+func settleSteps(row *TimeRow, percent int, measure TokenMeasure) bool {
+	steps := append([]StepRow(nil), row.Steps...)
+	final, changed := true, false
+	for index, step := range steps {
+		if step.Tokens == nil || step.Tokens.Settled(step.FinishedAt) {
+			continue
+		}
+		if measure == nil {
+			final = false
+			continue
+		}
+		use, known := measure(step.Agent, *step.Tokens.Since, step.FinishedAt)
+		if !known {
+			final = false
+			continue
+		}
+		tokens := tokensWithPrior(use, percent, *step.Tokens.Since, step.Tokens.Prior)
+		if tokens.Weighted < step.Tokens.Weighted {
+			final = false
+			continue
+		}
+		steps[index].Tokens, changed = tokens, true
+		if !tokens.Settled(step.FinishedAt) {
+			final = false
+		}
+	}
+	if changed {
+		row.Steps = steps
+		if row.Tokens != nil {
+			row.Tokens = sumStepTokenRows(steps)
+		}
+	}
+	return final
 }
 
 // tokensWithPrior is unitTokensFrom plus fixed usage before since (the rounds
@@ -124,6 +169,11 @@ func unitTokensFrom(use TokenUse, percent int, since time.Time) *UnitTokens {
 // spentUnit is a finished or parked unit of this run as the run budget
 // counts it. prior is fixed usage before since (rounds before a revision).
 type spentUnit struct {
+	// id is set for a step of a workflow with steps (unit, step and
+	// attempt): a later record of the same step replaces the earlier one,
+	// so a step is counted once whether it appears in a step_done event, a
+	// parked unit or the unit's times row.
+	id       string
 	unit     string
 	agent    string
 	since    time.Time
@@ -215,6 +265,9 @@ func deriveBreakers(events []Event, since time.Time) map[string]*agentBreaker {
 			continue
 		}
 		switch {
+		case event.Key != "" && event.State == StateStepDone && event.Decision == nil:
+			// A finished step is a success for the agent that ran it.
+			get(event.Agent).consecutive = 0
 		case event.Key != "" && terminalState(event.State) && event.Decision == nil:
 			// A human decision is not the agent's result.
 			b := get(event.Agent)
@@ -299,18 +352,19 @@ func newSupervision(d Definition, run Run, events []Event, times []TimeRow) *sup
 	if run.RunTokens > 0 {
 		s.runCeiling = run.RunTokens
 	}
+	// Finished steps of units still in progress have spent tokens but no
+	// row yet; the unit's row, when there is one, replaces them.
+	for _, row := range stepDoneRows(events) {
+		s.addSpentLocked(row, false)
+	}
 	for _, row := range times {
-		if row.Run == run.ID && row.Tokens != nil {
-			s.finished = append(s.finished, spentFromRow(row))
+		if row.Run == run.ID {
+			s.addSpentLocked(row, false)
 		}
 	}
 	// Parked units and pending revisions have spent tokens but no row yet.
 	for _, row := range parkedRows(events) {
-		if row.Tokens != nil {
-			unit := spentFromRow(row)
-			unit.parked = true
-			s.finished = append(s.finished, unit)
-		}
+		s.addSpentLocked(row, true)
 	}
 	return s
 }
@@ -472,20 +526,54 @@ func spentFromRow(row TimeRow) spentUnit {
 	return unit
 }
 
+// spentEntries is what a row adds to the run spend: the row itself, or one
+// entry per step with known tokens for a unit with steps.
+func spentEntries(row TimeRow) []spentUnit {
+	if len(row.Steps) == 0 {
+		if row.Tokens == nil {
+			return nil
+		}
+		return []spentUnit{spentFromRow(row)}
+	}
+	var entries []spentUnit
+	for _, step := range row.Steps {
+		if step.Tokens == nil {
+			continue
+		}
+		entry := spentFromRow(TimeRow{Unit: row.Unit, Agent: step.Agent, FinishedAt: step.FinishedAt, Tokens: step.Tokens})
+		entry.id = stepSpendID(row.Unit, step.Name, step.Attempt)
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func stepSpendID(unit, step string, attempt int) string {
+	return fmt.Sprintf("%s\x00%s\x00%d", unit, step, attempt)
+}
+
 // addSpent records a finished or parked unit. A parked entry of the same unit
 // is replaced: the new row (after a revision) includes its usage as prior.
+// Steps replace earlier entries of the same step attempt.
 func (s *supervision) addSpent(row TimeRow, parked bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	unit := spentFromRow(row)
-	unit.parked = parked
-	for index, existing := range s.finished {
-		if existing.parked && existing.unit == row.Unit {
-			s.finished[index] = unit
-			return
+	s.addSpentLocked(row, parked)
+}
+
+func (s *supervision) addSpentLocked(row TimeRow, parked bool) {
+	for _, unit := range spentEntries(row) {
+		unit.parked = parked
+		replaced := false
+		for index, existing := range s.finished {
+			if (unit.id != "" && existing.id == unit.id) || (unit.id == "" && existing.id == "" && existing.parked && existing.unit == row.Unit) {
+				s.finished[index], replaced = unit, true
+				break
+			}
+		}
+		if !replaced {
+			s.finished = append(s.finished, unit)
 		}
 	}
-	s.finished = append(s.finished, unit)
 }
 
 // unsettledUnits returns the finished units whose tokens may still grow, by
@@ -576,7 +664,8 @@ func (s *Store) RunSpend(id string) (spent, ceiling int64, err error) {
 }
 
 // spendRows is every row the run budget counts: times.jsonl plus the
-// proposed rows of parked units and pending revisions.
+// proposed rows of parked units and pending revisions, and the finished
+// steps of units between steps.
 func (s *Store) spendRows(id string) ([]TimeRow, error) {
 	rows, _, err := s.Times(id)
 	if err != nil {
@@ -586,15 +675,47 @@ func (s *Store) spendRows(id string) ([]TimeRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(rows, parkedRows(events)...), nil
+	return spendRowsFrom(rows, events), nil
 }
 
+func spendRowsFrom(times []TimeRow, events []Event) []TimeRow {
+	rows := stepDoneRows(events)
+	rows = append(rows, times...)
+	return append(rows, parkedRows(events)...)
+}
+
+// stepDoneRows wraps each finished step of a step_done event in a row of its
+// own, so the run spend counts it before the unit has a row.
+func stepDoneRows(events []Event) []TimeRow {
+	var rows []TimeRow
+	for _, event := range events {
+		if event.State != StateStepDone || event.StepRecord == nil {
+			continue
+		}
+		record := event.StepRecord
+		rows = append(rows, TimeRow{Run: record.Row.Run, Unit: event.Key, Agent: record.Row.Agent, FinishedAt: record.Row.FinishedAt, Steps: []StepRow{stepRowOf(*record)}})
+	}
+	return rows
+}
+
+// weightedSpend sums the budget measure of rows. Steps of units with steps
+// count once per step attempt, at their highest recorded figure.
 func weightedSpend(rows []TimeRow) int64 {
 	var spent int64
+	steps := map[string]int64{}
 	for _, row := range rows {
-		if row.Tokens != nil {
-			spent += row.Tokens.Weighted
+		if len(row.Steps) == 0 {
+			if row.Tokens != nil {
+				spent += row.Tokens.Weighted
+			}
+			continue
 		}
+		for _, entry := range spentEntries(row) {
+			steps[entry.id] = max(steps[entry.id], entry.weighted)
+		}
+	}
+	for _, weighted := range steps {
+		spent += weighted
 	}
 	return spent
 }

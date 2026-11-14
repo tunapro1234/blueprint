@@ -347,7 +347,9 @@ type RowActivity struct {
 // unit is named here, not in the event's key, so unit bookkeeping ignores the
 // event.
 type GuardrailRecord struct {
-	Unit  string `json:"unit"`
+	Unit string `json:"unit"`
+	// Step is the unit's step in a workflow with steps.
+	Step  string `json:"step,omitempty"`
 	Rule  string `json:"rule"`
 	Level string `json:"level"`
 	Value int    `json:"value"`
@@ -373,7 +375,8 @@ func announcedGuardrails(events []Event, unit string) map[string]GuardLevel {
 	announced := map[string]GuardLevel{}
 	for _, event := range events {
 		switch {
-		case event.Key == unit && terminalState(event.State):
+		case event.Key == unit && (terminalState(event.State) || event.State == StateStepDone):
+			// A finished step starts the next step's window afresh.
 			announced = map[string]GuardLevel{}
 		case event.Key == unit && event.State == StateRevising:
 			for rule := range announced {

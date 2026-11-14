@@ -35,6 +35,24 @@ type Run struct {
 	RestartCount  int               `json:"restart_count,omitempty"`
 	Current       map[string]string `json:"current,omitempty"`
 	AgentUnits    map[string]int    `json:"agent_units,omitempty"`
+	// PauseRequested is set by supervision (meltdown, run token budget). Like
+	// StopRequested, workers stop at the next unit boundary; the run then ends
+	// as "paused" with PauseReason until bp workflow resume.
+	PauseRequested bool   `json:"pause_requested,omitempty"`
+	PauseReason    string `json:"pause_reason,omitempty"`
+	// SupervisedSince is when breaker and meltdown counting starts: the run's
+	// creation, then each bp workflow resume. Zero means CreatedAt.
+	SupervisedSince time.Time `json:"supervised_since,omitempty"`
+	// RunTokens overrides budget.run_tokens (bp workflow resume --run-tokens).
+	RunTokens int64 `json:"run_tokens,omitempty"`
+}
+
+// SupervisionStart is the lower bound for breaker and meltdown counting.
+func (r Run) SupervisionStart() time.Time {
+	if r.SupervisedSince.After(r.CreatedAt) {
+		return r.SupervisedSince
+	}
+	return r.CreatedAt
 }
 
 type Event struct {
@@ -52,6 +70,8 @@ type Event struct {
 	ControlReplaced int            `json:"control_replaced,omitempty"`
 	LastObservation Observation    `json:"last_observation,omitempty"`
 	Compact         *CompactRecord `json:"compact,omitempty"`
+	// Until is when an opened breaker allows its trial unit.
+	Until *time.Time `json:"until,omitempty"`
 }
 
 type CompactRecord struct {
@@ -87,12 +107,37 @@ type TimeRow struct {
 	CtxEnd           *int       `json:"ctx_end,omitempty"`
 	CompactCtxBefore *int       `json:"compact_ctx_before,omitempty"`
 	CompactCtxAfter  *int       `json:"compact_ctx_after,omitempty"`
+	// Tokens is present only when the token meter knew the unit's usage.
+	Tokens *UnitTokens `json:"tokens,omitempty"`
 }
+
+// UnitTokens is one unit's token usage from its first send to its finish,
+// across all rounds, including the agent's CLI subagents when the source can
+// attribute them. Weighted is the budget measure.
+type UnitTokens struct {
+	Input      int64 `json:"in"`
+	Output     int64 `json:"out"`
+	CacheWrite int64 `json:"cache_write"`
+	CacheRead  int64 `json:"cache_read"`
+	Weighted   int64 `json:"weighted"`
+	// AsOf is how far the token source had collected when the unit was
+	// measured; the numbers are final once AsOf is at or after finished_at.
+	AsOf *time.Time `json:"as_of,omitempty"`
+	// Since is the start of the measured interval (just before the first
+	// send); the interval ends at finished_at.
+	Since *time.Time `json:"since,omitempty"`
+}
+
+// Total is every counted token, unweighted.
+func (u UnitTokens) Total() int64 { return u.Input + u.Output + u.CacheWrite + u.CacheRead }
 
 type Store struct {
 	StateDir string
-	Now      func() time.Time
-	mu       sync.Mutex
+	// Measure, when set, settles token usage that was not final when a unit
+	// finished (status run spend, RunSpend, SettledTimeRows).
+	Measure TokenMeasure
+	Now     func() time.Time
+	mu      sync.Mutex
 }
 
 func NewStore(stateDir string) *Store { return &Store{StateDir: stateDir, Now: time.Now} }
@@ -331,10 +376,39 @@ func (s *Store) UpdateRun(id string, update func(*Run) error) (Run, error) {
 
 func (s *Store) RequestStop(id string) (Run, error) {
 	return s.UpdateRun(id, func(run *Run) error {
-		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" {
+		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" || run.Status == "paused" {
 			return nil
 		}
-		run.StopRequested, run.Status = true, "stopping"
+		run.StopRequested = true
+		if run.Status != "pausing" {
+			// A pausing run already stops at the next unit boundary and keeps
+			// its pause reason.
+			run.Status = "stopping"
+		}
+		return nil
+	})
+}
+
+// ResumeOptions are the human choices recorded by bp workflow resume.
+type ResumeOptions struct {
+	RetryFailed bool
+	// RunTokens, when positive, replaces the run token ceiling.
+	RunTokens int64
+}
+
+// Resume marks a run to continue. It clears stop and pause requests and
+// restarts breaker and meltdown counting: a human has looked at the run.
+func (s *Store) Resume(id string, options ResumeOptions) (Run, error) {
+	return s.UpdateRun(id, func(current *Run) error {
+		if current.Status == "done" {
+			return errors.New("completed workflow runs cannot be resumed")
+		}
+		current.Status, current.LastError, current.StopRequested, current.RetryFailed = "running", "", false, options.RetryFailed
+		current.PauseRequested, current.PauseReason = false, ""
+		current.SupervisedSince = s.now()
+		if options.RunTokens > 0 {
+			current.RunTokens = options.RunTokens
+		}
 		return nil
 	})
 }

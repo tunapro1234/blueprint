@@ -33,6 +33,52 @@ type Definition struct {
 	Compact     CompactSpec  `yaml:"compact,omitempty" json:"compact,omitempty"`
 	Timeouts    TimeoutSpec  `yaml:"timeouts,omitempty" json:"timeouts,omitempty"`
 	Notify      string       `yaml:"notify,omitempty" json:"notify,omitempty"`
+	// Supervise and Budget are optional. A definition without them behaves
+	// exactly as before they existed.
+	Supervise *SuperviseSpec `yaml:"supervise,omitempty" json:"supervise,omitempty"`
+	Budget    *BudgetSpec    `yaml:"budget,omitempty" json:"budget,omitempty"`
+}
+
+// SuperviseSpec stops a broken agent or a broken run from failing every
+// remaining unit one after another.
+type SuperviseSpec struct {
+	Breaker  *BreakerSpec  `yaml:"breaker,omitempty" json:"breaker,omitempty"`
+	Meltdown *MeltdownSpec `yaml:"meltdown,omitempty" json:"meltdown,omitempty"`
+}
+
+// BreakerSpec opens one agent's circuit breaker after Failures consecutive
+// failed units; the agent then takes no unit for OpenFor, followed by exactly
+// one trial unit.
+type BreakerSpec struct {
+	Failures int    `yaml:"failures" json:"failures"`
+	OpenFor  string `yaml:"open_for" json:"open_for"`
+}
+
+// MeltdownSpec pauses the run when Failures units finish failed within the
+// sliding Window, across all agents.
+type MeltdownSpec struct {
+	Failures int    `yaml:"failures" json:"failures"`
+	Window   string `yaml:"window" json:"window"`
+}
+
+// BudgetSpec caps token spend. Pointers keep an explicit zero distinguishable
+// from an absent key so that zero can be rejected.
+type BudgetSpec struct {
+	UnitTokens       *int64 `yaml:"unit_tokens,omitempty" json:"unit_tokens,omitempty"`
+	RunTokens        *int64 `yaml:"run_tokens,omitempty" json:"run_tokens,omitempty"`
+	CacheReadPercent *int   `yaml:"cache_read_percent,omitempty" json:"cache_read_percent,omitempty"`
+}
+
+// DefaultCacheReadPercent is the weight of cache-read tokens in the budget
+// measure when budget.cache_read_percent is not set.
+const DefaultCacheReadPercent = 10
+
+// CacheReadWeight returns the configured cache-read percent or its default.
+func (d Definition) CacheReadWeight() int {
+	if d.Budget != nil && d.Budget.CacheReadPercent != nil {
+		return *d.Budget.CacheReadPercent
+	}
+	return DefaultCacheReadPercent
 }
 
 type UnitSpec struct {
@@ -188,6 +234,64 @@ func ValidateDefinition(d Definition) error {
 	}
 	if d.Notify != "" && d.Notify != "owner" && d.Notify != "none" {
 		return fmt.Errorf("notify must be owner or none, got %q", d.Notify)
+	}
+	if err := validateSupervise(d.Supervise); err != nil {
+		return err
+	}
+	return validateBudget(d.Budget)
+}
+
+func validateSupervise(spec *SuperviseSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.Breaker == nil && spec.Meltdown == nil {
+		return errors.New("supervise needs a breaker or meltdown block")
+	}
+	if b := spec.Breaker; b != nil {
+		if b.Failures <= 0 {
+			return fmt.Errorf("supervise.breaker.failures is required and must be a positive integer, got %d", b.Failures)
+		}
+		if err := positiveDuration("supervise.breaker.open_for", b.OpenFor); err != nil {
+			return err
+		}
+	}
+	if m := spec.Meltdown; m != nil {
+		if m.Failures <= 0 {
+			return fmt.Errorf("supervise.meltdown.failures is required and must be a positive integer, got %d", m.Failures)
+		}
+		if err := positiveDuration("supervise.meltdown.window", m.Window); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateBudget(spec *BudgetSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.UnitTokens == nil && spec.RunTokens == nil {
+		return errors.New("budget needs unit_tokens or run_tokens")
+	}
+	if spec.UnitTokens != nil && *spec.UnitTokens <= 0 {
+		return fmt.Errorf("budget.unit_tokens must be a positive integer, got %d", *spec.UnitTokens)
+	}
+	if spec.RunTokens != nil && *spec.RunTokens <= 0 {
+		return fmt.Errorf("budget.run_tokens must be a positive integer, got %d", *spec.RunTokens)
+	}
+	if spec.CacheReadPercent != nil && (*spec.CacheReadPercent < 0 || *spec.CacheReadPercent > 100) {
+		return fmt.Errorf("budget.cache_read_percent must be between 0 and 100, got %d", *spec.CacheReadPercent)
+	}
+	return nil
+}
+
+func positiveDuration(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if parsed, err := time.ParseDuration(value); err != nil || parsed <= 0 {
+		return fmt.Errorf("%s must be a positive duration: %q", field, value)
 	}
 	return nil
 }

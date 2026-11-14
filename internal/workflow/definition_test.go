@@ -1,10 +1,13 @@
 package workflow
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 const validYAML = `name: sample
@@ -152,4 +155,101 @@ func mustDefinition(t *testing.T, dir string) Definition {
 		t.Fatal(err)
 	}
 	return definition
+}
+
+func TestDefinitionSupervisionAndBudgetValidation(t *testing.T) {
+	full := validYAML + `supervise:
+  breaker:
+    failures: 3
+    open_for: 15m
+  meltdown:
+    failures: 5
+    window: 30m
+budget:
+  unit_tokens: 2000000
+  run_tokens: 50000000
+  cache_read_percent: 0
+`
+	root := t.TempDir()
+	writeDefinition(t, root, full, "ok", `[{"id":"one"}]`)
+	definition, err := ReadDefinition(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.Supervise.Breaker.Failures != 3 || definition.Supervise.Meltdown.Window != "30m" || *definition.Budget.UnitTokens != 2000000 || *definition.Budget.RunTokens != 50000000 || definition.CacheReadWeight() != 0 {
+		t.Fatalf("supervision keys not parsed: %#v %#v", definition.Supervise, definition.Budget)
+	}
+	defaulted := validYAML + "budget:\n  run_tokens: 10\n"
+	writeDefinition(t, root, defaulted, "ok", `[{"id":"one"}]`)
+	if definition, err := ReadDefinition(root); err != nil || definition.CacheReadWeight() != DefaultCacheReadPercent || definition.Supervise != nil {
+		t.Fatalf("default cache-read weight: %v %#v", err, definition)
+	}
+
+	for _, test := range []struct {
+		name  string
+		extra string
+		want  string
+	}{
+		{name: "empty supervise", extra: "supervise: {}\n", want: "supervise needs a breaker or meltdown block"},
+		{name: "breaker without failures", extra: "supervise:\n  breaker:\n    open_for: 5m\n", want: "supervise.breaker.failures is required"},
+		{name: "breaker zero failures", extra: "supervise:\n  breaker:\n    failures: 0\n    open_for: 5m\n", want: "supervise.breaker.failures is required and must be a positive integer, got 0"},
+		{name: "breaker without open_for", extra: "supervise:\n  breaker:\n    failures: 2\n", want: "supervise.breaker.open_for is required"},
+		{name: "breaker bad open_for", extra: "supervise:\n  breaker:\n    failures: 2\n    open_for: soon\n", want: `supervise.breaker.open_for must be a positive duration: "soon"`},
+		{name: "breaker negative open_for", extra: "supervise:\n  breaker:\n    failures: 2\n    open_for: -5m\n", want: "supervise.breaker.open_for must be a positive duration"},
+		{name: "meltdown negative failures", extra: "supervise:\n  meltdown:\n    failures: -1\n    window: 5m\n", want: "supervise.meltdown.failures is required and must be a positive integer, got -1"},
+		{name: "meltdown without window", extra: "supervise:\n  meltdown:\n    failures: 2\n", want: "supervise.meltdown.window is required"},
+		{name: "meltdown bad window", extra: "supervise:\n  meltdown:\n    failures: 2\n    window: 0s\n", want: "supervise.meltdown.window must be a positive duration"},
+		{name: "unknown supervise key", extra: "supervise:\n  breaker:\n    failures: 2\n    open_for: 5m\n    cooldown: 1m\n", want: "field cooldown not found"},
+		{name: "non-integer failures", extra: "supervise:\n  breaker:\n    failures: two\n    open_for: 5m\n", want: "cannot unmarshal"},
+		{name: "empty budget", extra: "budget: {}\n", want: "budget needs unit_tokens or run_tokens"},
+		{name: "percent only budget", extra: "budget:\n  cache_read_percent: 20\n", want: "budget needs unit_tokens or run_tokens"},
+		{name: "zero unit tokens", extra: "budget:\n  unit_tokens: 0\n", want: "budget.unit_tokens must be a positive integer, got 0"},
+		{name: "negative run tokens", extra: "budget:\n  run_tokens: -5\n", want: "budget.run_tokens must be a positive integer, got -5"},
+		{name: "percent above 100", extra: "budget:\n  run_tokens: 5\n  cache_read_percent: 101\n", want: "budget.cache_read_percent must be between 0 and 100, got 101"},
+		{name: "negative percent", extra: "budget:\n  run_tokens: 5\n  cache_read_percent: -1\n", want: "budget.cache_read_percent must be between 0 and 100, got -1"},
+		{name: "unknown budget key", extra: "budget:\n  run_tokens: 5\n  usd: 10\n", want: "field usd not found"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeDefinition(t, root, validYAML+test.extra, "ok", `[{"id":"one"}]`)
+			if _, err := ReadDefinition(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("want error containing %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestDefinitionWithoutSupervisionRoundTrips(t *testing.T) {
+	root := t.TempDir()
+	writeDefinition(t, root, validYAML, "ok", `[{"id":"one"}]`)
+	definition, err := ReadDefinition(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.Supervise != nil || definition.Budget != nil {
+		t.Fatalf("absent keys produced values: %#v %#v", definition.Supervise, definition.Budget)
+	}
+	encodedJSON, err := json.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedYAML, err := yaml.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, encoded := range []string{string(encodedJSON), string(encodedYAML)} {
+		if strings.Contains(encoded, "supervise") || strings.Contains(encoded, "budget") {
+			t.Fatalf("definition without supervision encodes new keys: %s", encoded)
+		}
+	}
+}
+
+func TestExampleDefinitionIsValid(t *testing.T) {
+	definition, err := ReadDefinition(filepath.Join("..", "..", "docs", "examples", "workflow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.Supervise == nil || definition.Supervise.Breaker == nil || definition.Supervise.Meltdown == nil || definition.Budget == nil {
+		t.Fatalf("example does not show the supervision keys: %#v %#v", definition.Supervise, definition.Budget)
+	}
 }

@@ -126,7 +126,7 @@ bp account login <N|email|alias> | profile [N|email|alias] [--json]
 bp service
 bp workflow add <dir> [--replace] | list | show <name> | check <dir|name> [--workdir <dir>]
 bp workflow start <name> --workdir <dir> --agent <a> [--agent <b> ...] [--limit N] [--dry-run]
-bp workflow status [<run-id>] [--json] | stop <run-id> | resume <run-id> [--retry-failed]
+bp workflow status [<run-id>] [--json] | stop <run-id> | resume <run-id> [--retry-failed] [--run-tokens N]
 bp workflow times <run-id|name> [--json]
 bp wait <agent> --until idle|working [--confirm N] [--timeout D] [--json]
 bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent> [--timeout <dur>] [--json]

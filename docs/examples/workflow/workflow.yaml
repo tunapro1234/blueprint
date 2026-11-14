@@ -23,3 +23,15 @@ timeouts:
   start: 3m
   unit: 40m
 notify: none
+# Optional supervision and token budget (see docs/workflow.md).
+supervise:
+  breaker:
+    failures: 3
+    open_for: 15m
+  meltdown:
+    failures: 5
+    window: 30m
+budget:
+  unit_tokens: 2000000
+  run_tokens: 50000000
+  cache_read_percent: 10

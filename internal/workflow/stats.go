@@ -30,6 +30,13 @@ type RunStatus struct {
 	LastError string        `json:"last_error,omitempty"`
 	TornLog   bool          `json:"torn_log,omitempty"`
 	UpdatedAt time.Time     `json:"updated_at"`
+	// PauseReason explains a "pausing" or "paused" run.
+	PauseReason string `json:"pause_reason,omitempty"`
+	// Breakers lists agents whose circuit breaker is open or half-open.
+	Breakers []BreakerView `json:"breakers,omitempty"`
+	// RunTokens and RunTokensSpent are set when a run token ceiling applies.
+	RunTokens      int64 `json:"run_tokens,omitempty"`
+	RunTokensSpent int64 `json:"run_tokens_spent,omitempty"`
 }
 
 func (s *Store) Status(id string) (RunStatus, error) {
@@ -41,12 +48,20 @@ func (s *Store) Status(id string) (RunStatus, error) {
 	if err != nil {
 		return RunStatus{}, err
 	}
-	_, timesTorn, err := s.Times(id)
+	times, timesTorn, err := s.Times(id)
 	if err != nil {
 		return RunStatus{}, err
 	}
 	latest := latestEvents(events)
-	view := RunStatus{ID: run.ID, Workflow: run.Workflow, Owner: run.Owner, Status: run.Status, LastError: run.LastError, UpdatedAt: run.UpdatedAt, TornLog: unitsTorn || timesTorn}
+	view := RunStatus{ID: run.ID, Workflow: run.Workflow, Owner: run.Owner, Status: run.Status, LastError: run.LastError, UpdatedAt: run.UpdatedAt, TornLog: unitsTorn || timesTorn, PauseReason: run.PauseReason}
+	// A snapshot that no longer parses only hides the supervision view.
+	if d, err := ReadDefinition(s.SnapshotDir(id)); err == nil {
+		view.Breakers = OpenBreakers(d, run, events, s.now())
+		if ceiling := runCeiling(d, run); ceiling > 0 {
+			settled, _ := SettleTokens(times, d.CacheReadWeight(), s.Measure)
+			view.RunTokens, view.RunTokensSpent = ceiling, weightedSpend(settled)
+		}
+	}
 	active := map[string]Event{}
 	for _, event := range events {
 		if event.Key == "" {
@@ -112,6 +127,86 @@ type TimeStats struct {
 	Rounds       map[int]int           `json:"rounds,omitempty"`
 	CompactTotal float64               `json:"compact_total_s,omitempty"`
 	Slowest      []SlowUnit            `json:"slowest,omitempty"`
+	// Tokens is present only when at least one row has token data.
+	Tokens *TokenStats `json:"tokens,omitempty"`
+}
+
+// TokenGroup sums token usage for one agent or model.
+type TokenGroup struct {
+	Units    int   `json:"units"`
+	Total    int64 `json:"total"`
+	Weighted int64 `json:"weighted"`
+}
+
+// CostlyUnit is one of the most expensive units by the budget measure.
+type CostlyUnit struct {
+	Unit     string `json:"unit"`
+	Agent    string `json:"agent"`
+	Model    string `json:"model,omitempty"`
+	Result   string `json:"result"`
+	Total    int64  `json:"total"`
+	Weighted int64  `json:"weighted"`
+}
+
+// TokenStats summarizes the rows that carry token data. Total is every token
+// counted; Weighted is the budget measure recorded with each row.
+type TokenStats struct {
+	Units          int                   `json:"units"`
+	Total          int64                 `json:"total"`
+	Weighted       int64                 `json:"weighted"`
+	Input          int64                 `json:"in"`
+	Output         int64                 `json:"out"`
+	CacheWrite     int64                 `json:"cache_write"`
+	CacheRead      int64                 `json:"cache_read"`
+	MedianTotal    float64               `json:"median_total"`
+	P90Total       float64               `json:"p90_total"`
+	MedianWeighted float64               `json:"median_weighted"`
+	P90Weighted    float64               `json:"p90_weighted"`
+	ByAgent        map[string]TokenGroup `json:"by_agent,omitempty"`
+	ByModel        map[string]TokenGroup `json:"by_model,omitempty"`
+	Costliest      []CostlyUnit          `json:"costliest,omitempty"`
+	// Unsettled counts units whose tokens are not final yet (set by readers
+	// that settle rows; SummarizeTimes leaves it zero).
+	Unsettled int `json:"unsettled,omitempty"`
+}
+
+func summarizeTokens(rows []TimeRow) *TokenStats {
+	stats := &TokenStats{ByAgent: map[string]TokenGroup{}, ByModel: map[string]TokenGroup{}}
+	var totals, weighted []float64
+	for _, row := range rows {
+		if row.Tokens == nil {
+			continue
+		}
+		t := *row.Tokens
+		stats.Units++
+		stats.Total += t.Total()
+		stats.Weighted += t.Weighted
+		stats.Input += t.Input
+		stats.Output += t.Output
+		stats.CacheWrite += t.CacheWrite
+		stats.CacheRead += t.CacheRead
+		totals = append(totals, float64(t.Total()))
+		weighted = append(weighted, float64(t.Weighted))
+		group := stats.ByAgent[row.Agent]
+		group.Units, group.Total, group.Weighted = group.Units+1, group.Total+t.Total(), group.Weighted+t.Weighted
+		stats.ByAgent[row.Agent] = group
+		if row.Model != "" {
+			group := stats.ByModel[row.Model]
+			group.Units, group.Total, group.Weighted = group.Units+1, group.Total+t.Total(), group.Weighted+t.Weighted
+			stats.ByModel[row.Model] = group
+		}
+		stats.Costliest = append(stats.Costliest, CostlyUnit{Unit: row.Unit, Agent: row.Agent, Model: row.Model, Result: row.Result, Total: t.Total(), Weighted: t.Weighted})
+	}
+	if stats.Units == 0 {
+		return nil
+	}
+	stats.MedianTotal, stats.P90Total = median(totals), percentile(totals, .90)
+	stats.MedianWeighted, stats.P90Weighted = median(weighted), percentile(weighted, .90)
+	sort.SliceStable(stats.Costliest, func(i, j int) bool { return stats.Costliest[i].Weighted > stats.Costliest[j].Weighted })
+	if len(stats.Costliest) > 5 {
+		stats.Costliest = stats.Costliest[:5]
+	}
+	return stats
 }
 
 func SummarizeTimes(rows []TimeRow) TimeStats {
@@ -173,6 +268,7 @@ func SummarizeTimes(rows []TimeRow) TimeStats {
 	if len(stats.Slowest) > 5 {
 		stats.Slowest = stats.Slowest[:5]
 	}
+	stats.Tokens = summarizeTokens(rows)
 	return stats
 }
 

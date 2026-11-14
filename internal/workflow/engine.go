@@ -78,6 +78,7 @@ type Engine struct {
 	Poll      time.Duration
 	mu        sync.Mutex
 	active    *Run
+	sup       *supervision
 }
 
 var ErrCompactBusy = errors.New("agent became busy before compact")
@@ -195,13 +196,22 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	e.active = &run
 	e.mu.Unlock()
 	defer func() { e.mu.Lock(); e.active = nil; e.mu.Unlock() }()
-	if !run.StopRequested && run.Status != "stopping" {
+	if !haltRequested(run) {
 		if err := e.setStatus("running", ""); err != nil {
 			return e.fail(id, err)
 		}
 	}
 	events, _, err := e.Store.Events(id)
 	if err != nil {
+		return e.fail(id, err)
+	}
+	times, _, err := e.Store.Times(id)
+	if err != nil {
+		return e.fail(id, err)
+	}
+	e.sup = newSupervision(d, run, events, times)
+	defer func() { e.sup = nil }()
+	if err := e.announcePendingOpenings(ctx, run, d); err != nil {
 		return e.fail(id, err)
 	}
 	latest := latestEvents(events)
@@ -261,12 +271,17 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	}
 	run, err = e.Store.UpdateRun(id, func(current *Run) error {
 		switch {
+		case current.PauseRequested && !allFinished:
+			current.Status, current.LastError = "paused", ""
 		case current.StopRequested || current.Status == "stopping":
 			current.Status, current.LastError = "stopped", ""
 		case allFinished:
 			current.Status, current.LastError = "done", ""
 		default:
 			current.Status = "running"
+		}
+		if current.Status != "paused" {
+			current.PauseRequested, current.PauseReason = false, ""
 		}
 		return nil
 	})
@@ -304,8 +319,6 @@ func (e *Engine) runWorkers(ctx context.Context, run Run, d Definition, pending 
 					mu.Unlock()
 					return
 				}
-				task := pending[next]
-				next++
 				mu.Unlock()
 				if stop, err := e.stopRequested(run.ID); err != nil {
 					setFirstErr(&mu, &firstErr, cancel, err)
@@ -313,6 +326,26 @@ func (e *Engine) runWorkers(ctx context.Context, run Run, d Definition, pending 
 				} else if stop {
 					return
 				}
+				if wait, err := e.breakerWait(ctx, run, agent); err != nil {
+					setFirstErr(&mu, &firstErr, cancel, err)
+					return
+				} else if wait {
+					continue
+				}
+				if admitted, err := e.admitRunBudget(ctx, run, d); err != nil {
+					setFirstErr(&mu, &firstErr, cancel, err)
+					return
+				} else if !admitted {
+					return
+				}
+				mu.Lock()
+				if firstErr != nil || ctx.Err() != nil || next >= len(pending) {
+					mu.Unlock()
+					return
+				}
+				task := pending[next]
+				next++
+				mu.Unlock()
 				if err := e.processTask(ctx, run, d, agent, task, &lastFinished, completed); err != nil {
 					setFirstErr(&mu, &firstErr, cancel, err)
 					return
@@ -386,6 +419,7 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 		return nil
 	}
 	metrics.started = e.now()
+	e.markInflight(agent, metrics.started)
 	startedText := metrics.started.Format(time.RFC3339Nano)
 	output, err := renderOutput(d, task.unit, run.Workdir, run.ID, startedText)
 	if err != nil {
@@ -419,6 +453,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 	if !first.IsZero() {
 		metrics.started = first
 	}
+	e.markInflight(agent, metrics.started)
 	if previous.State == "sending" {
 		idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute))
 		if waitErr != nil {
@@ -555,6 +590,9 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 		if round >= configuredRounds(d) || d.Prompt.Followup == "" {
 			return e.finishUnit(run, unit, agent, metrics, "failed", err.Error(), round, nil, completed, lastFinished)
 		}
+		if reason := e.unitBudgetExhausted(ctx, run, agent, metrics.started); reason != "" {
+			return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, nil, completed, lastFinished)
+		}
 		return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, err.Error(), output, completed, lastFinished)
 	}
 	begin := e.now()
@@ -586,6 +624,15 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 			result = "weak"
 		}
 		return e.finishUnit(run, unit, agent, metrics, result, strings.TrimSpace(stdout), round, nil, completed, lastFinished)
+	}
+	if reason := e.unitBudgetExhausted(ctx, run, agent, metrics.started); reason != "" {
+		// End the unit the way exhausted rounds end it: weak only when the
+		// weak rule allows it at this round.
+		result := "failed"
+		if code == 1 && round >= weakAfter(d) {
+			result = "weak"
+		}
+		return e.finishUnit(run, unit, agent, metrics, result, reason, round, nil, completed, lastFinished)
 	}
 	return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, truncateUTF8(stdout, 8*1024), output, completed, lastFinished)
 }
@@ -1103,6 +1150,7 @@ func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetric
 		return err
 	}
 	row := TimeRow{Run: run.ID, Workflow: run.Workflow, Unit: unit.Key, Agent: agent, Model: metrics.model, Result: result, Reason: reason, Rounds: max(1, round), RoundSeconds: metrics.roundWork, WorkSeconds: metrics.work, ValidateSeconds: metrics.validate, WaitSeconds: metrics.wait, CompactSeconds: metrics.compact, CompactResult: metrics.compactResult, FinishedAt: finished, CtxStart: metrics.ctxStart}
+	row.Tokens = e.unitTokens(run, agent, metrics.started, finished)
 	if !queuedAt.IsZero() {
 		row.QueuedAt = timePointer(queuedAt)
 	}
@@ -1143,6 +1191,9 @@ func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetric
 	}
 	*lastFinished = finished
 	completed.Add(1)
+	if err := e.afterFinish(run, row); err != nil {
+		return err
+	}
 	return e.setCurrent(run.ID, agent, "")
 }
 
@@ -1198,7 +1249,7 @@ func (e *Engine) setStatus(status, reason string) error {
 		return errors.New("workflow run is not active")
 	}
 	run, err := e.Store.UpdateRun(e.active.ID, func(current *Run) error {
-		if status == "running" && (current.StopRequested || current.Status == "stopping") {
+		if status == "running" && haltRequested(*current) {
 			return nil
 		}
 		current.Status, current.LastError = status, reason
@@ -1213,7 +1264,13 @@ func (e *Engine) setStatus(status, reason string) error {
 
 func (e *Engine) stopRequested(runID string) (bool, error) {
 	run, err := e.Store.LoadRun(runID)
-	return run.StopRequested || run.Status == "stopping", err
+	return haltRequested(run), err
+}
+
+// haltRequested reports a stop or pause request: workers finish in-flight
+// units and take no new one.
+func haltRequested(run Run) bool {
+	return run.StopRequested || run.Status == "stopping" || run.PauseRequested || run.Status == "pausing"
 }
 
 func (e *Engine) statusWaiting(runID, agent string) error {
@@ -1245,6 +1302,10 @@ func (e *Engine) setRunStatus(id, status, reason string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	run, err := e.Store.UpdateRun(id, func(current *Run) error {
+		if current.PauseRequested {
+			// Keep "pausing" visible; the flag stops workers either way.
+			return nil
+		}
 		if current.Status != status || current.LastError != reason {
 			current.Status, current.LastError = status, reason
 		}

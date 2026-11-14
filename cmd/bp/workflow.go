@@ -17,8 +17,14 @@ import (
 	"blueprint/internal/identity"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/tokens"
 	"blueprint/internal/workflow"
 )
+
+// tokenStoreStale is how old the token store's last collection may be before
+// the workflow meter stops vouching for it. The daemon collects every five
+// minutes; three missed collections mean the collector is not running.
+const tokenStoreStale = 15 * time.Minute
 
 type workflowDriver struct {
 	app          *app
@@ -31,9 +37,35 @@ type workflowDriver struct {
 	// runs walks every line, so without this one goroutine's pass could type
 	// into a pane another goroutine is clearing. Waits stay concurrent.
 	typing sync.Mutex
+	// runtimes is the harness each agent was last observed running; the token
+	// meter vouches only for harnesses whose usage the token store collects.
+	runtimes map[string]string
+	// tokenStore overrides the token store directory (tests).
+	tokenStore string
+	now        func() time.Time
 }
 
-func (a *app) workflowStore() *workflow.Store { return workflow.NewStore(a.config.StateDir) }
+func (a *app) workflowStore() *workflow.Store {
+	store := workflow.NewStore(a.config.StateDir)
+	store.Measure = settleMeasure(a.tokenStoreDir())
+	return store
+}
+
+func (a *app) tokenStoreDir() string {
+	return tokens.DefaultConfig(a.config.StateDir, nil).StoreDir
+}
+
+// settleMeasure re-measures recorded units straight from the token store. No
+// runtime check is possible or needed: a row with tokens was metered.
+func settleMeasure(storeDir string) workflow.TokenMeasure {
+	return func(agent string, since, until time.Time) (workflow.TokenUse, bool) {
+		usage, asOf, err := tokens.AgentUsage(storeDir, agent, since, until)
+		if err != nil || !usage.Seen {
+			return workflow.TokenUse{}, false
+		}
+		return workflow.TokenUse{Input: usage.In, Output: usage.Out, CacheWrite: usage.CacheWrite, CacheRead: usage.CacheRead, AsOf: asOf}, true
+	}
+}
 
 func (a *app) loadWorkflowFleet() (book.Fleet, error) {
 	if a.loadFleet != nil {
@@ -60,7 +92,7 @@ func (a *app) newWorkflowDriverBase(owner string) *workflowDriver {
 	if a.queue == nil {
 		a.queue = msgq.New(a.config.MsgqRoot)
 	}
-	return &workflowDriver{app: a, fleetByAgent: make(map[string]book.Fleet), owner: owner}
+	return &workflowDriver{app: a, fleetByAgent: make(map[string]book.Fleet), owner: owner, runtimes: make(map[string]string)}
 }
 
 func (d *workflowDriver) setFleet(agent string, fleet book.Fleet) {
@@ -92,6 +124,12 @@ func (d *workflowDriver) Observe(ctx context.Context, agent string) (workflow.Ob
 	if activity == nil {
 		return workflow.Observation{State: workflow.Unknown, Detail: "no runtime observation", ObservedAt: time.Now().UTC()}, nil
 	}
+	d.fleetMu.Lock()
+	if d.runtimes == nil {
+		d.runtimes = make(map[string]string)
+	}
+	d.runtimes[agent] = state.Runtime
+	d.fleetMu.Unlock()
 	stateName := workflow.AgentState(activity.State)
 	if stateName == workflow.Idle && activity.DeliveryBlocked {
 		stateName = workflow.Blocked
@@ -107,6 +145,57 @@ func (d *workflowDriver) Observe(ctx context.Context, agent string) (workflow.Ob
 		observation.TurnAt = *activity.LastEventAt
 	}
 	return observation, nil
+}
+
+// Tokens implements workflow.TokenMeter by reading bp's token store, which
+// the daemon's tokens-collect job fills from Claude and Codex transcripts
+// (subagents included). It only reads the store and never collects itself.
+func (d *workflowDriver) Tokens(_ context.Context, agent string, since, until time.Time) (workflow.TokenUse, bool, error) {
+	d.fleetMu.RLock()
+	runtime := d.runtimes[agent]
+	d.fleetMu.RUnlock()
+	if !meteredRuntime(runtime) {
+		return workflow.TokenUse{}, false, nil
+	}
+	now := time.Now
+	if d.now != nil {
+		now = d.now
+	}
+	current := now()
+	if until.IsZero() || until.After(current) {
+		until = current
+	}
+	store := d.tokenStore
+	if store == "" {
+		store = d.app.tokenStoreDir()
+	}
+	usage, asOf, err := tokens.AgentUsage(store, agent, since, until)
+	if errors.Is(err, tokens.ErrNotCollected) {
+		return workflow.TokenUse{}, false, nil
+	}
+	if err != nil {
+		return workflow.TokenUse{}, false, err
+	}
+	if current.Sub(asOf) > tokenStoreStale {
+		return workflow.TokenUse{}, false, nil
+	}
+	if !usage.Seen {
+		// The store has no record at all under this name around the
+		// interval: the collector attributes the agent's transcript to
+		// another label (no customTitle, a shared folder, an agentbook the
+		// collector does not read). Zero would be a wrong answer.
+		return workflow.TokenUse{}, false, nil
+	}
+	return workflow.TokenUse{Input: usage.In, Output: usage.Out, CacheWrite: usage.CacheWrite, CacheRead: usage.CacheRead, AsOf: asOf}, true, nil
+}
+
+// meteredRuntime lists harnesses whose transcripts the token collector reads:
+// Claude Code transcripts under ~/.claude/projects and Codex rollouts under
+// ~/.codex/sessions. A codex-remote agent's thread lives in a shared
+// app-server whose sessions directory and cwd attribution are not proven to
+// reach the collector, so it stays unknown.
+func meteredRuntime(runtime string) bool {
+	return runtime == "claude" || runtime == "codex"
 }
 
 func (d *workflowDriver) Send(ctx context.Context, agent, text string) (workflow.Delivery, error) {
@@ -243,6 +332,7 @@ func (a *app) workflow(args []string) error {
 		if len(definition.Validate.Command) > 0 {
 			fmt.Fprintf(a.out, "validator: %s\n", strings.Join(definition.Validate.Command, " "))
 		}
+		printWorkflowSupervision(a.out, definition)
 		return nil
 	case "check":
 		return a.workflowCheck(store, args[1:])
@@ -258,7 +348,7 @@ func (a *app) workflow(args []string) error {
 		if err != nil {
 			return err
 		}
-		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" {
+		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" || run.Status == "paused" {
 			fmt.Fprintf(a.out, "run %s is already %s\n", run.ID, run.Status)
 		} else {
 			fmt.Fprintf(a.out, "run %s will stop at the next unit boundary\n", run.ID)
@@ -311,8 +401,33 @@ func (a *app) workflowCheck(store *workflow.Store, args []string) error {
 	if err := checkSampleIfPresent(path, workdir, definition); err != nil {
 		return err
 	}
+	if definition.Budget != nil {
+		fmt.Fprintln(a.out, "warning: budget needs token usage data. Counts come from bp's token collector, which lags by up to one collection (5m), so both ceilings are soft and can be overshot by about that much spend. Only Claude Code and Codex agents in a tmux pane whose usage the collector records under the agent's name are metered; any other agent runs with no budget enforcement.")
+	}
 	fmt.Fprintf(a.out, "OK: workflow %s\n", definition.Name)
 	return nil
+}
+
+func printWorkflowSupervision(out *os.File, definition workflow.Definition) {
+	if spec := definition.Supervise; spec != nil {
+		if spec.Breaker != nil {
+			fmt.Fprintf(out, "breaker: %d consecutive failed units per agent, open for %s\n", spec.Breaker.Failures, spec.Breaker.OpenFor)
+		}
+		if spec.Meltdown != nil {
+			fmt.Fprintf(out, "meltdown: pause after %d failed units within %s\n", spec.Meltdown.Failures, spec.Meltdown.Window)
+		}
+	}
+	if budget := definition.Budget; budget != nil {
+		parts := []string{}
+		if budget.UnitTokens != nil {
+			parts = append(parts, fmt.Sprintf("unit=%d", *budget.UnitTokens))
+		}
+		if budget.RunTokens != nil {
+			parts = append(parts, fmt.Sprintf("run=%d", *budget.RunTokens))
+		}
+		parts = append(parts, fmt.Sprintf("cache_read=%d%%", definition.CacheReadWeight()))
+		fmt.Fprintf(out, "budget: %s\n", strings.Join(parts, " "))
+	}
 }
 
 func checkSampleIfPresent(workflowDir, workdir string, definition workflow.Definition) error {
@@ -518,28 +633,72 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 	if status.LastError != "" {
 		line += " last_error=" + status.LastError
 	}
+	if status.PauseReason != "" {
+		line += " pause_reason=" + status.PauseReason
+	}
+	if len(status.Breakers) > 0 {
+		breakers := make([]string, 0, len(status.Breakers))
+		for _, breaker := range status.Breakers {
+			if breaker.State == "half-open" {
+				breakers = append(breakers, fmt.Sprintf("%s half-open (trial unit allowed; %d consecutive failures)", breaker.Agent, breaker.Failures))
+			} else {
+				breakers = append(breakers, fmt.Sprintf("%s open until %s (%d consecutive failures)", breaker.Agent, breaker.ReopensAt.UTC().Format(time.RFC3339), breaker.Failures))
+			}
+		}
+		line += " breakers=[" + strings.Join(breakers, ", ") + "]"
+	}
+	if status.RunTokens > 0 {
+		line += fmt.Sprintf(" run_tokens=%d/%d", status.RunTokensSpent, status.RunTokens)
+	}
 	if status.TornLog {
 		line += " torn_log=true"
 	}
 	fmt.Fprintln(out, line)
 }
 
-func (a *app) workflowResume(store *workflow.Store, args []string) error {
-	id, retryFailed := "", false
-	for _, arg := range args {
+const workflowResumeUsage = "usage: bp workflow resume <run-id> [--retry-failed] [--run-tokens N]"
+
+type workflowResumeOptions struct {
+	id string
+	workflow.ResumeOptions
+}
+
+func parseWorkflowResume(args []string) (workflowResumeOptions, error) {
+	var options workflowResumeOptions
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		switch arg {
 		case "--retry-failed":
-			retryFailed = true
-		default:
-			if strings.HasPrefix(arg, "-") || id != "" {
-				return errors.New("usage: bp workflow resume <run-id> [--retry-failed]")
+			options.RetryFailed = true
+		case "--run-tokens":
+			if index+1 >= len(args) {
+				return options, errors.New("--run-tokens needs a value")
 			}
-			id = arg
+			index++
+			value, err := strconv.ParseInt(args[index], 10, 64)
+			if err != nil || value <= 0 {
+				return options, fmt.Errorf("--run-tokens must be a positive integer: %q", args[index])
+			}
+			options.RunTokens = value
+		default:
+			if strings.HasPrefix(arg, "-") || options.id != "" {
+				return options, errors.New(workflowResumeUsage)
+			}
+			options.id = arg
 		}
 	}
-	if id == "" {
-		return errors.New("usage: bp workflow resume <run-id> [--retry-failed]")
+	if options.id == "" {
+		return options, errors.New(workflowResumeUsage)
 	}
+	return options, nil
+}
+
+func (a *app) workflowResume(store *workflow.Store, args []string) error {
+	options, err := parseWorkflowResume(args)
+	if err != nil {
+		return err
+	}
+	id := options.id
 	run, err := store.LoadRun(id)
 	if err != nil {
 		return err
@@ -547,11 +706,11 @@ func (a *app) workflowResume(store *workflow.Store, args []string) error {
 	if run.Status == "done" {
 		return errors.New("completed workflow runs cannot be resumed")
 	}
-	if _, err := store.UpdateRun(id, func(current *workflow.Run) error {
-		current.Status, current.LastError, current.StopRequested, current.RetryFailed = "running", "", false, retryFailed
-		return nil
-	}); err != nil {
+	if _, err := store.Resume(id, options.ResumeOptions); err != nil {
 		return err
+	}
+	if spent, ceiling, err := store.RunSpend(id); err == nil && ceiling > 0 && spent >= ceiling {
+		fmt.Fprintf(a.out, "note: %s; the run will pause again before its next unit. Raise the ceiling with --run-tokens N.\n", workflow.RunBudgetReason(spent, ceiling))
 	}
 	if err := workflow.Start(a.ctx, a.config.StateDir, id); err != nil {
 		_, _ = store.UpdateRun(id, func(current *workflow.Run) error {
@@ -578,11 +737,14 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 	if selector == "" {
 		return errors.New("usage: bp workflow times <run-id|name> [--json]")
 	}
-	rows, err := store.TimeRows(selector)
+	rows, unsettled, err := store.SettledTimeRows(selector)
 	if err != nil {
 		return err
 	}
 	stats := workflow.SummarizeTimes(rows)
+	if stats.Tokens != nil {
+		stats.Tokens.Unsettled = unsettled
+	}
 	if jsonOutput {
 		return json.NewEncoder(a.out).Encode(stats)
 	}
@@ -607,7 +769,34 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 	for _, slow := range stats.Slowest {
 		fmt.Fprintf(a.out, "slowest: %s agent=%s model=%s result=%s work=%.1fs\n", slow.Unit, slow.Agent, slow.Model, slow.Result, slow.WorkSec)
 	}
+	if t := stats.Tokens; t != nil {
+		fmt.Fprintf(a.out, "tokens: units=%d/%d total=%d weighted=%d in=%d out=%d cache_write=%d cache_read=%d\n", t.Units, stats.Count, t.Total, t.Weighted, t.Input, t.Output, t.CacheWrite, t.CacheRead)
+		fmt.Fprintf(a.out, "tokens per unit: median=%.0f p90=%.0f median_weighted=%.0f p90_weighted=%.0f\n", t.MedianTotal, t.P90Total, t.MedianWeighted, t.P90Weighted)
+		for _, name := range sortedTokenKeys(t.ByAgent) {
+			group := t.ByAgent[name]
+			fmt.Fprintf(a.out, "tokens agent %s: units=%d total=%d weighted=%d\n", name, group.Units, group.Total, group.Weighted)
+		}
+		for _, model := range sortedTokenKeys(t.ByModel) {
+			group := t.ByModel[model]
+			fmt.Fprintf(a.out, "tokens model %s: units=%d total=%d weighted=%d\n", model, group.Units, group.Total, group.Weighted)
+		}
+		for _, unit := range t.Costliest {
+			fmt.Fprintf(a.out, "costliest: %s agent=%s model=%s result=%s total=%d weighted=%d\n", unit.Unit, unit.Agent, unit.Model, unit.Result, unit.Total, unit.Weighted)
+		}
+		if t.Unsettled > 0 {
+			fmt.Fprintf(a.out, "tokens not final yet: %d units (the token collector has not caught up with their finish; run again in a few minutes)\n", t.Unsettled)
+		}
+	}
 	return nil
+}
+
+func sortedTokenKeys(values map[string]workflow.TokenGroup) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func sortedGroupKeys(values map[string]workflow.GroupStats) []string {

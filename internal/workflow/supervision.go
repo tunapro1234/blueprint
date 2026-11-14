@@ -70,17 +70,47 @@ func SettleTokens(rows []TimeRow, percent int, measure TokenMeasure) ([]TimeRow,
 			continue
 		}
 		use, known := measure(row.Agent, *row.Tokens.Since, row.FinishedAt)
-		if !known || use.Weighted(percent) < row.Tokens.Weighted {
+		if !known {
 			unsettled++
 			continue
 		}
-		tokens := unitTokensFrom(use, percent, *row.Tokens.Since)
+		tokens := tokensWithPrior(use, percent, *row.Tokens.Since, row.Tokens.Prior)
+		if tokens.Weighted < row.Tokens.Weighted {
+			unsettled++
+			continue
+		}
 		settled[index].Tokens = tokens
 		if !tokens.Settled(row.FinishedAt) {
 			unsettled++
 		}
 	}
 	return settled, unsettled
+}
+
+// tokensWithPrior is unitTokensFrom plus fixed usage before since (the rounds
+// before a revision). Weighted adds the prior's own weighted figure so a
+// re-measure rounds exactly like the recorded row.
+func tokensWithPrior(use TokenUse, percent int, since time.Time, prior *TokenCounts) *UnitTokens {
+	tokens := unitTokensFrom(use, percent, since)
+	if prior == nil {
+		return tokens
+	}
+	copied := *prior
+	tokens.Input += copied.Input
+	tokens.Output += copied.Output
+	tokens.CacheWrite += copied.CacheWrite
+	tokens.CacheRead += copied.CacheRead
+	tokens.Weighted += copied.Weighted
+	tokens.Prior = &copied
+	return tokens
+}
+
+// countsOf freezes a unit's recorded tokens as prior usage.
+func countsOf(tokens *UnitTokens) *TokenCounts {
+	if tokens == nil {
+		return nil
+	}
+	return &TokenCounts{Input: tokens.Input, Output: tokens.Output, CacheWrite: tokens.CacheWrite, CacheRead: tokens.CacheRead, Weighted: tokens.Weighted}
 }
 
 func unitTokensFrom(use TokenUse, percent int, since time.Time) *UnitTokens {
@@ -91,13 +121,17 @@ func unitTokensFrom(use TokenUse, percent int, since time.Time) *UnitTokens {
 	return tokens
 }
 
-// spentUnit is a finished unit of this run as the run budget counts it.
+// spentUnit is a finished or parked unit of this run as the run budget
+// counts it. prior is fixed usage before since (rounds before a revision).
 type spentUnit struct {
+	unit     string
 	agent    string
 	since    time.Time
 	until    time.Time
 	weighted int64
+	prior    int64
 	settled  bool
+	parked   bool
 }
 
 // Event states written by supervision. They carry no unit key, so unit
@@ -181,7 +215,8 @@ func deriveBreakers(events []Event, since time.Time) map[string]*agentBreaker {
 			continue
 		}
 		switch {
-		case event.Key != "" && terminalState(event.State):
+		case event.Key != "" && terminalState(event.State) && event.Decision == nil:
+			// A human decision is not the agent's result.
 			b := get(event.Agent)
 			if event.State == "failed" {
 				b.consecutive++
@@ -243,7 +278,7 @@ func newSupervision(d Definition, run Run, events []Event, times []TimeRow) *sup
 		unknownTokens: map[string]bool{}, inflight: map[string]time.Time{}, percent: d.CacheReadWeight()}
 	s.agents = deriveBreakers(events, s.since)
 	for _, event := range events {
-		if event.Key != "" && event.State == "failed" && !event.At.Before(s.since) {
+		if event.Key != "" && event.State == "failed" && event.Decision == nil && !event.At.Before(s.since) {
 			s.failures = append(s.failures, event.At)
 		}
 		if event.State == eventTokensUnknown && event.Agent != "" {
@@ -262,6 +297,14 @@ func newSupervision(d Definition, run Run, events []Event, times []TimeRow) *sup
 	for _, row := range times {
 		if row.Run == run.ID && row.Tokens != nil {
 			s.finished = append(s.finished, spentFromRow(row))
+		}
+	}
+	// Parked units and pending revisions have spent tokens but no row yet.
+	for _, row := range parkedRows(events) {
+		if row.Tokens != nil {
+			unit := spentFromRow(row)
+			unit.parked = true
+			s.finished = append(s.finished, unit)
 		}
 	}
 	return s
@@ -414,17 +457,30 @@ func (s *supervision) inflightUnits() map[string]time.Time {
 }
 
 func spentFromRow(row TimeRow) spentUnit {
-	unit := spentUnit{agent: row.Agent, until: row.FinishedAt, weighted: row.Tokens.Weighted, settled: row.Tokens.Settled(row.FinishedAt)}
+	unit := spentUnit{unit: row.Unit, agent: row.Agent, until: row.FinishedAt, weighted: row.Tokens.Weighted, settled: row.Tokens.Settled(row.FinishedAt)}
 	if row.Tokens.Since != nil {
 		unit.since = *row.Tokens.Since
+	}
+	if row.Tokens.Prior != nil {
+		unit.prior = row.Tokens.Prior.Weighted
 	}
 	return unit
 }
 
-func (s *supervision) addFinished(row TimeRow) {
+// addSpent records a finished or parked unit. A parked entry of the same unit
+// is replaced: the new row (after a revision) includes its usage as prior.
+func (s *supervision) addSpent(row TimeRow, parked bool) {
 	s.mu.Lock()
-	s.finished = append(s.finished, spentFromRow(row))
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	unit := spentFromRow(row)
+	unit.parked = parked
+	for index, existing := range s.finished {
+		if existing.parked && existing.unit == row.Unit {
+			s.finished[index] = unit
+			return
+		}
+	}
+	s.finished = append(s.finished, unit)
 }
 
 // unsettledUnits returns the finished units whose tokens may still grow, by
@@ -494,12 +550,26 @@ func (s *Store) RunSpend(id string) (spent, ceiling int64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	rows, _, err := s.Times(id)
+	rows, err := s.spendRows(id)
 	if err != nil {
 		return 0, 0, err
 	}
 	rows, _ = SettleTokens(rows, d.CacheReadWeight(), s.Measure)
 	return weightedSpend(rows), runCeiling(d, run), nil
+}
+
+// spendRows is every row the run budget counts: times.jsonl plus the
+// proposed rows of parked units and pending revisions.
+func (s *Store) spendRows(id string) ([]TimeRow, error) {
+	rows, _, err := s.Times(id)
+	if err != nil {
+		return nil, err
+	}
+	events, _, err := s.Events(id)
+	if err != nil {
+		return nil, err
+	}
+	return append(rows, parkedRows(events)...), nil
 }
 
 func weightedSpend(rows []TimeRow) int64 {

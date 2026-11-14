@@ -12,6 +12,9 @@ type Counts struct {
 	Weak    int `json:"weak"`
 	Failed  int `json:"failed"`
 	Pending int `json:"pending"`
+	// AwaitingApproval counts parked units waiting for a human decision.
+	// A unit with a pending revision counts as pending.
+	AwaitingApproval int `json:"awaiting_approval,omitempty"`
 }
 
 type AgentStatus struct {
@@ -35,6 +38,7 @@ type RunStatus struct {
 	// Breakers lists agents whose circuit breaker is open or half-open.
 	Breakers []BreakerView `json:"breakers,omitempty"`
 	// RunTokens and RunTokensSpent are set when a run token ceiling applies.
+	// Spend includes parked units.
 	RunTokens      int64 `json:"run_tokens,omitempty"`
 	RunTokensSpent int64 `json:"run_tokens_spent,omitempty"`
 }
@@ -58,18 +62,24 @@ func (s *Store) Status(id string) (RunStatus, error) {
 	if d, err := ReadDefinition(s.SnapshotDir(id)); err == nil {
 		view.Breakers = OpenBreakers(d, run, events, s.now())
 		if ceiling := runCeiling(d, run); ceiling > 0 {
-			settled, _ := SettleTokens(times, d.CacheReadWeight(), s.Measure)
+			settled, _ := SettleTokens(append(times, parkedRows(events)...), d.CacheReadWeight(), s.Measure)
 			view.RunTokens, view.RunTokensSpent = ceiling, weightedSpend(settled)
 		}
 	}
 	active := map[string]Event{}
 	for _, event := range events {
-		if event.Key == "" {
+		if event.Key == "" || event.Decision != nil {
+			// Decisions (and revision requests) are not agent activity.
 			continue
 		}
-		if !terminalState(event.State) {
+		switch {
+		case parkedState(event.State):
+			if current, ok := active[event.Agent]; ok && current.Key == event.Key {
+				delete(active, event.Agent)
+			}
+		case !terminalState(event.State):
 			active[event.Agent] = event
-		} else {
+		default:
 			delete(active, event.Agent)
 		}
 	}
@@ -91,6 +101,8 @@ func (s *Store) Status(id string) (RunStatus, error) {
 			view.Counts.Weak++
 		case "failed":
 			view.Counts.Failed++
+		case StateAwaitingApproval:
+			view.Counts.AwaitingApproval++
 		default:
 			view.Counts.Pending++
 		}
@@ -129,6 +141,46 @@ type TimeStats struct {
 	Slowest      []SlowUnit            `json:"slowest,omitempty"`
 	// Tokens is present only when at least one row has token data.
 	Tokens *TokenStats `json:"tokens,omitempty"`
+	// Approvals is present when units waited for a human decision.
+	Approvals *ApprovalStats `json:"approvals,omitempty"`
+}
+
+// ApprovalStats counts decided units in times.jsonl. A revised unit counts
+// as revised and, if it was decided afterwards, also as approved or rejected.
+// MedianWait is over every unit that waited for a decision. Waiting (parked,
+// undecided units) is set by readers of units.jsonl; SummarizeTimes leaves it
+// zero.
+type ApprovalStats struct {
+	Approved   int     `json:"approved"`
+	Rejected   int     `json:"rejected"`
+	Revised    int     `json:"revised"`
+	MedianWait float64 `json:"median_wait_s"`
+	Waiting    int     `json:"waiting,omitempty"`
+}
+
+func summarizeApprovals(rows []TimeRow) *ApprovalStats {
+	stats := &ApprovalStats{}
+	var waits []float64
+	for _, row := range rows {
+		if row.Approval == nil {
+			continue
+		}
+		switch row.Approval.Decision {
+		case "approved":
+			stats.Approved++
+		case "rejected":
+			stats.Rejected++
+		}
+		if row.Approval.Revisions > 0 {
+			stats.Revised++
+		}
+		waits = append(waits, row.Approval.WaitSeconds)
+	}
+	if len(waits) == 0 {
+		return nil
+	}
+	stats.MedianWait = median(waits)
+	return stats
 }
 
 // TokenGroup sums token usage for one agent or model.
@@ -269,6 +321,7 @@ func SummarizeTimes(rows []TimeRow) TimeStats {
 		stats.Slowest = stats.Slowest[:5]
 	}
 	stats.Tokens = summarizeTokens(rows)
+	stats.Approvals = summarizeApprovals(rows)
 	return stats
 }
 

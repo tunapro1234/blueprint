@@ -168,15 +168,19 @@ func (e *Engine) unitTokens(run Run, agent string, started, finished time.Time) 
 
 // unitBudgetExhausted is checked at a round boundary, before a follow-up is
 // sent. It returns the unit's end reason when the unit ceiling is spent.
-func (e *Engine) unitBudgetExhausted(_ context.Context, run Run, agent string, started time.Time) string {
+func (e *Engine) unitBudgetExhausted(_ context.Context, run Run, agent string, metrics unitMetrics) string {
 	if e.sup == nil || e.sup.unitCeiling <= 0 {
 		return ""
 	}
-	use, known := e.meter(run.ID, agent, started, time.Time{})
+	use, known := e.meter(run.ID, agent, metrics.tokenStart(), time.Time{})
 	if !known {
 		return ""
 	}
-	if spent := use.Weighted(e.sup.percent); spent >= e.sup.unitCeiling {
+	spent := use.Weighted(e.sup.percent)
+	if metrics.prior != nil {
+		spent += metrics.prior.Weighted
+	}
+	if spent >= e.sup.unitCeiling {
 		return UnitBudgetReason(spent, e.sup.unitCeiling)
 	}
 	return ""
@@ -196,7 +200,7 @@ func (e *Engine) admitRunBudget(ctx context.Context, run Run, d Definition) (boo
 			continue
 		}
 		if use, known, _ := e.measureTokens(unit.agent, unit.since, unit.until); known {
-			e.sup.remeasured(index, use.Weighted(e.sup.percent), !use.AsOf.IsZero() && !use.AsOf.Before(unit.until))
+			e.sup.remeasured(index, use.Weighted(e.sup.percent)+unit.prior, !use.AsOf.IsZero() && !use.AsOf.Before(unit.until))
 		}
 	}
 	spent := e.sup.finishedSpend()
@@ -211,6 +215,18 @@ func (e *Engine) admitRunBudget(ctx context.Context, run Run, d Definition) (boo
 	return false, e.requestPause(ctx, run, d, RunBudgetReason(spent, e.sup.runCeiling))
 }
 
+// afterPark feeds a parked unit's spend to the run budget. A parked unit is
+// neither a success nor a failure for breakers and meltdown.
+func (e *Engine) afterPark(row TimeRow) {
+	if e.sup == nil {
+		return
+	}
+	e.sup.setInflight(row.Agent, time.Time{})
+	if row.Tokens != nil {
+		e.sup.addSpent(row, true)
+	}
+}
+
 // afterFinish feeds a written terminal event to the breaker, meltdown and
 // spend accounting.
 func (e *Engine) afterFinish(run Run, row TimeRow) error {
@@ -220,7 +236,7 @@ func (e *Engine) afterFinish(run Run, row TimeRow) error {
 	unit, agent, result, reason, finished := row.Unit, row.Agent, row.Result, row.Reason, row.FinishedAt
 	e.sup.setInflight(agent, time.Time{})
 	if row.Tokens != nil {
-		e.sup.addFinished(row)
+		e.sup.addSpent(row, false)
 	}
 	if e.sup.breaker == nil && e.sup.meltdown == nil {
 		return nil

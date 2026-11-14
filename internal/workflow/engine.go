@@ -79,6 +79,9 @@ type Engine struct {
 	mu        sync.Mutex
 	active    *Run
 	sup       *supervision
+	// parkMu guards parkNotice, the last parked-unit notification.
+	parkMu     sync.Mutex
+	parkNotice time.Time
 }
 
 var ErrCompactBusy = errors.New("agent became busy before compact")
@@ -110,6 +113,23 @@ type unitMetrics struct {
 	controls      int
 	channel       string
 	last          Observation
+	// revision is the parked outcome a human-requested revision round is
+	// revising; nil for ordinary units.
+	revision *ParkRecord
+	// approval carries revisions and decision waits into the unit's row.
+	approval RowApproval
+	// tokenSince starts the measured token interval when it differs from
+	// started (a revision round); prior is the usage before it.
+	tokenSince time.Time
+	prior      *TokenCounts
+}
+
+// tokenStart is the start of the unit's current token interval.
+func (m unitMetrics) tokenStart() time.Time {
+	if !m.tokenSince.IsZero() {
+		return m.tokenSince
+	}
+	return m.started
 }
 
 func NewEngine(store *Store, driver Driver) *Engine {
@@ -214,6 +234,7 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	if err := e.announcePendingOpenings(ctx, run, d); err != nil {
 		return e.fail(id, err)
 	}
+	e.seedParkNotice(events)
 	latest := latestEvents(events)
 	unitCounts := agentUnitCounts(events)
 	run, err = e.Store.UpdateRun(id, func(current *Run) error {
@@ -225,12 +246,19 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	}
 	recovery := make(map[string][]unitTask)
 	var pending []unitTask
+	unitsByKey := make(map[string]Unit, len(units))
 	for _, unit := range units {
+		unitsByKey[unit.Key] = unit
 		previous, ok := latest[unit.Key]
 		if ok && terminalState(previous.State) {
 			if previous.State != "failed" || !retryFailed {
 				continue
 			}
+		}
+		if ok && (parkedState(previous.State) || revisionState(previous.State)) {
+			// Parked units wait for a decision; revisions are claimed by
+			// their agent's worker loop ahead of new units.
+			continue
 		}
 		task := unitTask{unit: unit, previous: previous, hasPrevious: ok}
 		if ok && !terminalState(previous.State) && previous.State != "compact_effective" && previous.State != "compact_ineffective" {
@@ -251,50 +279,100 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 			completed.Add(1)
 		}
 	}
-	if err := e.runWorkers(ctx, run, d, pending, recovery, &completed); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	parked := 0
+	for {
+		if err := e.runWorkers(ctx, run, d, pending, recovery, unitsByKey, &completed); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return e.fail(id, err)
 		}
-		return e.fail(id, err)
-	}
-	events, _, err = e.Store.Events(id)
-	if err != nil {
-		return e.fail(id, err)
-	}
-	latest = latestEvents(events)
-	allFinished := true
-	for _, unit := range units {
-		if !terminalState(latest[unit.Key].State) {
-			allFinished = false
-			break
+		again, finalRun, waiting, err := e.finalize(run, units)
+		if err != nil {
+			return e.fail(id, err)
 		}
-	}
-	run, err = e.Store.UpdateRun(id, func(current *Run) error {
-		switch {
-		case current.PauseRequested && !allFinished:
-			current.Status, current.LastError = "paused", ""
-		case current.StopRequested || current.Status == "stopping":
-			current.Status, current.LastError = "stopped", ""
-		case allFinished:
-			current.Status, current.LastError = "done", ""
-		default:
-			current.Status = "running"
+		if again {
+			// A revision was requested after this agent's loop ended.
+			pending, recovery = nil, nil
+			continue
 		}
-		if current.Status != "paused" {
-			current.PauseRequested, current.PauseReason = false, ""
-		}
-		return nil
-	})
-	if err != nil {
-		return e.fail(id, err)
+		run, parked = finalRun, waiting
+		break
 	}
-	if (run.Status == "done" || run.Status == "stopped") && (d.Notify == "" || d.Notify == "owner") && e.Notify != nil {
+	switch {
+	case run.Status == StatusAwaitingApproval:
+		e.notifyOwner(ctx, run, d, fmt.Sprintf("workflow %s run %s is waiting for decisions: %d units await approval; see bp workflow approvals %s", run.Workflow, run.ID, parked, run.ID))
+	case (run.Status == "done" || run.Status == "stopped") && (d.Notify == "" || d.Notify == "owner") && e.Notify != nil:
 		_ = e.Notify(ctx, run.Owner, fmt.Sprintf("workflow %s run %s %s", run.Workflow, run.ID, run.Status))
 	}
 	return nil
 }
 
-func (e *Engine) runWorkers(ctx context.Context, run Run, d Definition, pending []unitTask, recovery map[string][]unitTask, completed *atomic.Int64) error {
+// finalize sets the run's end status. It runs under the decision lock, so a
+// decision made while the worker was alive is either seen here or sees the
+// status written here. again is true when a revision is pending for a run
+// agent and no stop or pause was requested: the workers run once more.
+func (e *Engine) finalize(run Run, units []Unit) (again bool, final Run, parked int, err error) {
+	id := run.ID
+	err = e.Store.withDecisionLock(id, func() error {
+		events, _, err := e.Store.Events(id)
+		if err != nil {
+			return err
+		}
+		latest := latestEvents(events)
+		allFinished, allSettled := true, true
+		revisions := 0
+		for _, unit := range units {
+			event := latest[unit.Key]
+			switch {
+			case terminalState(event.State):
+			case parkedState(event.State):
+				allFinished = false
+				parked++
+			case revisionState(event.State) && (event.Park == nil || !contains(run.Agents, event.Agent)):
+				// No worker can deliver this revision; it waits like a
+				// parked unit (approvals shows it as pending on its agent).
+				allFinished = false
+				parked++
+			case revisionState(event.State):
+				allFinished, allSettled = false, false
+				revisions++
+			default:
+				allFinished, allSettled = false, false
+			}
+		}
+		current, err := e.Store.LoadRun(id)
+		if err != nil {
+			return err
+		}
+		if revisions > 0 && !haltRequested(current) {
+			again = true
+			return nil
+		}
+		final, err = e.Store.UpdateRun(id, func(current *Run) error {
+			switch {
+			case current.PauseRequested && !allSettled:
+				current.Status, current.LastError = "paused", ""
+			case current.StopRequested || current.Status == "stopping":
+				current.Status, current.LastError = "stopped", ""
+			case allFinished:
+				current.Status, current.LastError = "done", ""
+			case allSettled && parked > 0:
+				current.Status, current.LastError = StatusAwaitingApproval, ""
+			default:
+				current.Status = "running"
+			}
+			if current.Status != "paused" {
+				current.PauseRequested, current.PauseReason = false, ""
+			}
+			return nil
+		})
+		return err
+	})
+	return again, final, parked, err
+}
+
+func (e *Engine) runWorkers(ctx context.Context, run Run, d Definition, pending []unitTask, recovery map[string][]unitTask, unitsByKey map[string]Unit, completed *atomic.Int64) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var mu sync.Mutex
@@ -315,11 +393,24 @@ func (e *Engine) runWorkers(ctx context.Context, run Run, d Definition, pending 
 			}
 			for {
 				mu.Lock()
-				if firstErr != nil || ctx.Err() != nil || next >= len(pending) {
+				if firstErr != nil || ctx.Err() != nil {
 					mu.Unlock()
 					return
 				}
+				queueEmpty := next >= len(pending)
 				mu.Unlock()
+				revisionsWaiting := false
+				if d.Approve != nil {
+					waiting, err := e.revisionsFor(run.ID, agent, unitsByKey)
+					if err != nil {
+						setFirstErr(&mu, &firstErr, cancel, err)
+						return
+					}
+					revisionsWaiting = len(waiting) > 0
+				}
+				if queueEmpty && !revisionsWaiting {
+					return
+				}
 				if stop, err := e.stopRequested(run.ID); err != nil {
 					setFirstErr(&mu, &firstErr, cancel, err)
 					return
@@ -330,6 +421,16 @@ func (e *Engine) runWorkers(ctx context.Context, run Run, d Definition, pending 
 					setFirstErr(&mu, &firstErr, cancel, err)
 					return
 				} else if wait {
+					continue
+				}
+				if revisionsWaiting {
+					// A human-requested revision goes to the agent that
+					// produced the unit, ahead of new units. Like a
+					// follow-up it is not held by the run token budget.
+					if _, err := e.nextRevision(ctx, run, d, agent, unitsByKey, &lastFinished, completed); err != nil {
+						setFirstErr(&mu, &firstErr, cancel, err)
+						return
+					}
 					continue
 				}
 				if admitted, err := e.admitRunBudget(ctx, run, d); err != nil {
@@ -423,11 +524,11 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	startedText := metrics.started.Format(time.RFC3339Nano)
 	output, err := renderOutput(d, task.unit, run.Workdir, run.ID, startedText)
 	if err != nil {
-		return e.finishUnit(run, task.unit, agent, metrics, "failed", err.Error(), 1, nil, completed, lastFinished)
+		return e.unjudged(ctx, run, d, task.unit, agent, metrics, err.Error(), 1, nil, completed, lastFinished)
 	}
 	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, task.unit, run, 1, "", output, startedText)
 	if err != nil {
-		return e.finishUnit(run, task.unit, agent, metrics, "failed", "render prompt: "+err.Error(), 1, nil, completed, lastFinished)
+		return e.unjudged(ctx, run, d, task.unit, agent, metrics, "render prompt: "+err.Error(), 1, nil, completed, lastFinished)
 	}
 	metrics.controls = controls
 	if err := e.appendEvent(run.ID, Event{Unit: task.unit.Key, Key: task.unit.Key, Agent: agent, State: "sending", Round: 1, ControlReplaced: controls, LastObservation: idle}); err != nil {
@@ -453,14 +554,17 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 	if !first.IsZero() {
 		metrics.started = first
 	}
-	e.markInflight(agent, metrics.started)
+	if err := e.seedRevision(run, agent, task.unit.Key, &metrics); err != nil {
+		return err
+	}
+	e.markInflight(agent, metrics.tokenStart())
 	if previous.State == "sending" {
 		idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute))
 		if waitErr != nil {
 			return waitErr
 		}
 		metrics.last = idle
-		return e.finishUnit(run, task.unit, agent, metrics, "failed", "delivery outcome unknown after restart; prompt was not resent", max(1, previous.Round), nil, completed, lastFinished)
+		return e.unjudged(ctx, run, d, task.unit, agent, metrics, "delivery outcome unknown after restart; prompt was not resent", max(1, previous.Round), nil, completed, lastFinished)
 	}
 	if previous.State != "sent" && previous.State != "working" && previous.State != "validating" {
 		return fmt.Errorf("cannot resume unit %q from state %q", task.unit.Key, previous.State)
@@ -479,7 +583,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		}
 		metrics.last = observation
 		if startedAt.IsZero() {
-			return e.finishUnit(run, task.unit, agent, metrics, "failed", "never started after verified delivery (last observation: "+observationSummary(observation)+")", max(1, previous.Round), nil, completed, lastFinished)
+			return e.unjudged(ctx, run, d, task.unit, agent, metrics, "never started after verified delivery (last observation: "+observationSummary(observation)+")", max(1, previous.Round), nil, completed, lastFinished)
 		}
 	} else {
 		startedAt, err = e.firstWorking(task.unit.Key, run.ID)
@@ -487,7 +591,9 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 			return err
 		}
 	}
-	metrics.startedAt = startedAt
+	if metrics.startedAt.IsZero() {
+		metrics.startedAt = startedAt
+	}
 	idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute))
 	if waitErr != nil {
 		return waitErr
@@ -495,7 +601,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 	metrics.last = idle
 	if !startedAt.IsZero() {
 		seconds := max(0, e.now().Sub(startedAt).Seconds())
-		metrics.work = seconds
+		metrics.work += seconds
 		metrics.roundWork = append(metrics.roundWork, seconds)
 	}
 	if err := e.appendEvent(run.ID, Event{Unit: task.unit.Key, Key: task.unit.Key, Agent: agent, State: "validating", Round: max(1, previous.Round), DeliveryID: previous.DeliveryID, LastObservation: idle}); err != nil {
@@ -532,7 +638,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 		if !strings.HasPrefix(strings.ToLower(reason), "not delivered") {
 			reason = "not delivered: " + reason
 		}
-		return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, &delivery, completed, lastFinished)
+		return e.unjudged(ctx, run, d, unit, agent, metrics, reason, round, &delivery, completed, lastFinished)
 	}
 	if delivery.DeliveredAt.IsZero() {
 		delivery.DeliveredAt = e.now()
@@ -560,7 +666,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 	}
 	if startedAt.IsZero() {
 		reason := fmt.Sprintf("never started after verified delivery (delivery record %s; last observation: %s)", delivery.ChannelID, observationSummary(observation))
-		return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, &delivery, completed, lastFinished)
+		return e.unjudged(ctx, run, d, unit, agent, metrics, reason, round, &delivery, completed, lastFinished)
 	}
 	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "working", Round: round, DeliveryID: delivery.ChannelID, DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: observation}); err != nil {
 		return err
@@ -572,7 +678,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 	metrics.last, metrics.work = idle, metrics.work+seconds
 	metrics.roundWork = append(metrics.roundWork, seconds)
 	if !done {
-		return e.finishUnit(run, unit, agent, metrics, "failed", "unit timed out before idle", round, &delivery, completed, lastFinished)
+		return e.unjudged(ctx, run, d, unit, agent, metrics, "unit timed out before idle", round, &delivery, completed, lastFinished)
 	}
 	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "validating", Round: round, DeliveryID: delivery.ChannelID, LastObservation: idle}); err != nil {
 		return err
@@ -584,14 +690,16 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 	started := metrics.started.Format(time.RFC3339Nano)
 	output, err := renderOutput(d, unit, run.Workdir, run.ID, started)
 	if err != nil {
-		return e.finishUnit(run, unit, agent, metrics, "failed", err.Error(), round, nil, completed, lastFinished)
+		return e.unjudged(ctx, run, d, unit, agent, metrics, err.Error(), round, nil, completed, lastFinished)
 	}
+	// From here on the agent finished a turn: every result is a judgment of
+	// its work and parks when approve.on lists it.
 	if err := validateOutput(d, run.Workdir, output, started); err != nil {
 		if round >= configuredRounds(d) || d.Prompt.Followup == "" {
-			return e.finishUnit(run, unit, agent, metrics, "failed", err.Error(), round, nil, completed, lastFinished)
+			return e.judged(ctx, run, d, unit, agent, metrics, "failed", err.Error(), round, completed, lastFinished)
 		}
-		if reason := e.unitBudgetExhausted(ctx, run, agent, metrics.started); reason != "" {
-			return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, nil, completed, lastFinished)
+		if reason := e.unitBudgetExhausted(ctx, run, agent, metrics); reason != "" {
+			return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 		}
 		return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, err.Error(), output, completed, lastFinished)
 	}
@@ -603,36 +711,36 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 		if errors.Is(runErr, ErrValidatorTimeout) {
 			reason = ErrValidatorTimeout.Error()
 		}
-		return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, nil, completed, lastFinished)
+		return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 	}
 	if code == 0 {
-		return e.finishUnit(run, unit, agent, metrics, "done", "", round, nil, completed, lastFinished)
+		return e.judged(ctx, run, d, unit, agent, metrics, "done", "", round, completed, lastFinished)
 	}
 	if code != 1 && code != 3 {
 		reason := strings.TrimSpace(stderr)
 		if reason == "" {
 			reason = fmt.Sprintf("validator exited with code %d", code)
 		}
-		return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, nil, completed, lastFinished)
+		return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 	}
 	if code == 3 && round >= weakAfter(d) {
-		return e.finishUnit(run, unit, agent, metrics, "weak", strings.TrimSpace(stdout), round, nil, completed, lastFinished)
+		return e.judged(ctx, run, d, unit, agent, metrics, "weak", strings.TrimSpace(stdout), round, completed, lastFinished)
 	}
 	if round >= configuredRounds(d) || d.Prompt.Followup == "" {
 		result := "failed"
 		if code == 1 && round >= weakAfter(d) {
 			result = "weak"
 		}
-		return e.finishUnit(run, unit, agent, metrics, result, strings.TrimSpace(stdout), round, nil, completed, lastFinished)
+		return e.judged(ctx, run, d, unit, agent, metrics, result, strings.TrimSpace(stdout), round, completed, lastFinished)
 	}
-	if reason := e.unitBudgetExhausted(ctx, run, agent, metrics.started); reason != "" {
+	if reason := e.unitBudgetExhausted(ctx, run, agent, metrics); reason != "" {
 		// End the unit the way exhausted rounds end it: weak only when the
 		// weak rule allows it at this round.
 		result := "failed"
 		if code == 1 && round >= weakAfter(d) {
 			result = "weak"
 		}
-		return e.finishUnit(run, unit, agent, metrics, result, reason, round, nil, completed, lastFinished)
+		return e.judged(ctx, run, d, unit, agent, metrics, result, reason, round, completed, lastFinished)
 	}
 	return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, truncateUTF8(stdout, 8*1024), output, completed, lastFinished)
 }
@@ -640,7 +748,7 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 func (e *Engine) sendFollowup(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, round int, problems, output string, completed *atomic.Int64, lastFinished *time.Time) error {
 	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, unit, run, round, problems, output, metrics.started.Format(time.RFC3339Nano))
 	if err != nil {
-		return e.finishUnit(run, unit, agent, metrics, "failed", "render follow-up: "+err.Error(), round-1, nil, completed, lastFinished)
+		return e.unjudged(ctx, run, d, unit, agent, metrics, "render follow-up: "+err.Error(), round-1, nil, completed, lastFinished)
 	}
 	metrics.controls += controls
 	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "sending", Round: round, ControlReplaced: controls, LastObservation: metrics.last}); err != nil {
@@ -1115,7 +1223,8 @@ func (e *Engine) compactIfNeeded(ctx context.Context, runID, agent string, d Def
 	return resetAgentUnits()
 }
 
-func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
+// outcome builds the terminal event and times row a unit ends with.
+func (e *Engine) outcome(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, lastFinished time.Time) (Event, TimeRow) {
 	finished := e.now()
 	channel, deliveryStatus := metrics.channel, ""
 	if channel != "" {
@@ -1146,11 +1255,8 @@ func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetric
 	if metrics.compact > 0 || metrics.compactBefore != nil || metrics.compactAfter != nil {
 		event.Compact = &CompactRecord{Seconds: metrics.compact, Before: metrics.compactBefore, After: metrics.compactAfter, Result: metrics.compactResult}
 	}
-	if err := e.Store.AppendEvent(run.ID, event); err != nil {
-		return err
-	}
 	row := TimeRow{Run: run.ID, Workflow: run.Workflow, Unit: unit.Key, Agent: agent, Model: metrics.model, Result: result, Reason: reason, Rounds: max(1, round), RoundSeconds: metrics.roundWork, WorkSeconds: metrics.work, ValidateSeconds: metrics.validate, WaitSeconds: metrics.wait, CompactSeconds: metrics.compact, CompactResult: metrics.compactResult, FinishedAt: finished, CtxStart: metrics.ctxStart}
-	row.Tokens = e.unitTokens(run, agent, metrics.started, finished)
+	row.Tokens = e.rowTokens(run, agent, metrics, finished)
 	if !queuedAt.IsZero() {
 		row.QueuedAt = timePointer(queuedAt)
 	}
@@ -1170,31 +1276,73 @@ func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetric
 	if metrics.compactAfter != nil {
 		row.CompactCtxAfter, row.CtxAfter = metrics.compactAfter, metrics.compactAfter
 	}
-	if !lastFinished.IsZero() && !queuedAt.IsZero() {
-		gap := queuedAt.Sub(*lastFinished).Seconds()
+	switch {
+	case metrics.revision != nil:
+		// The idle gap belongs to the unit's first dispatch.
+		row.IdleGapSeconds = metrics.revision.Row.IdleGapSeconds
+	case !lastFinished.IsZero() && !queuedAt.IsZero():
+		gap := queuedAt.Sub(lastFinished).Seconds()
 		if gap < 0 {
 			gap = 0
 		}
 		row.IdleGapSeconds = &gap
 	}
+	if metrics.approval != (RowApproval{}) {
+		approval := metrics.approval
+		row.Approval = &approval
+	}
+	return event, row
+}
+
+// judged ends a unit whose finished turn was judged by the output checks or
+// the validator: it parks when approve.on lists the result.
+func (e *Engine) judged(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, completed *atomic.Int64, lastFinished *time.Time) error {
+	if d.Approves(result) {
+		return e.parkUnit(ctx, run, d, unit, agent, metrics, result, reason, round, lastFinished)
+	}
+	return e.finishUnit(run, unit, agent, metrics, result, reason, round, nil, completed, lastFinished)
+}
+
+// unjudged fails a unit that produced nothing to judge (not delivered, never
+// started, timed out, a template that does not render). A failed revision
+// round parks the unit again with its earlier proposal: that output still
+// awaits a human decision.
+func (e *Engine) unjudged(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
+	if metrics.revision != nil {
+		reason = "revision round failed: " + reason + "; the earlier result is still proposed (" + oneLine(metrics.revision.Row.Reason) + ")"
+		return e.parkUnit(ctx, run, d, unit, agent, metrics, metrics.revision.Proposed, reason, round, lastFinished)
+	}
+	return e.finishUnit(run, unit, agent, metrics, "failed", reason, round, delivery, completed, lastFinished)
+}
+
+func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
+	event, row := e.outcome(run, unit, agent, metrics, result, reason, round, delivery, *lastFinished)
+	if err := e.Store.AppendEvent(run.ID, event); err != nil {
+		return err
+	}
 	if err := e.Store.AppendTime(run.ID, row); err != nil {
 		return err
 	}
-	if _, err := e.Store.UpdateRun(run.ID, func(current *Run) error {
-		if current.AgentUnits == nil {
-			current.AgentUnits = make(map[string]int)
-		}
-		current.AgentUnits[agent]++
-		return nil
-	}); err != nil {
+	if err := e.countAgentUnit(run.ID, agent); err != nil {
 		return err
 	}
-	*lastFinished = finished
+	*lastFinished = row.FinishedAt
 	completed.Add(1)
 	if err := e.afterFinish(run, row); err != nil {
 		return err
 	}
 	return e.setCurrent(run.ID, agent, "")
+}
+
+func (e *Engine) countAgentUnit(runID, agent string) error {
+	_, err := e.Store.UpdateRun(runID, func(current *Run) error {
+		if current.AgentUnits == nil {
+			current.AgentUnits = make(map[string]int)
+		}
+		current.AgentUnits[agent]++
+		return nil
+	})
+	return err
 }
 
 func (e *Engine) appendEvent(id string, event Event) error { return e.Store.AppendEvent(id, event) }
@@ -1326,7 +1474,9 @@ func agentUnitCounts(events []Event) map[string]int {
 	for _, event := range events {
 		if strings.HasPrefix(event.State, "compact_") {
 			counts[event.Agent] = 0
-		} else if terminalState(event.State) && event.Agent != "" {
+		} else if event.Agent != "" && event.Decision == nil && (terminalState(event.State) || parkedState(event.State)) {
+			// A parked unit was work done by the agent; the human decision
+			// that later finishes it is not.
 			counts[event.Agent]++
 		}
 	}

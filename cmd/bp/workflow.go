@@ -278,7 +278,7 @@ func (d *workflowDriver) Compact(_ context.Context, agent string) error {
 
 func (a *app) workflow(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: bp workflow add|list|show|check|start|status|stop|resume|times")
+		return errors.New("usage: bp workflow add|list|show|check|start|status|stop|resume|times|approvals|approve|reject")
 	}
 	store := a.workflowStore()
 	switch args[0] {
@@ -348,7 +348,13 @@ func (a *app) workflow(args []string) error {
 		if err != nil {
 			return err
 		}
-		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" || run.Status == "paused" {
+		if run.Status == workflow.StatusAwaitingApproval {
+			waiting, err := store.AwaitingApproval(run.ID)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(a.out, "run %s is already waiting for decisions: %d units await approval (bp workflow approvals %s)\n", run.ID, waiting, run.ID)
+		} else if workflow.AtRest(run.Status) {
 			fmt.Fprintf(a.out, "run %s is already %s\n", run.ID, run.Status)
 		} else {
 			fmt.Fprintf(a.out, "run %s will stop at the next unit boundary\n", run.ID)
@@ -358,6 +364,10 @@ func (a *app) workflow(args []string) error {
 		return a.workflowResume(store, args[1:])
 	case "times":
 		return a.workflowTimes(store, args[1:])
+	case "approvals":
+		return a.workflowApprovals(store, args[1:])
+	case "approve", "reject":
+		return a.workflowDecide(store, args[0], args[1:])
 	default:
 		return fmt.Errorf("unknown workflow command %q", args[0])
 	}
@@ -427,6 +437,9 @@ func printWorkflowSupervision(out *os.File, definition workflow.Definition) {
 		}
 		parts = append(parts, fmt.Sprintf("cache_read=%d%%", definition.CacheReadWeight()))
 		fmt.Fprintf(out, "budget: %s\n", strings.Join(parts, " "))
+	}
+	if definition.Approve != nil {
+		fmt.Fprintf(out, "approve: %s wait for a human decision\n", strings.Join(definition.Approve.On, ", "))
 	}
 }
 
@@ -629,7 +642,11 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 		}
 		agents = append(agents, entry)
 	}
-	line := fmt.Sprintf("%s %s owner=%s status=%s done=%d weak=%d failed=%d pending=%d agents=[%s]", status.ID, status.Workflow, status.Owner, status.Status, status.Counts.Done, status.Counts.Weak, status.Counts.Failed, status.Counts.Pending, strings.Join(agents, ", "))
+	line := fmt.Sprintf("%s %s owner=%s status=%s done=%d weak=%d failed=%d pending=%d", status.ID, status.Workflow, status.Owner, status.Status, status.Counts.Done, status.Counts.Weak, status.Counts.Failed, status.Counts.Pending)
+	if status.Counts.AwaitingApproval > 0 {
+		line += fmt.Sprintf(" awaiting_approval=%d", status.Counts.AwaitingApproval)
+	}
+	line += " agents=[" + strings.Join(agents, ", ") + "]"
 	if status.LastError != "" {
 		line += " last_error=" + status.LastError
 	}
@@ -706,6 +723,15 @@ func (a *app) workflowResume(store *workflow.Store, args []string) error {
 	if run.Status == "done" {
 		return errors.New("completed workflow runs cannot be resumed")
 	}
+	if run.Status == workflow.StatusAwaitingApproval {
+		// Without a pending revision or a unit to run, a resume would start a
+		// worker that ends at once; keep the run waiting instead.
+		work, err := store.ResumeWork(id, options.RetryFailed)
+		if err == nil && work.Pending == 0 && work.Revisions == 0 {
+			fmt.Fprintf(a.out, "nothing to run: run %s waits for decisions on %d units (bp workflow approvals %s)\n", id, work.Parked, id)
+			return nil
+		}
+	}
 	if _, err := store.Resume(id, options.ResumeOptions); err != nil {
 		return err
 	}
@@ -744,6 +770,16 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 	stats := workflow.SummarizeTimes(rows)
 	if stats.Tokens != nil {
 		stats.Tokens.Unsettled = unsettled
+	}
+	waiting, err := store.AwaitingApproval(selector)
+	if err != nil {
+		return err
+	}
+	if waiting > 0 {
+		if stats.Approvals == nil {
+			stats.Approvals = &workflow.ApprovalStats{}
+		}
+		stats.Approvals.Waiting = waiting
 	}
 	if jsonOutput {
 		return json.NewEncoder(a.out).Encode(stats)
@@ -787,6 +823,7 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 			fmt.Fprintf(a.out, "tokens not final yet: %d units (the token collector has not caught up with their finish; run again in a few minutes)\n", t.Unsettled)
 		}
 	}
+	printApprovalStats(a.out, stats.Approvals)
 	return nil
 }
 

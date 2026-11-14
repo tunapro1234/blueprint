@@ -782,6 +782,7 @@ repository.
 | Command | What it does |
 |---|---|
 | `bp workflow add\|list\|show\|check\|start\|status\|stop\|resume\|times` | runs a saved directory of prompt templates over unit records with selected tmux agents ([workflow.md](workflow.md)) |
+| `bp workflow approvals\|approve\|reject <run-id> ...` | lists units parked for a human decision and approves, rejects or sends one back for a revision round (`approve <run-id> <unit> --edit <text>`); see Approval gates in [workflow.md](workflow.md) |
 | `bp wait <agent> --until idle\|working [--confirm N] [--timeout D] [--json]` | waits until an agent reaches a state, for example before reading a receipt |
 | `bp compact [--idle-hours N] [--min-ctx N] [--apply]` | compaction by policy (idle Claude agents with a full context) for the agents below a verified sender; it only lists until you add `--apply` |
 | `bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]` | every agent below the sender, except excluded ones and those compacted within `--min-age`; lists by default |

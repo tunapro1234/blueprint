@@ -244,7 +244,8 @@ func (s *Supervisor) restore() error {
 
 // resumableStatus lists the statuses a worker owns. "pausing" still has
 // in-flight units to finish; "paused" waits for bp workflow resume and is never
-// restarted by the supervisor or at daemon startup.
+// restarted by the supervisor or at daemon startup. "awaiting-approval" has
+// nothing to run until a human decides; it is not restarted either.
 func resumableStatus(status string) bool {
 	return status == "running" || status == "stopping" || status == "pausing" || strings.HasPrefix(status, "waiting:")
 }

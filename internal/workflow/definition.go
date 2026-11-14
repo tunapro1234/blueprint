@@ -37,6 +37,31 @@ type Definition struct {
 	// exactly as before they existed.
 	Supervise *SuperviseSpec `yaml:"supervise,omitempty" json:"supervise,omitempty"`
 	Budget    *BudgetSpec    `yaml:"budget,omitempty" json:"budget,omitempty"`
+	// Approve is optional. Without it every validated result is final.
+	Approve *ApproveSpec `yaml:"approve,omitempty" json:"approve,omitempty"`
+}
+
+// ApproveSpec parks validated outcomes for a human decision. On lists the
+// results (done, weak, failed) that wait for bp workflow approve or reject
+// instead of finishing.
+type ApproveSpec struct {
+	On []string `yaml:"on" json:"on"`
+}
+
+// approvalResults are the validated outcomes approve.on may name.
+var approvalResults = []string{"done", "weak", "failed"}
+
+// Approves reports whether a validated result waits for a human decision.
+func (d Definition) Approves(result string) bool {
+	if d.Approve == nil {
+		return false
+	}
+	for _, value := range d.Approve.On {
+		if value == result {
+			return true
+		}
+	}
+	return false
 }
 
 // SuperviseSpec stops a broken agent or a broken run from failing every
@@ -238,7 +263,34 @@ func ValidateDefinition(d Definition) error {
 	if err := validateSupervise(d.Supervise); err != nil {
 		return err
 	}
+	if err := validateApprove(d.Approve); err != nil {
+		return err
+	}
 	return validateBudget(d.Budget)
+}
+
+func validateApprove(spec *ApproveSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if len(spec.On) == 0 {
+		return errors.New("approve.on must list at least one of done, weak, failed")
+	}
+	seen := map[string]bool{}
+	for _, value := range spec.On {
+		known := false
+		for _, result := range approvalResults {
+			known = known || value == result
+		}
+		if !known {
+			return fmt.Errorf("approve.on: unknown result %q (use done, weak, failed)", value)
+		}
+		if seen[value] {
+			return fmt.Errorf("approve.on: duplicate result %q", value)
+		}
+		seen[value] = true
+	}
+	return nil
 }
 
 func validateSupervise(spec *SuperviseSpec) error {

@@ -35,3 +35,7 @@ budget:
   unit_tokens: 2000000
   run_tokens: 50000000
   cache_read_percent: 10
+# Optional human approval gate (see Approval gates in docs/workflow.md):
+# units whose result is listed wait for bp workflow approve/reject.
+# approve:
+#   on: [weak, failed]

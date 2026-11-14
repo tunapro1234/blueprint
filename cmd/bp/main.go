@@ -128,6 +128,8 @@ bp workflow add <dir> [--replace] | list | show <name> | check <dir|name> [--wor
 bp workflow start <name> --workdir <dir> --agent <a> [--agent <b> ...] [--limit N] [--dry-run]
 bp workflow status [<run-id>] [--json] | stop <run-id> | resume <run-id> [--retry-failed] [--run-tokens N]
 bp workflow times <run-id|name> [--json]
+bp workflow approvals <run-id> [--json] | reject <run-id> (<unit>... | --all) [--reason <text>]
+bp workflow approve <run-id> (<unit>... | --all) [--note <text>] | approve <run-id> <unit> --edit <text>
 bp wait <agent> --until idle|working [--confirm N] [--timeout D] [--json]
 bp p2p id|start|stop|status [--json]|channels [--json]|ping <peer>|lookup <agent> [--timeout <dur>] [--json]
 bp p2p resume <peer> [agent] | pauses [--json]   # lift loop-cap pauses

@@ -72,6 +72,12 @@ type Event struct {
 	Compact         *CompactRecord `json:"compact,omitempty"`
 	// Until is when an opened breaker allows its trial unit.
 	Until *time.Time `json:"until,omitempty"`
+	// Park is the proposed outcome of a unit that waits for a human decision
+	// (awaiting_approval) and is carried by revise and revising events.
+	Park *ParkRecord `json:"park,omitempty"`
+	// Decision is set on events written by bp workflow approve or reject.
+	// Terminal events with a decision never count for breakers or meltdown.
+	Decision *DecisionRecord `json:"decision,omitempty"`
 }
 
 type CompactRecord struct {
@@ -109,6 +115,8 @@ type TimeRow struct {
 	CompactCtxAfter  *int       `json:"compact_ctx_after,omitempty"`
 	// Tokens is present only when the token meter knew the unit's usage.
 	Tokens *UnitTokens `json:"tokens,omitempty"`
+	// Approval is present when the unit waited for a human decision.
+	Approval *RowApproval `json:"approval,omitempty"`
 }
 
 // UnitTokens is one unit's token usage from its first send to its finish,
@@ -126,6 +134,20 @@ type UnitTokens struct {
 	// Since is the start of the measured interval (just before the first
 	// send); the interval ends at finished_at.
 	Since *time.Time `json:"since,omitempty"`
+	// Prior is usage measured before Since that belongs to this unit: the
+	// rounds before a human-requested revision. It is included in the
+	// numbers above and kept fixed when the interval is re-measured. The
+	// agent's work on other units while this one waited is not counted.
+	Prior *TokenCounts `json:"prior,omitempty"`
+}
+
+// TokenCounts is a fixed amount of token usage.
+type TokenCounts struct {
+	Input      int64 `json:"in"`
+	Output     int64 `json:"out"`
+	CacheWrite int64 `json:"cache_write"`
+	CacheRead  int64 `json:"cache_read"`
+	Weighted   int64 `json:"weighted"`
 }
 
 // Total is every counted token, unweighted.
@@ -374,9 +396,14 @@ func (s *Store) UpdateRun(id string, update func(*Run) error) (Run, error) {
 	return run, nil
 }
 
+// AtRest reports a run status without a worker that a stop cannot change.
+func AtRest(status string) bool {
+	return status == "done" || status == "stopped" || status == "error" || status == "paused" || status == StatusAwaitingApproval
+}
+
 func (s *Store) RequestStop(id string) (Run, error) {
 	return s.UpdateRun(id, func(run *Run) error {
-		if run.Status == "done" || run.Status == "stopped" || run.Status == "error" || run.Status == "paused" {
+		if AtRest(run.Status) {
 			return nil
 		}
 		run.StopRequested = true

@@ -52,6 +52,8 @@ generic example):
       unit_tokens: 2000000
       run_tokens: 50000000
       cache_read_percent: 10
+    approve:
+      on: [weak, failed]
 
 units.file is read from the run workdir. JSON is one array of objects, JSONL
 is one object per nonblank line, and TXT is one nonblank line per unit. JSON
@@ -91,6 +93,8 @@ newlines and tabs. The replacement count is recorded with the unit transition.
     bp workflow start sample-scoring --workdir /path/to/project --agent worker-a --agent worker-b
     bp workflow status
     bp workflow times <run-id>
+    bp workflow approvals <run-id>
+    bp workflow approve <run-id> <unit>
 
 start requires a verified caller who is the configured root or an ancestor of
 every selected agent. The owner identity is stored in run.json; before each
@@ -103,7 +107,8 @@ The daemon starts a separate _workflow-run process for each run. Unexpected
 worker exits are retried with exponential backoff, up to six restarts. At daemon
 startup, runs still marked running, stopping, pausing, or waiting are started
 again. A paused run is never restarted, neither after a worker exit nor at
-daemon startup; it waits for bp workflow resume. A worker panic cannot unwind
+daemon startup; it waits for bp workflow resume. A run in awaiting-approval is
+not restarted either; it waits for decisions (see Approval gates). A worker panic cannot unwind
 into the daemon process. After six restarts, the run is marked error.
 
 bp workflow stop <run-id> sets a stop request. The current unit is allowed to
@@ -114,11 +119,16 @@ raises the run token ceiling (see Supervision and budgets). Sent, working, and
 validating units are observed and validated on resume without sending their
 prompt again. New unit keys are picked up on resume. Run directories are
 retained. Stopping a paused run changes nothing; it is already at rest.
+Stopping a run in awaiting-approval changes nothing either and reports how many
+units wait for a decision. --retry-failed also retries rejected units (a
+rejection is a failed result), but only while the run is not done: once the
+last parked unit is decided the run is done and cannot be resumed.
 
 Run statuses: running; waiting: <reason> (an agent is blocked, or every agent's
 breaker is open); stopping and pausing (a stop or a pause was requested and
 in-flight units are finishing); stopped; paused (supervision ended the run,
-with pause_reason); done; error.
+with pause_reason); awaiting-approval (every unit is finished or parked and at
+least one parked unit waits for a decision; see Approval gates); done; error.
 
 Before a prompt is sent, an agent must be observed idle twice (five seconds
 between polls). A blocked composer moves status to waiting: <agent> blocked
@@ -219,12 +229,98 @@ attributed by the agent's name. Limits:
   and its end, including any work the agent did in that time that was not part
   of the unit.
 
+## Approval gates
+
+The optional approve key holds chosen results for a human decision:
+
+    approve:
+      on: [weak, failed]
+
+on lists one or more of done, weak and failed, without duplicates. Without the
+key nothing changes. A unit whose result is listed parks instead of finishing:
+units.jsonl gets an awaiting_approval event with the proposed result, the
+reason, the round, the agent, the rendered output path and the metrics its
+times row would have had, and the agent goes on with its next unit. A parked
+unit has no times.jsonl row until it is decided.
+
+Only results the validator (or the output check) judged after the agent
+finished a turn can park: validator exits, validator crash or timeout,
+missing, stale or invalid output, exhausted rounds, and an exhausted
+unit_tokens budget. A unit that was not delivered, never started, whose
+delivery is unknown after a restart, that hit the unit timeout, or whose
+prompt, follow-up or output path could not be rendered fails directly, since
+there is nothing to judge.
+
+Parked units are neutral for supervision: they neither count as failures for
+the breaker and meltdown nor reset the breaker's count, and human decisions are
+ignored by both as well. Their tokens count for the run budget. The owner is
+notified when units park, at most once every ten minutes with the number
+waiting, and once more when the run has nothing left but decisions. When every
+unit is finished or parked and at least one is parked, the run ends with status
+awaiting-approval. Neither the worker supervisor nor daemon startup restarts
+it; bp workflow status shows awaiting_approval=N.
+
+    bp workflow approvals <run-id> [--json]
+    bp workflow approve <run-id> (<unit>... | --all) [--note <text>]
+    bp workflow reject <run-id> (<unit>... | --all) [--reason <text>]
+    bp workflow approve <run-id> <unit> --edit <text>
+
+approvals lists parked units with agent, proposed result, round, park time,
+output and reason. approve finishes a unit: a proposed done stays done, a
+proposed weak or failed becomes weak. reject finishes it as failed with reason
+"rejected: <text>". Each decision writes the terminal event and the unit's
+times row with the parked metrics plus approval: proposed, decision
+(approved or rejected), by, note, decided_at and wait_s (time from parking to
+the decision). finished_at stays the time the unit parked. "--" ends the
+options, for unit keys that start with a dash.
+
+approve --edit records a revise event: the agent that produced the unit gets
+one more follow-up round with the text as .Problems, regardless of
+validate.rounds; the workflow needs prompt.followup. The round is not preceded
+by a compaction and does not wait for run budget admission. A running worker
+sends it at that agent's next unit boundary, ahead of new units; if the run has
+no worker, bp workflow resume <run-id> delivers it. While the agent's breaker is
+open, or the agent has left the run, the revision waits and approvals shows
+"revision pending on <agent>". After the round the validator decides as usual,
+so the unit finishes or parks again; if the round cannot be delivered or
+judged, the unit parks again with its earlier proposal. Its row carries
+approval.revisions and the sum of the parked wait times, and its tokens cover
+the earlier rounds plus the revision round, not the time it spent parked.
+
+A revision that is pending (requested, not yet claimed by a worker) can be
+cancelled: approve or reject the unit by name and the decision applies to the
+earlier parked proposal (approve gives done or weak as proposed, reject gives
+failed), and the worker never sends the revision. --all does not cover units
+with a pending revision; they must be named. A cancelled revision request
+still counts in approval.revisions, and approval.wait_s covers the original
+park and the time the request was pending. Once a worker has claimed the
+revision (state revising: its round is about to be sent or running), the unit
+cannot be decided until the round ends and the unit parks again or finishes.
+The claim and the decision take the same lock, so exactly one of them wins.
+approvals marks such rows "revision pending on <agent>" (with the hint that
+approve or reject cancels it) or "revision running on <agent>".
+
+Decisions require a verified caller who is the run's owner, the configured
+root, or an ancestor of the owner. They are serialized with each other and with
+the worker by a decisions.lock file in the run directory, so two concurrent
+decisions on one unit write one terminal event and one row; the second is
+refused because the unit is no longer awaiting approval. A unit list is
+checked as a whole before anything is written. A decision made while a worker
+runs is honored when that worker finishes the run. The last decision on an
+awaiting-approval run with nothing left to run sets status done without a
+notification. bp workflow resume on an awaiting-approval run with no pending
+unit or revision only prints that the run waits for decisions.
+
+bp workflow times reports approvals: approved, rejected and revised counts and
+the median decision wait, plus the number of units still awaiting approval.
+
 ## Timing and state
 
 Runs live below <state-dir>/workflow-runs/<run-id>/. run.json contains the
 workflow snapshot hash, a workflow directory copy, workdir, agents, owner,
 status, and restart metadata. units.jsonl records append-only state transitions;
-times.jsonl has one row per finished unit. Both logs use append writes plus
+times.jsonl has one row per finished unit (a parked unit gets its row when it
+is decided). Both logs use append writes plus
 fsync. An incomplete or malformed record is skipped and surfaced as torn_log
 by bp workflow status.
 

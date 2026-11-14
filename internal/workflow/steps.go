@@ -26,6 +26,41 @@ const MaxSteps = 16
 // terminal: the unit is between steps.
 const StateStepDone = "step_done"
 
+// StateSentBack is the unit event a multi-step run writes when a step's
+// validator exited 4 and the step has send_back: the attempt ended and the
+// unit goes back to the step send_back.to names. It is not terminal.
+const StateSentBack = "sent_back"
+
+// StateStepFailed is the unit event a multi-step run writes when a step
+// attempt failed and a fallback role of the step is left to try: the step
+// starts again from scratch on an agent of that role. It is not terminal.
+const StateStepFailed = "step_failed"
+
+// Attempt reasons: why a step attempt was dispatched (StepRecord and
+// StepRow attempt_reason, and every event of the attempt).
+const (
+	// AttemptFirst is the step's first attempt for the unit.
+	AttemptFirst = "first"
+	// AttemptRerun is a later step running again in order after an earlier
+	// step was redone (after a send-back).
+	AttemptRerun = "rerun"
+	// AttemptSendBack is the redo of the step a later step sent the unit
+	// back to.
+	AttemptSendBack = "send_back"
+	// AttemptFallback is the step started from scratch on an agent of a
+	// fallback role after an attempt failed.
+	AttemptFallback = "fallback"
+	// AttemptRetry is a --retry-failed restart of the step the unit failed
+	// at.
+	AttemptRetry = "retry"
+)
+
+// betweenSteps reports whether a unit event leaves the unit between two step
+// attempts: not terminal, nothing in flight, waiting for its next work item.
+func betweenSteps(state string) bool {
+	return state == StateStepDone || state == StateSentBack || state == StateStepFailed
+}
+
 var stepNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // ValidRole reports whether name may be a step name or a role: lowercase
@@ -41,6 +76,28 @@ type StepSpec struct {
 	Prompt   PromptSpec   `yaml:"prompt" json:"prompt"`
 	Output   OutputSpec   `yaml:"output,omitempty" json:"output,omitempty"`
 	Validate ValidateSpec `yaml:"validate,omitempty" json:"validate,omitempty"`
+	// SendBack lets the step's validator send the unit back to an earlier
+	// step by exiting 4.
+	SendBack *SendBackSpec `yaml:"send_back,omitempty" json:"send_back,omitempty"`
+	// Fallback lists, in order, the roles that retry the step from scratch
+	// when an attempt fails.
+	Fallback []string `yaml:"fallback,omitempty" json:"fallback,omitempty"`
+}
+
+// SendBackSpec is a step's send_back key: the earlier step a validator exit
+// 4 sends the unit back to, and how often the step may do so per unit
+// attempt (default 1).
+type SendBackSpec struct {
+	To  string `yaml:"to" json:"to"`
+	Max *int   `yaml:"max,omitempty" json:"max,omitempty"`
+}
+
+// Limit is the number of send-backs the step may issue per unit attempt.
+func (s SendBackSpec) Limit() int {
+	if s.Max == nil {
+		return 1
+	}
+	return *s.Max
 }
 
 // Role returns the step's role, DefaultRole when the step names none.
@@ -59,6 +116,16 @@ type StepResult struct {
 	Agent  string
 	Rounds int
 	Reason string
+}
+
+// StepAttempt is what a template sees as .Previous: the previous attempt of
+// the current step for this unit (zero for a first attempt and in a
+// workflow without steps). Result is done, weak, failed or sent_back.
+type StepAttempt struct {
+	Agent  string
+	Result string
+	Reason string
+	Output string
 }
 
 // MultiStep reports whether the definition has a steps list.
@@ -102,17 +169,40 @@ func (d Definition) forStep(index int) Definition {
 	return d
 }
 
-// Roles returns the distinct roles the pipeline uses, in step order.
+// Roles returns the distinct roles the pipeline uses: the steps' roles in
+// step order, then the fallback roles no step runs as its own role.
 func (d Definition) Roles() []string {
 	var roles []string
 	seen := map[string]bool{}
+	add := func(role string) {
+		if !seen[role] {
+			seen[role] = true
+			roles = append(roles, role)
+		}
+	}
 	for _, step := range d.Pipeline() {
-		if !seen[step.Role()] {
-			seen[step.Role()] = true
-			roles = append(roles, step.Role())
+		add(step.Role())
+	}
+	for _, step := range d.Steps {
+		for _, role := range step.Fallback {
+			add(role)
 		}
 	}
 	return roles
+}
+
+// servesStep reports whether an agent of role may run step: the step's own
+// role or one of its fallback roles.
+func servesStep(step StepSpec, role string) bool {
+	if step.Role() == role {
+		return true
+	}
+	for _, fallback := range step.Fallback {
+		if fallback == role {
+			return true
+		}
+	}
+	return false
 }
 
 func (d Definition) stepNames() []string {
@@ -192,6 +282,62 @@ func validateSteps(d Definition) error {
 		if err := checkStageReferences(prefix, names, index, step.Output, step.Validate); err != nil {
 			return err
 		}
+		if err := validateSendBack(d, index); err != nil {
+			return err
+		}
+		if err := validateFallback(step); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSendBack checks a step's send_back: it names an earlier step that
+// has a follow-up template (the redo is sent through it), and max is a
+// positive integer.
+func validateSendBack(d Definition, index int) error {
+	step := d.Steps[index]
+	spec := step.SendBack
+	if spec == nil {
+		return nil
+	}
+	field := stepPrefix(step.Name) + "send_back"
+	if index == 0 {
+		return fmt.Errorf("%s is not allowed on the first step: there is no earlier step to send the unit back to", field)
+	}
+	if spec.To == "" {
+		return fmt.Errorf("%s.to is required", field)
+	}
+	target := d.StepIndex(spec.To)
+	switch {
+	case target < 0:
+		return fmt.Errorf("%s.to refers to unknown step %q", field, spec.To)
+	case target >= index:
+		return fmt.Errorf("%s.to must name an earlier step; %q does not run before %q", field, spec.To, step.Name)
+	case d.Steps[target].Prompt.Followup == "":
+		return fmt.Errorf("%s.to names step %q, which has no prompt.followup; the redo is sent through it", field, spec.To)
+	}
+	if spec.Max != nil && *spec.Max < 1 {
+		return fmt.Errorf("%s.max must be a positive integer, got %d", field, *spec.Max)
+	}
+	return nil
+}
+
+// validateFallback checks a step's fallback list: valid role names, none of
+// them the step's own role, none listed twice.
+func validateFallback(step StepSpec) error {
+	field := stepPrefix(step.Name) + "fallback"
+	seen := map[string]bool{}
+	for _, role := range step.Fallback {
+		switch {
+		case !stepNamePattern.MatchString(role):
+			return fmt.Errorf("%s lists %q, which is not a valid role; use lowercase letters, digits, '-' and '_', starting with a letter or digit", field, role)
+		case role == step.Role():
+			return fmt.Errorf("%s lists %q, the step's own role; a fallback role must differ from it", field, role)
+		case seen[role]:
+			return fmt.Errorf("%s lists role %q twice", field, role)
+		}
+		seen[role] = true
 	}
 	return nil
 }
@@ -331,8 +477,9 @@ func isStepsNode(node parse.Node) bool {
 }
 
 // ValidateRoles checks the agents of a run against the pipeline's roles:
-// every role a step uses has at least one agent, and every agent's role is
-// used by some step. roles maps agent to role; an agent missing from it has
+// every role a step uses, as its own role or as a fallback role, has at
+// least one agent, and every agent's role is used by some step in one of
+// those ways. roles maps agent to role; an agent missing from it has
 // DefaultRole.
 func ValidateRoles(d Definition, agents []string, roles map[string]string) error {
 	used := map[string]bool{}
@@ -366,6 +513,34 @@ func ValidateRoles(d Definition, agents []string, roles map[string]string) error
 	return nil
 }
 
+// RunRoleMissing checks that every role the definition uses, as a step's
+// role or as a fallback role, has at least one agent in the run. A run
+// created by an older binary, or whose run.json was edited, may not: its
+// units would wait for that role forever. The error names the role and the
+// steps that use it.
+func RunRoleMissing(d Definition, run Run) error {
+	have := map[string]bool{}
+	for _, agent := range run.Agents {
+		have[run.RoleOf(agent)] = true
+	}
+	for _, role := range d.Roles() {
+		if have[role] {
+			continue
+		}
+		var users []string
+		for _, step := range d.Steps {
+			switch {
+			case step.Role() == role:
+				users = append(users, "step "+step.Name)
+			case contains(step.Fallback, role):
+				users = append(users, "step "+step.Name+" (fallback)")
+			}
+		}
+		return fmt.Errorf("run %s has no agent for role %q, which %s uses; its units could never run that step; start a new run with --agent %s=<name>", run.ID, role, strings.Join(users, ", "), role)
+	}
+	return nil
+}
+
 // sampleStepResults stands in for the results of the steps before index
 // during a dry render: every earlier step finished done after one round.
 func sampleStepResults(d Definition, index int, outputs map[string]string) map[string]StepResult {
@@ -395,7 +570,7 @@ func CheckSampleTemplates(workflowDir, workdir string, d Definition) error {
 		if d.MultiStep() {
 			label = stepPrefix(step.Name)
 		}
-		data := TemplateData{Unit: unit.Data, Key: unit.Key, Round: 1, Workdir: workdir, Started: started, Step: step.Name, Steps: sampleStepResults(d, index, outputs)}
+		data := TemplateData{Unit: unit.Data, Key: unit.Key, Round: 1, Attempt: 1, Workdir: workdir, Started: started, Step: step.Name, Steps: sampleStepResults(d, index, outputs)}
 		if _, err := RenderFile(workflowDir, step.Prompt.Template, data); err != nil {
 			return fmt.Errorf("render %sprompt with first unit: %w", label, err)
 		}
@@ -410,6 +585,21 @@ func CheckSampleTemplates(workflowDir, workdir string, d Definition) error {
 		if step.Prompt.Followup != "" {
 			if _, err := RenderFile(workflowDir, step.Prompt.Followup, data); err != nil {
 				return fmt.Errorf("render %sfollowup with first unit: %w", label, err)
+			}
+		}
+		if d.MultiStep() {
+			// A later attempt (rerun, send-back redo, fallback, retry) sees
+			// .Attempt above 1 and .Previous: branches on them are checked
+			// too.
+			later := data
+			later.Attempt, later.Previous = 2, StepAttempt{Agent: "sample-agent", Result: "failed", Reason: "sample reason", Output: data.Output}
+			if _, err := RenderFile(workflowDir, step.Prompt.Template, later); err != nil {
+				return fmt.Errorf("render %sprompt with first unit as attempt 2: %w", label, err)
+			}
+			if step.Prompt.Followup != "" {
+				if _, err := RenderFile(workflowDir, step.Prompt.Followup, later); err != nil {
+					return fmt.Errorf("render %sfollowup with first unit as attempt 2: %w", label, err)
+				}
 			}
 		}
 		for i, arg := range step.Validate.Command {

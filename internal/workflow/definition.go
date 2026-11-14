@@ -166,6 +166,12 @@ type TemplateData struct {
 	// Steps maps the names of the steps already finished for this unit to
 	// their results. It is empty (never nil) in a definition without steps.
 	Steps map[string]StepResult
+	// Attempt is the current step attempt for this unit, from 1. It is
+	// always 1 in a definition without steps.
+	Attempt int
+	// Previous is the previous attempt of the current step for this unit;
+	// zero for a first attempt and in a definition without steps.
+	Previous StepAttempt
 }
 
 func ReadDefinition(dir string) (Definition, error) {

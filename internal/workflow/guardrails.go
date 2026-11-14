@@ -375,8 +375,9 @@ func announcedGuardrails(events []Event, unit string) map[string]GuardLevel {
 	announced := map[string]GuardLevel{}
 	for _, event := range events {
 		switch {
-		case event.Key == unit && (terminalState(event.State) || event.State == StateStepDone):
-			// A finished step starts the next step's window afresh.
+		case event.Key == unit && (terminalState(event.State) || betweenSteps(event.State)):
+			// A finished step attempt starts the next attempt's window
+			// afresh.
 			announced = map[string]GuardLevel{}
 		case event.Key == unit && event.State == StateRevising:
 			for rule := range announced {

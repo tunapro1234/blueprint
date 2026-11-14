@@ -782,7 +782,7 @@ repository.
 | Command | What it does |
 |---|---|
 | `bp workflow add\|list\|show\|check\|start\|status\|stop\|resume\|times` | runs a saved directory of prompt templates over unit records with selected tmux agents ([workflow.md](workflow.md)) |
-| `bp workflow start <name> --workdir <dir> --agent [<role>=]<name> ...` | a workflow with steps runs each step on agents of the step's role (`--agent coder=a --agent reviewer=b`); a plain name has the role default; see Steps and roles in [workflow.md](workflow.md) |
+| `bp workflow start <name> --workdir <dir> --agent [<role>=]<name> ...` | a workflow with steps runs each step on agents of the step's role (`--agent coder=a --agent reviewer=b`); a plain name has the role default; roles a step lists as `fallback` need an agent too; a step's `send_back` sends a unit back to an earlier step on validator exit 4; see Steps and roles in [workflow.md](workflow.md) |
 | `bp workflow approvals\|approve\|reject <run-id> ...` | lists units parked for a human decision and approves, rejects or sends one back for a revision round (`approve <run-id> <unit> --edit <text>`); see Approval gates in [workflow.md](workflow.md) |
 | `bp wait <agent> --until idle\|working [--confirm N] [--timeout D] [--json]` | waits until an agent reaches a state, for example before reading a receipt |
 | `bp compact [--idle-hours N] [--min-ctx N] [--apply]` | compaction by policy (idle Claude agents with a full context) for the agents below a verified sender; it only lists until you add `--apply` |

@@ -17,9 +17,16 @@ def main():
     if not isinstance(comments, list) or not all(isinstance(c, str) for c in comments):
         print("comments must be a list of strings")
         return 1
-    if review["verdict"] == "revise" and not comments:
-        print("a revise verdict needs at least one comment")
-        return 1
+    if review["verdict"] == "revise":
+        if not comments:
+            print("a revise verdict needs at least one comment")
+            return 1
+        # Exit 4 sends the unit back to the code step (send_back in
+        # workflow.yaml); stdout becomes .Problems of the coder's redo.
+        print("The reviewer asked for changes:")
+        for comment in comments:
+            print("- " + comment)
+        return 4
     return 0
 
 

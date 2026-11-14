@@ -15,9 +15,13 @@ type Counts struct {
 	// AwaitingApproval counts parked units waiting for a human decision.
 	// A unit with a pending revision counts as pending.
 	AwaitingApproval int `json:"awaiting_approval,omitempty"`
-	// Ready counts, per next step, the units between steps (workflows with
-	// steps only). They are included in Pending.
+	// Ready counts, per step, the units ready for it: between steps, sent
+	// back to it or falling back (workflows with steps only). They are
+	// included in Pending.
 	Ready map[string]int `json:"ready,omitempty"`
+	// ReadyPinned counts, per step and agent, the ready send-back redos
+	// pinned to that agent. They are included in Ready.
+	ReadyPinned map[string]map[string]int `json:"ready_pinned,omitempty"`
 }
 
 type AgentStatus struct {
@@ -26,8 +30,10 @@ type AgentStatus struct {
 	// Role is the agent's role (workflows with steps).
 	Role string `json:"role,omitempty"`
 	// CurrentStep is the step of the current unit (workflows with steps).
-	CurrentStep string        `json:"current_step,omitempty"`
-	Elapsed     time.Duration `json:"elapsed,omitempty"`
+	CurrentStep string `json:"current_step,omitempty"`
+	// CurrentAttempt is the step attempt, set when it is above 1.
+	CurrentAttempt int           `json:"current_attempt,omitempty"`
+	Elapsed        time.Duration `json:"elapsed,omitempty"`
 	// Guardrails lists the warn and halt levels announced for the current
 	// unit, most severe first.
 	Guardrails []GuardrailMark `json:"guardrails,omitempty"`
@@ -85,7 +91,7 @@ func (s *Store) Status(id string) (RunStatus, error) {
 			continue
 		}
 		switch {
-		case parkedState(event.State) || event.State == StateStepDone:
+		case parkedState(event.State) || betweenSteps(event.State):
 			if current, ok := active[event.Agent]; ok && current.Key == event.Key {
 				delete(active, event.Agent)
 			}
@@ -110,9 +116,29 @@ func (s *Store) Status(id string) (RunStatus, error) {
 			item.Guardrails = guardrailMarks(events, event.Key)
 			if event.Key == item.CurrentUnit {
 				item.CurrentStep = event.Step
+				if event.Attempt > 1 {
+					item.CurrentAttempt = event.Attempt
+				}
 			}
 		}
 		view.Agents = append(view.Agents, item)
+	}
+	last := lastStepAgents(events)
+	ready := func(step, pinned string) {
+		if view.Counts.Ready == nil {
+			view.Counts.Ready = map[string]int{}
+		}
+		view.Counts.Ready[step]++
+		if pinned == "" {
+			return
+		}
+		if view.Counts.ReadyPinned == nil {
+			view.Counts.ReadyPinned = map[string]map[string]int{}
+		}
+		if view.Counts.ReadyPinned[step] == nil {
+			view.Counts.ReadyPinned[step] = map[string]int{}
+		}
+		view.Counts.ReadyPinned[step][pinned]++
 	}
 	for _, key := range run.UnitKeys {
 		switch latest[key].State {
@@ -128,11 +154,23 @@ func (s *Store) Status(id string) (RunStatus, error) {
 			view.Counts.Pending++
 			if definition != nil {
 				if next := definition.StepIndex(latest[key].Step) + 1; next > 0 && next < len(definition.Steps) {
-					if view.Counts.Ready == nil {
-						view.Counts.Ready = map[string]int{}
-					}
-					view.Counts.Ready[definition.Steps[next].Name]++
+					ready(definition.Steps[next].Name, "")
 				}
+			}
+		case StateSentBack:
+			view.Counts.Pending++
+			if definition != nil && latest[key].SendBack != nil && definition.StepIndex(latest[key].SendBack.To) >= 0 {
+				to := latest[key].SendBack.To
+				pinned := last[key][to]
+				if !contains(run.Agents, pinned) {
+					pinned = ""
+				}
+				ready(to, pinned)
+			}
+		case StateStepFailed:
+			view.Counts.Pending++
+			if definition != nil && definition.StepIndex(latest[key].Step) >= 0 {
+				ready(latest[key].Step, "")
 			}
 		default:
 			view.Counts.Pending++
@@ -179,6 +217,8 @@ type TimeStats struct {
 	// Steps is present when rows carry steps, one entry per step in order
 	// of first appearance.
 	Steps []StepStats `json:"steps,omitempty"`
+	// SendBacks is present when some unit was sent back.
+	SendBacks *SendBackStats `json:"send_backs,omitempty"`
 }
 
 // StepStats summarizes one step over the rows that carry steps. Units counts
@@ -192,12 +232,23 @@ type StepStats struct {
 	MedianWork  float64 `json:"median_work_s"`
 	P90Work     float64 `json:"p90_work_s"`
 	MedianQueue float64 `json:"median_queue_s"`
+	// SentBack counts the attempts of the step that sent the unit back;
+	// Redos the attempts that redid the step after a send-back; Reruns the
+	// attempts that ran it again in order after an earlier step was redone;
+	// Fallbacks the attempts on a fallback role, of which Rescued ended
+	// done or weak.
+	SentBack  int `json:"sent_back,omitempty"`
+	Redos     int `json:"redos,omitempty"`
+	Reruns    int `json:"reruns,omitempty"`
+	Fallbacks int `json:"fallbacks,omitempty"`
+	Rescued   int `json:"rescued,omitempty"`
 }
 
 func summarizeSteps(rows []TimeRow) []StepStats {
 	var order []string
 	work, queue := map[string][]float64{}, map[string][]float64{}
 	failed := map[string]int{}
+	loops := map[string]*StepStats{}
 	seen := map[string]bool{}
 	for _, row := range rows {
 		for _, step := range row.Steps {
@@ -216,13 +267,60 @@ func summarizeSteps(rows []TimeRow) []StepStats {
 			if step.Result == "failed" {
 				failed[step.Name]++
 			}
+			loop := loops[step.Name]
+			if loop == nil {
+				loop = &StepStats{}
+				loops[step.Name] = loop
+			}
+			if step.Result == StateSentBack {
+				loop.SentBack++
+			}
+			switch step.AttemptReason {
+			case AttemptSendBack:
+				loop.Redos++
+			case AttemptRerun:
+				loop.Reruns++
+			case AttemptFallback:
+				loop.Fallbacks++
+				if step.Result == "done" || step.Result == "weak" {
+					loop.Rescued++
+				}
+			}
 		}
 	}
 	var stats []StepStats
 	for _, name := range order {
-		stats = append(stats, StepStats{Name: name, Units: len(work[name]), Failed: failed[name], MedianWork: median(work[name]), P90Work: percentile(work[name], .90), MedianQueue: median(queue[name])})
+		loop := loops[name]
+		stats = append(stats, StepStats{Name: name, Units: len(work[name]), Failed: failed[name], MedianWork: median(work[name]), P90Work: percentile(work[name], .90), MedianQueue: median(queue[name]),
+			SentBack: loop.SentBack, Redos: loop.Redos, Reruns: loop.Reruns, Fallbacks: loop.Fallbacks, Rescued: loop.Rescued})
 	}
 	return stats
+}
+
+// SendBackStats counts the units (rows) with at least one send-back and the
+// median number of send-backs among them.
+type SendBackStats struct {
+	Units  int     `json:"units"`
+	Median float64 `json:"median"`
+}
+
+func summarizeSendBacks(rows []TimeRow) *SendBackStats {
+	var counts []float64
+	for _, row := range rows {
+		count := 0
+		for _, step := range row.Steps {
+			if step.Result == StateSentBack {
+				count++
+			}
+		}
+		if count > 0 {
+			counts = append(counts, float64(count))
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	return &SendBackStats{Units: len(counts), Median: median(counts)}
 }
 
 // ApprovalStats counts decided units in times.jsonl. A revised unit counts
@@ -404,6 +502,7 @@ func SummarizeTimes(rows []TimeRow) TimeStats {
 	stats.Approvals = summarizeApprovals(rows)
 	stats.Activity = summarizeActivity(rows)
 	stats.Steps = summarizeSteps(rows)
+	stats.SendBacks = summarizeSendBacks(rows)
 	return stats
 }
 

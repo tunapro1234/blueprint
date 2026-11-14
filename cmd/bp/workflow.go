@@ -430,7 +430,14 @@ func (a *app) workflowCheck(store *workflow.Store, args []string) error {
 	if definition.MultiStep() {
 		parts := make([]string, 0, len(definition.Steps))
 		for _, step := range definition.Steps {
-			parts = append(parts, fmt.Sprintf("%s (role %s)", step.Name, step.Role()))
+			detail := "role " + step.Role()
+			if len(step.Fallback) > 0 {
+				detail += ", fallback " + strings.Join(step.Fallback, ", ")
+			}
+			if step.SendBack != nil {
+				detail += fmt.Sprintf(", send_back to %s max %d", step.SendBack.To, step.SendBack.Limit())
+			}
+			parts = append(parts, fmt.Sprintf("%s (%s)", step.Name, detail))
 		}
 		fmt.Fprintf(a.out, "steps: %s\n", strings.Join(parts, " -> "))
 	}
@@ -456,6 +463,12 @@ func printWorkflowSteps(out *os.File, definition workflow.Definition) {
 		}
 		if len(step.Validate.Command) > 0 {
 			fmt.Fprintf(out, "  validator: %s\n", strings.Join(step.Validate.Command, " "))
+		}
+		if step.SendBack != nil {
+			fmt.Fprintf(out, "  send_back: to=%s max=%d (validator exit 4)\n", step.SendBack.To, step.SendBack.Limit())
+		}
+		if len(step.Fallback) > 0 {
+			fmt.Fprintf(out, "  fallback: %s\n", strings.Join(step.Fallback, ", "))
 		}
 	}
 }
@@ -716,6 +729,9 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 		entry := name + ":" + current
 		if agent.CurrentStep != "" && agent.CurrentUnit != "" {
 			entry += "@" + agent.CurrentStep
+			if agent.CurrentAttempt > 1 {
+				entry += fmt.Sprintf("#%d", agent.CurrentAttempt)
+			}
 		}
 		if agent.Elapsed > 0 {
 			entry += " (" + agent.Elapsed.Round(time.Second).String() + ")"
@@ -735,7 +751,19 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 		sort.Strings(steps)
 		ready := make([]string, 0, len(steps))
 		for _, step := range steps {
-			ready = append(ready, fmt.Sprintf("%s=%d", step, status.Counts.Ready[step]))
+			item := fmt.Sprintf("%s=%d", step, status.Counts.Ready[step])
+			if pinned := status.Counts.ReadyPinned[step]; len(pinned) > 0 {
+				agents := make([]string, 0, len(pinned))
+				for agent := range pinned {
+					agents = append(agents, agent)
+				}
+				sort.Strings(agents)
+				for index, agent := range agents {
+					agents[index] = fmt.Sprintf("%d for %s", pinned[agent], agent)
+				}
+				item += " (" + strings.Join(agents, ", ") + ")"
+			}
+			ready = append(ready, item)
 		}
 		line += " ready=[" + strings.Join(ready, ", ") + "]"
 	}
@@ -918,6 +946,12 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 	}
 	for _, step := range stats.Steps {
 		fmt.Fprintf(a.out, "step %s: units=%d failed=%d median_work=%.1fs p90_work=%.1fs median_queue=%.1fs\n", step.Name, step.Units, step.Failed, step.MedianWork, step.P90Work, step.MedianQueue)
+		if step.SentBack+step.Redos+step.Reruns+step.Fallbacks > 0 {
+			fmt.Fprintf(a.out, "step %s loops: sent_back=%d redo=%d rerun=%d fallback=%d rescued=%d\n", step.Name, step.SentBack, step.Redos, step.Reruns, step.Fallbacks, step.Rescued)
+		}
+	}
+	if sent := stats.SendBacks; sent != nil {
+		fmt.Fprintf(a.out, "send-backs: units=%d/%d median_per_unit=%.1f\n", sent.Units, stats.Count, sent.Median)
 	}
 	printApprovalStats(a.out, stats.Approvals)
 	printActivityStats(a.out, stats.Count, stats.Activity)

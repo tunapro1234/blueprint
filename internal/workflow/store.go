@@ -97,9 +97,18 @@ type Event struct {
 	// Both are omitted in a workflow without steps.
 	Step    string `json:"step,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
-	// StepRecord is carried by step_done events: the finished step's
-	// result, output and its own times row.
+	// AttemptReason says why the step attempt was dispatched (first, rerun,
+	// send_back, fallback, retry); set on every event of the attempt.
+	AttemptReason string `json:"attempt_reason,omitempty"`
+	// StepRecord is carried by step_done, sent_back and step_failed events
+	// and by the terminal event of a unit with steps: the attempt's result,
+	// output and its own times row.
 	StepRecord *StepRecord `json:"step_record,omitempty"`
+	// SendBack is carried by sent_back events and by the failed event of a
+	// unit whose step exhausted its send-backs.
+	SendBack *SendBackRecord `json:"send_back,omitempty"`
+	// Fallback is the role a step_failed event hands the step to.
+	Fallback string `json:"fallback,omitempty"`
 }
 
 type CompactRecord struct {

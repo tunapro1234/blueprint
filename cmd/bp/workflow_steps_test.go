@@ -235,3 +235,135 @@ func TestWorkflowStepsStatusTimesAndApprovals(t *testing.T) {
 		t.Fatalf("approve output:\n%s", got)
 	}
 }
+
+const loopsWorkflowYAML = `name: loops
+version: 1
+units:
+  file: units.json
+  key: id
+steps:
+  - name: code
+    agent: coder
+    fallback: [senior]
+    prompt:
+      template: code.md
+      followup: code-fix.md
+    output:
+      path: "out/{{.Key}}.txt"
+    validate:
+      command: [check, "{{.Key}}"]
+  - name: review
+    agent: reviewer
+    send_back:
+      to: code
+      max: 2
+    prompt:
+      template: review.md
+    validate:
+      command: [check, "{{.Steps.code.Output}}"]
+`
+
+func TestWorkflowStepsLoopsShowCheckStatusAndTimes(t *testing.T) {
+	a, store, workdir := workflowCLIFixture(t)
+	source := filepath.Join(t.TempDir(), "loops")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"workflow.yaml": loopsWorkflowYAML, "code.md": "code a{{.Attempt}} {{.Previous.Result}} {{.Key}}", "code-fix.md": "fix {{.Problems}} {{.Key}}", "review.md": "review {{.Steps.code.Output}} {{.Key}}"} {
+		if err := os.WriteFile(filepath.Join(source, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := store.Add(source, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.workflow([]string{"show", "loops"}); err != nil {
+		t.Fatal(err)
+	}
+	got := readTestOutput(t, a.out)
+	for _, want := range []string{"steps: 2 (roles: coder, reviewer, senior)\n", "  fallback: senior\n", "  send_back: to=code max=2 (validator exit 4)\n"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("show lacks %q:\n%s", want, got)
+		}
+	}
+	a.out = testOutput(t)
+	if err := a.workflow([]string{"check", "loops", "--workdir", workdir}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestOutput(t, a.out); !strings.Contains(got, "steps: code (role coder, fallback senior) -> review (role reviewer, send_back to code max 2)\n") {
+		t.Fatalf("check output:\n%s", got)
+	}
+	a.out = testOutput(t)
+	if err := a.workflow([]string{"start", "loops", "--workdir", workdir, "--agent", "coder=worker", "--agent", "reviewer=side", "--agent", "senior=owner", "--dry-run"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestOutput(t, a.out); got != "would run loops: units=2 agents=worker,side,owner roles=coder=worker reviewer=side senior=owner\n" {
+		t.Fatalf("dry run %q", got)
+	}
+	if err := a.workflow([]string{"start", "loops", "--workdir", workdir, "--agent", "coder=worker", "--agent", "reviewer=side", "--dry-run"}); err == nil || !strings.Contains(err.Error(), `role "senior" has no agent; pass --agent senior=<name>`) {
+		t.Fatalf("a fallback role without an agent: %v", err)
+	}
+
+	definition, err := workflow.ReadDefinition(store.WorkflowPath("loops"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.CreateRunWithRoles(store.WorkflowPath("loops"), definition, workdir, []string{"worker", "side", "owner"}, map[string]string{"worker": "coder", "side": "reviewer", "owner": "senior"}, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	codeRow := workflow.TimeRow{Run: run.ID, Workflow: "loops", Unit: "one", Agent: "worker", Result: "done", Rounds: 1, FinishedAt: now, WorkSeconds: 40}
+	reviewRow := workflow.TimeRow{Run: run.ID, Workflow: "loops", Unit: "one", Agent: "side", Result: workflow.StateSentBack, Reason: "missing tests", Rounds: 1, FinishedAt: now, WorkSeconds: 10}
+	for _, event := range []workflow.Event{
+		{Unit: "one", Key: "one", Agent: "worker", State: workflow.StateStepDone, Step: "code", Attempt: 1, StepRecord: &workflow.StepRecord{Name: "code", Attempt: 1, Role: "coder", AttemptReason: workflow.AttemptFirst, Output: "out/one.txt", Row: codeRow}},
+		{Unit: "one", Key: "one", Agent: "side", State: workflow.StateSentBack, Step: "review", Attempt: 1, Reason: "sent back to step code: missing tests", SendBack: &workflow.SendBackRecord{To: "code", Count: 1, Max: 2, Problems: "missing tests"}, StepRecord: &workflow.StepRecord{Name: "review", Attempt: 1, Role: "reviewer", AttemptReason: workflow.AttemptFirst, SentBackTo: "code", Row: reviewRow}},
+		{Unit: "two", Key: "two", Agent: "owner", State: "working", Step: "code", Attempt: 2, AttemptReason: workflow.AttemptFallback},
+	} {
+		if err := store.AppendEvent(run.ID, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.UpdateRun(run.ID, func(current *workflow.Run) error {
+		current.Current = map[string]string{"owner": "two"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.out = testOutput(t)
+	if err := a.workflow([]string{"status", run.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got = readTestOutput(t, a.out)
+	for _, want := range []string{"ready=[code=1 (1 for worker)]", "owner[senior]:two@code#2"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status lacks %q: %s", want, got)
+		}
+	}
+
+	row := workflow.TimeRow{Run: run.ID, Workflow: "loops", Unit: "one", Agent: "side", Result: "done", Rounds: 5, FinishedAt: now, WorkSeconds: 100, Steps: []workflow.StepRow{
+		{Name: "code", Attempt: 1, Agent: "worker", Role: "coder", AttemptReason: workflow.AttemptFirst, Result: "failed", Rounds: 1, WorkSeconds: 30},
+		{Name: "code", Attempt: 2, Agent: "owner", Role: "senior", AttemptReason: workflow.AttemptFallback, Result: "done", Rounds: 1, WorkSeconds: 30},
+		{Name: "review", Attempt: 1, Agent: "side", Role: "reviewer", AttemptReason: workflow.AttemptFirst, Result: workflow.StateSentBack, SentBackTo: "code", Rounds: 1, WorkSeconds: 10},
+		{Name: "code", Attempt: 3, Agent: "owner", Role: "senior", AttemptReason: workflow.AttemptSendBack, Result: "done", Rounds: 1, WorkSeconds: 20},
+		{Name: "review", Attempt: 2, Agent: "side", Role: "reviewer", AttemptReason: workflow.AttemptRerun, Result: "done", Rounds: 1, WorkSeconds: 10},
+	}}
+	if err := store.AppendTime(run.ID, row); err != nil {
+		t.Fatal(err)
+	}
+	a.out = testOutput(t)
+	if err := a.workflow([]string{"times", run.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got = readTestOutput(t, a.out)
+	for _, want := range []string{
+		"step code: units=3 failed=1 ",
+		"step code loops: sent_back=0 redo=1 rerun=0 fallback=1 rescued=1\n",
+		"step review loops: sent_back=1 redo=0 rerun=1 fallback=0 rescued=0\n",
+		"send-backs: units=1/1 median_per_unit=1.0\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("times lacks %q:\n%s", want, got)
+		}
+	}
+}

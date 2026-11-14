@@ -10,6 +10,10 @@ units:
 steps:
   - name: code
     agent: coder
+    # Optional: when the code step fails (not delivered, timeout, validator
+    # failure, exhausted rounds, guardrail halt), retry it from scratch on an
+    # agent of the next listed role. Needs --agent senior=<name> at start.
+    # fallback: [senior]
     prompt:
       template: prompts/code.md
       followup: prompts/code-fix.md
@@ -23,6 +27,12 @@ steps:
       weak_after: 2
   - name: review
     agent: reviewer
+    # check_review.py exits 4 on a "revise" verdict: the note goes back to
+    # the coder who wrote it (through prompts/code-fix.md, with the review
+    # comments as .Problems) and is then reviewed again, at most twice.
+    send_back:
+      to: code
+      max: 2
     prompt:
       template: prompts/review.md
       followup: prompts/review-fix.md
@@ -44,6 +54,7 @@ supervise:
     failures: 3
     open_for: 15m
 # Optional: hold failed steps for a human decision. Approving a failed code
-# step lets the unit continue to review as weak.
+# step lets the unit continue to review as weak; approving a review that
+# used up its send-backs accepts the note as weak.
 # approve:
 #   on: [failed]

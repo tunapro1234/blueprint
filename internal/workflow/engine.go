@@ -102,6 +102,15 @@ type unitTask struct {
 	step   int
 	queued float64
 	sticky bool
+	// reason is the attempt reason of a fresh step attempt (empty: stepFor
+	// decides). problems is a send-back's text, the attempt's .Problems;
+	// followup sends its first prompt through the follow-up template, and
+	// pinned marks a send-back redo on the agent that ran the step last
+	// (never compacted first).
+	reason   string
+	problems string
+	followup bool
+	pinned   bool
 }
 
 type unitMetrics struct {
@@ -136,6 +145,12 @@ type unitMetrics struct {
 	guard *unitGuard
 	// step is the step this work item runs (zero without steps).
 	step stepRun
+	// sendBack marks a unit whose step exhausted its send-backs; its
+	// failure counts for nobody's breaker (noBlame). noFallback marks a
+	// failure that does not fall back to another role.
+	sendBack   *SendBackRecord
+	noFallback bool
+	noBlame    bool
 }
 
 // tokenStart is the start of the unit's current token interval.
@@ -206,6 +221,11 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 		return e.fail(id, fmt.Errorf("read workflow snapshot: %w", err))
 	}
 	if d.MultiStep() {
+		// Checked before any worker starts: a role without an agent would
+		// leave units waiting for it forever.
+		if err := RunRoleMissing(d, run); err != nil {
+			return e.fail(id, err)
+		}
 		if err := ValidateRoles(d, run.Agents, run.Roles); err != nil {
 			return e.fail(id, err)
 		}
@@ -286,7 +306,7 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 			// their agent's worker loop ahead of new units.
 			continue
 		}
-		if ok && previous.State == StateStepDone {
+		if ok && betweenSteps(previous.State) {
 			// Between steps: the step scheduler finds it in the log.
 			continue
 		}
@@ -311,6 +331,13 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 	}
 	parked := 0
 	for {
+		// progress is the size of the unit log when this pass starts; a
+		// pass that appends nothing and still asks for another pass waits
+		// one poll interval first, so the loop can never spin hot.
+		progress, err := e.eventCount(id)
+		if err != nil {
+			return e.fail(id, err)
+		}
 		work := e.runWorkers
 		if d.MultiStep() {
 			work = func(ctx context.Context, run Run, d Definition, pending []unitTask, recovery map[string][]unitTask, unitsByKey map[string]Unit, completed *atomic.Int64) error {
@@ -330,6 +357,16 @@ func (e *Engine) Run(ctx context.Context, id string, retryFailed bool) error {
 		if again {
 			// A revision was requested, or a decision continued a unit
 			// with its next step, after the workers' loops ended.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if count, err := e.eventCount(id); err != nil {
+				return e.fail(id, err)
+			} else if count == progress {
+				if err := e.sleep(ctx, e.interval()); err != nil {
+					return err
+				}
+			}
 			pending, recovery = nil, nil
 			continue
 		}
@@ -374,7 +411,7 @@ func (e *Engine) finalize(run Run, units []Unit) (again bool, final Run, parked 
 			case revisionState(event.State):
 				allFinished, allSettled = false, false
 				revisions++
-			case event.State == StateStepDone:
+			case betweenSteps(event.State):
 				allFinished, allSettled = false, false
 				continuations++
 			default:
@@ -507,6 +544,12 @@ func setFirstErr(mu *sync.Mutex, first *error, cancel context.CancelFunc, err er
 	}
 }
 
+// eventCount is the number of records in the run's unit log.
+func (e *Engine) eventCount(id string) (int, error) {
+	events, _, err := e.Store.Events(id)
+	return len(events), err
+}
+
 func (e *Engine) fail(id string, cause error) error {
 	_, _ = e.Store.UpdateRun(id, func(run *Run) error {
 		run.Status, run.LastError = "error", cause.Error()
@@ -523,7 +566,7 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	}
 	// A fresh work item starts a unit, the next step of a unit between
 	// steps, or a retry; anything else resumes an in-flight step.
-	fresh := !task.hasPrevious || terminalState(task.previous.State) || task.previous.State == StateStepDone
+	fresh := !task.hasPrevious || terminalState(task.previous.State) || betweenSteps(task.previous.State)
 	if stop, err := e.stopRequested(run.ID); err != nil {
 		return err
 	} else if stop && fresh {
@@ -533,7 +576,7 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 		return err
 	}
 	defer func() { _ = e.setCurrent(run.ID, agent, "") }()
-	step, err := e.stepFor(run, d, task, fresh)
+	step, err := e.stepFor(run, d, task, fresh, agent)
 	if err != nil {
 		return err
 	}
@@ -558,9 +601,10 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	if err != nil {
 		return err
 	}
-	// Never compact between two steps of one unit on the same agent: the
-	// next step may rely on the conversation.
-	sameAgent := task.sticky || (len(step.pass) > 0 && step.pass[len(step.pass)-1].Row.Agent == agent)
+	// Never compact between two steps of one unit on the same agent, nor
+	// before a send-back redo on the agent that ran the step: the work may
+	// rely on the conversation.
+	sameAgent := task.sticky || task.pinned || (len(step.pass) > 0 && step.pass[len(step.pass)-1].Row.Agent == agent)
 	if !sameAgent {
 		if err := e.compactIfNeeded(ctx, run.ID, agent, d, updated.AgentUnits[agent], &metrics); errors.Is(err, errStopBoundary) {
 			return nil
@@ -578,11 +622,19 @@ func (e *Engine) processTask(ctx context.Context, run Run, d Definition, agent s
 	startedText := metrics.started.Format(time.RFC3339Nano)
 	output, err := renderOutput(d, task.unit, run.Workdir, run.ID, startedText, metrics.stepData())
 	if err != nil {
+		metrics.noFallback = true
 		return e.unjudged(ctx, run, d, task.unit, agent, metrics, err.Error(), 1, nil, completed, lastFinished)
 	}
 	metrics.step.output = output
-	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, task.unit, run, 1, "", output, startedText, metrics.stepData())
+	template := d.Prompt.Template
+	if task.followup {
+		// A send-back redo on the agent that ran the step: round 1 of a new
+		// attempt, sent through the follow-up template.
+		template = d.Prompt.Followup
+	}
+	prompt, controls, err := renderPromptFile(e.Store.SnapshotDir(run.ID), template, task.unit, run, 1, task.problems, output, startedText, metrics.stepData())
 	if err != nil {
+		metrics.noFallback = true
 		return e.unjudged(ctx, run, d, task.unit, agent, metrics, "render prompt: "+err.Error(), 1, nil, completed, lastFinished)
 	}
 	metrics.controls = controls
@@ -751,6 +803,7 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 	started := metrics.started.Format(time.RFC3339Nano)
 	output, err := renderOutput(d, unit, run.Workdir, run.ID, started, metrics.stepData())
 	if err != nil {
+		metrics.noFallback = true
 		return e.unjudged(ctx, run, d, unit, agent, metrics, err.Error(), round, nil, completed, lastFinished)
 	}
 	metrics.step.output = output
@@ -767,6 +820,7 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 			return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 		}
 		if reason := e.unitBudgetExhausted(ctx, run, agent, metrics); reason != "" {
+			metrics.noFallback = true
 			return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 		}
 		return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, err.Error(), output, completed, lastFinished)
@@ -783,6 +837,9 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 	}
 	if code == 0 {
 		return e.judged(ctx, run, d, unit, agent, metrics, "done", "", round, completed, lastFinished)
+	}
+	if code == 4 && metrics.step.multi && d.Steps[metrics.step.index].SendBack != nil {
+		return e.sendBackOrFail(ctx, run, d, unit, agent, metrics, truncateUTF8(stdout, 8*1024), round, completed, lastFinished)
 	}
 	if code != 1 && code != 3 {
 		reason := strings.TrimSpace(stderr)
@@ -815,14 +872,37 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 		if code == 1 && round >= weakAfter(d) {
 			result = "weak"
 		}
+		metrics.noFallback = true
 		return e.judged(ctx, run, d, unit, agent, metrics, result, reason, round, completed, lastFinished)
 	}
 	return e.sendFollowup(ctx, run, d, unit, agent, metrics, round+1, truncateUTF8(stdout, 8*1024), output, completed, lastFinished)
 }
 
+// sendBackOrFail handles a validator exit 4 on a step with send_back. With
+// send-backs left, and the unit budget not spent, the attempt ends
+// sent_back. With none left the unit fails ("sent back <max> times; last:
+// ..."): that failure parks under approve.on failed and counts for meltdown,
+// but for nobody's breaker and never falls back. A spent unit budget ends
+// the unit failed as it does before a follow-up.
+func (e *Engine) sendBackOrFail(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, problems string, round int, completed *atomic.Int64, lastFinished *time.Time) error {
+	spec := *d.Steps[metrics.step.index].SendBack
+	if metrics.step.sendBacks >= spec.Limit() {
+		metrics.noFallback, metrics.noBlame = true, true
+		metrics.sendBack = &SendBackRecord{To: spec.To, Count: metrics.step.sendBacks, Max: spec.Limit(), Problems: problems, Exhausted: true}
+		reason := fmt.Sprintf("sent back %d times; last: %s", spec.Limit(), oneLine(problems))
+		return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
+	}
+	if reason := e.unitBudgetExhausted(ctx, run, agent, metrics); reason != "" {
+		metrics.noFallback = true
+		return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
+	}
+	return e.sendBack(ctx, run, d, unit, agent, metrics, problems, round, lastFinished)
+}
+
 func (e *Engine) sendFollowup(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, round int, problems, output string, completed *atomic.Int64, lastFinished *time.Time) error {
 	prompt, controls, err := renderPrompt(e.Store.SnapshotDir(run.ID), d, unit, run, round, problems, output, metrics.started.Format(time.RFC3339Nano), metrics.stepData())
 	if err != nil {
+		metrics.noFallback = true
 		return e.unjudged(ctx, run, d, unit, agent, metrics, "render follow-up: "+err.Error(), round-1, nil, completed, lastFinished)
 	}
 	metrics.controls += controls
@@ -994,7 +1074,8 @@ func templateData(unit Unit, workdir, runID string, round int, problems, output,
 	if results == nil {
 		results = map[string]StepResult{}
 	}
-	return TemplateData{Unit: unit.Data, Key: unit.Key, Round: round, Problems: problems, Output: output, Started: started, Workdir: workdir, Run: runID, Step: steps.name, Steps: results}
+	return TemplateData{Unit: unit.Data, Key: unit.Key, Round: round, Problems: problems, Output: output, Started: started, Workdir: workdir, Run: runID, Step: steps.name, Steps: results,
+		Attempt: max(1, steps.attempt), Previous: steps.previous}
 }
 
 func renderOutput(d Definition, unit Unit, workdir, runID, started string, steps stepData) (string, error) {
@@ -1022,6 +1103,12 @@ func renderPrompt(snapshot string, d Definition, unit Unit, run Run, round int, 
 	if round > 1 {
 		path = d.Prompt.Followup
 	}
+	return renderPromptFile(snapshot, path, unit, run, round, problems, output, started, steps)
+}
+
+// renderPromptFile renders one prompt template and replaces control
+// characters other than newline and tab.
+func renderPromptFile(snapshot, path string, unit Unit, run Run, round int, problems, output, started string, steps stepData) (string, int, error) {
 	data := templateData(unit, run.Workdir, run.ID, round, problems, output, started, steps)
 	text, err := RenderFile(snapshot, path, data)
 	if err != nil {
@@ -1420,6 +1507,9 @@ func (e *Engine) judged(ctx context.Context, run Run, d Definition, unit Unit, a
 // round parks the unit again with its earlier proposal: that output still
 // awaits a human decision.
 func (e *Engine) unjudged(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
+	if role := fallbackRole(d, metrics); role != "" {
+		return e.stepFailed(ctx, run, d, unit, agent, metrics, reason, round, delivery, lastFinished, role)
+	}
 	if metrics.revision != nil {
 		reason = "revision round failed: " + reason + "; the earlier result is still proposed (" + oneLine(metrics.revision.stepRow().Reason) + ")"
 		if metrics.step.multi {
@@ -1434,7 +1524,10 @@ func (e *Engine) unjudged(ctx context.Context, run Run, d Definition, unit Unit,
 }
 
 func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetrics, result, reason string, round int, delivery *Delivery, completed *atomic.Int64, lastFinished *time.Time) error {
-	event, row := e.outcome(run, unit, agent, metrics, result, reason, round, delivery, *lastFinished)
+	event, row, record := e.unitOutcome(run, unit, agent, metrics, result, reason, round, delivery, *lastFinished)
+	// The terminal event of a unit with steps carries its last attempt's
+	// record (.Previous of a --retry-failed restart reads it).
+	event.StepRecord = record
 	if err := e.Store.AppendEvent(run.ID, event); err != nil {
 		return err
 	}
@@ -1446,7 +1539,7 @@ func (e *Engine) finishUnit(run Run, unit Unit, agent string, metrics unitMetric
 	}
 	*lastFinished = row.FinishedAt
 	completed.Add(1)
-	if err := e.afterFinish(run, row); err != nil {
+	if err := e.afterFinish(run, row, !metrics.noBlame); err != nil {
 		return err
 	}
 	return e.setCurrent(run.ID, agent, "")
@@ -1594,7 +1687,7 @@ func agentUnitCounts(events []Event) map[string]int {
 	for _, event := range events {
 		if strings.HasPrefix(event.State, "compact_") {
 			counts[event.Agent] = 0
-		} else if event.Agent != "" && event.Decision == nil && (terminalState(event.State) || parkedState(event.State) || event.State == StateStepDone) {
+		} else if event.Agent != "" && event.Decision == nil && (terminalState(event.State) || parkedState(event.State) || betweenSteps(event.State)) {
 			// A parked unit was work done by the agent; the human decision
 			// that later finishes it is not. A finished step is a finished
 			// work item.

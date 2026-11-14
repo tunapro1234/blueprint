@@ -1099,6 +1099,7 @@ func TestStepsEachStepAttemptInOneRow(t *testing.T) {
 	if stats.Count != 4 || stats.Done != 2 || stats.Weak != 1 || stats.Failed != 1 {
 		t.Fatalf("stats %#v", stats)
 	}
+	t.Run("send-backs, fallbacks and retries", eachStepAttemptWithLoops)
 }
 
 // Pins what bp workflow times does today with a unit retried in a workflow

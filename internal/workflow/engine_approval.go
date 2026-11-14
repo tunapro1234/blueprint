@@ -181,7 +181,14 @@ func (e *Engine) revisionStep(run Run, d Definition, key string, claim Event) (s
 		return stepRun{}, err
 	}
 	progress := progressOf(d, events, key)
-	return stepRun{multi: true, index: index, name: claim.Step, attempt: max(1, claim.Attempt), pass: recordsBefore(d, progress.pass, index)}, nil
+	reason, role := claim.AttemptReason, ""
+	if record := claim.Park.StepRecord; record != nil {
+		reason, role = record.AttemptReason, record.Role
+	}
+	if role == "" {
+		role = run.RoleOf(claim.Agent)
+	}
+	return stepRunAt(d, progress, index, max(1, claim.Attempt), reason, role), nil
 }
 
 // metricsFromPark continues a parked unit's metrics in its revision round.
@@ -223,7 +230,7 @@ func (e *Engine) seedRevision(run Run, agent, key string, metrics *unitMetrics) 
 			continue
 		}
 		switch {
-		case terminalState(event.State) || parkedState(event.State) || event.State == StateStepDone:
+		case terminalState(event.State) || parkedState(event.State) || betweenSteps(event.State):
 			claim, sentAt = nil, time.Time{}
 		case event.State == StateRevising && event.Park != nil:
 			copied := event

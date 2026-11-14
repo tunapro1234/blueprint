@@ -265,9 +265,20 @@ func deriveBreakers(events []Event, since time.Time) map[string]*agentBreaker {
 			continue
 		}
 		switch {
-		case event.Key != "" && event.State == StateStepDone && event.Decision == nil:
-			// A finished step is a success for the agent that ran it.
+		case event.Key != "" && (event.State == StateStepDone || event.State == StateSentBack) && event.Decision == nil:
+			// A finished step, or one that sent the unit back, is a success
+			// for the agent that ran it.
 			get(event.Agent).consecutive = 0
+		case event.Key != "" && event.State == StateStepFailed && event.Decision == nil:
+			// A failed attempt that fell back to another role counts for
+			// the agent's breaker (not for meltdown).
+			b := get(event.Agent)
+			b.consecutive++
+			b.lastFailure, b.lastUnit, b.lastReason = event.At, event.Key, event.Reason
+			b.openAnnounced, b.halfAnnounced = false, false
+		case event.Key != "" && event.State == "failed" && event.SendBack != nil && event.SendBack.Exhausted:
+			// Send-backs exhausted: the steps disagreed; nobody's breaker
+			// counts it.
 		case event.Key != "" && terminalState(event.State) && event.Decision == nil:
 			// A human decision is not the agent's result.
 			b := get(event.Agent)
@@ -406,6 +417,22 @@ func (s *supervision) gate(agent string, now time.Time) (allowed, halfOpen, anno
 func (s *supervision) allOpen(agents []string, now time.Time) (bool, string, time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.allOpenLocked(agents, now)
+}
+
+// blocked reports whether the agent's breaker is open and its trial is not
+// due yet.
+func (s *supervision) blocked(agent string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.breaker == nil {
+		return false
+	}
+	b := s.agents[agent]
+	return b != nil && b.open(s.breaker.failures) && now.Before(b.lastFailure.Add(s.breaker.openFor))
+}
+
+func (s *supervision) allOpenLocked(agents []string, now time.Time) (bool, string, time.Time) {
 	if s.breaker == nil || len(agents) == 0 {
 		return false, "", time.Time{}
 	}
@@ -437,6 +464,13 @@ type finishOutcome struct {
 // recordFinish updates breaker and meltdown state after a terminal unit event
 // has been written.
 func (s *supervision) recordFinish(agent, unit, result, reason string, finished time.Time) finishOutcome {
+	return s.recordOutcome(agent, unit, result, reason, finished, true, true)
+}
+
+// recordOutcome is recordFinish for an attempt that counts only for the
+// agent's breaker (a step attempt that did not end the unit) or only for
+// meltdown (a unit whose step exhausted its send-backs).
+func (s *supervision) recordOutcome(agent, unit, result, reason string, finished time.Time, breaker, meltdown bool) finishOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var outcome finishOutcome
@@ -447,12 +481,17 @@ func (s *supervision) recordFinish(agent, unit, result, reason string, finished 
 	}
 	wasOpen := b.open(threshold)
 	if result == "failed" {
-		b.consecutive++
-		b.lastFailure, b.lastUnit, b.lastReason = finished, unit, reason
-		b.openAnnounced, b.halfAnnounced = false, false
-		if b.open(threshold) {
-			outcome.opened, outcome.consecutive, outcome.until = true, b.consecutive, finished.Add(s.breaker.openFor)
-			b.openAnnounced = true
+		if breaker {
+			b.consecutive++
+			b.lastFailure, b.lastUnit, b.lastReason = finished, unit, reason
+			b.openAnnounced, b.halfAnnounced = false, false
+			if b.open(threshold) {
+				outcome.opened, outcome.consecutive, outcome.until = true, b.consecutive, finished.Add(s.breaker.openFor)
+				b.openAnnounced = true
+			}
+		}
+		if !meltdown {
+			return outcome
 		}
 		s.failures = append(s.failures, finished)
 		if s.meltdown != nil {
@@ -684,12 +723,13 @@ func spendRowsFrom(times []TimeRow, events []Event) []TimeRow {
 	return append(rows, parkedRows(events)...)
 }
 
-// stepDoneRows wraps each finished step of a step_done event in a row of its
-// own, so the run spend counts it before the unit has a row.
+// stepDoneRows wraps each step attempt of a step_done, sent_back or
+// step_failed event in a row of its own, so the run spend counts it before
+// the unit has a row.
 func stepDoneRows(events []Event) []TimeRow {
 	var rows []TimeRow
 	for _, event := range events {
-		if event.State != StateStepDone || event.StepRecord == nil {
+		if !betweenSteps(event.State) || event.StepRecord == nil {
 			continue
 		}
 		record := event.StepRecord

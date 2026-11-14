@@ -254,8 +254,9 @@ func (e *Engine) afterPark(row TimeRow) {
 }
 
 // afterFinish feeds a written terminal event to the breaker, meltdown and
-// spend accounting.
-func (e *Engine) afterFinish(run Run, row TimeRow) error {
+// spend accounting. blame false leaves the agent's breaker alone (a unit
+// whose step exhausted its send-backs).
+func (e *Engine) afterFinish(run Run, row TimeRow, blame bool) error {
 	if e.sup == nil {
 		return nil
 	}
@@ -267,7 +268,7 @@ func (e *Engine) afterFinish(run Run, row TimeRow) error {
 	}
 	d := e.sup.def
 	ctx := context.Background()
-	outcome := e.sup.recordFinish(agent, unit, result, reason, finished)
+	outcome := e.sup.recordOutcome(agent, unit, result, reason, finished, blame, true)
 	if outcome.opened {
 		if err := e.announceOpen(ctx, run, d, agent, outcome.consecutive, outcome.until, unit, reason); err != nil {
 			return err

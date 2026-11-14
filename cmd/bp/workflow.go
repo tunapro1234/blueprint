@@ -40,6 +40,10 @@ type workflowDriver struct {
 	// runtimes is the harness each agent was last observed running; the token
 	// meter vouches only for harnesses whose usage the token store collects.
 	runtimes map[string]string
+	// transcripts is the Claude Code transcript each agent was last observed
+	// bound to; the activity meter reads only these.
+	transcripts map[string]string
+	activity    *activityReader
 	// tokenStore overrides the token store directory (tests).
 	tokenStore string
 	now        func() time.Time
@@ -130,6 +134,7 @@ func (d *workflowDriver) Observe(ctx context.Context, agent string) (workflow.Ob
 	}
 	d.runtimes[agent] = state.Runtime
 	d.fleetMu.Unlock()
+	d.noteTranscript(agent, state.Runtime, activity.TranscriptPath, activity.ThreadID, len(activity.BindingConflicts))
 	stateName := workflow.AgentState(activity.State)
 	if stateName == workflow.Idle && activity.DeliveryBlocked {
 		stateName = workflow.Blocked
@@ -414,6 +419,9 @@ func (a *app) workflowCheck(store *workflow.Store, args []string) error {
 	if definition.Budget != nil {
 		fmt.Fprintln(a.out, "warning: budget needs token usage data. Counts come from bp's token collector, which lags by up to one collection (5m), so both ceilings are soft and can be overshot by about that much spend. Only Claude Code and Codex agents in a tmux pane whose usage the collector records under the agent's name are metered; any other agent runs with no budget enforcement.")
 	}
+	if definition.Guardrails != nil {
+		fmt.Fprintln(a.out, guardrailsCheckWarning)
+	}
 	fmt.Fprintf(a.out, "OK: workflow %s\n", definition.Name)
 	return nil
 }
@@ -441,6 +449,7 @@ func printWorkflowSupervision(out *os.File, definition workflow.Definition) {
 	if definition.Approve != nil {
 		fmt.Fprintf(out, "approve: %s wait for a human decision\n", strings.Join(definition.Approve.On, ", "))
 	}
+	printWorkflowGuardrails(out, definition.Guardrails)
 }
 
 func checkSampleIfPresent(workflowDir, workdir string, definition workflow.Definition) error {
@@ -640,6 +649,7 @@ func printWorkflowStatus(out *os.File, status workflow.RunStatus) {
 		if agent.Elapsed > 0 {
 			entry += " (" + agent.Elapsed.Round(time.Second).String() + ")"
 		}
+		entry += guardrailMarker(agent.Guardrails)
 		agents = append(agents, entry)
 	}
 	line := fmt.Sprintf("%s %s owner=%s status=%s done=%d weak=%d failed=%d pending=%d", status.ID, status.Workflow, status.Owner, status.Status, status.Counts.Done, status.Counts.Weak, status.Counts.Failed, status.Counts.Pending)
@@ -824,6 +834,7 @@ func (a *app) workflowTimes(store *workflow.Store, args []string) error {
 		}
 	}
 	printApprovalStats(a.out, stats.Approvals)
+	printActivityStats(a.out, stats.Count, stats.Activity)
 	return nil
 }
 

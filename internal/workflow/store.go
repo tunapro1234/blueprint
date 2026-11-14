@@ -78,6 +78,8 @@ type Event struct {
 	// Decision is set on events written by bp workflow approve or reject.
 	// Terminal events with a decision never count for breakers or meltdown.
 	Decision *DecisionRecord `json:"decision,omitempty"`
+	// Guardrail is set on guardrail_warn and guardrail_halt events.
+	Guardrail *GuardrailRecord `json:"guardrail,omitempty"`
 }
 
 type CompactRecord struct {
@@ -117,6 +119,9 @@ type TimeRow struct {
 	Tokens *UnitTokens `json:"tokens,omitempty"`
 	// Approval is present when the unit waited for a human decision.
 	Approval *RowApproval `json:"approval,omitempty"`
+	// Activity is present when guardrails are configured and the unit's
+	// tool activity was known at finish.
+	Activity *RowActivity `json:"activity,omitempty"`
 }
 
 // UnitTokens is one unit's token usage from its first send to its finish,

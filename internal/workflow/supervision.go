@@ -266,16 +266,18 @@ type supervision struct {
 	agents        map[string]*agentBreaker
 	failures      []time.Time
 	unknownTokens map[string]bool
-	finished      []spentUnit
-	inflight      map[string]time.Time
-	unitCeiling   int64
-	runCeiling    int64
-	percent       int
+	// unknownActivity marks agents with a guardrails_unknown event.
+	unknownActivity map[string]bool
+	finished        []spentUnit
+	inflight        map[string]time.Time
+	unitCeiling     int64
+	runCeiling      int64
+	percent         int
 }
 
 func newSupervision(d Definition, run Run, events []Event, times []TimeRow) *supervision {
 	s := &supervision{def: d, breaker: breakerSettings(d), meltdown: meltdownSettings(d), since: run.SupervisionStart(),
-		unknownTokens: map[string]bool{}, inflight: map[string]time.Time{}, percent: d.CacheReadWeight()}
+		unknownTokens: map[string]bool{}, unknownActivity: map[string]bool{}, inflight: map[string]time.Time{}, percent: d.CacheReadWeight()}
 	s.agents = deriveBreakers(events, s.since)
 	for _, event := range events {
 		if event.Key != "" && event.State == "failed" && event.Decision == nil && !event.At.Before(s.since) {
@@ -283,6 +285,9 @@ func newSupervision(d Definition, run Run, events []Event, times []TimeRow) *sup
 		}
 		if event.State == eventTokensUnknown && event.Agent != "" {
 			s.unknownTokens[event.Agent] = true
+		}
+		if event.State == eventGuardrailsUnknown && event.Agent != "" {
+			s.unknownActivity[event.Agent] = true
 		}
 	}
 	if d.Budget != nil && d.Budget.UnitTokens != nil {
@@ -530,6 +535,18 @@ func (s *supervision) markUnknown(agent string) bool {
 		return false
 	}
 	s.unknownTokens[agent] = true
+	return true
+}
+
+// markActivityUnknown reports whether this is the first unknown-activity
+// observation for the agent in this run.
+func (s *supervision) markActivityUnknown(agent string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unknownActivity[agent] {
+		return false
+	}
+	s.unknownActivity[agent] = true
 	return true
 }
 

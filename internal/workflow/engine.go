@@ -122,6 +122,9 @@ type unitMetrics struct {
 	// started (a revision round); prior is the usage before it.
 	tokenSince time.Time
 	prior      *TokenCounts
+	// guard is the unit's guardrail state, shared by its rounds; nil
+	// without guardrails.
+	guard *unitGuard
 }
 
 // tokenStart is the start of the unit's current token interval.
@@ -558,8 +561,11 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 		return err
 	}
 	e.markInflight(agent, metrics.tokenStart())
+	if err := e.ensureGuard(run, d, task.unit.Key, agent, &metrics); err != nil {
+		return err
+	}
 	if previous.State == "sending" {
-		idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute))
+		idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute), metrics.guard)
 		if waitErr != nil {
 			return waitErr
 		}
@@ -594,7 +600,7 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 	if metrics.startedAt.IsZero() {
 		metrics.startedAt = startedAt
 	}
-	idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute))
+	idle, waitErr := e.waitIdleInFlight(ctx, run.ID, agent, duration(d.Timeouts.Unit, 40*time.Minute), metrics.guard)
 	if waitErr != nil {
 		return waitErr
 	}
@@ -611,6 +617,9 @@ func (e *Engine) resumeTask(ctx context.Context, run Run, d Definition, agent st
 }
 
 func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Unit, agent string, metrics unitMetrics, round int, prompt, output string, completed *atomic.Int64, lastFinished *time.Time) error {
+	if err := e.ensureGuard(run, d, unit.Key, agent, &metrics); err != nil {
+		return err
+	}
 	queuedAt := e.now()
 	delivery, err := e.Driver.Send(ctx, agent, prompt)
 	if err != nil {
@@ -671,7 +680,7 @@ func (e *Engine) sendAndWork(ctx context.Context, run Run, d Definition, unit Un
 	if err := e.appendEvent(run.ID, Event{Unit: unit.Key, Key: unit.Key, Agent: agent, State: "working", Round: round, DeliveryID: delivery.ChannelID, DeliveredAt: timePointer(delivery.DeliveredAt), LastObservation: observation}); err != nil {
 		return err
 	}
-	done, seconds, idle, err := e.waitUnitIdle(ctx, run.ID, agent, d.Timeouts.Unit)
+	done, seconds, idle, err := e.waitUnitIdle(ctx, run.ID, agent, d.Timeouts.Unit, metrics.guard)
 	if err != nil {
 		return err
 	}
@@ -697,6 +706,12 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 	if err := validateOutput(d, run.Workdir, output, started); err != nil {
 		if round >= configuredRounds(d) || d.Prompt.Followup == "" {
 			return e.judged(ctx, run, d, unit, agent, metrics, "failed", err.Error(), round, completed, lastFinished)
+		}
+		// Guardrails first, then the unit budget.
+		if reason, guardErr := e.guardrailHalt(ctx, metrics.guard); guardErr != nil {
+			return guardErr
+		} else if reason != "" {
+			return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 		}
 		if reason := e.unitBudgetExhausted(ctx, run, agent, metrics); reason != "" {
 			return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
@@ -732,6 +747,13 @@ func (e *Engine) validateLoop(ctx context.Context, run Run, d Definition, unit U
 			result = "weak"
 		}
 		return e.judged(ctx, run, d, unit, agent, metrics, result, strings.TrimSpace(stdout), round, completed, lastFinished)
+	}
+	// A guardrail halt only stops further rounds: an accepted result was
+	// returned above. Guardrails are checked before the unit budget.
+	if reason, err := e.guardrailHalt(ctx, metrics.guard); err != nil {
+		return err
+	} else if reason != "" {
+		return e.judged(ctx, run, d, unit, agent, metrics, "failed", reason, round, completed, lastFinished)
 	}
 	if reason := e.unitBudgetExhausted(ctx, run, agent, metrics); reason != "" {
 		// End the unit the way exhausted rounds end it: weak only when the
@@ -951,14 +973,16 @@ func renderPrompt(snapshot string, d Definition, unit Unit, run Run, round int, 
 }
 
 func (e *Engine) waitIdle(ctx context.Context, runID, agent string, timeout time.Duration) (Observation, error) {
-	return e.waitIdleMode(ctx, runID, agent, timeout, true)
+	return e.waitIdleMode(ctx, runID, agent, timeout, true, nil)
 }
 
-func (e *Engine) waitIdleInFlight(ctx context.Context, runID, agent string, timeout time.Duration) (Observation, error) {
-	return e.waitIdleMode(ctx, runID, agent, timeout, false)
+// waitIdleInFlight waits for an agent that is working on a unit; guard, when
+// set, is polled while it waits.
+func (e *Engine) waitIdleInFlight(ctx context.Context, runID, agent string, timeout time.Duration, guard *unitGuard) (Observation, error) {
+	return e.waitIdleMode(ctx, runID, agent, timeout, false, guard)
 }
 
-func (e *Engine) waitIdleMode(ctx context.Context, runID, agent string, timeout time.Duration, stopAtBoundary bool) (Observation, error) {
+func (e *Engine) waitIdleMode(ctx context.Context, runID, agent string, timeout time.Duration, stopAtBoundary bool, guard *unitGuard) (Observation, error) {
 	var deadline time.Time
 	if timeout > 0 {
 		deadline = e.now().Add(timeout)
@@ -979,6 +1003,9 @@ func (e *Engine) waitIdleMode(ctx context.Context, runID, agent string, timeout 
 			return last, err
 		}
 		last = observation
+		if err := e.guardPoll(ctx, guard); err != nil {
+			return last, err
+		}
 		switch observation.State {
 		case Idle:
 			idleCount++
@@ -1091,7 +1118,9 @@ func (e *Engine) waitForStart(ctx context.Context, agent string, deliveredAt tim
 	}
 }
 
-func (e *Engine) waitUnitIdle(ctx context.Context, runID, agent string, timeout string) (bool, float64, Observation, error) {
+// waitUnitIdle waits for a working agent to finish its turn. guard, when set,
+// is polled while it waits; it never sends anything to the agent.
+func (e *Engine) waitUnitIdle(ctx context.Context, runID, agent string, timeout string, guard *unitGuard) (bool, float64, Observation, error) {
 	started := e.now()
 	deadline := started.Add(duration(timeout, 40*time.Minute))
 	idleCount, blockedCount := 0, 0
@@ -1105,6 +1134,9 @@ func (e *Engine) waitUnitIdle(ctx context.Context, runID, agent string, timeout 
 			return false, e.now().Sub(started).Seconds(), last, err
 		}
 		last = observation
+		if err := e.guardPoll(ctx, guard); err != nil {
+			return false, e.now().Sub(started).Seconds(), last, err
+		}
 		switch observation.State {
 		case Idle:
 			idleCount++
@@ -1257,6 +1289,7 @@ func (e *Engine) outcome(run Run, unit Unit, agent string, metrics unitMetrics, 
 	}
 	row := TimeRow{Run: run.ID, Workflow: run.Workflow, Unit: unit.Key, Agent: agent, Model: metrics.model, Result: result, Reason: reason, Rounds: max(1, round), RoundSeconds: metrics.roundWork, WorkSeconds: metrics.work, ValidateSeconds: metrics.validate, WaitSeconds: metrics.wait, CompactSeconds: metrics.compact, CompactResult: metrics.compactResult, FinishedAt: finished, CtxStart: metrics.ctxStart}
 	row.Tokens = e.rowTokens(run, agent, metrics, finished)
+	row.Activity = e.rowActivity(metrics)
 	if !queuedAt.IsZero() {
 		row.QueuedAt = timePointer(queuedAt)
 	}

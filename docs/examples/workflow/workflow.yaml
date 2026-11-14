@@ -39,3 +39,17 @@ budget:
 # units whose result is listed wait for bp workflow approve/reject.
 # approve:
 #   on: [weak, failed]
+# Optional guardrails on tool activity (see Guardrails in docs/workflow.md).
+# Claude Code agents only; bp never interrupts a working agent, a halt ends
+# the unit at its next idle boundary instead of sending a follow-up.
+# guardrails:
+#   tool_calls:
+#     warn: 150
+#     halt: 400
+#   repeated_tool_call:
+#     warn: 5
+#     halt: 10
+#   tool_failures:
+#     warn: 5
+#     halt: 12
+#     tool: Bash

@@ -314,6 +314,100 @@ unit or revision only prints that the run waits for decisions.
 bp workflow times reports approvals: approved, rejected and revised counts and
 the median decision wait, plus the number of units still awaiting approval.
 
+## Guardrails
+
+The optional guardrails key watches what an agent does while it works on a
+unit, not only what it produces. It counts the agent's tool calls and their
+results and stops a unit that is clearly going in circles:
+
+    guardrails:
+      tool_calls:            # tool calls in one unit
+        warn: 150
+        halt: 400
+      repeated_tool_call:    # the same call (tool and input) in a row
+        warn: 5
+        halt: 10
+        tool: Bash           # optional: only this tool counts
+      tool_failures:         # failed tool results in a row
+        warn: 5
+        halt: 12
+        tool: Bash           # optional: only this tool's results count
+
+Each rule is optional, but the block needs at least one. A rule needs warn,
+halt or both; both are positive integers and warn must be below halt. tool is
+an exact tool name as the harness reports it (Bash, Read, Edit, an MCP tool's
+full name). Unknown keys are rejected. Without the key nothing is read and
+nothing changes.
+
+What is measured. The window of a unit starts at its first send and covers
+every round, so follow-ups count too. Only the agent's own conversation counts:
+tool calls made inside subagents it spawned do not.
+
+- tool_calls is the number of tool calls in the window.
+- repeated_tool_call is the longest run of consecutive calls with the same tool
+  and the same input (compared by a hash of the input with its keys sorted).
+  Any other call in between ends the run; with tool set only runs of that tool
+  count.
+- tool_failures is the longest run of consecutive tool results the harness
+  marked as errors. A successful result ends the run; a call whose result has
+  not arrived (still running, or interrupted) neither extends nor ends it.
+  With tool set only that tool's results count and other tools in between do
+  not end the run.
+
+The streak rules use the longest run seen in the window, not the current one:
+an agent that failed twelve times in a row and then recovered still reached
+halt. Each rule's level is ok, warn or halt, and the unit's verdict is the
+worst of them.
+
+Only Claude Code agents are measured. bp reads the transcript it already binds
+to the agent for status and delivery (the same file, never a second guess)
+and reads only what was appended since the last check; a session switch
+(/clear, a resume into a new session) is noticed and the new file is read by
+timestamp from the window start. Codex, Hermes, opencode and other harnesses,
+and a Claude agent whose transcript cannot be bound, have unknown activity:
+units.jsonl records one guardrails_unknown event per agent per run, and the
+unit runs without guardrails while its activity stays unknown. bp workflow
+check prints a warning about this whenever guardrails are set.
+
+bp never interrupts a working agent. While the engine waits for a busy agent
+it checks the rules at most once a minute. A rule that newly reaches warn or
+halt writes a guardrail_warn or guardrail_halt event to units.jsonl (with the
+rule, level, value and limit) and notifies the owner, once per level per rule
+for the unit. A halt notice says that the agent keeps working and that the
+unit ends at its next idle boundary, so the owner can step in sooner by hand.
+
+Boundaries. When the agent goes idle the validator runs as usual. An accepted
+result (done, or weak by weak_after) finishes the unit normally even at halt.
+Before a follow-up round would be sent, guardrails are checked first, then the
+unit token budget: at halt no follow-up is sent and the unit ends failed with
+the reason "guardrail: <explanation>", for example "guardrail: tool Bash failed
+12 times in a row". This goes through the normal finish path: it counts for
+the breaker and meltdown, and it parks instead when approve.on lists failed.
+A halt reached while the agent was busy stays in force even if the activity
+cannot be read at the boundary.
+
+Revisions. approve --edit on a unit that a guardrail stopped still sends its
+one revision round. tool_calls keeps counting from the earlier rounds, so a
+unit already at its tool_calls halt gets no further follow-up after the
+revision round. The streak rules start over at the revision's send: only the
+revision round's calls count for them, and they are announced again if they
+reach a level again.
+
+Restarts. A restarted worker rebuilds which levels were already announced
+from units.jsonl, so it does not notify twice, and recomputes the verdict from
+the transcript.
+
+Records. With guardrails set, each times.jsonl row whose activity was known
+carries activity: tool_calls, longest_repeat, longest_failures, and verdict
+plus rule when the unit ended at warn or halt (the row of a parked unit too).
+These are measured over all tools, whatever the rules' tool filters. Rows
+without the field (older runs, unknown activity) still load. bp workflow
+status marks an in-flight unit that reached a level, for example
+"a1:unit-7 (12m3s) [guardrail tool_failures halt]". bp workflow times adds
+"activity: units=N/M median_tool_calls=X p90_tool_calls=Y warned=W halted=H"
+and, when units halted, "guardrail halts: <rule>=N ...". bp workflow show
+prints the rules.
+
 ## Timing and state
 
 Runs live below <state-dir>/workflow-runs/<run-id>/. run.json contains the
@@ -337,8 +431,9 @@ tokens per unit, tokens per agent and per model, and the five most expensive
 units, all settled as described in Supervision and budgets. A workflow name aggregates all of its saved runs.
 
 bp workflow status shows pause_reason for a paused run, breakers=[...] with
-each open breaker's reopen time, and run_tokens=<spent>/<ceiling> when a run
-budget is set.
+each open breaker's reopen time, run_tokens=<spent>/<ceiling> when a run
+budget is set, and a [guardrail <rule> <level>] mark on an in-flight unit
+that reached a guardrail level.
 
 bp wait <agent> --until idle|working [--confirm N] [--timeout 5m] [--json] is
 the read-only wait primitive for external runners. Idle defaults to two

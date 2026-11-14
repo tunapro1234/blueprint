@@ -39,6 +39,8 @@ type Definition struct {
 	Budget    *BudgetSpec    `yaml:"budget,omitempty" json:"budget,omitempty"`
 	// Approve is optional. Without it every validated result is final.
 	Approve *ApproveSpec `yaml:"approve,omitempty" json:"approve,omitempty"`
+	// Guardrails is optional. Without it no tool activity is read.
+	Guardrails *GuardrailSpec `yaml:"guardrails,omitempty" json:"guardrails,omitempty"`
 }
 
 // ApproveSpec parks validated outcomes for a human decision. On lists the
@@ -264,6 +266,9 @@ func ValidateDefinition(d Definition) error {
 		return err
 	}
 	if err := validateApprove(d.Approve); err != nil {
+		return err
+	}
+	if err := validateGuardrails(d.Guardrails); err != nil {
 		return err
 	}
 	return validateBudget(d.Budget)

@@ -21,6 +21,9 @@ type AgentStatus struct {
 	Agent       string        `json:"agent"`
 	CurrentUnit string        `json:"current_unit,omitempty"`
 	Elapsed     time.Duration `json:"elapsed,omitempty"`
+	// Guardrails lists the warn and halt levels announced for the current
+	// unit, most severe first.
+	Guardrails []GuardrailMark `json:"guardrails,omitempty"`
 }
 
 type RunStatus struct {
@@ -91,6 +94,9 @@ func (s *Store) Status(id string) (RunStatus, error) {
 				item.Elapsed = 0
 			}
 		}
+		if event, ok := active[agent]; ok {
+			item.Guardrails = guardrailMarks(events, event.Key)
+		}
 		view.Agents = append(view.Agents, item)
 	}
 	for _, key := range run.UnitKeys {
@@ -143,6 +149,8 @@ type TimeStats struct {
 	Tokens *TokenStats `json:"tokens,omitempty"`
 	// Approvals is present when units waited for a human decision.
 	Approvals *ApprovalStats `json:"approvals,omitempty"`
+	// Activity is present when at least one row has tool activity.
+	Activity *ActivityStats `json:"activity,omitempty"`
 }
 
 // ApprovalStats counts decided units in times.jsonl. A revised unit counts
@@ -322,6 +330,7 @@ func SummarizeTimes(rows []TimeRow) TimeStats {
 	}
 	stats.Tokens = summarizeTokens(rows)
 	stats.Approvals = summarizeApprovals(rows)
+	stats.Activity = summarizeActivity(rows)
 	return stats
 }
 

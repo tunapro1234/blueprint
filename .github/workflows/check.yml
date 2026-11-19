@@ -33,7 +33,7 @@ jobs:
       - run: go tool cover -func="$RUNNER_TEMP/bp-coverage.out" | tail -n 1
       - run: go vet ./...
       - run: go test -race ./internal/p2p ./internal/msgq
-      - run: BP_TEST_COVERAGE_DIR="$RUNNER_TEMP/bp-cli-coverage" python3 -m unittest scripts.test_local_cli scripts.test_publish_release scripts.test_runtime_usage scripts.test_migrate_codex_book
+      - run: BP_TEST_COVERAGE_DIR="$RUNNER_TEMP/bp-cli-coverage" python3 -m unittest scripts.test_local_cli scripts.test_publish_release scripts.test_runtime_usage scripts.test_migrate_codex_book scripts.test_bp_attach_bar
       - run: go tool covdata percent -i="$RUNNER_TEMP/bp-cli-coverage"
       - run: npm --prefix npm test
   # Separate jobs, so a failing test step cannot skip them. CI runs only on

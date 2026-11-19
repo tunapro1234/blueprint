@@ -98,6 +98,18 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- `scripts/bp-attach` (the shared core of `rush`/`lush`) wrote the session bar
+  as plain `#(bp name ...)` and `#(bp bar ...)` jobs, which tmux 3.4 reruns on
+  every status redraw: each attached session launched two bp processes about
+  every 1.5 seconds even though the daemon already pushes the rendered text
+  into `@bp-name` and `@bp-bar`. It now writes the same conditional form as
+  bp's own local bar (`#{?@bp-name,#{@bp-name},#(...)}`), so the job runs only
+  where no daemon renders the bar, and upgrades a session that still carries
+  the old form for the same agent. When HOME, PATH, BP_HOME or the bp path
+  contains `,`, `}` or `#`, which tmux would misparse inside the conditional,
+  the plain job form is kept. Values are now shell-quoted, and an unset HOME
+  no longer aborts the script.
+
 - A Claude Code permission prompt ("Do you want to proceed? 1. Yes ... 3. No",
   shown for some Bash commands even in bypass-permissions mode) is no longer
   reported as "composer contains foreign text": the queue reason now says

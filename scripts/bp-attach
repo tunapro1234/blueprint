@@ -44,21 +44,59 @@ attach() {
   if [ -n "${TMUX:-}" ]; then tmux switch-client -t "=$1"; else tmux attach -d -t "=$1"; fi
 }
 
+# sq <value>: one shell word in single quotes (same quoting as quoteShell in cmd/bp/local.go).
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
 # Session-level bp bar (blueprint #13: bp open does not set it up itself).
+#
+# The daemon's bar renderer pushes the rendered text into the session options
+# @bp-name and @bp-bar for attached sessions (cmd/bp/bar_renderer.go). tmux
+# reruns #() jobs on every status redraw, so the options are written in the
+# same conditional form as localBarStatusFormat in cmd/bp/local.go:
+#   #{?@bp-name,#{@bp-name},#(env ... bp name 'agent')}
+# The #() job is only the fallback for machines without the daemon renderer.
 bar() {
-  local sess="$1" agent="$2" bp_bin idx envp
+  local sess="$1" agent="$2" bp_bin idx envp qa name_job bar_job left right cur_left cur_right
   bp_bin="$(command -v bp)" || return 0
-  # Leave the bar alone when it already shows this agent (on the server bp open may set it itself).
-  tmux show-options -t "=$sess:" status-left 2>/dev/null | grep -qF "name '$agent'" && return 0
   # BP_HOME is passed only when set: on the server bp keeps its data outside ~/.blueprint.
-  envp="env ${BP_HOME:+BP_HOME='$BP_HOME'} HOME='$HOME' PATH='$PATH' '$bp_bin'"
+  # HOME and PATH likewise (an unset HOME must not abort the script under set -u).
+  envp="env ${BP_HOME:+BP_HOME=$(sq "$BP_HOME") }${HOME:+HOME=$(sq "$HOME") }${PATH:+PATH=$(sq "$PATH") }$(sq "$bp_bin")"
+  qa=$(sq "$agent")
+  name_job="#($envp name $qa)"
+  bar_job="#($envp bar $qa)"
+  # The fallback job sits inside #{?...}: tmux ends the conditional at the first
+  # bare '}', and older tmux releases split its branches at every bare ','. A '#'
+  # starts a format sequence and would need the '##' escape that local.go applies,
+  # but '##[' is passed through unescaped by tmux 3.4, so it cannot be escaped
+  # reliably either. HOME, PATH, BP_HOME and the bp path are free-form; agent
+  # names are [A-Za-z0-9._-] for new records but the book may hold older ones.
+  # When any of these characters is present, write the plain #() form as before
+  # (a job per redraw) instead of a conditional tmux would misparse.
+  case "$envp $qa" in
+    *[,}#]*) left="$name_job" right="$bar_job" ;;
+    *) left="#{?@bp-name,#{@bp-name},$name_job}" right="#{?@bp-bar,#{@bp-bar},$bar_job}" ;;
+  esac
+  cur_left=$(tmux show-options -v -t "=$sess:" status-left 2>/dev/null)
+  cur_right=$(tmux show-options -v -t "=$sess:" status-right 2>/dev/null)
+  # Already conditional for this agent (written here or by bp's own local bar): leave it alone.
+  if [[ $cur_left == "#{?@bp-name,#{@bp-name},#("*" name $qa)}" &&
+        $cur_right == "#{?@bp-bar,#{@bp-bar},#("*" bar $qa)}" ]]; then
+    return 0
+  fi
+  # Shows this agent in the old raw #() form: upgrade the two status options only.
+  if [[ $cur_left == *" name $qa)"* ]]; then
+    [ "$left" = "$name_job" ] && return 0 # unsafe value: the raw form is all we could write
+    tmux set-option -t "=$sess:" status-left "$left"
+    tmux set-option -t "=$sess:" status-right "$right"
+    return 0
+  fi
   idx=$(bp color "$agent" --json 2>/dev/null | sed -n 's/.*"index":[[:space:]]*\([0-9]*\).*/\1/p')
   [ -n "$idx" ] || idx=236
   tmux set-option -t "=$sess:" status on
   tmux set-option -t "=$sess:" status-interval 2
-  tmux set-option -t "=$sess:" status-left "#($envp name '$agent')"
+  tmux set-option -t "=$sess:" status-left "$left"
   tmux set-option -t "=$sess:" status-left-length 48
-  tmux set-option -t "=$sess:" status-right "#($envp bar '$agent')"
+  tmux set-option -t "=$sess:" status-right "$right"
   tmux set-option -t "=$sess:" status-right-length 120
   tmux set-option -t "=$sess:" status-style "bg=colour${idx},fg=colour231"
 }

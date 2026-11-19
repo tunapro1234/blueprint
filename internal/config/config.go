@@ -16,6 +16,7 @@ import (
 
 	"blueprint/internal/ntfy"
 	"blueprint/internal/p2p"
+	"blueprint/internal/userhome"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -295,7 +296,7 @@ type barOverrides struct {
 
 // Load resolves BP_HOME and reads one optional config.yaml/config.yml/config.json.
 func Load() (Config, error) {
-	return loadWithWarning(os.Getenv, os.Stat, os.UserHomeDir, os.ReadFile, os.Stderr)
+	return loadWithWarning(os.Getenv, os.Stat, userhome.Dir, os.ReadFile, os.Stderr)
 }
 
 // LoadHome reads the config of the installation at home, ignoring BP_HOME and
@@ -311,7 +312,7 @@ func LoadHome(home string) (Config, error) {
 		}
 		return os.Getenv(key)
 	}
-	return loadWithWarning(getenv, os.Stat, os.UserHomeDir, os.ReadFile, os.Stderr)
+	return loadWithWarning(getenv, os.Stat, userhome.Dir, os.ReadFile, os.Stderr)
 }
 
 func loadWith(getenv func(string) string, stat func(string) (os.FileInfo, error), userHome func() (string, error), readFile func(string) ([]byte, error)) (Config, error) {

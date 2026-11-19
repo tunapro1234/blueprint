@@ -19,6 +19,7 @@ import (
 	"blueprint/internal/cache"
 	"blueprint/internal/identity"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/userhome"
 )
 
 func localHarness(name string) bool {
@@ -492,7 +493,7 @@ func (a *app) startLocalSession(args []string, managed bool) error {
 	if args[2] != "" {
 		nativeHome := os.Getenv("CODEX_HOME")
 		if nativeHome == "" {
-			userHome, _ := os.UserHomeDir()
+			userHome, _ := userhome.Dir()
 			nativeHome = filepath.Join(userHome, ".codex")
 		}
 		if absolute, err := filepath.Abs(nativeHome); err == nil {

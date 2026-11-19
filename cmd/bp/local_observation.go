@@ -15,6 +15,7 @@ import (
 	"blueprint/internal/cache"
 	"blueprint/internal/identity"
 	"blueprint/internal/modules"
+	"blueprint/internal/userhome"
 	"context"
 )
 
@@ -134,7 +135,7 @@ func localClaudeSettings(args []string) (map[string]any, []string, error) {
 }
 
 func localClaudeStatusLine(cli map[string]any, args []string) (map[string]any, error) {
-	home, _ := os.UserHomeDir()
+	home, _ := userhome.Dir()
 	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if configDir == "" {
 		configDir = filepath.Join(home, ".claude")

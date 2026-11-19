@@ -527,7 +527,11 @@ func importClaudeHistory(root, folder string) (string, error) {
 		return "", err
 	}
 	id := strings.TrimSuffix(filepath.Base(source), ".jsonl")
-	if err := writeNoConflict(filepath.Join(bptmux.ClaudeProjectDir(folder), id+".jsonl"), data, 0o600); err != nil {
+	directory := bptmux.ClaudeProjectDir(folder)
+	if directory == "" {
+		return "", bptmux.ErrClaudeHomeUnknown
+	}
+	if err := writeNoConflict(filepath.Join(directory, id+".jsonl"), data, 0o600); err != nil {
 		return "", err
 	}
 	return id, nil

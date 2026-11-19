@@ -16,6 +16,7 @@ import (
 	"blueprint/internal/modules"
 	"blueprint/internal/release"
 	"blueprint/internal/safefile"
+	"blueprint/internal/userhome"
 )
 
 type updateResult struct {
@@ -269,7 +270,7 @@ func (a *app) setupCheck(enable ...string) error {
 		}
 	}
 
-	home, _ := os.UserHomeDir()
+	home, _ := userhome.Dir()
 	for _, path := range []string{a.config.Home, filepath.Join(home, ".config", "bp"), filepath.Join(home, ".local", "bin")} {
 		for {
 			if _, err := os.Stat(path); err == nil {
@@ -289,7 +290,7 @@ func (a *app) setupCheck(enable ...string) error {
 }
 
 func (a *app) disableSetup() error {
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return err
 	}

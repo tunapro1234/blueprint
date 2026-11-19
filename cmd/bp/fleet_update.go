@@ -16,6 +16,7 @@ import (
 	"blueprint/internal/book"
 	"blueprint/internal/cache"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/userhome"
 )
 
 const fleetUpdateUsage = "usage: bp update [--clis] [--models <from=to...>] [--all] [--agent <name>...] [--set-defaults] [--dry-run] [--yes] [--json]"
@@ -906,7 +907,7 @@ func (a *app) managedFleetLaunch(name string, opts bptmux.OpenOptions) (bptmux.O
 // updateFleetDefaults is intentionally file-only: native CLIs are never invoked.
 // Each changed file is copied beside itself before an atomic rewrite.
 func updateFleetDefaults(models map[string]string, now time.Time) ([]string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return nil, err
 	}

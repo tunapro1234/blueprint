@@ -17,6 +17,7 @@ import (
 	"blueprint/internal/hop"
 	"blueprint/internal/p2p"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/userhome"
 )
 
 const hopUsage = "usage: bp hop <agent> --to <peer> [--recursive] [--no-files] [--copy] [--delete-source] [--raw] [--dry-run] (an agent may name itself) | bp hop list [--json] | bp hop accept <id> [--dir <path>] [--parent <name>] [--resume] [--yes] | bp hop reject <id>"
@@ -867,7 +868,7 @@ func removeSourceFolder(folder string) error {
 	if clean == "" || clean == "/" || clean == "." || len(clean) < 2 {
 		return fmt.Errorf("refusing to delete %q", folder)
 	}
-	if home, _ := os.UserHomeDir(); home != "" && clean == filepath.Clean(home) {
+	if home, _ := userhome.Dir(); home != "" && clean == filepath.Clean(home) {
 		return fmt.Errorf("refusing to delete the home directory")
 	}
 	return os.RemoveAll(clean)

@@ -14,7 +14,11 @@ import (
 // No environment identity or newest-file selection; inaccessible old clients
 // may still use an explicit pin or a unique title at the caller.
 func ClaudeProcessSession(panePID int, folder string) (string, error) {
-	return claudeProcessSession("/proc", filepath.Join(filepath.Dir(ClaudeProjectsRoot()), "sessions"), panePID, folder)
+	root := ClaudeProjectsRoot()
+	if root == "" {
+		return "", ErrClaudeHomeUnknown
+	}
+	return claudeProcessSession("/proc", filepath.Join(filepath.Dir(root), "sessions"), panePID, folder)
 }
 
 func claudeProcessSession(procRoot, sessions string, panePID int, folder string) (string, error) {

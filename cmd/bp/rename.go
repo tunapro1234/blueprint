@@ -19,6 +19,7 @@ import (
 	"blueprint/internal/identity"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/userhome"
 )
 
 // rename renames an agent everywhere bp knows about it: the tmux session, the
@@ -889,7 +890,7 @@ func (a *app) reportCodeReferences(fleet book.Fleet, old, name string) {
 	}
 	// A folder that is the home directory or / (bp run opencode registers the
 	// shell's cwd) is not the agent's project: grepping it takes unbounded time.
-	userHome, _ := os.UserHomeDir()
+	userHome, _ := userhome.Dir()
 	if clean := filepath.Clean(folder); clean == "/" || (userHome != "" && physicalPath(clean) == physicalPath(userHome)) {
 		fmt.Fprintf(a.out, "\nreference scan skipped: %s is not a project folder; check hooks/units for %q yourself.\n", folder, old)
 		return

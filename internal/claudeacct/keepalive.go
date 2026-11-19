@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"blueprint/internal/userhome"
 )
 
 // Keepalive keeps every usable account's five-hour window running and
@@ -508,7 +510,7 @@ func ClaudeBinary(env Env) (string, error) {
 	}
 	userHome := env.UserHome
 	if userHome == nil {
-		userHome = os.UserHomeDir
+		userHome = userhome.Dir
 	}
 	if home, err := userHome(); err == nil && home != "" {
 		candidate := filepath.Join(home, ".local", "bin", "claude")

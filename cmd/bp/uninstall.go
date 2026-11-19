@@ -12,6 +12,7 @@ import (
 	"blueprint/internal/audit"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/modules"
+	"blueprint/internal/userhome"
 )
 
 // binaryMarker is in every bp binary (the usage text), so uninstall removes a
@@ -47,7 +48,7 @@ func (a *app) installRecord(args []string) error {
 	if len(args) == 3 {
 		extra = args[2]
 	}
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return err
 	}
@@ -243,7 +244,7 @@ func (a *app) purgeTargets() ([]string, error) {
 	if !filepath.IsAbs(home) {
 		return nil, fmt.Errorf("--purge refuses the relative bp home %q; set BP_HOME to an absolute path", home)
 	}
-	userHome, err := os.UserHomeDir()
+	userHome, err := userhome.Dir()
 	if err != nil {
 		return nil, err
 	}

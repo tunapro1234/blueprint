@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"blueprint/internal/userhome"
 )
 
 // CodexProcess contains connection hints only. A remote TUI's argv is not
@@ -21,8 +23,11 @@ func CodexProcessInfo(pid int) CodexProcess {
 func codexProcessInfo(pid int, procRoot string) CodexProcess {
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
-		user, _ := os.UserHomeDir()
-		home = filepath.Join(user, ".codex")
+		// Unknown home leaves Home empty (callers treat that as no Codex
+		// home) instead of a relative ".codex".
+		if user, err := userhome.Dir(); err == nil {
+			home = filepath.Join(user, ".codex")
+		}
 	}
 	result := CodexProcess{Home: home}
 	pids := []int{pid}

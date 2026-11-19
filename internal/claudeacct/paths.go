@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"blueprint/internal/userhome"
 )
 
 // Env is the process environment the package reads. Tests inject a temporary
@@ -30,7 +32,7 @@ type Env struct {
 
 // OSEnv reads the real process environment.
 func OSEnv() Env {
-	return Env{Getenv: os.Getenv, UserHome: os.UserHomeDir}
+	return Env{Getenv: os.Getenv, UserHome: userhome.Dir}
 }
 
 // ClaudePaths locates Claude Code's live login.
@@ -52,7 +54,7 @@ func (e Env) Paths() (ClaudePaths, error) {
 	}
 	userHome := e.UserHome
 	if userHome == nil {
-		userHome = os.UserHomeDir
+		userHome = userhome.Dir
 	}
 	home, err := userHome()
 	if err != nil || home == "" {

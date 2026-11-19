@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"blueprint/internal/userhome"
 )
 
 const (
@@ -27,20 +29,20 @@ type Config struct {
 }
 
 func DefaultConfig(stateDir string, agentbooks []string) Config {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home, _ = os.UserHomeDir()
-	}
-	return Config{
+	config := Config{
 		StoreDir:       filepath.Join(stateDir, "tokens"),
-		ClaudeRoot:     filepath.Join(home, ".claude", "projects"),
-		CodexRoot:      filepath.Join(home, ".codex", "sessions"),
 		Agentbooks:     append([]string(nil), agentbooks...),
 		Now:            time.Now,
 		BudgetBytes:    defaultBudget,
 		HardLimitBytes: defaultHardLimit,
 		Log:            os.Stderr,
 	}
+	// An unknown home leaves the native roots empty, never relative.
+	if home, err := userhome.Dir(); err == nil {
+		config.ClaudeRoot = filepath.Join(home, ".claude", "projects")
+		config.CodexRoot = filepath.Join(home, ".codex", "sessions")
+	}
+	return config
 }
 
 func (c Config) normalized() Config {

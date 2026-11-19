@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"blueprint/internal/identity"
+	"blueprint/internal/userhome"
 )
 
 var promptLine = regexp.MustCompile("^(?:\x1b\\[[0-9;]*m|[\t ])*[❯›](?:\x1b\\[[0-9;]*m)?")
@@ -2749,21 +2750,37 @@ func mungeProjectPath(dir string) string {
 	return string(b)
 }
 
-// claudeProjectsRoot is the directory where Claude Code stores per-cwd session logs.
+// ClaudeProjectsRoot is the directory where Claude Code stores per-cwd session
+// logs: $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects. The home falls back
+// to the user database when HOME is unset (systemd units), so a HOME-less bp
+// reads the same directory as the daemon running as the same user. Account
+// profiles link their projects directory to the base home, so this one root
+// serves every agent whatever CLAUDE_CONFIG_DIR it runs with. The result is
+// empty, never relative, when no home directory is known; path builders below
+// refuse an empty root with ErrClaudeHomeUnknown.
 func ClaudeProjectsRoot() string {
 	if dir := os.Getenv("CLAUDE_CONFIG_DIR"); dir != "" {
 		return filepath.Join(dir, "projects")
 	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		home, _ = os.UserHomeDir()
+	home, err := userhome.Dir()
+	if err != nil {
+		return ""
 	}
 	return filepath.Join(home, ".claude", "projects")
 }
 
-// ClaudeProjectDir is the native transcript directory for one absolute cwd.
+// ErrClaudeHomeUnknown reports that this process cannot locate Claude Code's
+// transcripts: no CLAUDE_CONFIG_DIR, no HOME and no user database home.
+var ErrClaudeHomeUnknown = errors.New("Claude transcript root unknown in this process: no CLAUDE_CONFIG_DIR, HOME is not set and the user database has no home for this uid")
+
+// ClaudeProjectDir is the native transcript directory for one absolute cwd,
+// empty when ClaudeProjectsRoot is unknown.
 func ClaudeProjectDir(dir string) string {
-	return filepath.Join(ClaudeProjectsRoot(), mungeProjectPath(dir))
+	root := ClaudeProjectsRoot()
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, mungeProjectPath(dir))
 }
 
 // readCustomTitle returns the customTitle set for a Claude session file (via the
@@ -2849,6 +2866,9 @@ func customTitleLine(line []byte) (string, bool) {
 // working directory — which `claude -c` (continue-most-recent-in-cwd) cannot,
 // causing it to resume a co-located agent's conversation instead of ours.
 func ResumeSessionPath(projectsRoot, dir, agent string) (string, bool) {
+	if projectsRoot == "" {
+		return "", false
+	}
 	entries, err := os.ReadDir(filepath.Join(projectsRoot, mungeProjectPath(dir)))
 	if err != nil {
 		return "", false
@@ -3050,6 +3070,9 @@ func ClaudeSessionPathForID(projectsRoot, dir, id string) (string, error) {
 	if !codexThreadID.MatchString(id) {
 		return "", fmt.Errorf("invalid Claude session id")
 	}
+	if projectsRoot == "" {
+		return "", ErrClaudeHomeUnknown
+	}
 	path := filepath.Join(projectsRoot, mungeProjectPath(dir), id+".jsonl")
 	info, err := os.Stat(path)
 	if err != nil {
@@ -3064,6 +3087,9 @@ func ClaudeSessionPathForID(projectsRoot, dir, id string) (string, error) {
 // ResolveSessionPath distinguishes a missing pin from duplicate titles and
 // includes the conflicting paths. A missing same-provider pin never falls open.
 func ResolveSessionPath(projectsRoot, dir, agent, id string) (string, error) {
+	if projectsRoot == "" {
+		return "", ErrClaudeHomeUnknown
+	}
 	root := filepath.Join(projectsRoot, mungeProjectPath(dir))
 	if id != "" && !codexThreadID.MatchString(id) {
 		return "", fmt.Errorf("invalid Claude session pin %q under %s", id, root)

@@ -109,6 +109,16 @@ Changes on `dev` since the 1.9.34 release.
   contains `,`, `}` or `#`, which tmux would misparse inside the conditional,
   the plain job form is kept. Values are now shell-quoted, and an unset HOME
   no longer aborts the script.
+- `bp msg` run without HOME (systemd units) resolved the Claude transcript
+  directory as the relative `.claude/projects` and stopped with "runtime
+  unknown: Claude transcript directory unavailable"; the daemon delivered the
+  message a few seconds later. Every per-user path bp derives from the home
+  directory (`~/.claude`, `~/.codex`, `~/.blueprint`, `~/.config/bp`, token
+  roots, account paths) now falls back to the user database entry of the
+  current uid when HOME is unset or empty, and is never relative.
+  `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `BP_HOME` and configured paths still take
+  precedence. Such a `bp msg` now delivers in-process. A process with no home
+  at all leaves the message queued and says the daemon will deliver it.
 
 - A Claude Code permission prompt ("Do you want to proceed? 1. Yes ... 3. No",
   shown for some Bash commands even in bypass-permissions mode) is no longer

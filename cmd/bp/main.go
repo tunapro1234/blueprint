@@ -46,6 +46,7 @@ import (
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
+	"blueprint/internal/userhome"
 	"blueprint/internal/wa"
 	"blueprint/internal/windowmap"
 	"blueprint/internal/worktree"
@@ -631,7 +632,7 @@ type commandSpec struct {
 var safeSessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 func connectConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return "", fmt.Errorf("find home directory: %w", err)
 	}
@@ -2643,7 +2644,12 @@ func (a *app) message(args []string) error {
 	}
 	fmt.Fprintf(a.out, "QUEUED (channel: %s). Check: bp qstat %s\n", channelID, channelID)
 	// A queued message is not evidence the agent is working; print the cause.
-	if why := a.queue.Reason(channelID); why != "" {
+	if why := a.queue.Reason(channelID); strings.Contains(why, bptmux.ErrClaudeHomeUnknown.Error()) {
+		// Nothing is wrong with the target: this process (typically a systemd
+		// unit without HOME, on a host whose user database has no home for its
+		// uid) cannot read Claude transcripts, and the daemon delivers instead.
+		fmt.Fprintln(a.out, "WAITING FOR THE DAEMON: this bp process cannot locate Claude transcripts (no CLAUDE_CONFIG_DIR, HOME is not set and the user database has no home for this uid); the message is queued and the bp daemon will deliver it")
+	} else if why != "" {
 		fmt.Fprintf(a.out, "WAITING REASON: %s — inspect with bp peek %s\n", why, name)
 	}
 	a.resultLine("queued", channelID)

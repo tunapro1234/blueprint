@@ -10,6 +10,7 @@ import (
 
 	"blueprint/internal/modules"
 	"blueprint/internal/safefile"
+	"blueprint/internal/userhome"
 )
 
 // localSetup prepares bp's own home (config and book) and refreshes what the
@@ -75,7 +76,7 @@ func (a *app) localSetup(args []string) error {
 	// Mark the home as bp's when bp created its config here, or when it is
 	// the default location; a custom BP_HOME that already had a config may
 	// be someone's project and stays unmarked (purge then refuses it).
-	if userHome, err := os.UserHomeDir(); err == nil && (created || filepath.Clean(a.config.Home) == filepath.Join(userHome, ".blueprint")) {
+	if userHome, err := userhome.Dir(); err == nil && (created || filepath.Clean(a.config.Home) == filepath.Join(userHome, ".blueprint")) {
 		if err := bpconfig.MarkHome(a.config.Home); err != nil {
 			return err
 		}

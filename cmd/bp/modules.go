@@ -10,11 +10,12 @@ import (
 
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/modules"
+	"blueprint/internal/userhome"
 )
 
 // moduleEnv builds the environment module hooks inspect and change.
 func (a *app) moduleEnv() modules.Env {
-	home, _ := os.UserHomeDir()
+	home, _ := userhome.Dir()
 	env := modules.Env{Config: a.config, UserHome: home, Getenv: os.Getenv, ProcRoot: "/proc", Shell: filepath.Base(os.Getenv("SHELL")), Actor: a.moduleActor()}
 	if a.tmux != nil {
 		env.Tmux = func(args ...string) (string, error) { return a.tmux.Exec(a.ctx, args...) }

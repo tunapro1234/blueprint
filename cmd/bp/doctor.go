@@ -17,6 +17,7 @@ import (
 	"blueprint/internal/cache"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/release"
+	"blueprint/internal/userhome"
 )
 
 type doctorCheck struct {
@@ -147,7 +148,7 @@ func doctor(cfg bpconfig.Config, configErr error, args []string) error {
 			checks = append(checks, doctorRuntimeChecks(cfg, fleet, agentName)...)
 		}
 	}
-	home, _ := os.UserHomeDir()
+	home, _ := userhome.Dir()
 	path := filepath.Join(home, ".config", "bp", "shell.sh")
 	if sessions {
 		shellDetail, err := checkShellIntegration(path)

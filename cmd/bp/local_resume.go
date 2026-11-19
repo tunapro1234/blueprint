@@ -96,6 +96,9 @@ func claudeResumeArgs(args []string, cwd, projects string) (string, []string, er
 }
 
 func latestClaudeResume(projects, cwd string) (string, error) {
+	if projects == "" {
+		return "", bptmux.ErrClaudeHomeUnknown
+	}
 	// Include the caller's logical path for histories created before canonical cwd
 	// registration. New launches always use the physical directory.
 	dirs := map[string]bool{cwd: true, physicalPath(cwd): true}

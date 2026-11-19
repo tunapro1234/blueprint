@@ -21,6 +21,7 @@ import (
 	"blueprint/internal/audit"
 	"blueprint/internal/config"
 	"blueprint/internal/safefile"
+	"blueprint/internal/userhome"
 )
 
 // Module names.
@@ -210,7 +211,7 @@ func Init(cfg config.Config) config.Config {
 }
 
 func detectEnv(cfg config.Config) Env {
-	home, _ := os.UserHomeDir()
+	home, _ := userhome.Dir()
 	return Env{Config: cfg, UserHome: home, Getenv: os.Getenv}
 }
 

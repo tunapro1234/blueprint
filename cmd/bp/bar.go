@@ -19,6 +19,7 @@ import (
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
+	"blueprint/internal/userhome"
 )
 
 // bar renders one tmux status-right line for a single agent. It is called by
@@ -488,7 +489,7 @@ func claudeBarModel(live cache.State, launch claudeLaunch, folder string, models
 	if folder != "" {
 		paths = append(paths, filepath.Join(folder, ".claude", "settings.local.json"))
 	}
-	if home, _ := os.UserHomeDir(); home != "" {
+	if home, _ := userhome.Dir(); home != "" {
 		paths = append(paths, filepath.Join(home, ".claude", "settings.json"))
 	}
 	model, effort := launch.model, launch.effort
@@ -558,7 +559,7 @@ func codexHome(pid int) string {
 	if home := processEnv(pid, "CODEX_HOME"); home != "" {
 		return home
 	}
-	if user, _ := os.UserHomeDir(); user != "" {
+	if user, _ := userhome.Dir(); user != "" {
 		return filepath.Join(user, ".codex")
 	}
 	return ""

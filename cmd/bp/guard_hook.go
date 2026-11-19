@@ -13,6 +13,7 @@ import (
 	"blueprint/internal/identity"
 	"blueprint/internal/msgq"
 	bptmux "blueprint/internal/tmux"
+	"blueprint/internal/userhome"
 )
 
 const guardHookUsage = "usage: bp guard status | bp guard hook claude [--ask] [--canary <path>]... (reads the PreToolUse payload on stdin)"
@@ -80,7 +81,7 @@ func parseGuardHookArgs(args []string) (guard.HookConfig, error) {
 	if len(args) < 2 || args[0] != "hook" || args[1] != "claude" {
 		return cfg, fmt.Errorf("%s", guardHookUsage)
 	}
-	cfg.Home, _ = os.UserHomeDir()
+	cfg.Home, _ = userhome.Dir()
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
 		case "--ask":

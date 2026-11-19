@@ -3,13 +3,13 @@ package main
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
 	"blueprint/internal/audit"
 	bpconfig "blueprint/internal/config"
 	"blueprint/internal/modules"
+	"blueprint/internal/userhome"
 )
 
 // guardCoverage is the caveat `bp guard status` always prints, so the
@@ -58,7 +58,7 @@ func guardStatusMain(stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "bp guard status:", err)
 		return 1
 	}
-	home, _ := os.UserHomeDir()
+	home, _ := userhome.Dir()
 	guardStatus(cfg, home, time.Now(), stdout)
 	return 0
 }

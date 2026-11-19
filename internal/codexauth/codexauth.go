@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"blueprint/internal/userhome"
 )
 
 // staleAfter is how long last_refresh may lag before the session counts as
@@ -99,7 +101,7 @@ func Home() string {
 	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
 		return home
 	}
-	if user, _ := os.UserHomeDir(); user != "" {
+	if user, _ := userhome.Dir(); user != "" {
 		return filepath.Join(user, ".codex")
 	}
 	return ""

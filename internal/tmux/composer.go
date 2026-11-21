@@ -2,8 +2,10 @@ package tmux
 
 import (
 	"blueprint/internal/harness"
+	"blueprint/internal/messagetext"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // This file holds the BOX view of a composer: the whole multi-line content of a
@@ -407,6 +409,15 @@ func classifyPaste(pane string, texts []string) (pasteVerdict, string) {
 			return pasteExact, text
 		}
 	}
+	// Our message with its trailing @token completed by Claude Code's mention
+	// picker is ours and was never sent. It must be cleared, never submitted:
+	// Enter would deliver a mention the sender did not write. It is checked
+	// before the wide-rune leniency below, which would otherwise call it exact.
+	for _, text := range texts {
+		if mentionCompleted(pane, text) {
+			return pasteDamaged, text
+		}
+	}
 	for _, text := range texts {
 		want := stripSpace(text)
 		if !relatedPaste(got, want) {
@@ -434,6 +445,51 @@ func classifyPaste(pane string, texts []string) (pasteVerdict, string) {
 		return pasteDamaged, text
 	}
 	return pasteForeign, ""
+}
+
+// mentionCompleted reports whether a readable composer holds want with only its
+// trailing @-mention extended by Claude Code's mention picker: the whole of want
+// up to and including the typed token, then the rest of ONE token, then nothing
+// but an optional trailing space.
+//
+// Measured on Claude Code 2.1.330 (2026-11-21, q915605609): bp pasted a message
+// ending in "@pr", the picker opened on the token, and bp's Enter accepted its
+// first suggestion, leaving "... @probot-egitim " unsent in the composer. The
+// box reads as our text with a suffix, which the composer clear refused as "a
+// draft appended to our message" and so left in place for good.
+//
+// The match is deliberately narrow. The completed token must be the last
+// whitespace-separated field of the raw box (so no space and nothing else
+// follows it), it must start with the typed token, and the completion may only
+// use the characters of session names and file paths. A human's words after our
+// paste ("@pr thanks") put a space in the box and do not match.
+func mentionCompleted(pane, want string) bool {
+	// The queue now stores and pastes the safe form, which ends in a space
+	// (messagetext.NeutralizeTrailingMention). A record queued before that rule
+	// may have been pasted without it, so the token is read with the trailing
+	// whitespace removed; the raw-field check below still requires the completed
+	// token to be the last thing in the box.
+	token := messagetext.TrailingMention(strings.TrimRightFunc(want, unicode.IsSpace))
+	if token == "" {
+		return false
+	}
+	box, ok := composerBox(pane)
+	if !ok {
+		return false
+	}
+	got, base := stripSpace(box), stripSpace(want)
+	if !strings.HasPrefix(got, base) || len(got) == len(base) {
+		return false
+	}
+	completion := got[len(base):]
+	for _, r := range completion {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("-_./:@", r) {
+			return false
+		}
+	}
+	trimmed := strings.TrimRightFunc(box, unicode.IsSpace)
+	field := trimmed[strings.LastIndexFunc(trimmed, unicode.IsSpace)+1:]
+	return field == token+completion
 }
 
 // relatedPaste reports whether got looks like a MUTILATED render of want: one

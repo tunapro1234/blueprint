@@ -1654,8 +1654,13 @@ func (c *Client) clearWithCtrlU(ctx context.Context, session string, mine []stri
 		// An intact clipped prefix/suffix is a substring. A torn rendering may
 		// omit interior characters, so keep the existing related-paste recovery
 		// for that case, but reject extra text appended around our whole message.
+		// The one appended text that is ours is a mention completion: Claude
+		// Code's picker extended our trailing @token (mentionCompleted). Refusing
+		// it left q915605609's completed copy in the composer with nothing able
+		// to remove it (2026-11-21). Each C-u then removes a row from the end, so
+		// the tail check below sees a prefix of this view and keeps going.
 		if !readable || visibleText == "" ||
-			(!strings.Contains(ownedText, visibleText) &&
+			(!mentionCompleted(pane, owned) && !strings.Contains(ownedText, visibleText) &&
 				(strings.Contains(visibleText, ownedText) || !relatedPaste(visibleText, ownedText))) {
 			return clearStopped(ErrTyping, pane)
 		}
@@ -1931,6 +1936,12 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 	if err := messagetext.Validate(message); err != nil {
 		return nil, err
 	}
+	// A trailing @token would open Claude Code's mention picker and the submit
+	// Enter would complete it instead of sending (see TrailingMention). The
+	// queue already stores the safe form; this covers callers that paste
+	// directly (digest flush, workflow prompts). The appended space is invisible
+	// to every verification below, which compares with whitespace stripped.
+	message, _ = messagetext.NeutralizeTrailingMention(message)
 	// Guard first: never inject keystrokes into a pane that is not running an
 	// agent CLI. A session that dropped to a root shell (zsh) would otherwise
 	// receive the message text at its shell prompt. Send is the single delivery

@@ -29,7 +29,7 @@ func (q *Queue) EnqueueOnceOrigin(key, to, from, text string, origin *Origin) (M
 	if err := messagetext.Label(from); err != nil {
 		return Message{}, err
 	}
-	text, _ = messagetext.NeutralizeImagePaths(text)
+	text = messagetext.NeutralizeForClaude(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
@@ -53,7 +53,7 @@ func (q *Queue) EnqueueOnceOrigin(key, to, from, text string, origin *Origin) (M
 	if old, err := q.Record(id); err == nil {
 		// Peer aliases can change. The authenticated origin and normalized body,
 		// rather than today's presentation label, define replay identity.
-		oldText, _ := messagetext.NeutralizeImagePaths(old.Msg)
+		oldText := messagetext.NeutralizeForClaude(old.Msg)
 		same := old.To == to && old.From == from && oldText == text && (origin == nil) == (old.Origin == nil)
 		if origin != nil && old.Origin != nil {
 			a, b := *origin, *old.Origin
@@ -103,7 +103,7 @@ func (q *Queue) Record(id string) (Message, error) {
 // Completed records are not deduplicated: repeating a completed instruction can
 // be intentional. Transport retries use EnqueueOnce's explicit key instead.
 func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Duration) (string, error) {
-	text, _ = messagetext.NeutralizeImagePaths(text)
+	text = messagetext.NeutralizeForClaude(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
@@ -129,7 +129,7 @@ func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Dur
 	}
 	for _, r := range records {
 		age := q.Now().Sub(time.Unix(0, int64(r.TS*1e9)))
-		recorded, _ := messagetext.NeutralizeImagePaths(r.Msg)
+		recorded := messagetext.NeutralizeForClaude(r.Msg)
 		if r.To == to && r.From == from && recorded == text && r.ForceBusy == force && age >= -time.Minute && age <= within {
 			return r.ID, nil
 		}

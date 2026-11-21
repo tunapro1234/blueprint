@@ -414,7 +414,7 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 	if err := messagetext.Validate(text); err != nil {
 		return "", err
 	}
-	text, _ = messagetext.NeutralizeImagePaths(text)
+	text = messagetext.NeutralizeForClaude(text)
 	if err := messagetext.Sender(from); err != nil {
 		return "", err
 	}
@@ -740,6 +740,18 @@ func (q *Queue) pendingRecords() ([]record, []badRecord, error) {
 				rec.wire = wire
 			}
 		}
+		// The trailing-mention rule is applied to the delivery body as well as at
+		// intake, so a record queued before the rule existed (q915605609 sat
+		// pending across the deploy that introduced it) is pasted in the same safe
+		// form as a new one. The rewrite only appends a space, which neither the
+		// composer checks (whitespace stripped) nor the transcript witness
+		// (trimmed) can see, so the old record still recognises its own earlier
+		// paste and its own transcript entry.
+		if rec.renderErr == nil {
+			if wire, changed := messagetext.NeutralizeTrailingMention(rec.Wire()); changed {
+				rec.wire = wire
+			}
+		}
 		records = append(records, rec)
 	}
 	sort.Slice(records, func(i, j int) bool {
@@ -876,7 +888,8 @@ func (q *Queue) PendingFor(to string) []string {
 }
 
 // RecentIdentical returns the newest pending record for `to` whose text matches
-// text after image-path neutralization and which was queued within `within`.
+// text after intake neutralization (messagetext.NeutralizeForClaude) and which
+// was queued within `within`.
 //
 // It is the sender-side duplicate guard, and it exists because the two other
 // guards cannot see the case that produced measured duplicates: an agent whose
@@ -888,7 +901,7 @@ func (q *Queue) PendingFor(to string) []string {
 // times. Nothing downstream can undo that; only refusing to produce the second
 // copy can.
 func (q *Queue) RecentIdentical(to, text string, within time.Duration) (Message, bool) {
-	text, _ = messagetext.NeutralizeImagePaths(text)
+	text = messagetext.NeutralizeForClaude(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	records, _, err := q.pendingRecords()
@@ -899,7 +912,7 @@ func (q *Queue) RecentIdentical(to, text string, within time.Duration) (Message,
 	var newest Message
 	found := false
 	for _, rec := range records {
-		recorded, _ := messagetext.NeutralizeImagePaths(rec.Msg)
+		recorded := messagetext.NeutralizeForClaude(rec.Msg)
 		if rec.To != to || recorded != text {
 			continue
 		}
@@ -923,13 +936,13 @@ func (q *Queue) Reason(id string) string {
 }
 
 // CloseDelivered closes the oldest pending record for `to` whose text matches
-// text after image-path neutralization, with the given status. It is how a caller
-// reports that a queued message left the composer some other way than through
-// Dispatch — for instance because the delivery step found it hanging there and
-// pressed Enter on it. Leaving such a record open is what makes the queue paste
+// text after intake neutralization (messagetext.NeutralizeForClaude), with the
+// given status. It is how a caller reports that a queued message left the
+// composer some other way than through Dispatch — for instance because the
+// delivery step found it hanging there and pressed Enter on it. Leaving such a record open is what makes the queue paste
 // an already-delivered message a second time.
 func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
-	text, _ = messagetext.NeutralizeImagePaths(text)
+	text = messagetext.NeutralizeForClaude(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	records, _, err := q.pendingRecords()
@@ -939,7 +952,7 @@ func (q *Queue) CloseDelivered(to, text, status string) (string, bool) {
 	// "Oldest" now really means oldest: the records arrive in send-time order, not
 	// in the order of a file name that carries a fraction of a second.
 	for _, rec := range records {
-		recorded, _ := messagetext.NeutralizeImagePaths(rec.Wire())
+		recorded := messagetext.NeutralizeForClaude(rec.Wire())
 		if rec.To != to || recorded != text {
 			continue
 		}
@@ -1587,6 +1600,15 @@ type lineState struct {
 	// may do it, and only after forceCooldown — see forceReleased.
 	forceHeld     string
 	forceHeldFrom float64
+	// waitingHead is the first record that holds this line for ORDINARY records,
+	// whether its hold is hard (block) or soft (softBlock). A soft hold comes from
+	// an in-flight record (see inFlight) whose text is provably not in the
+	// composer and which is only waiting — for the transcript witness, or for a
+	// working pane to finish before its resend. Ordinary records keep their send
+	// order behind it; a force record may proceed, as it did before in-flight
+	// records were sorted in front of it, because there is nothing of the
+	// earlier message in the composer for it to collide with.
+	waitingHead string
 }
 
 // block records that this record is holding the line. The FIRST blocker wins, so
@@ -1595,6 +1617,18 @@ type lineState struct {
 func (l *lineState) block(id string) {
 	if l.blockedBy == "" {
 		l.blockedBy = id
+	}
+	if l.waitingHead == "" {
+		l.waitingHead = id
+	}
+}
+
+// softBlock holds the line for ordinary records only; see waitingHead. It never
+// sets blockedBy, so the force interlock (forceReleased) reads exactly the holds
+// it read before.
+func (l *lineState) softBlock(id string) {
+	if l.waitingHead == "" {
+		l.waitingHead = id
 	}
 }
 
@@ -1609,13 +1643,20 @@ func (l *lineState) holdForce(id string, forcedAt float64) {
 }
 
 // hold reports why this record may not be acted on yet, or "" when it is the head
-// of a line that has not moved in this pass.
-func (l *lineState) hold() string {
+// of a line that has not moved in this pass. A force record is held by hard
+// blocks only; an ordinary record also by the soft hold of an in-flight record.
+func (l *lineState) hold(rec record) string {
 	if l.delivered != "" {
 		return deliveredThisPassReason(l.delivered)
 	}
-	if l.blockedBy != "" {
-		return headOfLineReason(l.blockedBy)
+	if rec.ForceBusy {
+		if l.blockedBy != "" {
+			return headOfLineReason(l.blockedBy)
+		}
+		return ""
+	}
+	if l.waitingHead != "" {
+		return headOfLineReason(l.waitingHead)
 	}
 	return ""
 }
@@ -1746,6 +1787,16 @@ func (q *Queue) dispatch(ctx context.Context, target Target, selected map[string
 // put in front of the queue is delivered before the ordinary traffic waiting for
 // the same agent, and forced messages keep send order among themselves, because
 // two of them are usually one conversation.
+//
+// One kind of ordinary record goes in front of the force records: one already in
+// flight (inFlight). Its text has reached the pane, so it is no longer ordinary
+// traffic waiting its turn but a delivery in progress, and only its own pass can
+// finish it: recognise and clear its copy in the composer, resend it, or settle
+// it. Sorted behind a later force record it never got that pass. Measured
+// 2026-11-21: q915605609 was pasted, its trailing "@pr" was completed to
+// "@probot-egitim" in the composer, and 14 minutes later a forced record took the
+// head, was refused for "composer contains foreign text" (the completed copy),
+// and held the line for 15 hours with the pasted record behind it.
 func lines(records []record) ([]string, map[string][]record) {
 	order := make([]string, 0, len(records))
 	byTarget := make(map[string][]record, len(records))
@@ -1755,14 +1806,33 @@ func lines(records []record) ([]string, map[string][]record) {
 		}
 		byTarget[rec.To] = append(byTarget[rec.To], rec)
 	}
+	group := func(rec record) int {
+		switch {
+		case inFlight(rec):
+			return 0
+		case rec.ForceBusy:
+			return 1
+		}
+		return 2
+	}
 	for _, to := range order {
 		line := byTarget[to]
 		// A STABLE partition: the records arrive in (TS, id) order already, so
-		// moving the force records to the front is the whole of the reordering and
-		// send order survives inside both groups.
-		sort.SliceStable(line, func(i, j int) bool { return line[i].ForceBusy && !line[j].ForceBusy })
+		// moving the groups to the front is the whole of the reordering and send
+		// order survives inside each group.
+		sort.SliceStable(line, func(i, j int) bool { return group(line[i]) < group(line[j]) })
 	}
 	return order, byTarget
+}
+
+// inFlight reports whether an ORDINARY record's text has already reached its
+// pane and the delivery is not settled: it was pasted and could not be verified
+// (NoRepaste with UnverifiedAt), or a torn or completed copy of it was cleared
+// from the composer and it waits to be sent again (TornClears). A forced record
+// is never in flight in this sense; it keeps its place among the force records
+// and the follower interlock (forceReleased) governs it as before.
+func inFlight(rec record) bool {
+	return !rec.ForceBusy && ((rec.NoRepaste && rec.UnverifiedAt > 0) || rec.TornClears > 0)
 }
 
 // dispatchRecord decides what happens to ONE pending record in this pass.
@@ -1819,7 +1889,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		q.remember(rec.path, rec.Message, "target closed; waiting for it to reopen", report)
 		return
 	}
-	if held := line.hold(); held != "" && !q.forceReleased(rec, line) {
+	if held := line.hold(rec); held != "" && !q.forceReleased(rec, line) {
 		q.remember(rec.path, rec.Message, held, report)
 		return
 	}
@@ -1840,7 +1910,9 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			q.remember(rec.path, rec.Message, reason, report)
 			// Unknown ownership cannot authorize keys. A readable exact/torn copy
 			// is already proof of non-delivery, so close it with a loud notice now.
+			seen := false
 			if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil {
+				seen = true
 				settled := rec.Message
 				switch {
 				case bptmux.ExactPaste(pane, []string{rec.Wire()}):
@@ -1858,7 +1930,14 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				}
 			}
 			if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) {
-				line.block(rec.ID)
+				if seen {
+					// The composer was read and holds no copy of this text: the
+					// record only waits for the witness. Ordinary records stay
+					// behind it; a force record may pass (lineState.waitingHead).
+					line.softBlock(rec.ID)
+				} else {
+					line.block(rec.ID)
+				}
 			}
 			return
 		}
@@ -2030,16 +2109,30 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 	// refuses this too and is the real guarantee; the check is repeated here so the
 	// record gets the honest "pane is working" reason a human can read in `bp q`
 	// instead of a delivery error.
+	//
+	// An in-flight record (one whose torn copy was cleared and which waits to be
+	// resent) facing a merely WORKING pane holds the line softly: its composer
+	// copy is gone, so a force record may go in first, exactly as it did before
+	// in-flight records were sorted in front of it. Making Tuna's forced message
+	// wait out a whole turn would turn the ordering fix into a latency bug.
 	if q.RuntimeBlock != nil {
 		if reason := q.RuntimeBlock(rec.To, rec.ForceBusy); reason != "" {
 			q.remember(rec.path, rec.Message, reason, report)
-			line.block(rec.ID)
+			if inFlight(rec) && q.RuntimeBlock(rec.To, true) == "" {
+				line.softBlock(rec.ID)
+			} else {
+				line.block(rec.ID)
+			}
 			return
 		}
 	}
 	if (!rec.ForceBusy || bptmux.HermesPane(pane)) && (bptmux.Busy(pane) || (q.RuntimeBlock == nil && q.TurnOpen != nil && q.TurnOpen(rec.To))) {
 		q.remember(rec.path, rec.Message, bptmux.BlockedByBusyPane, report)
-		line.block(rec.ID)
+		if inFlight(rec) {
+			line.softBlock(rec.ID)
+		} else {
+			line.block(rec.ID)
+		}
 		return
 	}
 	// A non-empty composer used to end the attempt right here, and that is how the

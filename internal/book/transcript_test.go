@@ -114,6 +114,21 @@ func TestTranscriptDeliveredMatchesClaudeImageTransform(t *testing.T) {
 	}
 }
 
+func TestTranscriptDeliveredMatchesTrailingMentionSafeForm(t *testing.T) {
+	// The queue pastes "... @pr " so Claude Code's mention picker stays closed;
+	// Claude stores the submitted text without the trailing space (measured on
+	// 2.1.330). Both the safe form and a legacy record's bare form must match.
+	folder := "/srv/necati/gruplar/vbaipr"
+	queued := time.Now().Add(-time.Minute)
+	stored := "[server-whatsapp] [kopru] message for the group: [WA:VBAI/PR 26-27|Utku#ACBD] @pr"
+	path := writeTranscript(t, "server-necati-vbaipr", folder, userRecord(queued.Add(time.Second), stored))
+	for _, message := range []string{stored + " ", stored} {
+		if !TranscriptDelivered(path, folder, "server-necati-vbaipr", message, queued) {
+			t.Fatalf("%q was not witnessed", message)
+		}
+	}
+}
+
 func TestTranscriptDeliveredRefusesWhatItCannotProve(t *testing.T) {
 	folder := "/srv/kavram-main"
 	queued := time.Now().Add(-time.Minute)

@@ -99,6 +99,27 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- Delivery: a message ending in an `@` token (`... @pr`) no longer opens Claude
+  Code's mention picker. Claude Code 2.1.330 suggests files and other Claude
+  sessions on the machine for such a token, and bp's Enter accepted the first
+  suggestion instead of sending: the composer was left holding
+  `... @probot-egitim`, unsent. The queue now stores and pastes such a message
+  with one trailing space, which keeps the picker closed; records queued before
+  this change are pasted the same way. The transcript witness and the composer
+  checks ignore the space, so old and new records still match their own pastes.
+- Delivery: a copy whose trailing `@` token was completed by the picker is now
+  recognised as the message's own undelivered paste. It is cleared with C-u and
+  sent again in the safe form, never submitted (Enter would send a mention the
+  sender did not write). Before, the composer clear refused it as "text appended
+  to our message" without pressing a key, so the copy stayed for good.
+- Queue order: a message whose text already reached the pane (pasted but not
+  verified, or cleared and waiting to be resent) now stays ahead of forced
+  messages that arrive later, so its recovery and settlement run first. Before,
+  a later `--force-busy` message became the head, was refused because the
+  composer held the earlier copy, and held the line: one target had over a
+  hundred records stuck behind it. A forced message may still go ahead while
+  the earlier message only waits for the transcript witness or for a working
+  pane, with nothing of it in the composer; ordinary messages keep their order.
 - `scripts/bp-attach` (the shared core of `rush`/`lush`) wrote the session bar
   as plain `#(bp name ...)` and `#(bp bar ...)` jobs, which tmux 3.4 reruns on
   every status redraw: each attached session launched two bp processes about

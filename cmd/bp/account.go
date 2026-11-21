@@ -70,7 +70,9 @@ even while the active account still has room, and auto switching returns to
 it as soon as its window resets. A backup account is used only when every
 preferred and normal account is used up, lowest priority first, and auto
 switching returns to a normal account once one has room again; keepalive
-alternates normal and backup windows. Priority numbers apply to backups only.`
+alternates normal and backup windows. Priority numbers apply to backups only.
+With claudeAccounts.preferredYieldHours set, a normal account whose seven-day
+window resets within that many hours is used before the preferred accounts.`
 
 // Exit codes of bp account auto --once.
 const (
@@ -335,7 +337,11 @@ func (a *app) accountStatus(m *claudeacct.Manager, args []string) error {
 	if weekly := cfg.WeeklyThresholdPercent(); weekly != cfg.Threshold {
 		threshold = fmt.Sprintf("threshold %d%% five-hour, %d%% seven-day", cfg.Threshold, weekly)
 	}
-	fmt.Fprintf(a.out, "auto switch: %s (%s, cooldown %dm, poll every %dm, prefer %s)\n", mode, threshold, cfg.CooldownMinutes, cfg.PollMinutes, prefer)
+	yield := ""
+	if cfg.PreferredYieldHours > 0 {
+		yield = fmt.Sprintf(", preferred accounts yield to a seven-day reset within %dh", cfg.PreferredYieldHours)
+	}
+	fmt.Fprintf(a.out, "auto switch: %s (%s, cooldown %dm, poll every %dm, prefer %s%s)\n", mode, threshold, cfg.CooldownMinutes, cfg.PollMinutes, prefer, yield)
 	if len(cfg.Limits) > 0 {
 		keys := make([]string, 0, len(cfg.Limits))
 		for key := range cfg.Limits {
@@ -521,7 +527,8 @@ func (a *app) accountAuto(m *claudeacct.Manager, args []string) error {
 	}
 	cfg := a.config.ClaudeAccounts
 	policy := claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), WeeklyThreshold: float64(cfg.WeeklyThreshold),
-		Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer, BackupOrder: cfg.Backup.SwitchOrder}
+		Cooldown: a.accountCooldown(), Limits: cfg.LimitPercents(), Prefer: cfg.SwitchPrefer, BackupOrder: cfg.Backup.SwitchOrder,
+		PreferredYield: cfg.PreferredYield()}
 	for _, flag := range []struct {
 		name   string
 		target *float64
@@ -622,7 +629,8 @@ func (a *app) accountKeepAlive(m *claudeacct.Manager, args []string) error {
 	backup := cfg.Backup
 	opts := claudeacct.KeepAliveOptions{Model: cfg.KeepAliveModel, DryRun: flags["--once"] == "" || flags["--dry-run"] != "",
 		SkipBackups: !backup.KeepAliveBackups, FlatStagger: backup.Stagger == "flat", Scope: cfg.KeepAliveScope,
-		Policy: claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), WeeklyThreshold: float64(cfg.WeeklyThreshold), Limits: cfg.LimitPercents()},
+		Policy: claudeacct.AutoPolicy{Threshold: float64(cfg.Threshold), WeeklyThreshold: float64(cfg.WeeklyThreshold), Limits: cfg.LimitPercents(),
+			PreferredYield: cfg.PreferredYield()},
 		Weekly: cfg.KeepAliveWeekly}
 	if scope, ok := flags["--scope"]; ok {
 		if scope != claudeacct.KeepAliveScopeAll && scope != claudeacct.KeepAliveScopeWeeklyActive {

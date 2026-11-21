@@ -620,3 +620,49 @@ func TestAccountCLIRoles(t *testing.T) {
 		t.Fatalf("a token value reached command output:\n%s", e.transcript.String())
 	}
 }
+
+func TestAccountCLIPreferredYield(t *testing.T) {
+	e := newAccountEnv(t)
+	a := e.app(0)
+	for n := 1; n <= 3; n++ {
+		e.login(n)
+		if out, code := e.run(a, "add"); code != 0 {
+			t.Fatalf("add %d: %s", n, out)
+		}
+	}
+	// Every seven-day window resets at 2099-01-02T00:00Z, the five-hour ones
+	// at 2099-01-01T00:00Z. Slot 1 is preferred, slot 3 is live.
+	e.api.set(1, 10, 10)
+	e.api.set(2, 20, 20)
+	e.api.set(3, 30, 30)
+	if out, code := e.run(a, "list", "--refresh"); code != 0 {
+		t.Fatalf("list: %s", out)
+	}
+	if out, code := e.run(a, "role", "1", "preferred"); code != 0 {
+		t.Fatalf("role: %s", out)
+	}
+	// Decide four hours before the weekly reset, from the cached usage.
+	e.now = time.Date(2099, 1, 1, 20, 0, 0, 0, time.UTC)
+
+	out, code := e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoSwitched || !strings.Contains(out, "would switch from slot 3 (30%) to slot 1 (10%)") {
+		t.Fatalf("yield off: code=%d %s", code, out)
+	}
+	a.config.ClaudeAccounts.PreferredYieldHours = 9
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoNothing || !strings.Contains(out, "active account's seven-day window resets in 4h, within the preferred yield 9h") {
+		t.Fatalf("yield 9h: code=%d %s", code, out)
+	}
+	out, code = e.run(a, "status")
+	if code != 0 || !strings.Contains(out, "prefer soonest-reset, preferred accounts yield to a seven-day reset within 9h)") {
+		t.Fatalf("status: %s", out)
+	}
+	a.config.ClaudeAccounts.PreferredYieldHours = 3
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	if code != accountAutoSwitched || !strings.Contains(out, "to slot 1") {
+		t.Fatalf("reset outside a 3h yield: code=%d %s", code, out)
+	}
+	if !e.liveAccessIs(3) {
+		t.Fatal("dry run changed the live login")
+	}
+}

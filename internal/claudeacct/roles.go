@@ -265,7 +265,119 @@ func decideWithRoles(accounts *Accounts, active int, current Slot, use windowUse
 	return noTarget(why)
 }
 
-// decidePreferred is Decide when some account is preferred. Preferred
+// decidePreferred is Decide when some account is preferred. With
+// AutoPolicy.PreferredYield set, a normal account whose seven-day window
+// resets within the yield comes before the preferred accounts (see
+// decideExpiring); otherwise, and while no such account has room,
+// decideByTier.
+func decidePreferred(accounts *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
+	if expiring := expiringTargets(accounts, policy, now); len(expiring) > 0 {
+		return decideExpiring(accounts, active, current, use, state, policy, now, d, expiring)
+	}
+	return decideByTier(accounts, active, current, use, state, policy, now, d)
+}
+
+// expiringTargets lists the accounts the preferred yield puts first: usable
+// normal accounts (neither preferred nor backup) with room whose seven-day
+// window is running and resets within AutoPolicy.PreferredYield, whatever
+// the switch strategy; soonest seven-day reset first, then most room. The
+// list may hold the active account. It is empty while the yield is off.
+func expiringTargets(accounts *Accounts, policy AutoPolicy, now time.Time) []rankedTarget {
+	if policy.PreferredYield <= 0 {
+		return nil
+	}
+	var list []rankedTarget
+	for _, s := range accounts.Slots {
+		if s.RoleName() != RoleNormal || !s.Usable() {
+			continue
+		}
+		use, known := policy.use(s, now)
+		if !known || use.room() <= 0 {
+			continue
+		}
+		reset := slotUsage(s).SevenDayResetAt(now)
+		if reset.IsZero() || reset.After(now.Add(policy.PreferredYield)) {
+			continue
+		}
+		list = append(list, newRankedTarget(s.Number, use, reset))
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		if !list[i].reset.Equal(list[j].reset) {
+			return list[i].reset.Before(list[j].reset)
+		}
+		return list[i].room > list[j].room
+	})
+	return list
+}
+
+// decideExpiring is decidePreferred while some normal account's seven-day
+// window resets within the preferred yield (see expiringTargets): an
+// allowance about to reset is lost unless it is spent, so it is spent before
+// a preferred account's.
+//
+// On an expiring account the policy runs among the expiring accounts only,
+// so neither a preferred account nor a normal account outside the yield pulls
+// auto switching away while it has room (an expiring account always has
+// room). On any other account, a preferred one with room included, it
+// switches to the first expiring account after the cooldown; after the
+// expiring accounts, the candidates are those decideByTier would take.
+func decideExpiring(accounts *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision, expiring []rankedTarget) Decision {
+	in := map[int]bool{}
+	for _, r := range expiring {
+		in[r.n] = true
+	}
+	yield := FormatDuration(policy.PreferredYield)
+	for _, r := range expiring {
+		if r.n != active {
+			continue
+		}
+		sub := decideWithin(filterSlots(accounts, func(s Slot) bool { return in[s.Number] }), active, current, use, state, policy, now, d)
+		sub.Reason = fmt.Sprintf("active account's seven-day window resets in %s, within the preferred yield %s; ", FormatDuration(r.reset.Sub(now)), yield) + sub.Reason
+		return sub
+	}
+	candidates := targetNumbers(expiring)
+	if fallback := decideByTier(accounts, active, current, use, state, policy, now, d); fallback.Action == AutoSwitch {
+		for _, n := range candidatesFor(accounts, fallback, policy, now) {
+			if !in[n] {
+				candidates = append(candidates, n)
+			}
+		}
+	}
+	best := expiring[0]
+	reason := fmt.Sprintf("slot %d's seven-day window resets in %s, within the preferred yield %s; slot %d at %s, leaving slot %d at %s",
+		best.n, FormatDuration(best.reset.Sub(now)), yield, best.n, best.use.valueText(), active, use.valueText())
+	return switchDecision(accounts, expiring, candidates, reason, state, policy, now, d)
+}
+
+// switchDecision is d switching to list[0] with candidates, or waiting while
+// the last switch is under the cooldown.
+func switchDecision(accounts *Accounts, list []rankedTarget, candidates []int, reason string, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
+	if !state.LastSwitchAt.IsZero() && now.Before(state.LastSwitchAt.Add(policy.Cooldown)) {
+		d.Action = AutoNone
+		d.Reason = "cooling down for " + FormatDuration(state.LastSwitchAt.Add(policy.Cooldown).Sub(now)) + " after the last switch"
+		return d
+	}
+	d.Action, d.candidates = AutoSwitch, candidates
+	d.target(list[0])
+	d.Reason = reason
+	if target := accounts.Slot(d.To); target != nil && target.IsBackup() {
+		d.Reason += fmt.Sprintf(" (backup, priority %d)", target.Priority)
+	}
+	return d
+}
+
+// decideWithin decides among a subset of the accounts that holds the active
+// one, with decideTiers (where the preferred role plays no part), and takes
+// the candidates from that subset.
+func decideWithin(subset *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
+	sub := decideTiers(subset, active, current, use, state, policy, now, d)
+	if sub.Action == AutoSwitch {
+		sub.candidates = candidatesFor(subset, sub, policy, now)
+	}
+	return sub
+}
+
+// decideByTier is decidePreferred without the preferred yield. Preferred
 // accounts come first, then normal accounts, then backups; each tier is
 // ordered by the policy as normal accounts are (see normalTargets).
 //
@@ -275,35 +387,17 @@ func decideWithRoles(accounts *Accounts, active int, current Slot, use windowUse
 // preferred accounts (decideTiers) runs on the other accounts as if the
 // preferred ones did not exist. On a preferred account with room it runs
 // among the preferred accounts only, so auto switching never leaves the
-// preferred tier while the active account has room. When the
-// active preferred account is used up it takes the next preferred account
-// with room, else a normal account by the policy, else a backup by priority
+// preferred tier while the active account has room. When the active
+// preferred account is used up it takes the next preferred account with
+// room, else a normal account by the policy, else a backup by priority
 // (normals before backups in either backup switch order).
-func decidePreferred(accounts *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
+func decideByTier(accounts *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
 	preferred := preferredTargets(accounts, active, policy, now)
 	switchTo := func(list []rankedTarget, candidates []int, reason string) Decision {
-		if !state.LastSwitchAt.IsZero() && now.Before(state.LastSwitchAt.Add(policy.Cooldown)) {
-			d.Action = AutoNone
-			d.Reason = "cooling down for " + FormatDuration(state.LastSwitchAt.Add(policy.Cooldown).Sub(now)) + " after the last switch"
-			return d
-		}
-		d.Action, d.candidates = AutoSwitch, candidates
-		d.target(list[0])
-		d.Reason = reason
-		if target := accounts.Slot(d.To); target != nil && target.IsBackup() {
-			d.Reason += fmt.Sprintf(" (backup, priority %d)", target.Priority)
-		}
-		return d
+		return switchDecision(accounts, list, candidates, reason, state, policy, now, d)
 	}
-	// within decides among a subset of the accounts that holds the active
-	// one, with decideTiers (where the preferred role plays no part), and
-	// takes the candidates from that subset.
 	within := func(subset *Accounts) Decision {
-		sub := decideTiers(subset, active, current, use, state, policy, now, d)
-		if sub.Action == AutoSwitch {
-			sub.candidates = candidatesFor(subset, sub, policy, now)
-		}
-		return sub
+		return decideWithin(subset, active, current, use, state, policy, now, d)
 	}
 	rest := withoutRole(accounts, RolePreferred)
 	if !current.IsPreferred() {

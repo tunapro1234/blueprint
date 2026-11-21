@@ -144,6 +144,7 @@ claudeAccounts:
   keepAliveModel: haiku # model of the minimal keepalive prompt
   keepAliveScope: all   # or weekly-active: five-hour pings for the weekly-active account only
   keepAliveWeekly: false # also start every account's seven-day window when it is not running
+  preferredYieldHours: 0 # preferred accounts yield to a normal account whose week resets within this many hours (0 = off)
   backup:               # accounts marked with bp account role N backup
     switchOrder: after-normals # or interleave
     stagger: interleave        # or flat
@@ -209,6 +210,24 @@ normal one, except that the `weekly-active` account is a preferred account
 while one has seven-day room (see below). Without a preferred account nothing
 changes.
 
+`preferredYieldHours` (0 to 168; 0, the default, is off) makes preferred
+accounts yield to an allowance that is about to reset and would otherwise be
+lost. With it set, an enabled normal account (not preferred, not a backup)
+that has room and whose seven-day window resets within that many hours is
+used before the preferred accounts, whatever `switchPrefer` is. From any other
+account, a preferred one with room included, auto switching moves to the one
+whose seven-day window resets soonest, after `cooldownMinutes`. On such an
+account it stays while it has room: `switchPrefer` runs among those accounts
+only, so neither a preferred account nor an account whose week resets later
+pulls it away. Once its five-hour window is used up it no longer counts, and
+auto switching goes to another such account, else to a preferred account as
+usual; it returns when that window resets, if its week still resets within
+the yield. After its weekly
+reset the next reset is a week away and the preferred accounts come first
+again. With `keepAliveScope: weekly-active` such an account is the
+weekly-active account. The setting changes nothing while no account is
+preferred.
+
 A Claude five-hour window starts with the first request after the previous one
 ran out. With `keepAlive` on, each pass also sends a one-word prompt
 (`claude -p` with `keepAliveModel`, no tools, no session saved, in a private
@@ -230,7 +249,9 @@ on.
 `keepAliveScope: weekly-active` gives five-hour pings to one account only:
 the weekly-active account, the one `switchPrefer: soonest-weekly-reset`
 drains. It is chosen the way that strategy orders accounts, on the seven-day
-window alone: among enabled preferred accounts below their seven-day limit
+window alone: with a preferred account and `preferredYieldHours` set, an
+enabled normal account below its seven-day limit whose seven-day window resets
+within the yield (the soonest); then among enabled preferred accounts below their seven-day limit
 (`weeklyThreshold`, else `threshold`, or the account's lower `limits` entry), the one whose
 seven-day window resets soonest; when no preferred account qualifies, the same
 among the normal accounts; a backup, by priority, only when no normal
@@ -316,7 +337,7 @@ windows:
 | `codex.sockets` | Read-only Codex app-server observation sockets |
 | `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
-| `claudeAccounts.autoSwitch`, `.threshold`, `.weeklyThreshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, preferred and backup accounts and keepalive (see above) |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.weeklyThreshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.preferredYieldHours`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, preferred and backup accounts and keepalive (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

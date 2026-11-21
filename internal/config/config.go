@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"blueprint/internal/ntfy"
 	"blueprint/internal/p2p"
@@ -121,6 +122,11 @@ type ClaudeAccountsConfig struct {
 	// "soonest-weekly-reset" drains the account whose seven-day window resets
 	// soonest, leaving it only while its five-hour window is used up.
 	SwitchPrefer string `json:"switchPrefer" yaml:"switchPrefer"`
+	// PreferredYieldHours (0, the default, is off) makes preferred accounts
+	// (bp account role N preferred) yield to a normal account whose seven-day
+	// window resets within this many hours, so that allowance is spent
+	// before it resets. At most 168.
+	PreferredYieldHours int `json:"preferredYieldHours,omitempty" yaml:"preferredYieldHours,omitempty"`
 	// Backup controls backup accounts (bp account role N backup).
 	Backup ClaudeAccountsBackup `json:"backup" yaml:"backup"`
 }
@@ -136,6 +142,11 @@ type ClaudeAccountsBackup struct {
 	// is used up) or "interleave" (the next backup whenever the active normal
 	// account is used up: A1 B1 A2 B2 ...).
 	SwitchOrder string `json:"switchOrder" yaml:"switchOrder"`
+}
+
+// PreferredYield is PreferredYieldHours as a duration; 0 is off.
+func (c ClaudeAccountsConfig) PreferredYield() time.Duration {
+	return time.Duration(c.PreferredYieldHours) * time.Hour
 }
 
 // WeeklyThresholdPercent is the seven-day threshold in effect: WeeklyThreshold,
@@ -265,18 +276,19 @@ type overrides struct {
 }
 
 type claudeAccountsOverrides struct {
-	AutoSwitch      *bool           `json:"autoSwitch" yaml:"autoSwitch"`
-	Threshold       *int            `json:"threshold" yaml:"threshold"`
-	WeeklyThreshold *int            `json:"weeklyThreshold" yaml:"weeklyThreshold"`
-	CooldownMinutes *int            `json:"cooldownMinutes" yaml:"cooldownMinutes"`
-	PollMinutes     *int            `json:"pollMinutes" yaml:"pollMinutes"`
-	Limits          *map[string]int `json:"limits" yaml:"limits"`
-	KeepAlive       *bool           `json:"keepAlive" yaml:"keepAlive"`
-	KeepAliveModel  *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
-	KeepAliveScope  *string         `json:"keepAliveScope" yaml:"keepAliveScope"`
-	KeepAliveWeekly *bool           `json:"keepAliveWeekly" yaml:"keepAliveWeekly"`
-	SwitchPrefer    *string         `json:"switchPrefer" yaml:"switchPrefer"`
-	Backup          *struct {
+	AutoSwitch          *bool           `json:"autoSwitch" yaml:"autoSwitch"`
+	Threshold           *int            `json:"threshold" yaml:"threshold"`
+	WeeklyThreshold     *int            `json:"weeklyThreshold" yaml:"weeklyThreshold"`
+	CooldownMinutes     *int            `json:"cooldownMinutes" yaml:"cooldownMinutes"`
+	PollMinutes         *int            `json:"pollMinutes" yaml:"pollMinutes"`
+	Limits              *map[string]int `json:"limits" yaml:"limits"`
+	KeepAlive           *bool           `json:"keepAlive" yaml:"keepAlive"`
+	KeepAliveModel      *string         `json:"keepAliveModel" yaml:"keepAliveModel"`
+	KeepAliveScope      *string         `json:"keepAliveScope" yaml:"keepAliveScope"`
+	KeepAliveWeekly     *bool           `json:"keepAliveWeekly" yaml:"keepAliveWeekly"`
+	SwitchPrefer        *string         `json:"switchPrefer" yaml:"switchPrefer"`
+	PreferredYieldHours *int            `json:"preferredYieldHours" yaml:"preferredYieldHours"`
+	Backup              *struct {
 		KeepAliveBackups *bool   `json:"keepAliveBackups" yaml:"keepAliveBackups"`
 		Stagger          *string `json:"stagger" yaml:"stagger"`
 		SwitchOrder      *string `json:"switchOrder" yaml:"switchOrder"`
@@ -673,6 +685,9 @@ func apply(result *Config, values overrides) {
 		if accounts.SwitchPrefer != nil {
 			result.ClaudeAccounts.SwitchPrefer = *accounts.SwitchPrefer
 		}
+		if accounts.PreferredYieldHours != nil {
+			result.ClaudeAccounts.PreferredYieldHours = *accounts.PreferredYieldHours
+		}
 		if backup := accounts.Backup; backup != nil {
 			if backup.KeepAliveBackups != nil {
 				result.ClaudeAccounts.Backup.KeepAliveBackups = *backup.KeepAliveBackups
@@ -699,6 +714,9 @@ func validateClaudeAccounts(value ClaudeAccountsConfig) error {
 	}
 	if value.WeeklyThreshold != 0 && (value.WeeklyThreshold < 1 || value.WeeklyThreshold > 100) {
 		return fmt.Errorf("weeklyThreshold must be between 1 and 100, or 0 to use threshold")
+	}
+	if value.PreferredYieldHours < 0 || value.PreferredYieldHours > 168 {
+		return fmt.Errorf("preferredYieldHours must be between 0 (off) and 168")
 	}
 	if value.CooldownMinutes < 1 {
 		return fmt.Errorf("cooldownMinutes must be at least 1")

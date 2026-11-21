@@ -65,6 +65,7 @@ func newClaudeAccountAuto(cfg config.Config, logger *log.Logger) *claudeAccountA
 				Limits:          accounts.LimitPercents(),
 				Prefer:          accounts.SwitchPrefer,
 				BackupOrder:     accounts.Backup.SwitchOrder,
+				PreferredYield:  accounts.PreferredYield(),
 			},
 			PollEvery: time.Duration(accounts.PollMinutes) * time.Minute,
 			MaxPolls:  1,

@@ -280,3 +280,19 @@ func TestClaudeAccountSwitchMessageShape(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeAccountPolicyCarriesPreferredYield(t *testing.T) {
+	cfg := config.Config{StateDir: t.TempDir(), ClaudeAccounts: config.DefaultClaudeAccounts()}
+	cfg.ClaudeAccounts.AutoSwitch, cfg.ClaudeAccounts.KeepAlive = true, true
+	if p := newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0)).options.Policy; p.PreferredYield != 0 {
+		t.Fatalf("default policy %+v", p)
+	}
+	cfg.ClaudeAccounts.PreferredYieldHours = 9
+	auto := newClaudeAccountAuto(cfg, log.New(io.Discard, "", 0))
+	if p := auto.options.Policy; p.PreferredYield != 9*time.Hour {
+		t.Fatalf("auto policy %+v", p)
+	}
+	if k := auto.keepAlive; k == nil || k.Policy.PreferredYield != 9*time.Hour {
+		t.Fatalf("keepalive options %+v", k)
+	}
+}

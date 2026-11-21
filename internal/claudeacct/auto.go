@@ -62,6 +62,11 @@ type AutoPolicy struct {
 	// BackupOrder is when backup accounts are used: SwitchOrderAfterNormals
 	// (the default) or SwitchOrderInterleave. See decideWithRoles.
 	BackupOrder string
+	// PreferredYield, when set and some account is preferred, puts a normal
+	// account whose seven-day window resets within it before the preferred
+	// accounts, so an allowance about to reset is spent first (see
+	// decideExpiring). 0 is off.
+	PreferredYield time.Duration
 	// sevenDayOnly measures room on the seven-day window alone, leaving the
 	// five-hour window out. Auto switching never sets it; keepalive's
 	// weekly-active scope does, to find the account the weekly policy is draining

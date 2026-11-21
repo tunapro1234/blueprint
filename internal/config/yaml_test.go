@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func yamlConfig(t *testing.T, name, data string) (Config, error) {
@@ -327,5 +328,37 @@ func TestClaudeAccountsWeeklyThreshold(t *testing.T) {
 	c, err = Load()
 	if err != nil || c.ClaudeAccounts.WeeklyThreshold != 95 || c.ClaudeAccounts.WeeklyThresholdPercent() != 95 || c.ClaudeAccounts.Threshold != 90 || !c.ClaudeAccounts.AutoSwitch {
 		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
+	}
+}
+
+func TestClaudeAccountsPreferredYieldHours(t *testing.T) {
+	if d := DefaultClaudeAccounts(); d.PreferredYieldHours != 0 || d.PreferredYield() != 0 {
+		t.Fatalf("default preferredYieldHours=%d", d.PreferredYieldHours)
+	}
+	for _, value := range []int{0, 1, 9, 168} {
+		c, err := yamlConfig(t, "config.yaml", fmt.Sprintf("claudeAccounts:\n  preferredYieldHours: %d\n", value))
+		if err != nil || c.ClaudeAccounts.PreferredYieldHours != value || c.ClaudeAccounts.PreferredYield() != time.Duration(value)*time.Hour {
+			t.Fatalf("preferredYieldHours %d: %+v err=%v", value, c.ClaudeAccounts, err)
+		}
+	}
+	for _, value := range []string{"-1", "169", "1000"} {
+		if _, err := yamlConfig(t, "config.yaml", "claudeAccounts:\n  preferredYieldHours: "+value+"\n"); err == nil || !strings.Contains(err.Error(), "preferredYieldHours") {
+			t.Fatalf("accepted preferredYieldHours %s: %v", value, err)
+		}
+	}
+	home := t.TempDir()
+	t.Setenv("BP_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"autoSwitch":true,"preferredYieldHours":9}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load()
+	if err != nil || c.ClaudeAccounts.PreferredYieldHours != 9 || c.ClaudeAccounts.PreferredYield() != 9*time.Hour || c.ClaudeAccounts.Threshold != 90 {
+		t.Fatalf("json=%+v err=%v", c.ClaudeAccounts, err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"claudeAccounts":{"preferredYieldHours":200}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "preferredYieldHours") {
+		t.Fatalf("json accepted preferredYieldHours 200: %v", err)
 	}
 }

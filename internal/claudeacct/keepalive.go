@@ -601,8 +601,8 @@ type KeepAliveOptions struct {
 	Scope string
 	// Policy supplies the weekly threshold (the threshold when unset) and
 	// per-account limits the weekly-active scope measures seven-day room
-	// against, as auto switching does. Prefer,
-	// Cooldown and BackupOrder are not used. Ignored in the all scope.
+	// against, and the preferred yield it orders by, as auto switching does.
+	// Prefer, Cooldown and BackupOrder are not used. Ignored in the all scope.
 	Policy AutoPolicy
 	// Weekly also pings every usable account (backups as SkipBackups says)
 	// whose seven-day window is not running, in either scope.
@@ -886,8 +886,10 @@ func keepAliveStale(result KeepAliveResult, accounts *Accounts, opts KeepAliveOp
 
 // weeklyTarget is the weekly-active scope's account: the one
 // soonest-weekly-reset auto switching drains, with its five-hour state left
-// out. It takes the switch strategy's own order, tier by tier: among usable
-// preferred accounts with room under their seven-day limit
+// out. It takes the switch strategy's own order, tier by tier: with a
+// preferred account and AutoPolicy.PreferredYield set, the first normal
+// account with seven-day room whose seven-day window resets within the yield
+// (expiringTargets); then among usable preferred accounts with room under their seven-day limit
 // (AutoPolicy.WeeklyLimitFor), the one whose seven-day window resets soonest
 // (preferredTargets); when no preferred account has room, the same among the
 // normal accounts (normalTargets); only when no normal account has room
@@ -896,6 +898,11 @@ func keepAliveStale(result KeepAliveResult, accounts *Accounts, opts KeepAliveOp
 // and is not a candidate. 0 means no account qualifies.
 func weeklyTarget(accounts *Accounts, opts KeepAliveOptions, now time.Time) int {
 	policy := weeklyPolicy(opts)
+	if hasPreferred(accounts) {
+		if expiring := expiringTargets(accounts, policy, now); len(expiring) > 0 {
+			return expiring[0].n
+		}
+	}
 	if preferred := preferredTargets(accounts, 0, policy, now); len(preferred) > 0 {
 		return preferred[0].n
 	}

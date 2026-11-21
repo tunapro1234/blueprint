@@ -23,7 +23,8 @@ type Slot struct {
 	OrgUUID     string `json:"orgUuid"`
 	OrgName     string `json:"orgName,omitempty"`
 	Alias       string `json:"alias,omitempty"`
-	// Role is RoleBackup for a backup account; empty means normal.
+	// Role is RoleBackup for a backup account and RolePreferred for a
+	// preferred one; empty means normal.
 	Role string `json:"role,omitempty"`
 	// Priority orders backup accounts for auto switching, lower first.
 	Priority   int         `json:"priority,omitempty"`

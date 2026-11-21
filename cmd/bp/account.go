@@ -28,7 +28,7 @@ const accountUsage = `usage:
   bp account remove N
   bp account alias N A | bp account alias N --unset
   bp account disable N | bp account enable N
-  bp account role N normal|backup | bp account priority N P
+  bp account role N normal|backup|preferred | bp account priority N P
   bp account auto [--once] [--dry-run] [--threshold P] [--weekly-threshold P] [--json]
   bp account keepalive [--once] [--dry-run] [--scope all|weekly-active] [--weekly|--no-weekly] [--model M] [--json]
   bp account bind <agent> N|email|alias|default
@@ -65,9 +65,12 @@ its seven-day usage reaches claudeAccounts.weeklyThreshold (the threshold when
 unset), each lowered by the account's own limit; --threshold and
 --weekly-threshold override them for one run.
 
-A backup account is used by auto switching only when every normal account is
-used up, lowest priority first, and auto switching returns to a normal account
-once one has room again; keepalive alternates normal and backup windows.`
+A preferred account is used by auto switching first whenever one has room,
+even while the active account still has room, and auto switching returns to
+it as soon as its window resets. A backup account is used only when every
+preferred and normal account is used up, lowest priority first, and auto
+switching returns to a normal account once one has room again; keepalive
+alternates normal and backup windows. Priority numbers apply to backups only.`
 
 // Exit codes of bp account auto --once.
 const (
@@ -483,7 +486,7 @@ func (a *app) accountPriority(m *claudeacct.Manager, args []string) error {
 	}
 	fmt.Fprintf(a.out, "slot %d (%s) has backup priority %d\n", slot.Number, slot.Email, slot.Priority)
 	if !slot.IsBackup() {
-		fmt.Fprintf(a.out, "note: slot %d is a normal account; priority applies once it is a backup (bp account role %d backup)\n", slot.Number, slot.Number)
+		fmt.Fprintf(a.out, "note: slot %d is a %s account; priority applies once it is a backup (bp account role %d backup)\n", slot.Number, slot.RoleName(), slot.Number)
 	}
 	return nil
 }

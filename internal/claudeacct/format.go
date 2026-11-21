@@ -125,7 +125,7 @@ func RenderList(w io.Writer, o *Overview) {
 		if s.IsBackup() {
 			flags = append(flags, fmt.Sprintf("backup, priority %d", s.Priority))
 		} else {
-			flags = append(flags, RoleNormal)
+			flags = append(flags, s.RoleName())
 		}
 		if s.Disabled {
 			flags = append(flags, "disabled")

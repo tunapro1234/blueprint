@@ -37,10 +37,10 @@ import (
 //
 // The weekly-active scope (KeepAliveScopeWeeklyActive) keeps only one
 // account's five-hour window running: the one soonest-weekly-reset auto
-// switching is draining, chosen on its seven-day window alone (see
-// weeklyTarget). Its windows run back to back, each pinged the moment the
-// previous one ends, with no grid; every other account gets no five-hour
-// pings.
+// switching is draining, chosen on its seven-day window alone (a preferred
+// account while one has seven-day room; see weeklyTarget). Its windows run
+// back to back, each pinged the moment the previous one ends, with no grid;
+// every other account gets no five-hour pings.
 //
 // Weekly pings (KeepAliveOptions.Weekly) are separate from the scope: every
 // usable account whose seven-day window is not running gets one ping to start
@@ -886,14 +886,19 @@ func keepAliveStale(result KeepAliveResult, accounts *Accounts, opts KeepAliveOp
 
 // weeklyTarget is the weekly-active scope's account: the one
 // soonest-weekly-reset auto switching drains, with its five-hour state left
-// out. It takes the switch strategy's own order: among usable normal accounts
-// with room under their seven-day limit (AutoPolicy.WeeklyLimitFor), the one
-// whose seven-day window resets soonest (normalTargets); only when no normal account
-// has room, the first backup by priority (backupTargets), unless backups are
+// out. It takes the switch strategy's own order, tier by tier: among usable
+// preferred accounts with room under their seven-day limit
+// (AutoPolicy.WeeklyLimitFor), the one whose seven-day window resets soonest
+// (preferredTargets); when no preferred account has room, the same among the
+// normal accounts (normalTargets); only when no normal account has room
+// either, the first backup by priority (backupTargets), unless backups are
 // skipped. An account whose seven-day window is unknown has no measured room
 // and is not a candidate. 0 means no account qualifies.
 func weeklyTarget(accounts *Accounts, opts KeepAliveOptions, now time.Time) int {
 	policy := weeklyPolicy(opts)
+	if preferred := preferredTargets(accounts, 0, policy, now); len(preferred) > 0 {
+		return preferred[0].n
+	}
 	if normals := normalTargets(accounts, 0, policy, now); len(normals) > 0 {
 		return normals[0].n
 	}

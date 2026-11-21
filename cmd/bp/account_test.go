@@ -545,3 +545,78 @@ func TestAccountCLIWeeklyThreshold(t *testing.T) {
 		t.Fatalf("keepalive without weekly threshold: code=%d %s", code, out)
 	}
 }
+
+func TestAccountCLIRoles(t *testing.T) {
+	e := newAccountEnv(t)
+	a := e.app(0)
+	expect := func(out string, code, wantCode int, want ...string) {
+		t.Helper()
+		if code != wantCode {
+			t.Fatalf("exit %d, want %d: %s", code, wantCode, out)
+		}
+		for _, w := range want {
+			if !strings.Contains(out, w) {
+				t.Fatalf("output lacks %q:\n%s", w, out)
+			}
+		}
+	}
+	roles := func() map[int]string {
+		t.Helper()
+		out, code := e.run(a, "list", "--json")
+		var overview claudeacct.Overview
+		if err := json.Unmarshal([]byte(out), &overview); code != 0 || err != nil {
+			t.Fatalf("list --json code=%d err=%v: %s", code, err, out)
+		}
+		got := map[int]string{}
+		for _, s := range overview.Slots {
+			got[s.Number] = s.Role
+		}
+		return got
+	}
+	for n := 1; n <= 3; n++ {
+		e.login(n)
+		if out, code := e.run(a, "add"); code != 0 {
+			t.Fatalf("add %d: %s", n, out)
+		}
+	}
+	e.api.set(1, 50, 10)
+	e.api.set(2, 10, 10)
+	e.api.set(3, 20, 10)
+
+	out, code := e.run(a, "role", "1", "preferred")
+	expect(out, code, 0, "slot 1 (user1@example.com) is now a preferred account")
+	out, code = e.run(a, "role", "2", "backup")
+	expect(out, code, 0, "slot 2 (user2@example.com) is now a backup account")
+	out, code = e.run(a, "role", "3", "primary")
+	expect(out, code, 1, "role must be normal, backup or preferred")
+	out, code = e.run(a, "list", "--refresh")
+	expect(out, code, 0, "slot 1  user1@example.com (Org 1)  max, preferred", "backup, priority 0", "slot 3  user3@example.com (Org 3)  max, normal")
+	if got := roles(); got[1] != claudeacct.RolePreferred || got[2] != claudeacct.RoleBackup || got[3] != "" {
+		t.Fatalf("list --json roles %v", got)
+	}
+	out, code = e.run(a, "priority", "1", "3")
+	expect(out, code, 0, "slot 1 (user1@example.com) has backup priority 3",
+		"note: slot 1 is a preferred account; priority applies once it is a backup")
+
+	// Slot 3 is live with more room; the preferred slot 1 has room too, so
+	// auto switching moves to it.
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	expect(out, code, accountAutoSwitched, "would switch from slot 3 (20%) to slot 1 (50%)", "preferred slot 1 has room")
+	if !e.liveAccessIs(3) {
+		t.Fatal("auto dry run changed the live login")
+	}
+
+	out, code = e.run(a, "role", "1", "normal")
+	expect(out, code, 0, "slot 1 (user1@example.com) is now a normal account")
+	if got := roles(); got[1] != "" {
+		t.Fatalf("normal role stored as %q", got[1])
+	}
+	out, code = e.run(a, "auto", "--once", "--dry-run")
+	expect(out, code, accountAutoNothing)
+	if !strings.Contains(accountUsage, "bp account role N normal|backup|preferred") {
+		t.Fatalf("usage lacks the preferred role:\n%s", accountUsage)
+	}
+	if strings.Contains(e.transcript.String(), accountSecret) {
+		t.Fatalf("a token value reached command output:\n%s", e.transcript.String())
+	}
+}

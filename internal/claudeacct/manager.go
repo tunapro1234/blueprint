@@ -304,15 +304,16 @@ func (m *Manager) SetAlias(ctx context.Context, n int, alias string) (Slot, erro
 	})
 }
 
-// SetRole marks slot n as a normal or backup account (see RoleBackup).
+// SetRole marks slot n as a normal, backup or preferred account (see
+// RoleBackup and RolePreferred). A normal account is stored without a role.
 func (m *Manager) SetRole(ctx context.Context, n int, role string) (Slot, error) {
 	if !ValidRole(role) {
-		return Slot{}, fmt.Errorf("role must be %s or %s", RoleNormal, RoleBackup)
+		return Slot{}, fmt.Errorf("role must be %s, %s or %s", RoleNormal, RoleBackup, RolePreferred)
 	}
 	return m.mutateSlot(ctx, n, func(_ *Accounts, slot *Slot, _ *liveLogin) error {
 		slot.Role = ""
-		if role == RoleBackup {
-			slot.Role = RoleBackup
+		if role != RoleNormal {
+			slot.Role = role
 		}
 		return nil
 	})

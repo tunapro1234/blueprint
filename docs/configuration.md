@@ -181,8 +181,9 @@ target above that. A slot number key wins over an alias, an alias over an
 email. Limits govern switching only; an agent bound to an account's profile
 keeps using it.
 
-Accounts are normal unless marked `bp account role N backup`; `bp account
-priority N P` orders backups (lower first) and `bp account list` shows both.
+Accounts are normal unless marked `bp account role N backup` or `bp account
+role N preferred`; `bp account priority N P` orders backups (lower first) and
+`bp account list` shows the role and, for backups, the priority.
 While the active normal account has room, auto switching ignores backups. When
 it is used up, `switchOrder: after-normals` moves to another normal account and
 takes a backup, by priority, only when every normal account is used up (A1 A2
@@ -192,6 +193,21 @@ has reset (with `after-normals`, any normal account with room), after
 `cooldownMinutes`; when the backup is used up it moves to the next normal
 account with room, else the next backup. Manual `bp account switch` may pick
 any account.
+
+Preferred accounts come before normal ones. While a preferred account has
+room (both windows under their limits), auto switching moves to it from any
+other account, even one that still has room, after `cooldownMinutes`, and it
+returns to it the moment its window resets. Among several preferred accounts
+`switchPrefer` orders them as it orders normal accounts. On a preferred
+account with room auto switching stays among the preferred accounts; once it
+is used up it takes the next preferred account with room, else a normal
+account by `switchPrefer`, else a backup by priority (normal accounts before
+backups with either `switchOrder`). A preferred account that is used up,
+disabled or whose usage is unknown is ignored, and the other accounts are
+switched as if it did not exist. For keepalive a preferred account counts as a
+normal one, except that the `weekly-active` account is a preferred account
+while one has seven-day room (see below). Without a preferred account nothing
+changes.
 
 A Claude five-hour window starts with the first request after the previous one
 ran out. With `keepAlive` on, each pass also sends a one-word prompt
@@ -214,10 +230,11 @@ on.
 `keepAliveScope: weekly-active` gives five-hour pings to one account only:
 the weekly-active account, the one `switchPrefer: soonest-weekly-reset`
 drains. It is chosen the way that strategy orders accounts, on the seven-day
-window alone: among enabled normal accounts below their seven-day limit
+window alone: among enabled preferred accounts below their seven-day limit
 (`weeklyThreshold`, else `threshold`, or the account's lower `limits` entry), the one whose
-seven-day window resets soonest; a backup, by priority, only when no normal
-account qualifies and `backup.keepAliveBackups` is on. An account whose
+seven-day window resets soonest; when no preferred account qualifies, the same
+among the normal accounts; a backup, by priority, only when no normal
+account qualifies either and `backup.keepAliveBackups` is on. An account whose
 seven-day usage is unknown is not a candidate. Its five-hour windows run back
 to back: it is prompted as soon as a window has run out, without the grid. The
 other accounts get no five-hour pings and `bp account keepalive` lists each
@@ -299,7 +316,7 @@ windows:
 | `codex.sockets` | Read-only Codex app-server observation sockets |
 | `codex.disabled` | Installation policy: bp starts no new Codex sessions (see below) |
 | `ntfy.url`, `ntfy.topic`, `ntfy.token` | Existing notification integration |
-| `claudeAccounts.autoSwitch`, `.threshold`, `.weeklyThreshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, backup accounts and keepalive (see above) |
+| `claudeAccounts.autoSwitch`, `.threshold`, `.weeklyThreshold`, `.cooldownMinutes`, `.pollMinutes`, `.limits`, `.keepAlive`, `.keepAliveModel`, `.keepAliveScope`, `.keepAliveWeekly`, `.backup.switchOrder`, `.backup.stagger`, `.backup.keepAliveBackups` | Claude account auto-switching, per-account caps, preferred and backup accounts and keepalive (see above) |
 | `fed.mode`, `fed.listen`, `fed.hub`, `fed.peerName`, `fed.token`, `fed.expose` | Existing federation settings |
 
 Optional integrations are disabled on laptops by default. Fields use the same

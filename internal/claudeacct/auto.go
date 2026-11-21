@@ -221,6 +221,10 @@ type Decision struct {
 //     limit, if that room is at least AutoHysteresis points more than the
 //     live account has: switch
 //   - no such account: no-target
+//
+// With backup accounts see decideWithRoles; with preferred accounts, which
+// come before both, see decidePreferred. Without a preferred account the
+// decision is what it was before that role existed.
 func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, now time.Time) Decision {
 	if active == 0 || accounts.Slot(active) == nil {
 		return Decision{Action: AutoNone, Reason: "the live Claude login is not a stored account"}
@@ -231,11 +235,21 @@ func Decide(accounts *Accounts, active int, state AutoState, policy AutoPolicy, 
 		return Decision{Action: AutoNone, From: active, Reason: "usage of the active account is unknown"}
 	}
 	d := Decision{From: active, ActiveMax: use.value, ActiveLimit: use.limit, ActiveWindow: use.windowName()}
+	if hasPreferred(accounts) {
+		return decidePreferred(accounts, active, *current, use, state, policy, now, d)
+	}
+	return decideTiers(accounts, active, *current, use, state, policy, now, d)
+}
+
+// decideTiers is Decide without preferred accounts: decideWithRoles when some
+// account is a backup, otherwise the switch strategy among all accounts.
+// decidePreferred runs it on subsets of the accounts.
+func decideTiers(accounts *Accounts, active int, current Slot, use windowUse, state AutoState, policy AutoPolicy, now time.Time, d Decision) Decision {
 	if hasBackups(accounts) {
-		return decideWithRoles(accounts, active, *current, use, state, policy, now, d)
+		return decideWithRoles(accounts, active, current, use, state, policy, now, d)
 	}
 	if policy.soonest() {
-		return decideSoonestReset(accounts, active, *current, use, state, policy, now, d)
+		return decideSoonestReset(accounts, active, current, use, state, policy, now, d)
 	}
 	if use.room() > 0 {
 		d.Action, d.Reason = AutoNone, fmt.Sprintf("active account at %s, below %s", use.valueText(), use.limitText())

@@ -89,6 +89,13 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Changed
 
+- Daemon watchdogs: pane-sanity and blocked-queue now send each sweep's due
+  findings to the coordinator as one message (`pane-sanity: N findings in this
+  sweep`, then one finding per line in session order; at most 40 lines and
+  16 KiB, then `... and K more, see the daemon log`). A single finding is sent
+  exactly as before. The daemon log still gets one line per finding, and each
+  finding keeps its own cooldown. Before, a sweep with many findings queued one
+  message per finding.
 - `bp open`, resume and daemon relaunches no longer connect Claude sessions to
   Remote Control. A resumed session that reconnects on its own (its banner
   reads `· /rc`) is disconnected. Set `remoteControlOnOpen: true` for the old
@@ -99,6 +106,16 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- WhatsApp bridge: the daemon never runs a second bridge. Before every start
+  and restart it looks for another live process of its user whose argv is
+  exactly `node <bridge.js>`, such as a bridge left running by a daemon that was
+  SIGKILLed or crashed (the unit uses `KillMode=process`). Each one is logged by
+  pid and stopped with SIGTERM, then SIGKILL after 10 seconds, before the new
+  bridge starts. If one cannot be removed, the bridge is not started: the
+  `wa-bridge` job is marked failed with the reason, the coordinator is alarmed
+  once, and the check repeats every 5 seconds. Before, a restarted daemon
+  started a second bridge beside the orphan: two connections on one WhatsApp
+  session.
 - Bar: the daemon now renders the bar of every attached session whose agent is
   registered, whatever its recorded status. Before, it pushed `@bp-bar` and
   `@bp-name` only for agents recorded `open`, so an agent recorded `closed`

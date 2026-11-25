@@ -301,8 +301,9 @@ func debounceSessionFileFindings(findings map[string]string, sessionFile map[str
 
 // paneSanityScan turns one sweep's observations into alarms. Like the other two
 // watchdogs on this beat it swallows nothing but its own noise: findings go to
-// the log and to the coordinator (alarm), and the state it keeps is the cooldown
-// plus the one-sweep debounce for the session-file class.
+// the log (one line each) and to the coordinator as one message per sweep
+// (alarmFindings), and the state it keeps is the cooldown plus the one-sweep
+// debounce for the session-file class.
 func (s *Service) paneSanityScan(observations []paneObservation, state *busySanityState, now time.Time) {
 	if state.PaneSanityReported == nil {
 		state.PaneSanityReported = make(map[string]string)
@@ -312,7 +313,5 @@ func (s *Service) paneSanityScan(observations []paneObservation, state *busySani
 	}
 	findings := debounceSessionFileFindings(paneSanityFindings(observations),
 		sessionFileFindingSessions(observations), state.PaneSanityPending, now)
-	for _, message := range dueFindings(findings, state.PaneSanityReported, now) {
-		s.alarm("pane-sanity", message)
-	}
+	s.alarmFindings("pane-sanity", dueFindings(findings, state.PaneSanityReported, now))
 }

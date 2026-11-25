@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -45,6 +44,9 @@ type Service struct {
 	// serverProcessAlive reports whether a tmux server process of this user
 	// is running; nil scans /proc (tmuxServerProcessAlive). Tests inject it.
 	serverProcessAlive func() bool
+	// waOps finds, signals and starts WhatsApp bridge processes; nil uses
+	// defaultBridgeOps. Tests inject it.
+	waOps *bridgeProcessOps
 	// reconcileHeld is true while the reconcile is held because the socket
 	// does not answer but a server process lives; it makes the hold and its
 	// end log once each. Only the agentbook-reconcile loop touches it.
@@ -293,6 +295,61 @@ func (s *Service) coordinator() string {
 // alarm logs one watchdog finding and queues it to the coordinator.
 func (s *Service) alarm(job, message string) {
 	s.log.Print(message)
+	s.enqueueAlarm(job, message)
+}
+
+// alarmBatchMaxLines and alarmBatchMaxBytes bound the one message a sweep's
+// findings are folded into: each finding is a long line (a blocked-queue
+// finding runs to some 450 characters), and the message is pasted into the
+// coordinator's composer. The log keeps every finding regardless.
+const (
+	alarmBatchMaxLines = 40
+	alarmBatchMaxBytes = 16 << 10
+)
+
+// alarmFindings sends one sweep's due findings of a watchdog as ONE message to
+// the coordinator, so a sweep that finds a hundred panes queues one message,
+// not a hundred. A single finding goes out exactly as alarm sends it. Every
+// finding is logged on its own line either way. findings must already be in
+// a stable order (dueFindingsWithin sorts them).
+func (s *Service) alarmFindings(job string, findings []string) {
+	switch len(findings) {
+	case 0:
+		return
+	case 1:
+		s.alarm(job, findings[0])
+		return
+	}
+	for _, finding := range findings {
+		s.log.Print(finding)
+	}
+	s.enqueueAlarm(job, alarmBatchText(job, findings))
+}
+
+// alarmBatchText is the folded message: a count line, then one finding per
+// line up to alarmBatchMaxLines lines or alarmBatchMaxBytes bytes, then how
+// many were left out and where to read them.
+func alarmBatchText(job string, findings []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %d findings in this sweep", job, len(findings))
+	shown := 0
+	for _, finding := range findings {
+		line := strings.ReplaceAll(finding, "\n", " ")
+		if shown == alarmBatchMaxLines || b.Len()+1+len(line) > alarmBatchMaxBytes {
+			break
+		}
+		b.WriteString("\n")
+		b.WriteString(line)
+		shown++
+	}
+	if rest := len(findings) - shown; rest > 0 {
+		fmt.Fprintf(&b, "\n... and %d more, see the daemon log (journalctl -u blueprint.service)", rest)
+	}
+	return b.String()
+}
+
+// enqueueAlarm queues message for the coordinator without logging it.
+func (s *Service) enqueueAlarm(job, message string) {
 	if s.queue == nil {
 		return
 	}
@@ -1108,18 +1165,44 @@ func writeBusySanity(path string, state busySanityState) error {
 	return os.Rename(temporary, path)
 }
 
+// superviseWA runs the WhatsApp bridge and restarts it when it exits. Before
+// every start — the first and each restart — it removes any other live
+// process that is this bridge (removeLeftoverBridges): when this loop starts a
+// bridge, its previous child has already been waited for, so whatever is
+// found is an orphan of an earlier daemon (SIGKILLed or crashed) or of a
+// panicked supervisor, and a second connection on one WhatsApp session must
+// never exist. A leftover that cannot be removed blocks the start: the job is
+// marked failed, the coordinator is alarmed once, and the check is retried
+// every 5 seconds.
 func (s *Service) superviseWA(ctx context.Context, bridgePath string) {
 	const name = "wa-bridge"
+	ops := s.bridgeOps()
+	leftoverAlarmed := false
 	for ctx.Err() == nil {
 		started := time.Now()
-		cmd := exec.Command("node", bridgePath)
-		cmd.Dir = filepath.Dir(bridgePath)
-		cmd.Env = append(os.Environ(), "TMUX_TMPDIR=/tmp")
+		if err := s.removeLeftoverBridges(ctx, bridgePath); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.setState(name, JobState{LastRun: started.Format(time.RFC3339), Status: "failed", Error: err.Error(), NextRun: time.Now().Add(ops.retry).Format(time.RFC3339)})
+			if !leftoverAlarmed {
+				leftoverAlarmed = true
+				s.alarm(name, "bp: wa-bridge not started: "+err.Error()+". Retrying every 5s; inspect the process before killing it by hand.")
+			} else {
+				s.log.Printf("%s: %v", name, err)
+			}
+			if !wait(ctx, ops.retry) {
+				return
+			}
+			continue
+		}
+		leftoverAlarmed = false
+		cmd := ops.command(bridgePath)
 		cmd.Stdout = io.Discard
 		cmd.Stderr = os.Stderr
 		if err := cmd.Start(); err != nil {
-			s.setState(name, JobState{LastRun: started.Format(time.RFC3339), Status: "failed", Error: err.Error(), NextRun: time.Now().Add(5 * time.Second).Format(time.RFC3339)})
-			if !wait(ctx, 5*time.Second) {
+			s.setState(name, JobState{LastRun: started.Format(time.RFC3339), Status: "failed", Error: err.Error(), NextRun: time.Now().Add(ops.retry).Format(time.RFC3339)})
+			if !wait(ctx, ops.retry) {
 				return
 			}
 			continue
@@ -1133,14 +1216,14 @@ func (s *Service) superviseWA(ctx context.Context, bridgePath string) {
 				s.setState(name, JobState{LastRun: started.Format(time.RFC3339), Status: "stopped", Duration: time.Since(started).Round(time.Millisecond).String()})
 				return
 			}
-			state := JobState{LastRun: started.Format(time.RFC3339), Status: "failed", Duration: time.Since(started).Round(time.Millisecond).String(), NextRun: time.Now().Add(5 * time.Second).Format(time.RFC3339)}
+			state := JobState{LastRun: started.Format(time.RFC3339), Status: "failed", Duration: time.Since(started).Round(time.Millisecond).String(), NextRun: time.Now().Add(ops.retry).Format(time.RFC3339)}
 			if err != nil {
 				state.Error = err.Error()
 			} else {
 				state.Error = "unexpected exit"
 			}
 			s.setState(name, state)
-			if !wait(ctx, 5*time.Second) {
+			if !wait(ctx, ops.retry) {
 				return
 			}
 		case <-ctx.Done():

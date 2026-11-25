@@ -90,15 +90,24 @@ func (r *barRenderer) scan(ctx context.Context) error {
 	r.forgetReplacedSessions(sessions)
 	allSessions := make([]string, 0, len(sessions))
 	var targets []string
+	var leftovers []bptmux.SessionAttachment
 	processes := make(map[string]bptmux.PaneProcess)
 	for _, session := range sessions {
 		allSessions = append(allSessions, session.Name)
-		agent, ok := fleet.Agents[session.Name]
-		if ok && agent.Status == "open" && agent.ArchivedAt == "" && session.Attached > 0 {
+		if session.Attached == 0 {
+			// A detached session costs nothing here: its status line is not
+			// drawn, and it is rendered or cleaned within one interval of
+			// being attached again.
+			continue
+		}
+		if barRenderTarget(fleet, session.Name) {
 			targets = append(targets, session.Name)
 			processes[session.Name] = session.Process
+		} else if session.HasBar || session.HasName {
+			leftovers = append(leftovers, session)
 		}
 	}
+	r.clearLeftovers(ctx, leftovers)
 
 	type result struct {
 		name   string
@@ -166,6 +175,45 @@ func (r *barRenderer) scan(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// barRenderTarget reports whether the daemon renders an attached session's
+// bar. Every registered, unarchived agent qualifies whatever its recorded
+// Status: the agentbook often says "closed" for a session that is still alive,
+// and `bp bar`/`bp name` render a normal bar for it all the same, so skipping
+// it only moved the work into a #() job tmux spawns on every status redraw.
+// The book's Status is not read anywhere on the CLI path, so the pushed text
+// matches what the fallback would print.
+func barRenderTarget(fleet book.Fleet, name string) bool {
+	agent, ok := fleet.Agents[name]
+	return ok && agent.ArchivedAt == ""
+}
+
+// clearLeftovers unsets @bp-bar/@bp-name on attached sessions the renderer no
+// longer renders (unregistered or archived since they were pushed), so their
+// status line falls back to the #() job instead of freezing on stale text.
+// The flags come from the scan listing, so a session without leftovers costs
+// no tmux call; one that has them costs one call per option, once.
+// status-style is left alone: the fallback `bp name` keeps it in step itself.
+func (r *barRenderer) clearLeftovers(ctx context.Context, sessions []bptmux.SessionAttachment) {
+	for _, session := range sessions {
+		r.mu.Lock()
+		delete(r.last, session.Name)
+		r.mu.Unlock()
+		var errs []error
+		for _, option := range []struct {
+			name string
+			set  bool
+		}{{"@bp-name", session.HasName}, {"@bp-bar", session.HasBar}} {
+			if !option.set {
+				continue
+			}
+			if err := r.tmux.UnsetOption(ctx, "="+session.Name+":", option.name); err != nil {
+				errs = append(errs, fmt.Errorf("unset leftover %s for %s: %w", option.name, session.Name, err))
+			}
+		}
+		r.reportAgent(session.Name, errorsJoin(errs))
+	}
 }
 
 // forgetReplacedSessions drops what the renderer remembers about sessions that
@@ -242,10 +290,10 @@ func (r *barRenderer) set(ctx context.Context, session, option, value, field str
 }
 
 func (r *barRenderer) renderAgent(ctx context.Context, name string, process bptmux.PaneProcess, fleet book.Fleet, sessions []string) (barRenderOutput, error) {
-	agent, ok := fleet.Agents[name]
-	if !ok || agent.Status != "open" || agent.ArchivedAt != "" {
-		return barRenderOutput{}, fmt.Errorf("agent registration is no longer open")
+	if !barRenderTarget(fleet, name) {
+		return barRenderOutput{}, fmt.Errorf("agent is not registered or is archived")
 	}
+	agent := fleet.Agents[name]
 	// The scan listing supplies the process and one capture serves the
 	// runtime state, the title and the accent; each extra tmux call is paid
 	// for every attached agent every scan.

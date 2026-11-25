@@ -99,6 +99,18 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- Bar: the daemon now renders the bar of every attached session whose agent is
+  registered, whatever its recorded status. Before, it pushed `@bp-bar` and
+  `@bp-name` only for agents recorded `open`, so an agent recorded `closed`
+  while its session was still alive (`closed  !TMUX OPEN` in `bp status`) fell
+  back to the `#(bp bar ...)` and `#(bp name ...)` jobs, which tmux reruns on
+  nearly every status redraw: about 35 process starts per minute for each such
+  attached session. The bar shows the same text as before; only the daemon
+  computes it now. An attached session that is no longer registered (or is
+  archived) and still carries `@bp-bar` or `@bp-name` from an earlier render
+  has them unset, so its status line uses the command fallback instead of
+  frozen text. Detached sessions are not touched; the leftovers are found in
+  the daemon's existing session listing, at no extra tmux request per session.
 - Delivery: a message ending in an `@` token (`... @pr`) no longer opens Claude
   Code's mention picker. Claude Code 2.1.330 suggests files and other Claude
   sessions on the machine for such a token, and bp's Enter accepted the first

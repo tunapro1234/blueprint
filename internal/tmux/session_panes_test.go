@@ -201,3 +201,88 @@ func TestStatusSnapshotKeepsPlainAndAnsiCapturesApart(t *testing.T) {
 		t.Fatalf("ANSI caller got the memoized plain capture %q", ansi)
 	}
 }
+
+func TestParseSessionPanesReadsBarOptionFlags(t *testing.T) {
+	out := "" +
+		"both\t1\t$1\t1\t1\tclaude\t10\t1\t1\n" +
+		"bar\t1\t$2\t1\t1\tclaude\t20\t1\t0\n" +
+		"none\t0\t$3\t1\t1\tbash\t30\t0\t0\n" +
+		// The seven-field form still parses, with both options reported unset.
+		"old\t1\t$4\t1\t1\tbash\t40\n" +
+		"eight\t1\t$5\t1\t1\tbash\t50\t1\n"
+	got := parseSessionPanes(out)
+	want := []SessionAttachment{
+		{Name: "both", Attached: 1, ID: "$1", Process: PaneProcess{Command: "claude", PID: 10}, HasBar: true, HasName: true},
+		{Name: "bar", Attached: 1, ID: "$2", Process: PaneProcess{Command: "claude", PID: 20}, HasBar: true},
+		{Name: "none", Attached: 0, ID: "$3", Process: PaneProcess{Command: "bash", PID: 30}},
+		{Name: "old", Attached: 1, ID: "$4", Process: PaneProcess{Command: "bash", PID: 40}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseSessionPanes=%+v\nwant %+v", got, want)
+	}
+}
+
+// The flags must follow the same #{?@bp-bar,...} test the status line uses,
+// against a real tmux: a session option set, unset, or never set.
+func TestSessionsWithAttachmentsReportsBarOptions(t *testing.T) {
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	// A short socket path: unix socket paths are limited to about 100 bytes.
+	dir, err := os.MkdirTemp("/tmp", "bpt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	base := func(args ...string) *exec.Cmd {
+		cmd := exec.Command(tmuxPath, append([]string{"-S", socket}, args...)...)
+		cmd.Env = withoutTmux(os.Environ())
+		return cmd
+	}
+	run := func(args ...string) {
+		t.Helper()
+		if output, err := base(args...).CombinedOutput(); err != nil {
+			t.Fatalf("tmux %v: %v: %s", args, err, output)
+		}
+	}
+	wrapper := filepath.Join(dir, "tmux-isolated")
+	script := "#!/bin/sh\nexec " + strconv.Quote(tmuxPath) + " -S " + strconv.Quote(socket) + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{Bin: wrapper}
+	ctx := context.Background()
+	run("new-session", "-d", "-s", "alpha", "sleep", "60")
+	t.Cleanup(func() { _ = base("kill-server").Run() })
+	run("new-session", "-d", "-s", "beta", "sleep", "61")
+	run("new-session", "-d", "-s", "gamma", "sleep", "62")
+	if err := client.SetOption(ctx, "=alpha:", "@bp-bar", "#[bg=colour236] line #[default]"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetOption(ctx, "=alpha:", "@bp-name", "plate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetOption(ctx, "=beta:", "@bp-name", "plate"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetOption(ctx, "=gamma:", "@bp-bar", "line"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UnsetOption(ctx, "=gamma:", "@bp-bar"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := client.SessionsWithAttachments(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][2]bool{}
+	for _, session := range sessions {
+		got[session.Name] = [2]bool{session.HasBar, session.HasName}
+	}
+	want := map[string][2]bool{"alpha": {true, true}, "beta": {false, true}, "gamma": {false, false}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bar option flags=%v, want %v", got, want)
+	}
+}

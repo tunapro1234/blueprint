@@ -809,12 +809,17 @@ func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 // ID is tmux's session id ($N): a session closed and recreated under the same
 // name gets a new one, and with it none of the old session's options. Process
 // is what PaneProcess would return for the session; its PID is zero when the
-// listing carried no usable pane row.
+// listing carried no usable pane row. HasBar and HasName report whether
+// @bp-bar and @bp-name are set, by the same #{?...} test the status line's
+// conditional applies, so a caller can find leftover pushed text without one
+// show-options request per session.
 type SessionAttachment struct {
 	Name     string
 	Attached int
 	ID       string
 	Process  PaneProcess
+	HasBar   bool
+	HasName  bool
 }
 
 // SessionsWithAttachments lists every session with its attached-client count,
@@ -824,7 +829,7 @@ func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachme
 	if c.statusSnapshot != nil {
 		return append([]SessionAttachment(nil), c.statusSnapshot.sessions...), nil
 	}
-	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{session_attached}\t#{session_id}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}")
+	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{session_attached}\t#{session_id}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{?@bp-bar,1,0}\t#{?@bp-name,1,0}")
 	if err != nil {
 		lower := strings.ToLower(err.Error())
 		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
@@ -858,8 +863,10 @@ func parseSessionPanes(out string) []SessionAttachment {
 	index := make(map[string]int)
 	activePane := make(map[string]bool)
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 7)
-		if len(fields) != 7 || fields[0] == "" {
+		// Seven fields is the listing without the bar option flags; it is
+		// still accepted so a row from an older format parses as "unset".
+		fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 9)
+		if len(fields) != 7 && len(fields) != 9 || fields[0] == "" {
 			continue
 		}
 		attached, parseErr := strconv.Atoi(strings.TrimSpace(fields[1]))
@@ -870,7 +877,12 @@ func parseSessionPanes(out string) []SessionAttachment {
 		if !seen {
 			i = len(sessions)
 			index[fields[0]] = i
-			sessions = append(sessions, SessionAttachment{Name: fields[0], Attached: attached, ID: strings.TrimSpace(fields[2])})
+			session := SessionAttachment{Name: fields[0], Attached: attached, ID: strings.TrimSpace(fields[2])}
+			if len(fields) == 9 {
+				session.HasBar = strings.TrimSpace(fields[7]) == "1"
+				session.HasName = strings.TrimSpace(fields[8]) == "1"
+			}
+			sessions = append(sessions, session)
 		}
 		if strings.TrimSpace(fields[3]) != "1" || activePane[fields[0]] {
 			continue

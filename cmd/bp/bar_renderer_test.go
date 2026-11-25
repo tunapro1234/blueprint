@@ -7,7 +7,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -19,30 +22,33 @@ import (
 
 func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 	sessions := "attached\t1\nunattached\t0\nclosed\t1\n"
-	renderer, ops := newTestBarRenderer(t, sessions, book.Fleet{Agents: map[string]book.Agent{
+	agents := map[string]book.Agent{
 		"attached":   {Name: "attached", Status: "open"},
 		"unattached": {Name: "unattached", Status: "open"},
-		"closed":     {Name: "closed", Status: "closed"},
-	}})
+		// Recorded closed while its session is alive and attached: the CLI
+		// fallback renders it, so the daemon must too.
+		"closed": {Name: "closed", Status: "closed"},
+	}
+	renderer, ops := newTestBarRenderer(t, sessions, book.Fleet{Agents: agents})
 	loads := 0
 	renderer.loadFleet = func() (book.Fleet, error) {
 		loads++
-		return book.Fleet{Agents: map[string]book.Agent{
-			"attached":   {Name: "attached", Status: "open"},
-			"unattached": {Name: "unattached", Status: "open"},
-			"closed":     {Name: "closed", Status: "closed"},
-		}}, nil
+		return book.Fleet{Agents: agents}, nil
 	}
+	var mu sync.Mutex
 	var rendered []string
 	renderer.render = func(_ context.Context, name string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
+		mu.Lock()
 		rendered = append(rendered, name)
+		mu.Unlock()
 		return barRenderOutput{name: "plate", bar: "line", style: "style"}, nil
 	}
 	if err := renderer.scan(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(rendered) != 1 || rendered[0] != "attached" {
-		t.Fatalf("rendered %v, want attached only", rendered)
+	sort.Strings(rendered)
+	if strings.Join(rendered, ",") != "attached,closed" {
+		t.Fatalf("rendered %v, want the attached sessions only", rendered)
 	}
 	if loads != 1 {
 		t.Fatalf("agentbook loads=%d, want one per scan", loads)
@@ -51,8 +57,11 @@ func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 	if got := strings.Count(first, "list-panes -a -F"); got != 1 {
 		t.Fatalf("session scans=%d, want one list-panes -a request", got)
 	}
-	if got := countTmuxSets(first); got != 3 {
-		t.Fatalf("first scan set-option calls=%d, want 3 (name, bar, style): %s", got, first)
+	if got := countTmuxSets(first); got != 6 {
+		t.Fatalf("first scan set-option calls=%d, want 6 (name, bar, style for two agents): %s", got, first)
+	}
+	if strings.Contains(first, "=unattached:") {
+		t.Fatalf("detached session was touched: %s", first)
 	}
 	if err := os.WriteFile(ops, nil, 0600); err != nil {
 		t.Fatal(err)
@@ -66,18 +75,153 @@ func TestBarRendererAttachedOnlyAndChangesOnly(t *testing.T) {
 	if loads != 2 {
 		t.Fatalf("agentbook loads=%d after two scans, want 2", loads)
 	}
-	renderer.render = func(_ context.Context, _ string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
+	renderer.render = func(_ context.Context, name string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
+		if name != "attached" {
+			return barRenderOutput{name: "plate", bar: "line", style: "style"}, nil
+		}
 		return barRenderOutput{name: "plate", bar: "changed", style: "style"}, nil
 	}
 	if err := renderer.scan(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	changed := readBarRendererOps(t, ops)
-	if got := countTmuxSets(changed); got != 1 || !strings.Contains(changed, "@bp-bar changed") {
+	if got := countTmuxSets(changed); got != 1 || !strings.Contains(changed, "=attached: @bp-bar changed") {
 		t.Fatalf("changed bar set-option calls=%d, want one bar update: %s", got, changed)
 	}
 	if loads != 3 {
 		t.Fatalf("agentbook loads=%d after three scans, want 3", loads)
+	}
+}
+
+// Unregistered and archived sessions are not rendered. One that still carries
+// pushed text from an earlier render has it unset, so its #() fallback takes
+// over instead of showing frozen text; one without leftovers and every
+// detached session cost no tmux call beyond the scan listing.
+func TestBarRendererClearsLeftoversOnSessionsItNoLongerRenders(t *testing.T) {
+	sessions := "" +
+		"agent\t1\t$1\t1\t1\tbash\t10\t1\t1\n" +
+		"unregistered\t1\t$2\t1\t1\tbash\t20\t1\t1\n" +
+		"archived\t2\t$3\t1\t1\tbash\t30\t1\t0\n" +
+		"plain\t1\t$4\t1\t1\tbash\t40\t0\t0\n" +
+		"detached-stale\t0\t$5\t1\t1\tbash\t50\t1\t1\n" +
+		"detached-closed\t0\t$6\t1\t1\tbash\t60\t0\t0\n"
+	renderer, ops := newTestBarRenderer(t, "", book.Fleet{Agents: map[string]book.Agent{
+		"agent":           {Name: "agent", Status: "closed"},
+		"archived":        {Name: "archived", Status: "closed", ArchivedAt: "2026-11-01T00:00:00Z"},
+		"detached-closed": {Name: "detached-closed", Status: "closed"},
+	}})
+	sessionsFile := filepath.Join(filepath.Dir(ops), "sessions")
+	if err := os.WriteFile(sessionsFile, []byte(sessions), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var rendered []string
+	renderer.render = func(_ context.Context, name string, _ bptmux.PaneProcess, _ book.Fleet, _ []string) (barRenderOutput, error) {
+		mu.Lock()
+		rendered = append(rendered, name)
+		mu.Unlock()
+		return barRenderOutput{name: "plate", bar: "line", style: "style"}, nil
+	}
+	// The renderer once pushed text into "unregistered"; that memory must go
+	// with the cleanup, or a later re-registration would be skipped as unchanged.
+	renderer.last["unregistered"] = renderedBar{name: "plate", bar: "line", hasName: true, hasBar: true}
+	renderer.sessionIDs["unregistered"] = "$2"
+	if err := renderer.scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(rendered, ",") != "agent" {
+		t.Fatalf("rendered %v, want the registered attached agent only", rendered)
+	}
+	got := readBarRendererOps(t, ops)
+	var unsets []string
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if strings.HasPrefix(line, "set-option -u ") {
+			unsets = append(unsets, line)
+		}
+	}
+	sort.Strings(unsets)
+	want := []string{
+		"set-option -u -t =archived: @bp-bar",
+		"set-option -u -t =unregistered: @bp-bar",
+		"set-option -u -t =unregistered: @bp-name",
+	}
+	if strings.Join(unsets, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unsets=%q, want %q; ops=%s", unsets, want, got)
+	}
+	for _, session := range []string{"plain", "detached-stale", "detached-closed"} {
+		if strings.Contains(got, "="+session+":") {
+			t.Fatalf("session %s was touched: %s", session, got)
+		}
+	}
+	if _, kept := renderer.last["unregistered"]; kept {
+		t.Fatal("cleared session kept its skip-unchanged memory")
+	}
+
+	// Once tmux reports the options gone, nothing is unset again.
+	cleaned := strings.NewReplacer("\t20\t1\t1\n", "\t20\t0\t0\n", "\t30\t1\t0\n", "\t30\t0\t0\n").Replace(sessions)
+	if err := os.WriteFile(sessionsFile, []byte(cleaned), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ops, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderer.scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := readBarRendererOps(t, ops); strings.Contains(got, "set-option") || strings.Count(got, "\n") != 1 {
+		t.Fatalf("steady scan ran more than the listing: %s", got)
+	}
+}
+
+// The daemon must push exactly what `bp bar` / `bp name` print for the same
+// session; a closed Status in the agentbook changes who renders, not the text.
+func TestBarRendererMatchesCLIFallbackForClosedAgent(t *testing.T) {
+	dir := t.TempDir()
+	ops := filepath.Join(dir, "tmux-ops")
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + quoteShell(ops) + "\ncase \"$1 $2\" in\n" +
+		"'list-panes -a') printf 'agent\\t1\\t$1\\t1\\t1\\tbash\\t41\\t0\\t0\\n' ;;\n" +
+		"'list-panes -t') printf '1\\tbash\\t41\\n' ;;\n" +
+		"capture-pane*) printf 'shell prompt\\n' ;;\n" +
+		"*) exit 0 ;;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ops, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	bookPath := filepath.Join(dir, "agentbook.json")
+	writeBarTestFile(t, bookPath, `{"agents":[{"name":"agent","status":"closed","folder":`+strconv.Quote(dir)+`,"colorOverride":"44"}]}`)
+	a := &app{ctx: context.Background(), tmux: &bptmux.Client{Bin: bin}, out: testOutput(t), config: bpconfig.Config{
+		Agentbooks: []string{bookPath},
+		Bar:        bpconfig.BarConfig{Widgets: []string{"ctx", "temp", "talk"}},
+	}}
+	cliBar, cliName := a.barLine("agent"), a.barName("agent")
+	if !strings.Contains(cliBar, "×") || !strings.Contains(cliName, " agent ") {
+		t.Fatalf("CLI fallback did not render a real bar: bar=%q name=%q", cliBar, cliName)
+	}
+
+	renderer := newBarRenderer(a, nil)
+	var logs bytes.Buffer
+	renderer.logger = log.New(&logs, "", 0)
+	if err := os.WriteFile(ops, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderer.scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := readBarRendererOps(t, ops)
+	for _, want := range []string{
+		"set-option -t =agent: @bp-bar " + escapeTmuxBarFormat(cliBar) + "\n",
+		"set-option -t =agent: @bp-name " + escapeTmuxBarFormat(cliName) + "\n",
+		"set-option -t =agent: status-style " + barStatusStyle("44") + "\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("renderer did not push the CLI text %q; ops=%s logs=%s", want, got, logs.String())
+		}
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("renderer reported a failure for a closed-status agent: %s", logs.String())
 	}
 }
 

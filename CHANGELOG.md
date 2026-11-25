@@ -111,6 +111,26 @@ Changes on `dev` since the 1.9.34 release.
   has them unset, so its status line uses the command fallback instead of
   frozen text. Detached sessions are not touched; the leftovers are found in
   the daemon's existing session listing, at no extra tmux request per session.
+- `bp status` no longer closes agents whose tmux sessions are alive. Run
+  from an environment without `TMUX` or a UTF-8 locale (`env -i`, cron, a bare
+  service), tmux 3.4 replaced every tab in `list-panes` output with `_`; bp
+  parsed that as zero sessions and wrote `closed` over every open agent (103
+  records on 2026-11-19). bp now passes `-u` to tmux when the caller's locale
+  would not select UTF-8, and a listing row it cannot parse fails the command
+  instead of being skipped. `bp status` closes vanished agents only when the
+  tmux server it reached lists at least one open agent's session; when no
+  server answers, or the server lists none of them, it changes nothing and
+  says `agentbook not reconciled: ...` on stderr. Closing every agent at once
+  (a reboot, a crashed tmux server) is left to the daemon, which runs in the
+  environment agents are opened in. When no server answers at its socket,
+  the daemon closes the open agents only if no tmux server process of its
+  user is running (a reboot, a crashed or exited server); this now includes
+  tmux 3.4's `error connecting to <socket> (No such file or directory)`, the
+  shape after a reboot clears `/tmp`, which used to fail the pass. If a
+  `tmux: server` process is alive, the socket file was removed under it (a
+  `/tmp` cleaner, a manual cleanup) and every session still runs: the daemon
+  closes and archives nothing and logs one `agentbook-reconcile: held` line
+  until the socket answers again (SIGUSR1 to the server recreates it).
 - Delivery: a message ending in an `@` token (`... @pr`) no longer opens Claude
   Code's mention picker. Claude Code 2.1.330 suggests files and other Claude
   sessions on the machine for such a token, and bp's Enter accepted the first

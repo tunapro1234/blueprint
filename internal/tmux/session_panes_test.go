@@ -23,10 +23,11 @@ func TestParseSessionPanesFollowsPaneProcessRule(t *testing.T) {
 		"two\t0\t$2\t1\t0\tclaude\t21\n" +
 		// Unusable pid: listed, process left zero for the caller's fallback.
 		"three\t2\t$3\t1\t1\tbash\tx\n" +
-		"bad\tnope\t$4\t1\t1\tbash\t40\n" +
-		"short\t1\t$5\n" +
 		"\n"
-	got := parseSessionPanes(out)
+	got, err := parseSessionPanes(out)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []SessionAttachment{
 		{Name: "one", Attached: 1, ID: "$1", Process: PaneProcess{Command: "codex", PID: 12}},
 		{Name: "two", Attached: 0, ID: "$2", Process: PaneProcess{Command: "bash", PID: 20}},
@@ -208,9 +209,13 @@ func TestParseSessionPanesReadsBarOptionFlags(t *testing.T) {
 		"bar\t1\t$2\t1\t1\tclaude\t20\t1\t0\n" +
 		"none\t0\t$3\t1\t1\tbash\t30\t0\t0\n" +
 		// The seven-field form still parses, with both options reported unset.
-		"old\t1\t$4\t1\t1\tbash\t40\n" +
-		"eight\t1\t$5\t1\t1\tbash\t50\t1\n"
-	got := parseSessionPanes(out)
+		"old\t1\t$4\t1\t1\tbash\t40\n"
+	// An eight-field row fails the whole listing (strict parsing; see
+	// TestParseSessionPanesRejectsSanitizedListing).
+	got, err := parseSessionPanes(out)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []SessionAttachment{
 		{Name: "both", Attached: 1, ID: "$1", Process: PaneProcess{Command: "claude", PID: 10}, HasBar: true, HasName: true},
 		{Name: "bar", Attached: 1, ID: "$2", Process: PaneProcess{Command: "claude", PID: 20}, HasBar: true},

@@ -93,7 +93,11 @@ func TestIssue03_StatusReconcilesAnOpenRecordWithoutATmuxSession(t *testing.T) {
 		{"name": "server-main", "folder": dir, "status": "open"},
 		{"name": "ghost", "folder": dir, "parent": "server-main", "status": "open"},
 	})
-	tmux, _, _ := issueTmux(t, "", false)
+	// The coordinator's session is listed: the server bp status reached is
+	// the fleet's, so the missing ghost session is proof the ghost is gone.
+	// (A listing with none of the fleet is the daemon's to act on; see
+	// status_reconcile_proof_test.go.)
+	tmux := statusListingTmux(t, "server-main\t0\t$1\t1\t1\tclaude\t101\n", "", 0)
 	a := issueApp(t, path, filepath.Join(dir, "state"), tmux)
 	a.loadCache = func(map[string]string) map[string]cache.State { return nil }
 	if err := a.status(nil); err != nil {

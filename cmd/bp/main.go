@@ -1046,20 +1046,26 @@ func (a *app) status(args []string) error {
 	return nil
 }
 
+// reconcileDeadAgents lets bp status record agents whose session is gone, as
+// an installation without the daemon has no other reconcile. It runs under
+// book.ReconcileCLI: a listing from this command's environment proves absence
+// only when it reached a server that hosts at least one open agent, so an
+// unreachable or foreign server never closes the whole fleet (2026-11-19).
+// When the listing proves nothing, closed ephemerals are not archived either.
 func (a *app) reconcileDeadAgents() error {
 	paths := book.Paths(a.config.Agentbooks)
 	if len(paths) == 0 || a.tmux == nil || a.loadFleet != nil {
 		return nil
 	}
-	sessions, err := a.tmux.Sessions(a.ctx)
+	listing, err := a.tmux.ListSessions(a.ctx)
 	if err != nil {
 		return err
 	}
-	live := make(map[string]bool, len(sessions))
-	for _, name := range sessions {
-		live[name] = true
+	_, skipped, err := book.ReconcileFromListing(paths, listing, book.ReconcileCLI, processIsLive, time.Now())
+	if skipped != "" {
+		fmt.Fprintf(a.err, "bp: agentbook not reconciled: %s\n", skipped)
+		return nil
 	}
-	_, err = book.ReconcileClosed(paths, live, processIsLive, time.Now())
 	if err == nil && a.config.Lifecycle.ArchiveOnClose {
 		for _, result := range a.archiveClosedEphemerals() {
 			fmt.Fprintln(a.err, result)

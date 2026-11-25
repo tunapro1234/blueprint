@@ -1133,6 +1133,71 @@ func SetStatus(paths []string, name, status, folder string, reg Registration) er
 	return writeBook(target, raw, info.Mode().Perm())
 }
 
+// ReconcileAuthority names whose observation a reconcile pass acts on, which
+// decides how much a session listing is allowed to prove.
+type ReconcileAuthority int
+
+const (
+	// ReconcileDaemon is the bp service. Its environment (user, TMUX_TMPDIR,
+	// /tmp, locale) is fixed by its unit and is the one agents are opened
+	// under, so its listing is the record of truth: a reached server's
+	// listing closes every open record it lacks, and a listing with no server
+	// closes them all. The daemon passes an unreached listing here only when
+	// no tmux server process of its user is alive (a reboot, a crashed or
+	// exited server); with one alive the socket file was removed under a
+	// running server and it does not call this at all
+	// (daemon.reconcileExitedAgents).
+	ReconcileDaemon ReconcileAuthority = iota
+	// ReconcileCLI is an interactive command such as bp status, run from
+	// whatever environment the operator typed it in (env -i, sudo, cron, a
+	// sandbox with a private /tmp). Its listing proves absence only when it
+	// reached a tmux server that demonstrably hosts this fleet — one that
+	// lists at least one open record's session. A pass that would close every
+	// open record (no server found, or a server with none of them) is left to
+	// the daemon: from a CLI it is indistinguishable from looking at the
+	// wrong server, and on 2026-11-19 a bp status that parsed zero sessions
+	// closed 103 live agents in one write.
+	ReconcileCLI
+)
+
+// ReconcileFromListing applies ReconcileClosed to one tmux observation under
+// the rule of authority. skipped is non-empty when the listing could not
+// prove anything and no record was touched; it then explains why.
+func ReconcileFromListing(paths []string, listing bptmux.SessionListing, authority ReconcileAuthority, processAlive func(int) bool, now time.Time) (changes []string, skipped string, err error) {
+	live := make(map[string]bool, len(listing.Names))
+	for _, name := range listing.Names {
+		live[name] = true
+	}
+	if authority != ReconcileDaemon {
+		records, err := Records(paths)
+		if err != nil {
+			return nil, "", err
+		}
+		absent, present := 0, 0
+		for _, record := range records {
+			agent := record.Agent
+			if agent.ArchivedAt != "" || (agent.Status != "open" && agent.Status != "opening") {
+				continue
+			}
+			if live[agent.Name] {
+				present++
+			} else {
+				absent++
+			}
+		}
+		switch {
+		case absent == 0:
+			return nil, "", nil
+		case !listing.Reached:
+			return nil, fmt.Sprintf("no tmux server answered from this environment; %d open record(s) left for the daemon", absent), nil
+		case present == 0:
+			return nil, fmt.Sprintf("the tmux server reached lists none of the open agents' sessions; %d open record(s) left for the daemon", absent), nil
+		}
+	}
+	changes, err = ReconcileClosed(paths, live, processAlive, now)
+	return changes, "", err
+}
+
 // ReconcileClosed repairs open/opening registrations whose tmux session and
 // recorded local process are both gone. A fresh opening marker is given a short
 // grace period because bp writes it just before creating its tmux session.

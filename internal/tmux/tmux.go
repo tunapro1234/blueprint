@@ -546,6 +546,9 @@ type Client struct {
 
 type statusSnapshot struct {
 	sessions []SessionAttachment
+	// reached is false when the listing behind the snapshot found no tmux
+	// server at all, which a caller must not read as "every session ended".
+	reached  bool
 	byName   map[string]SessionAttachment
 	captures map[statusCaptureKey]statusCapture
 	mu       sync.Mutex
@@ -592,7 +595,7 @@ func (c *Client) run(ctx context.Context, stdin []byte, args ...string) ([]byte,
 	if c.exec != nil {
 		return c.exec(ctx, stdin, args...)
 	}
-	cmd := exec.CommandContext(ctx, c.Bin, args...)
+	cmd := exec.CommandContext(ctx, c.Bin, utf8Args(os.LookupEnv, args)...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -601,6 +604,35 @@ func (c *Client) run(ctx context.Context, stdin []byte, args ...string) ([]byte,
 		return out, fmt.Errorf("tmux %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+// utf8Args prepends -u when tmux would otherwise treat this process as a
+// non-UTF-8 client. tmux decides that from TMUX (set inside a pane) or the
+// first non-empty of LC_ALL, LC_CTYPE and LANG, and for a non-UTF-8 client it
+// replaces every byte outside printable ASCII in command output with "_" —
+// tabs included. bp parses tab-separated listings, so on 2026-11-19 a
+// bp status run under env -i parsed zero sessions and closed every open agent.
+// The check is the stricter reading of tmux's (TMUX set, or the first
+// non-empty locale variable names UTF-8; tmux 3.4 also accepts a later one),
+// so -u may be added where tmux would not sanitise, never left out where it
+// would. A caller whose environment selects UTF-8 runs the same command as
+// before.
+func utf8Args(lookup func(string) (string, bool), args []string) []string {
+	if _, inside := lookup("TMUX"); inside {
+		return args
+	}
+	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		value, _ := lookup(key)
+		if value == "" {
+			continue
+		}
+		upper := strings.ToUpper(value)
+		if strings.Contains(upper, "UTF-8") || strings.Contains(upper, "UTF8") {
+			return args
+		}
+		break
+	}
+	return append([]string{"-u"}, args...)
 }
 
 var ansiSeq = regexp.MustCompile("\x1b\\[[0-9;]*m")
@@ -780,21 +812,42 @@ func (c *Client) PaneDead(ctx context.Context, session string) (bool, error) {
 	}
 }
 
+// Sessions lists session names. No running server reads as no sessions; a
+// caller that turns absence into a fact (an agent is gone) uses ListSessions,
+// which keeps those two cases apart.
 func (c *Client) Sessions(ctx context.Context) ([]string, error) {
+	listing, err := c.ListSessions(ctx)
+	return listing.Names, err
+}
+
+// SessionListing is one observation of the tmux server's sessions.
+type SessionListing struct {
+	Names []string
+	// Reached is true when a tmux server answered the listing, so a name
+	// missing from Names is a session that server does not have. False means
+	// tmux found no server at the socket this process resolves to: after a
+	// reboot that is the truth, but from another environment (a different
+	// TMUX_TMPDIR, user, or private /tmp) it says nothing about the server
+	// the agents run on.
+	Reached bool
+}
+
+// ListSessions lists session names and records whether a server answered.
+func (c *Client) ListSessions(ctx context.Context) (SessionListing, error) {
 	if c.statusSnapshot != nil {
-		sessions := make([]string, 0, len(c.statusSnapshot.sessions))
+		names := make([]string, 0, len(c.statusSnapshot.sessions))
 		for _, session := range c.statusSnapshot.sessions {
-			sessions = append(sessions, session.Name)
+			names = append(names, session.Name)
 		}
-		return sessions, nil
+		return SessionListing{Names: names, Reached: c.statusSnapshot.reached}, nil
 	}
 	out, err := c.run(ctx, nil, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "no server running") ||
-			strings.Contains(strings.ToLower(err.Error()), "no sessions") {
-			return nil, nil
+		reached, empty := classifyListError(err)
+		if empty {
+			return SessionListing{Reached: reached}, nil
 		}
-		return nil, err
+		return SessionListing{}, err
 	}
 	var sessions []string
 	for _, line := range strings.Split(string(out), "\n") {
@@ -802,7 +855,33 @@ func (c *Client) Sessions(ctx context.Context) ([]string, error) {
 			sessions = append(sessions, line)
 		}
 	}
-	return sessions, nil
+	return SessionListing{Names: sessions, Reached: true}, nil
+}
+
+// classifyListError reports whether a failed listing still means "no
+// sessions" (empty) and, if so, whether a server answered (reached). tmux
+// prints "no sessions" from a running server with none; "no server running
+// on <socket>" when the socket file is left but nothing listens (a crashed or
+// exited server); and, in tmux 3.4, "error connecting to <socket> (No such
+// file or directory)" when there is no socket file at all — the shape after a
+// reboot clears /tmp, but also of a socket file removed while the server and
+// its sessions keep running. Reached=false therefore says only that nothing
+// answered here; the daemon closes agents on it only when no tmux server
+// process is alive, and the CLI never does. Any other connection error
+// (permission denied, a sandbox) is not evidence of anything and stays an
+// error.
+func classifyListError(err error) (reached, empty bool) {
+	lower := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lower, "no server running"):
+		return false, true
+	case strings.Contains(lower, "error connecting") && strings.Contains(lower, "no such file or directory"):
+		return false, true
+	case strings.Contains(lower, "no sessions"):
+		return true, true
+	default:
+		return false, false
+	}
 }
 
 // SessionAttachment records whether a session has at least one attached client.
@@ -826,29 +905,38 @@ type SessionAttachment struct {
 // id and active-window pane process in a single tmux request, so a caller that
 // renders per-session state pays one exec per scan instead of one per session.
 func (c *Client) SessionsWithAttachments(ctx context.Context) ([]SessionAttachment, error) {
+	sessions, _, err := c.sessionsWithAttachments(ctx)
+	return sessions, err
+}
+
+func (c *Client) sessionsWithAttachments(ctx context.Context) ([]SessionAttachment, bool, error) {
 	if c.statusSnapshot != nil {
-		return append([]SessionAttachment(nil), c.statusSnapshot.sessions...), nil
+		return append([]SessionAttachment(nil), c.statusSnapshot.sessions...), c.statusSnapshot.reached, nil
 	}
 	out, err := c.run(ctx, nil, "list-panes", "-a", "-F", "#{session_name}\t#{session_attached}\t#{session_id}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_pid}\t#{?@bp-bar,1,0}\t#{?@bp-name,1,0}")
 	if err != nil {
-		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "no server running") || strings.Contains(lower, "no sessions") {
-			return nil, nil
+		reached, empty := classifyListError(err)
+		if empty {
+			return nil, reached, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return parseSessionPanes(string(out)), nil
+	sessions, err := parseSessionPanes(string(out))
+	if err != nil {
+		return nil, false, err
+	}
+	return sessions, true, nil
 }
 
 // StatusSnapshot returns a client clone bound to one list-panes -a result.
 // Only callers that keep this clone inside one status invocation can observe
 // the snapshot; the original client and its send/delivery paths stay live.
 func (c *Client) StatusSnapshot(ctx context.Context) (*Client, error) {
-	sessions, err := c.SessionsWithAttachments(ctx)
+	sessions, reached, err := c.sessionsWithAttachments(ctx)
 	if err != nil {
 		return nil, err
 	}
-	snapshot := &statusSnapshot{sessions: sessions, byName: make(map[string]SessionAttachment, len(sessions)), captures: map[statusCaptureKey]statusCapture{}}
+	snapshot := &statusSnapshot{sessions: sessions, reached: reached, byName: make(map[string]SessionAttachment, len(sessions)), captures: map[statusCaptureKey]statusCapture{}}
 	for _, session := range sessions {
 		snapshot.byName[session.Name] = session
 	}
@@ -858,20 +946,29 @@ func (c *Client) StatusSnapshot(ctx context.Context) (*Client, error) {
 // parseSessionPanes folds list-panes -a rows into one entry per session, in
 // listing order. The process follows PaneProcess: the active pane of the
 // session's current window, else that window's first pane.
-func parseSessionPanes(out string) []SessionAttachment {
+//
+// A row that does not carry the requested fields fails the whole listing.
+// Skipping it would drop a session that exists, and callers read a missing
+// session as a closed agent: tmux output sanitised for a non-UTF-8 client
+// (every tab turned into "_") once parsed as zero sessions without an error.
+func parseSessionPanes(out string) ([]SessionAttachment, error) {
 	var sessions []SessionAttachment
 	index := make(map[string]int)
 	activePane := make(map[string]bool)
 	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		// Seven fields is the listing without the bar option flags; it is
 		// still accepted so a row from an older format parses as "unset".
-		fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 9)
+		fields := strings.SplitN(line, "\t", 9)
 		if len(fields) != 7 && len(fields) != 9 || fields[0] == "" {
-			continue
+			return nil, fmt.Errorf("tmux list-panes: unparseable row %q", truncateRow(line))
 		}
 		attached, parseErr := strconv.Atoi(strings.TrimSpace(fields[1]))
 		if parseErr != nil || attached < 0 {
-			continue
+			return nil, fmt.Errorf("tmux list-panes: unparseable attached count in row %q", truncateRow(line))
 		}
 		i, seen := index[fields[0]]
 		if !seen {
@@ -899,7 +996,14 @@ func parseSessionPanes(out string) []SessionAttachment {
 			sessions[i].Process = process
 		}
 	}
-	return sessions
+	return sessions, nil
+}
+
+func truncateRow(row string) string {
+	if len(row) > 120 {
+		return row[:120] + "..."
+	}
+	return row
 }
 
 // Clients returns attached client processes, which lets callers associate a

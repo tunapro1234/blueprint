@@ -11,6 +11,10 @@ import (
 // test may resolve the live installation: without BP_HOME, config.Load reads
 // /etc/blueprint/home and would reach the server's config and state.
 func TestMain(m *testing.M) {
+	// Without a UTF-8 locale bp's tmux client prepends -u (internal/tmux
+	// utf8Args); the fake tmux scripts here dispatch on "$1", so the suite
+	// pins a UTF-8 locale instead of depending on the runner's.
+	_ = os.Setenv("LC_ALL", "C.UTF-8")
 	_ = os.Unsetenv("CODEX_THREAD_ID")
 	_ = os.Unsetenv("BP_OWNER")
 	// The suite's own systemd unit must not become a sender in any test.

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,6 +42,13 @@ type Service struct {
 	queue  *msgq.Queue
 	log    *log.Logger
 	wg     sync.WaitGroup
+	// serverProcessAlive reports whether a tmux server process of this user
+	// is running; nil scans /proc (tmuxServerProcessAlive). Tests inject it.
+	serverProcessAlive func() bool
+	// reconcileHeld is true while the reconcile is held because the socket
+	// does not answer but a server process lives; it makes the hold and its
+	// end log once each. Only the agentbook-reconcile loop touches it.
+	reconcileHeld bool
 }
 
 var archiveThreadIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
@@ -321,17 +329,39 @@ func (s *Service) startDashboard(ctx context.Context) {
 	}()
 }
 
+// reconcileExitedAgents is the authoritative reconcile: the daemon's listing
+// runs in the environment agents are opened under, so a reached server's
+// listing closes what it lacks. When no server answers at the socket, the
+// fleet is closed only if no tmux server process of this user is alive (a
+// reboot, a crashed or exited server). A live server process behind a socket
+// that does not answer is a removed socket file — a /tmp cleaner, a manual
+// cleanup — with every session still running (tmux recreates the socket on
+// SIGUSR1), so the pass changes nothing and logs that once. A listing that
+// fails or cannot be parsed changes nothing.
 func (s *Service) reconcileExitedAgents(ctx context.Context) error {
-	sessions, err := s.tmux.Sessions(ctx)
+	listing, err := s.tmux.ListSessions(ctx)
 	if err != nil {
 		return err
 	}
-	live := make(map[string]bool, len(sessions))
-	for _, name := range sessions {
-		live[name] = true
+	if !listing.Reached {
+		alive := s.serverProcessAlive
+		if alive == nil {
+			alive = func() bool { return tmuxServerProcessAlive("/proc", os.Geteuid()) }
+		}
+		if alive() {
+			if !s.reconcileHeld {
+				s.reconcileHeld = true
+				s.log.Print("agentbook-reconcile: held: the tmux socket does not answer but a tmux server process of this user is running (socket file removed?); no agent is closed until it answers (SIGUSR1 to the tmux server recreates the socket)")
+			}
+			return nil
+		}
+	}
+	if s.reconcileHeld {
+		s.reconcileHeld = false
+		s.log.Print("agentbook-reconcile: resumed: the tmux socket answers again or no tmux server process is left")
 	}
 	paths := book.Paths(s.config.Agentbooks)
-	_, err = book.ReconcileClosed(paths, live, func(pid int) bool {
+	_, _, err = book.ReconcileFromListing(paths, listing, book.ReconcileDaemon, func(pid int) bool {
 		if pid <= 1 {
 			return false
 		}
@@ -348,6 +378,39 @@ func (s *Service) reconcileExitedAgents(ctx context.Context) error {
 		s.log.Print(result)
 	}
 	return err
+}
+
+// tmuxServerProcessAlive reports whether procRoot lists a process whose comm
+// is "tmux: server" (the name the tmux server gives itself) with effective
+// uid euid. Without a readable procRoot (no /proc, e.g. macOS) it reports
+// false, which leaves the reconcile as it was before this check.
+func tmuxServerProcessAlive(procRoot string, euid int) bool {
+	entries, err := os.ReadDir(procRoot)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+		dir := filepath.Join(procRoot, entry.Name())
+		comm, err := os.ReadFile(filepath.Join(dir, "comm"))
+		if err != nil || strings.TrimSpace(string(comm)) != "tmux: server" {
+			continue
+		}
+		status, err := os.ReadFile(filepath.Join(dir, "status"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(status), "\n") {
+			fields := strings.Fields(line)
+			// Uid: real effective saved filesystem
+			if len(fields) >= 3 && fields[0] == "Uid:" && fields[2] == strconv.Itoa(euid) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) archiveGuard(ctx context.Context, agent book.Agent) error {

@@ -297,7 +297,9 @@ func isClaudeWarningNoticeLine(line string) bool {
 // A tail is also what a paste that lost its head looks like (see DamagedPaste),
 // so the match needs positive evidence of clipping at the measured pane width:
 // the message must wrap to more rows than the box shows, and the hidden part
-// must be at least half a row. A few eaten leading characters, or a middle-only
+// must be at least half a row, or consist of whole logical lines whose
+// remainder renders as exactly the rows the box shows (see
+// claudeTailStartsAtLine). A few eaten leading characters, or a middle-only
 // fragment, never authorizes submission. Without a width there is no match.
 func claudeComposerTailMatches(pane, want string, paneWidth int) bool {
 	if paneWidth <= 0 {
@@ -316,7 +318,39 @@ func claudeComposerTailMatches(pane, want string, paneWidth int) bool {
 		return false
 	}
 	hidden := len([]rune(stripped)) - len([]rune(got))
-	return hidden*2 >= composerContentWidth(paneWidth)
+	if hidden*2 >= composerContentWidth(paneWidth) {
+		return true
+	}
+	return claudeTailStartsAtLine(want, got, composerBoxRows(box), paneWidth)
+}
+
+// claudeTailStartsAtLine reports whether the visible box is exactly the
+// logical lines of want after one of its newlines, rendered in exactly the rows
+// the box shows. Claude starts every logical line on a new row, so a viewport
+// that hides only a SHORT first line (or several) hides less than half a row of
+// text and would fail the half-row rule above. Measured 2026-11-26 on Claude
+// Code 2.1.321 in a 79x18 pane: a 4-row viewport hid a 33-character first line,
+// the intact paste was judged mangled, cleared and re-pasted, and the message
+// was queued as "paste entered the composer incorrectly". A torn paste that lost a few characters does not start at a
+// line, a fragment that is not the message's end was refused by the caller,
+// and the row count must agree with the box, so neither is accepted here.
+func claudeTailStartsAtLine(want, got string, boxRows, paneWidth int) bool {
+	for i := strings.IndexByte(want, '\n'); i >= 0; {
+		rest := want[i+1:]
+		if stripSpace(rest) == got {
+			// Blank lines strip to nothing, so several newlines can leave the
+			// same text; only the one rendering to the box's height counts.
+			if rows, err := wrappedMessageRows(rest, paneWidth); err == nil && rows == boxRows {
+				return true
+			}
+		}
+		next := strings.IndexByte(rest, '\n')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return false
 }
 
 // composerBoxText returns the whitespace-stripped full box content. Whitespace

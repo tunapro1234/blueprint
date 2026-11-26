@@ -32,21 +32,22 @@ func (tt *claudeViewportTerminal) pane() string {
 		}
 		return pane
 	}
-	rows := wordWrap(tt.composer, composerContentWidth(tt.width))
+	rows := composerRows(tt.composer, composerContentWidth(tt.width))
 	if len(rows) > tt.visibleRows {
 		// Claude anchors the cursor at the end after a paste. Once the buffer
 		// shrinks to fit, displaying all rows naturally anchors the view at top.
 		rows = rows[len(rows)-tt.visibleRows:]
 	}
-	composerRows := make([]string, len(rows))
+	rendered := make([]string, len(rows))
 	for i, row := range rows {
+		row = strings.TrimSuffix(row, "\n")
 		if i == 0 {
-			composerRows[i] = "❯ " + row
+			rendered[i] = "❯ " + row
 		} else {
-			composerRows[i] = "  " + row
+			rendered[i] = "  " + row
 		}
 	}
-	pane := claudePane(composerRows...)
+	pane := claudePane(rendered...)
 	if !tt.usageLimited {
 		return pane
 	}
@@ -77,13 +78,30 @@ func wordWrap(text string, width int) []string {
 	return append(rows, string(runes))
 }
 
+// composerRows renders a composer buffer the way Claude does: every logical
+// line starts a new row and is word-wrapped on its own. Each row keeps the
+// newline that ends its logical line, so joining the rows restores the text.
+func composerRows(text string, width int) []string {
+	lines := strings.Split(text, "\n")
+	var rows []string
+	for i, line := range lines {
+		wrapped := wordWrap(line, width)
+		if i < len(lines)-1 {
+			wrapped[len(wrapped)-1] += "\n"
+		}
+		rows = append(rows, wrapped...)
+	}
+	return rows
+}
+
 func (tt *claudeViewportTerminal) clearWrappedRow() {
-	rows := wordWrap(tt.composer, composerContentWidth(tt.width))
+	rows := composerRows(tt.composer, composerContentWidth(tt.width))
 	if len(rows) <= 1 {
 		tt.composer = ""
 		return
 	}
-	tt.composer = strings.Join(rows[:len(rows)-1], "")
+	// The row above keeps its newline; deleting the emptied row removes it.
+	tt.composer = strings.TrimSuffix(strings.Join(rows[:len(rows)-1], ""), "\n")
 }
 
 func (tt *claudeViewportTerminal) client() *Client {
@@ -318,5 +336,117 @@ func TestClaudeClippedWordWrappedMessageDeliversOnce(t *testing.T) {
 				t.Fatalf("submitted = %q, want one complete message", terminal.submitted)
 			}
 		})
+	}
+}
+
+// Measured 2026-11-26 on Claude Code 2.1.321 in a 79x18 pane: a two-line
+// message whose short first line (about 33 cells without spaces) is the only
+// row the 4-row composer viewport hides. Moving the cursor up revealed the
+// first line intact, but the hidden part was under half a row, so the tail was
+// not accepted: the paste was called mangled, cleared, re-pasted, called
+// mangled again and queued as "paste entered the composer incorrectly".
+// shortHeadMessage is a synthetic text with the same geometry: a 34-cell first
+// line, then one logical line that word-wraps to exactly 4 rows at width 79.
+// The em dash and the accented letters keep rune-versus-byte handling covered.
+const shortHeadMessage = "[relay-bot] Morning round, 09:00 note:\n" +
+	"Zoë | ops | 00:07-08:07 | soldered four encoder cables for the café crew, " +
+	"whether they were shipped is unclear, some may be wired wrong (the first " +
+	"one was right, it was tested) — the owner said they will check it later, " +
+	"follow-up stays with the owner [follow-up]"
+
+// shortHeadCapture is the composer viewport written out row by row in the
+// shape Claude 2.1.321 draws it (prompt marker plus NBSP on the first visible
+// row, a two-space indent on the rest, trailing spaces trimmed), so the matcher
+// is also tested against rows the test helpers did not generate.
+var shortHeadCapture = []string{
+	"❯\u00a0Zoë | ops | 00:07-08:07 | soldered four encoder cables for the café crew,",
+	"  whether they were shipped is unclear, some may be wired wrong (the first",
+	"  one was right, it was tested) — the owner said they will check it later,",
+	"  follow-up stays with the owner [follow-up]",
+}
+
+func TestClaudeComposerTailHidesShortFirstLine(t *testing.T) {
+	const width = 79
+	// The literal rows must be what the helpers render for the same viewport.
+	rendered := (&claudeViewportTerminal{width: width, visibleRows: 4, composer: shortHeadMessage}).pane()
+	if literal := claudePane(shortHeadCapture...); captureRows(rendered) != captureRows(literal) {
+		t.Fatalf("literal capture does not match the rendered viewport:\n%s\n---\n%s", literal, rendered)
+	}
+	pane := claudePane(shortHeadCapture...)
+	if !claudeComposerTailMatches(pane, shortHeadMessage, width) {
+		t.Fatal("the viewport hiding exactly the short first line must match as our tail")
+	}
+	if !claudeComposerTailMatches(rendered, shortHeadMessage, width) {
+		t.Fatal("the rendered viewport hiding the short first line must match as our tail")
+	}
+	if got := testClient(&sendHarness{}).pasteIntegrity(pane, shortHeadMessage, width); got != pasteIntact {
+		t.Fatalf("pasteIntegrity(short first line hidden)=%v, want pasteIntact", got)
+	}
+	// Several short lines hidden at once are still whole lines.
+	tinyHeads := "a\nb\n" + strings.SplitN(shortHeadMessage, "\n", 2)[1]
+	if !claudeComposerTailMatches(pane, tinyHeads, width) {
+		t.Fatal("hidden whole short lines must match as our tail")
+	}
+}
+
+func TestClaudeComposerTailShortLossStaysDamage(t *testing.T) {
+	const width = 79
+	tinyHead := "abc\n" + strings.SplitN(shortHeadMessage, "\n", 2)[1]
+	cases := []struct {
+		name, message string
+		rows          []string
+	}{
+		// A tear that lost part of the first line, not the whole of it.
+		{"head lost mid-line", shortHeadMessage, append([]string{"❯\u00a0round, 09:00 note:"}, indentRows(shortHeadCapture)...)},
+		// The whole short first line AND the opening word of the second are
+		// gone: under half a row in all, and not starting at a line.
+		{"second line lost its head", tinyHead, append([]string{"❯\u00a0| ops | 00:07-08:07 | soldered four encoder cables for the café crew,"}, shortHeadCapture[1:]...)},
+		// The rows after the newline, but missing a middle row.
+		{"middle row lost", shortHeadMessage, []string{shortHeadCapture[0], shortHeadCapture[1], shortHeadCapture[3]}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pane := claudePane(tc.rows...)
+			if claudeComposerTailMatches(pane, tc.message, width) {
+				t.Fatal("a damaged paste must not be accepted as a clipped tail")
+			}
+			if got := testClient(&sendHarness{}).pasteIntegrity(pane, tc.message, width); got == pasteIntact {
+				t.Fatal("pasteIntegrity accepted a damaged paste as intact")
+			}
+		})
+	}
+}
+
+// captureRows normalizes a pane row by row the way a capture reads: the NBSP
+// after the prompt marker as a space, trailing spaces trimmed.
+func captureRows(pane string) string {
+	rows := strings.Split(strings.ReplaceAll(pane, "\u00a0", " "), "\n")
+	for i, row := range rows {
+		rows[i] = strings.TrimRight(row, " ")
+	}
+	return strings.Join(rows, "\n")
+}
+
+func indentRows(rows []string) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = "  " + strings.TrimPrefix(row, "❯\u00a0")
+	}
+	return out
+}
+
+func TestClaudeClippedShortFirstLineDeliversOnce(t *testing.T) {
+	terminal := &claudeViewportTerminal{width: 79, visibleRows: 4}
+	if rows := len(composerRows(shortHeadMessage, composerContentWidth(79))); rows != 5 {
+		t.Fatalf("fixture renders %d rows, want 5 (one hidden)", rows)
+	}
+	if err := terminal.client().Send(context.Background(), "target", shortHeadMessage); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if terminal.pastes != 1 || countClaudeEnter(terminal.keys) != 1 {
+		t.Fatalf("pastes=%d Enter=%d keys=%v, want one paste and one Enter", terminal.pastes, countClaudeEnter(terminal.keys), terminal.keys)
+	}
+	if len(terminal.submitted) != 1 || terminal.submitted[0] != shortHeadMessage {
+		t.Fatalf("submitted = %q, want one complete message", terminal.submitted)
 	}
 }

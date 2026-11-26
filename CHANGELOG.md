@@ -106,6 +106,14 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- Delivery: a multi-line message whose short first line scrolled out of a short
+  pane's Claude composer is now delivered. Claude shows only the last rows of a
+  tall composer, and when the hidden part was a first line shorter than half a
+  row, bp judged its own intact paste mangled, cleared it, pasted it once more,
+  cleared it again and never delivered it ("paste entered the composer
+  incorrectly"). A view that hides whole lines is now accepted when the
+  visible rows are exactly the rest of the message; a paste that lost part of
+  a line is still refused.
 - WhatsApp bridge: the daemon never runs a second bridge. Before every start
   and restart it looks for another live process of its user whose argv is
   exactly `node <bridge.js>`, such as a bridge left running by a daemon that was

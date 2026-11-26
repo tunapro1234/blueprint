@@ -86,6 +86,14 @@ Changes on `dev` since the 1.9.34 release.
   touched: it is retried every 20 seconds until `--wait` (default 10m) runs
   out and is then reported as still busy.
 - Config `remoteControlOnOpen` (default `false`).
+- `bp config check` and `bp p2p status` warn on stderr when the running P2P
+  node loaded an older `p2p` section than the config on disk, for example
+  before a changed `peers.<name>.expose` list takes effect. The node reads its
+  config only when it starts; `bp p2p serve` now records a SHA-256 fingerprint
+  of that section (no config text) with its pid in
+  `state/p2p/running-config.json`. A node that is not answering on its control
+  socket, or one started by an older bp, is never reported. Exit status and
+  message handling are unchanged.
 
 ### Changed
 

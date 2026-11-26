@@ -46,7 +46,11 @@ The network worker runs independently of individual agent panes. BP starts it
 when sending or opening a wrapped local CLI with P2P enabled. For unattended
 receiving, start it at login or run `bp p2p serve` under a service manager.
 `bp p2p stop` stops only this worker. After changing P2P settings, stop/start it;
-agent sessions and channel files remain intact. All machines must run a version
+agent sessions and channel files remain intact. The worker reads the `p2p`
+section only when it starts, so an edited `expose` list takes effect only after that;
+`bp config check` and `bp p2p status` print a warning while the running worker
+still uses an older `p2p` section (they stay silent for a worker started by an
+older bp). All machines must run a version
 that supports the `/bp/*/1.0.0` protocols.
 Lookup checks connected configured peers in parallel and returns only a canonical
 agent name and whether it is live, closed or archived. An older peer without the

@@ -43,6 +43,7 @@ import (
 	"blueprint/internal/monitorcli"
 	"blueprint/internal/msgq"
 	"blueprint/internal/ntfy"
+	"blueprint/internal/p2p"
 	"blueprint/internal/pending"
 	bptmux "blueprint/internal/tmux"
 	"blueprint/internal/usagecli"
@@ -440,6 +441,11 @@ func (a *app) run(args []string) error {
 			fmt.Fprintln(a.out, a.config.Path)
 		} else {
 			fmt.Fprintf(a.out, "OK: %s\n", a.config.Path)
+		}
+		if args[1] == "check" {
+			// A valid file is not necessarily the one the P2P node runs: it
+			// reads its section once at start. Exit status stays unchanged.
+			a.warnStaleP2PConfig(p2p.CheckRunningConfig(a.ctx, a.config.StateDir, a.config.P2P))
 		}
 		return nil
 	case "run":

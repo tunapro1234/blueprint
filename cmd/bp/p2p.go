@@ -59,6 +59,8 @@ func (a *app) p2pCommand(args []string) error {
 		if e := p2p.Control(a.ctx, a.config.StateDir, http.MethodGet, "/status", &info); e != nil {
 			return fmt.Errorf("p2p service unavailable: %w; start with bp p2p start", e)
 		}
+		// The warning goes to stderr so --json output stays one JSON document.
+		a.warnStaleP2PConfig(p2p.CompareRunningConfig(a.config.StateDir, info.PID, a.config.P2P))
 		if len(args) == 2 {
 			return json.NewEncoder(a.out).Encode(info)
 		}
@@ -148,11 +150,28 @@ func (a *app) p2pCommand(args []string) error {
 			return e
 		}
 		defer n.Close()
+		// Lets bp config check and bp p2p status notice a config edited after
+		// this node started. A failure here never stops the node.
+		if e := p2p.WriteRunningConfig(a.config.StateDir, *a.config.P2P); e != nil {
+			fmt.Fprintf(a.err, "p2p: could not record the running config fingerprint: %v\n", e)
+		}
 		n.Log = a.err
 		n.ResolveLookup = a.resolvePeerLookup
 		return n.Serve(ctx, a.dispatchP2P)
 	default:
 		return fmt.Errorf("usage: bp p2p id|start|stop|status|channels|ping|lookup|resume|pauses|serve")
+	}
+}
+
+// warnStaleP2PConfig prints one warning line when the live P2P node runs an
+// older p2p section than the config on disk. Unknown prints nothing, and so
+// does an invalid config, whose P2P section is not the one on disk.
+func (a *app) warnStaleP2PConfig(d p2p.ConfigDrift) {
+	if a.config.InvalidConfig != "" {
+		return
+	}
+	if line := d.Warning(); line != "" {
+		fmt.Fprintln(a.err, line)
 	}
 }
 

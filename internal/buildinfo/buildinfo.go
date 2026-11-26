@@ -234,6 +234,16 @@ func writeAtomic(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
+// ProcessStartTicks returns pid's start time in clock ticks since boot, from
+// /proc/<pid>/stat, or "" where /proc cannot say. Together with the pid it
+// identifies one process across pid reuse.
+func ProcessStartTicks(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	return processStart(fmt.Sprintf("/proc/%d/stat", pid))
+}
+
 func processStart(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {

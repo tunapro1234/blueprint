@@ -78,3 +78,64 @@ func TestSubmitStuckChipRefusesWithoutAKey(t *testing.T) {
 		}
 	}
 }
+
+func TestClearStuckChipPressesOneCtrlUAndWaitsForTheEmptyBox(t *testing.T) {
+	chip := claudePane("❯ [Pasted text #21 +2 lines]")
+	empty := claudePane(emptyRow)
+	for _, tc := range []struct {
+		name     string
+		captures []string
+	}{
+		{"cleared at once", []string{chip, empty}},
+		{"redrawn late", []string{chip, chip, chip, empty}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &sendHarness{captures: tc.captures}
+			cleared, err := testClient(h).ClearStuckChip(context.Background(), "target", chipMessage)
+			if err != nil || !cleared {
+				t.Fatalf("cleared=%v err=%v", cleared, err)
+			}
+			if got := countKey(h.mutations, "C-u"); got != 1 || len(h.mutations) != 1 {
+				t.Fatalf("keys=%v, want exactly one C-u", h.mutations)
+			}
+		})
+	}
+}
+
+func TestClearStuckChipThatStaysPressesNothingMore(t *testing.T) {
+	chip := claudePane("❯ [Pasted text #21 +2 lines]")
+	h := &sendHarness{captures: []string{chip}}
+	cleared, err := testClient(h).ClearStuckChip(context.Background(), "target", chipMessage)
+	if cleared || !errors.Is(err, ErrNotCleared) {
+		t.Fatalf("cleared=%v err=%v, want ErrNotCleared", cleared, err)
+	}
+	if len(h.mutations) != 1 || countKey(h.mutations, "C-u") != 1 {
+		t.Fatalf("keys=%v, want exactly one C-u", h.mutations)
+	}
+}
+
+func TestClearStuckChipRefusesWithoutAKey(t *testing.T) {
+	busy := spinnerPane("  agent: output", "✻ Working… (23s · esc to interrupt)")
+	chip := claudePane("❯ [Pasted text #21 +2 lines]")
+	for _, tc := range []struct {
+		name       string
+		pane       string
+		activities []string
+		err        error
+	}{
+		{"count differs", claudePane("❯ [Pasted text #21 +5 lines]"), nil, nil},
+		{"text next to the chip", claudePane("❯ [Pasted text #21 +2 lines] mine"), nil, nil},
+		{"verbatim text", claudePane("❯ " + strings.ReplaceAll(chipMessage, "\n", " ")), nil, nil},
+		{"busy pane", busy, nil, ErrBusy},
+		{"client typing", chip, []string{"target\t1000\n"}, ErrTyping},
+	} {
+		h := &sendHarness{captures: []string{tc.pane}, activities: tc.activities}
+		cleared, err := testClient(h).ClearStuckChip(context.Background(), "target", chipMessage)
+		if cleared || !errors.Is(err, tc.err) || (tc.err == nil && err != nil) {
+			t.Errorf("%s: cleared=%v err=%v", tc.name, cleared, err)
+		}
+		if len(h.mutations) != 0 {
+			t.Errorf("%s: keys pressed: %v", tc.name, h.mutations)
+		}
+	}
+}

@@ -204,6 +204,7 @@ bp msg work 'Please review the change'   # bp msg [--force-busy] <name> <message
 bp qstat <channel-id> [--json]
 bp q [--retry]
 bp qcancel <channel-id>...
+bp qclear [--dry-run] <channel-id>
 bp peek work                              # bp peek <name> [n]
 bp whoami
 bp announce [--now | --rate N] [--dry-run] [--] <message...>
@@ -275,6 +276,27 @@ over from before an update still runs the old binary. `bp qcancel` withdraws
 queued messages; a send already in progress refuses the cancellation rather
 than claiming the recipient can no longer receive it. `bp peek <name> [n]`
 prints the last `n` non-empty lines of the agent's screen (default 8).
+
+`bp qclear <channel-id>` erases bp's own unsent paste of one message from its
+target's composer, for a message that should no longer be delivered. While
+such a leftover sits in a composer, bp refuses every new message to that agent
+(foreign text in the composer), and `bp qcancel` cannot help once the record
+has closed. It works on a record that is pending and never to be pasted again
+(from 30 seconds after bp's last key on it, once the screen has settled),
+or that closed in the last 24 hours as `unconfirmed`, `not delivered (hanging
+in composer)` or `not delivered (verification failed)`. Only the message's
+sender (with a verified identity) or the identities `--force-busy` accepts may
+use it. It acts only when all of these hold, and otherwise names the check that
+failed: the target is still the session bp pasted into; the transcript does not
+have the message (if it does, it prints `already delivered, nothing to clear`
+and touches nothing); no turn is open; the pane is an idle agent pane with no
+dialog; and its whole composer box holds exactly this message, verbatim or as
+the single Claude paste chip with this message's line count. It then presses
+Ctrl-u (never Escape), reads the composer back, and reports. If the box is not
+empty afterwards it says so and presses nothing more. On success the record
+reads `CANCELED (LEFTOVER PASTE CLEARED BY OPERATOR)` in `bp qstat`, a pending
+record is closed so it is never delivered later, and the action is written to
+the audit log. `--dry-run` prints every check with ok/FAIL and presses nothing.
 
 `bp announce` sends `[ANNOUNCE <sender>] <text>` to the sender's descendants
 (everyone, when the root sends it). Agents with a warm cache receive it; the

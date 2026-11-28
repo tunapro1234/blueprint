@@ -39,6 +39,16 @@ unverified with its own cause ("the paste never became visible ... Enter WAS NOT
 PRESSED") and the record says Enter was not pressed; a paste that shows up later
 is finished by the recovery above once the screen-settle grace has passed.
 
+A leftover the operator no longer wants delivered is erased with `bp qclear`,
+under the same ownership evidence (session binding, exact text or this
+message's chip, idle pane, no open turn, transcript witness negative). The key
+is Ctrl-u: on Claude Code 2.1.332 one press removes a whole paste chip, in the
+vim editor mode's INSERT and NORMAL states alike, and a verbatim paste takes
+one press per row with the usual stall guard. The composer must read empty
+afterwards; otherwise nothing more is pressed. A closed record is rewritten in
+`done/` and its new final state is appended to `messages.jsonl`, whose readers
+take the last line for an id.
+
 Concurrent local retries of identical in-flight text share a channel. Repeating
 text after a completed delivery is treated as a new instruction. P2P retries use
 an explicit peer/channel idempotency key that survives completed delivery.

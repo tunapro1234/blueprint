@@ -114,6 +114,7 @@ bp remote [<agent>...]       # existing /remote-control action; list/add/rm are 
 bp remote --off [--wait <duration>] [<agent>...]  # turn Remote Control off (all live Claude agents by default); waits for busy ones
 bp shell <server> [agent]    # interactive remote shell, or remote bp attach
 bp q [--retry] | bp qstat <channel-id> | bp qcancel <channel-id>...
+bp qclear [--dry-run] <channel-id>  # erase bp's own unsent paste of that message from the composer
 bp peek <name> [n]
 bp wa send [--to <target>] [--reply <msgId>] [--from <label>] [--mention <jid|number>]... [--mention-all] <message...>
                              # --from states the sender outside tmux (cron, scripts);
@@ -558,6 +559,8 @@ func (a *app) run(args []string) error {
 		return a.queueList(nil)
 	case "qstat":
 		return a.queueStatus(args[1:])
+	case "qclear":
+		return a.qclear(args[1:])
 	case "qcancel":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: bp qcancel <channel-id>...")

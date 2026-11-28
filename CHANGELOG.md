@@ -115,6 +115,7 @@ Changes on `dev` since the 1.9.34 release.
 
 ### Fixed
 
+- Delivery: when bp pressed Enter on its own hanging paste and the screen had not caught up yet, the same pass read the lagging frames as "still hanging", closed the message as `not delivered (hanging in composer)` and told the sender it failed, although the Enter had submitted it. bp now waits for the transcript witness after such an Enter (one more screen-settle period); a second Enter the screen does not confirm still ends as hanging.
 - Delivery: a multi-line message whose short first line scrolled out of a short
   pane's Claude composer is now delivered. Claude shows only the last rows of a
   tall composer, and when the hidden part was a first line shorter than half a

@@ -1106,6 +1106,14 @@ const (
 	UnverifiedComposerOwnership = "could not prove the composer text belongs to this message; no extra Enter/Tab was sent"
 )
 
+// ErrSubmitUnconfirmed is SubmitStuck's answer when it DID press Enter on our
+// exact hanging text but the composer had not cleared by the time it looked
+// again. That is not evidence the Enter failed: a loaded TUI repaints late. The
+// caller must wait for the transcript witness rather than read the next frames
+// as "still hanging" (a delivered announcement was reported as hanging in the
+// composer this way while the target's turn had already started).
+var ErrSubmitUnconfirmed = fmt.Errorf("%w: Enter pressed on the hanging paste; the composer had not cleared yet", ErrUnverified)
+
 // authExpiredMarkers are the phrases a Claude Code session renders in its status
 // footer when its credentials expired ("● Login expired · Please run /login").
 // Such a pane looks exactly like a healthy idle one to Typing/readyToSend — an
@@ -1601,7 +1609,9 @@ func (c *Client) sendStartupCommand(ctx context.Context, session, command string
 // Enter, by design.
 func (c *Client) finishStartupCommand(ctx context.Context, session, command string) {
 	for tries := 0; tries < 3; tries++ {
-		if submitted, err := c.SubmitStuck(ctx, session, []string{command}); submitted || err != nil {
+		// An Enter whose effect has not shown yet is retried like before:
+		// SubmitStuck presses again only while the box still holds the command.
+		if submitted, err := c.SubmitStuck(ctx, session, []string{command}); submitted || (err != nil && !errors.Is(err, ErrSubmitUnconfirmed)) {
 			return
 		}
 		c.Sleep(500 * time.Millisecond)
@@ -1632,7 +1642,8 @@ func (c *Client) finishStartupCommand(ctx context.Context, session, command stri
 //     Enter would cancel the turn, which is why Busy is checked here too.
 //
 // Pressing Enter on our own unsubmitted text is not a new delivery; it is the
-// same one, finished.
+// same one, finished. When Enter was pressed but the box has not cleared yet it
+// returns ErrSubmitUnconfirmed, so the caller knows a key went in.
 func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string) (bool, error) {
 	if err := messagetext.Validate(texts...); err != nil {
 		return false, err
@@ -1671,7 +1682,10 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 	// Only an observed empty composer is evidence that this Enter finished the
 	// hanging message. A changed or unreadable box could be someone else's text,
 	// so leave it for the queue's transcript witness rather than guessing.
-	return ComposerEmpty(after), nil
+	if !ComposerEmpty(after) {
+		return false, ErrSubmitUnconfirmed
+	}
+	return true, nil
 }
 
 // ClearDelivered is the legacy name of the guarded torn-paste eraser.

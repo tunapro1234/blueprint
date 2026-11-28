@@ -290,6 +290,11 @@ const (
 	// and still holds the text: the message never went in, and bp could not press
 	// Enter itself. This one names the action instead of the mechanism.
 	hangingPasteReason = "message is HANGING in the composer (not sent); bp could not finish — one Enter is enough when the pane is idle"
+	// enterPendingReason is a hanging record bp has just pressed Enter on, whose
+	// composer had not cleared by the next look. One pass waits for the
+	// transcript witness instead of judging the same lagging frames as "still
+	// hanging"; a second unconfirmed Enter falls back to the hanging verdict.
+	enterPendingReason = "Enter pressed on the hanging paste; waiting for the transcript witness"
 	// damagedPasteReason is the OTHER thing a held composer can mean, and it
 	// wants the opposite action. The text in the box is our message with
 	// characters missing, so an Enter delivers a mutilated instruction and
@@ -1293,12 +1298,15 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 		return false, fmt.Errorf("%s", reason)
 	}
 	submitted, err := target.SubmitStuck(ctx, rec.To, []string{rec.Wire()})
-	if err != nil {
+	if err != nil && !errors.Is(err, bptmux.ErrSubmitUnconfirmed) {
 		return false, err
 	}
 	since := time.Unix(0, int64(rec.TS*1e9))
 	if q.Witness != nil && q.Witness(rec.To, rec.Wire(), since) {
 		return true, nil
+	}
+	if err != nil {
+		return false, err
 	}
 	if !submitted {
 		return false, nil
@@ -2022,6 +2030,21 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 				report(fmt.Sprintf("msgq: could not finish %s: %v", rec.ID, err))
 			}
 			return
+		} else if errors.Is(err, bptmux.ErrSubmitUnconfirmed) && rec.Reason != enterPendingReason {
+			// Our Enter went in but the screen has not caught up. The frames read
+			// right now still show the text, so judging them would close a
+			// message that is being submitted as "hanging" and tell its sender it
+			// failed. Restart the screen-settle grace from this Enter instead and
+			// let the witness decide.
+			message := rec.Message
+			message.Reason = enterPendingReason
+			message.UnverifiedAt = float64(q.Now().UnixNano()) / 1e9
+			q.update(rec.path, message, report)
+			if report != nil {
+				report(fmt.Sprintf("msgq: %s -> %s: Enter pressed on its hanging paste; waiting for the transcript witness", rec.ID, rec.To))
+			}
+			line.block(rec.ID)
+			return
 		} else if pane, err := target.CaptureAnsi(ctx, rec.To); err == nil && !rec.ForceBusy && holdsTorn(pane, rec.Wire()) {
 			// A TORN copy of our message is sitting in the box. This is the one
 			// state in which "never paste again" may be lifted: the witness has
@@ -2117,7 +2140,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		// would report a proven failure as a probable delivery. (Caught by
 		// TestProvenFailureBacksOffAndStopsAtThreeAttempts, which is exactly the
 		// kind of thing a blanket assignment breaks quietly.)
-		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason || strings.HasPrefix(rec.Reason, damagedPasteReason) {
+		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason || rec.Reason == enterPendingReason || strings.HasPrefix(rec.Reason, damagedPasteReason) {
 			q.remember(rec.path, rec.Message, unverifiedGoneReason, report)
 		}
 		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) && rec.ForceBusy {

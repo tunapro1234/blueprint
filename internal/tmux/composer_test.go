@@ -1574,3 +1574,17 @@ func TestSendLeavesAnotherAgentsOnboardingTextAlone(t *testing.T) {
 		t.Fatalf("Enter pressed on someone else's text: %v", h.mutations)
 	}
 }
+
+func TestSubmitStuckReportsAnEnterTheScreenHasNotShownYet(t *testing.T) {
+	// A loaded TUI keeps drawing the text after our Enter. The caller must learn
+	// that a key went in, not read "nothing happened" and judge the same frame
+	// as a hanging paste.
+	h := &sendHarness{captures: []string{claudePane("❯ " + stuckMessage)}}
+	submitted, err := testClient(h).SubmitStuck(context.Background(), "target", []string{stuckMessage})
+	if submitted || !errors.Is(err, ErrSubmitUnconfirmed) || !errors.Is(err, ErrUnverified) {
+		t.Fatalf("submitted=%v err=%v, want ErrSubmitUnconfirmed", submitted, err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("Enter presses=%d, want exactly one: %v", got, h.mutations)
+	}
+}

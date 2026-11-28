@@ -2687,3 +2687,73 @@ func TestLateRepaintIsNotReadAsHangingDuringSettleGrace(t *testing.T) {
 		t.Fatalf("status=%q done=%v, want %q", status, done, StatusHangingComposer)
 	}
 }
+
+// lagEnterQueue holds an unverified record whose text is still drawn in the
+// composer, and a pane on which Enter goes in but the screen does not catch up.
+func lagEnterQueue(t *testing.T, now *time.Time) (*Queue, *fakeTarget, string) {
+	t.Helper()
+	q := heldQueue(t, now)
+	id, err := enqueueBoundUnverified(t, q, "target", "sender", witnessable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &fakeTarget{alive: true, pane: deepPane(witnessable), submitErr: bptmux.ErrSubmitUnconfirmed}
+	if !bptmux.ExactPaste(target.pane, []string{witnessable}) {
+		t.Fatalf("fixture is not an exact composer paste: %s", target.pane)
+	}
+	return q, target, id
+}
+
+func senderNotices(t *testing.T, q *Queue) int {
+	t.Helper()
+	rows, err := q.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, row := range rows {
+		if row.To == "sender" {
+			count++
+		}
+	}
+	return count
+}
+
+func TestAnEnterTheScreenHasNotShownWaitsForTheWitness(t *testing.T) {
+	now := time.Date(2026, 11, 28, 16, 0, 0, 0, time.Local)
+	q, target, id := lagEnterQueue(t, &now)
+	dispatchOnce(t, q, target)
+	if status, done := q.Finished(id); done {
+		t.Fatalf("closed as %q on the frame drawn right after its own Enter", status)
+	}
+	if record := pendingRecord(t, q, id); record.Reason != enterPendingReason || !record.NoRepaste {
+		t.Fatalf("record=%+v", record)
+	}
+	if n := senderNotices(t, q); n != 0 {
+		t.Fatalf("sender was told about a failure %d time(s)", n)
+	}
+	// The turn starts and the transcript gets the message a moment later.
+	q.Witness = func(_, text string, _ time.Time) bool { return text == witnessable }
+	now = now.Add(time.Second)
+	dispatchOnce(t, q, target)
+	if status, done := q.Finished(id); !done || status != "delivered (found in transcript)" {
+		t.Fatalf("status=%q done=%v", status, done)
+	}
+	if n := senderNotices(t, q); n != 0 {
+		t.Fatalf("sender notices=%d", n)
+	}
+}
+
+func TestASecondUnshownEnterStillEndsAsHanging(t *testing.T) {
+	now := time.Date(2026, 11, 28, 16, 0, 0, 0, time.Local)
+	q, target, id := lagEnterQueue(t, &now)
+	dispatchOnce(t, q, target)
+	now = now.Add(screenSettleGrace + time.Second)
+	dispatchOnce(t, q, target)
+	if status, done := q.Finished(id); !done || status != StatusHangingComposer {
+		t.Fatalf("status=%q done=%v, want %q after the second unconfirmed Enter", status, done, StatusHangingComposer)
+	}
+	if n := senderNotices(t, q); n != 1 {
+		t.Fatalf("sender notices=%d, want 1", n)
+	}
+}

@@ -55,6 +55,13 @@ type Service struct {
 
 var archiveThreadIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$`)
 
+// announceReleasePoll is how often the release timer reads the slot hint while
+// no announcement is scheduled. Below the slot interval (10 seconds at the
+// default 6 per minute) the first held slot of a new announcement is seen
+// before it is due; at a faster rate the first slots may go out together and
+// the later ones keep time.
+const announceReleasePoll = 2 * time.Second
+
 func New(logger *log.Logger, cfg config.Config) *Service {
 	if logger == nil {
 		logger = log.New(os.Stderr, "blueprint: ", log.LstdFlags)
@@ -80,6 +87,11 @@ func New(logger *log.Logger, cfg config.Config) *Service {
 	queue.TurnOpen = book.TurnOpenProbe(cfg.Agentbooks, bptmux.ClaudeProjectsRoot())
 	queue.RuntimeBlock = book.RuntimeBlockProbe(cfg.Agentbooks)
 	queue.Binding = book.DeliveryBindingProbe(cfg.Agentbooks)
+	// A spread announcement whose target went cold while it waited for its slot
+	// goes to the offline spool instead of waking the agent.
+	if cfg.StateDir != "" {
+		queue.DeferCold = delivery.AnnounceDeferrer(cfg.StateDir, book.AnnounceWarmProbe(cfg.Agentbooks))
+	}
 	// Messages that crossed a trust boundary are pasted wrapped in an
 	// untrusted-input frame. The framer key lives under StateDir so the daemon
 	// and a synchronous bp msg frame a record identically; without a StateDir, or
@@ -129,6 +141,13 @@ func (s *Service) Run(ctx context.Context) {
 			return s.queue.Dispatch(run, s.tmux, func(message string) { s.log.Print(message) })
 		})
 	})
+	// Spread announcements are released at their slots, not in bursts at the
+	// next 30-second pass.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.queue.RunReleases(ctx, s.tmux, announceReleasePoll, func(message string) { s.log.Print(message) })
+	}()
 	s.startLoop(ctx, "agentbook-reconcile", 10*time.Second, time.Minute, func(run context.Context, interval time.Duration) {
 		s.tracked(run, "agentbook-reconcile", interval, func() error { return s.reconcileExitedAgents(run) })
 	})

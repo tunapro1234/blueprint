@@ -259,3 +259,31 @@ func TestGuardHooksConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestAnnounceRateConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("BP_HOME", home)
+	write := func(name, text string) (Config, error) {
+		for _, other := range []string{"config.yaml", "config.json"} {
+			_ = os.Remove(filepath.Join(home, other))
+		}
+		if err := os.WriteFile(filepath.Join(home, name), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load()
+	}
+	if cfg, err := write("config.yaml", "updateCheck: false\n"); err != nil || cfg.Announce.RatePerMinute != DefaultAnnounceRate || DefaultAnnounceRate != 6 {
+		t.Fatalf("absent announce = %+v, %v", cfg.Announce, err)
+	}
+	if cfg, err := write("config.yaml", "announce:\n  ratePerMinute: 0\n"); err != nil || cfg.Announce.RatePerMinute != 0 {
+		t.Fatalf("explicit 0 = %+v, %v", cfg.Announce, err)
+	}
+	if cfg, err := write("config.json", `{"announce":{"ratePerMinute":12}}`); err != nil || cfg.Announce.RatePerMinute != 12 {
+		t.Fatalf("json 12 = %+v, %v", cfg.Announce, err)
+	}
+	for name, bad := range map[string]string{"config.yaml": "announce:\n  ratePerMinute: -1\n", "config.json": `{"announce":{"ratePerMinute":-3}}`} {
+		if _, err := write(name, bad); err == nil || !strings.Contains(err.Error(), "ratePerMinute") {
+			t.Errorf("%s %q: err=%v, want a ratePerMinute error", name, bad, err)
+		}
+	}
+}

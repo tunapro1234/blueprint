@@ -98,7 +98,12 @@ bp msg [--force|--force-busy] [--from <label>] <name> <message...>
                              # limits targets to that agent and the agents below it
                              # a /slash command goes bare, and only down the hierarchy
                              # --force-busy jumps the queue on a busy agent (root/bp/wa only)
-bp announce <message...> [--dry-run]
+bp announce [--now | --rate N] [--dry-run] [--] <message...>
+                             # warm agents get it spread out, announce.ratePerMinute
+                             # (default 6) per minute; --now reaches all of them at once,
+                             # --rate N sets the rate for this one; cold or closed agents
+                             # find it in their next digest. --now/--rate count only
+                             # before the message; after it they are text
 bp compact [--idle-hours N] [--min-ctx N] [--apply]   # policy: idle+full claude agents
 bp compact --all [--min-age <minutes>] [--exclude <name,...>] [--apply]
                              # lists by default; nothing is sent without --apply
@@ -2820,6 +2825,9 @@ func (a *app) prepareDispatch() {
 			a.queue.TurnOpen = book.TurnOpenProbe(a.config.Agentbooks, projects)
 			a.queue.RuntimeBlock = book.RuntimeBlockProbe(a.config.Agentbooks)
 			a.queue.Binding = book.DeliveryBindingProbe(a.config.Agentbooks)
+			if a.config.StateDir != "" {
+				a.queue.DeferCold = delivery.AnnounceDeferrer(a.config.StateDir, book.AnnounceWarmProbe(a.config.Agentbooks))
+			}
 		}
 	})
 }
@@ -3072,19 +3080,80 @@ func (t *deliveryTally) report(out *os.File) {
 	}
 }
 
-func (a *app) announce(args []string) error {
-	dryRun := false
-	words := make([]string, 0, len(args))
-	for _, arg := range args {
-		if arg == "--dry-run" {
-			dryRun = true
-		} else {
-			words = append(words, arg)
+const announceUsage = "usage: bp announce [--now | --rate N] [--dry-run] [--] <message...>"
+
+// announceOptions are bp announce's flags. rate is the spread rate in agents
+// per minute; 0 delivers to every warm agent at once.
+type announceOptions struct {
+	dryRun bool
+	rate   int
+	words  []string
+}
+
+// parseAnnounceArgs reads bp announce's flags. --now and --rate are flags only
+// before the first message word, and a literal -- ends them, so an
+// announcement whose text mentions them keeps its words and its delivery
+// mode. --dry-run is recognised anywhere, as it always was. Without --now or
+// --rate the rate comes from announce.ratePerMinute.
+func parseAnnounceArgs(args []string, configured int) (announceOptions, error) {
+	options := announceOptions{rate: configured, words: make([]string, 0, len(args))}
+	now, rateSet, flags := false, false, true
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch {
+		case arg == "--dry-run":
+			options.dryRun = true
+		case !flags:
+			options.words = append(options.words, arg)
+		case arg == "--":
+			flags = false
+		case arg == "--now":
+			now = true
+		case arg == "--rate" || strings.HasPrefix(arg, "--rate="):
+			value, inline := strings.CutPrefix(arg, "--rate=")
+			if !inline {
+				if index+1 >= len(args) {
+					return announceOptions{}, fmt.Errorf("--rate needs a number of agents per minute (1 or more); %s", announceUsage)
+				}
+				index++
+				value = args[index]
+			}
+			rate, err := strconv.Atoi(value)
+			if err != nil || rate < 1 {
+				return announceOptions{}, fmt.Errorf("--rate must be a whole number of agents per minute, 1 or more (got %q); use --now to deliver to every warm agent at once; %s", value, announceUsage)
+			}
+			options.rate, rateSet = rate, true
+		default:
+			flags = false
+			options.words = append(options.words, arg)
 		}
 	}
-	if len(words) == 0 {
-		return fmt.Errorf("usage: bp announce <message...>")
+	if now && rateSet {
+		return announceOptions{}, fmt.Errorf("--now and --rate cannot be combined; %s", announceUsage)
 	}
+	if now {
+		options.rate = 0
+	}
+	if options.rate < 0 {
+		return announceOptions{}, fmt.Errorf("announce.ratePerMinute must be 0 or more (bp config check)")
+	}
+	if len(options.words) == 0 {
+		return announceOptions{}, fmt.Errorf("%s", announceUsage)
+	}
+	return options, nil
+}
+
+// announceInterval is the gap between two spread deliveries at rate per minute.
+func announceInterval(rate int) time.Duration {
+	return time.Minute / time.Duration(rate)
+}
+
+func (a *app) announce(args []string) error {
+	options, err := parseAnnounceArgs(args, a.config.Announce.RatePerMinute)
+	if err != nil {
+		return err
+	}
+	dryRun, words := options.dryRun, options.words
 	if err := messagetext.Validate(strings.Join(words, " ")); err != nil {
 		return err
 	}
@@ -3109,9 +3178,10 @@ func (a *app) announce(args []string) error {
 	if !dryRun {
 		messageText = a.neutralizeImagePaths(messageText)
 	}
-	message := fmt.Sprintf("[ANNOUNCE %s] %s", sender, messageText)
+	message := delivery.AnnouncePrefix(sender) + messageText
 	var tally deliveryTally
 	deferred, coldCost, warm := 0, 0, 0
+	var spread []string
 	for _, target := range targets {
 		cacheState := cacheStates[target]
 		live := states[target].Alive
@@ -3130,17 +3200,121 @@ func (a *app) announce(args []string) error {
 		if dryRun {
 			continue
 		}
+		if options.rate > 0 {
+			spread = append(spread, target)
+			continue
+		}
 		queued, channelID, deliveryErr := a.deliver(target, sender, message)
 		tally.record(target, queued, channelID, deliveryErr)
 	}
 	if dryRun {
 		fmt.Fprintf(a.out, "would send: %d, would defer: %d\n", warm, deferred)
 		fmt.Fprintf(a.out, "deferred context: ~%s tokens (%d targets: %d estimated warm, %d cold/unknown)\n", humanTokens(coldCost), len(targets), warm, deferred)
+		fmt.Fprintln(a.out, a.announceSchedulePreview(warm, options.rate))
 		return nil
 	}
-	fmt.Fprintf(a.out, "sent: %d, deferred: %d\n", tally.sent+len(tally.channels), deferred)
+	if options.rate == 0 {
+		fmt.Fprintf(a.out, "sent: %d, deferred: %d\n", tally.sent+len(tally.channels), deferred)
+		tally.report(a.out)
+		return errors.Join(tally.errs...)
+	}
+	queued, spooled, last := a.spreadAnnouncement(spread, sender, message, announceInterval(options.rate), &tally)
+	deferred += spooled
+	fmt.Fprintf(a.out, "queued: %s, deferred: %d\n", spreadSummary(queued, options.rate, last.Sub(time.Now())), deferred)
 	tally.report(a.out)
 	return errors.Join(tally.errs...)
+}
+
+// spreadAnnouncement queues the announcement for each warm target at its own
+// slot (msgq.Queue.EnqueueSpread) and runs one delivery pass, which takes the
+// slots that are already due; the daemon releases the rest as their slots
+// come. It returns how many stay queued or went out, how many the pass moved
+// to the offline spool because the target was no longer warm, and the last
+// slot handed out.
+func (a *app) spreadAnnouncement(targets []string, sender, message string, interval time.Duration, tally *deliveryTally) (queued, spooled int, last time.Time) {
+	if len(targets) == 0 {
+		return 0, 0, last
+	}
+	if err := messagetext.Validate(message); err != nil {
+		tally.errs = append(tally.errs, err)
+		return 0, 0, last
+	}
+	if a.queue == nil {
+		tally.errs = append(tally.errs, fmt.Errorf("message queue unavailable"))
+		return 0, 0, last
+	}
+	type queuedTarget struct{ name, channel string }
+	var enqueued []queuedTarget
+	for _, target := range targets {
+		if !a.hasSession(target) {
+			tally.errs = append(tally.errs, fmt.Errorf("%s: no open session named %s", target, target))
+			continue
+		}
+		channelID, slot, err := a.queue.EnqueueSpread(target, sender, message, interval, dedupWindow)
+		if err != nil {
+			tally.errs = append(tally.errs, fmt.Errorf("%s: %w", target, err))
+			continue
+		}
+		if a.ownChannels == nil {
+			a.ownChannels = map[string]bool{}
+		}
+		a.ownChannels[channelID] = true
+		enqueued = append(enqueued, queuedTarget{target, channelID})
+		if slot.After(last) {
+			last = slot
+		}
+	}
+	if len(enqueued) > 0 {
+		a.dispatchNow()
+	}
+	for _, entry := range enqueued {
+		record, err := a.queue.Record(entry.channel)
+		switch {
+		case err != nil:
+			tally.errs = append(tally.errs, fmt.Errorf("%s: %w", entry.name, err))
+		case record.Status == msgq.StatusDeferredCold:
+			spooled++
+		case msgq.IsUnverifiedDelivery(record.Status) || (record.Status == "" && record.NoRepaste):
+			tally.unverified = append(tally.unverified, entry.name)
+		case strings.HasPrefix(record.Status, "not delivered"):
+			tally.errs = append(tally.errs, fmt.Errorf("%s: message was not delivered: %s (channel %s)", entry.name, record.Status, entry.channel))
+		default:
+			queued++
+		}
+	}
+	return queued, spooled, last
+}
+
+// spreadSummary is the "queued:" part of bp announce's summary line.
+func spreadSummary(queued, rate int, untilLast time.Duration) string {
+	switch {
+	case queued == 0:
+		return "0"
+	case untilLast < time.Second:
+		return fmt.Sprintf("%d (%d/min, now)", queued, rate)
+	}
+	return fmt.Sprintf("%d (%d/min, last in ~%s)", queued, rate, untilLast.Round(time.Second))
+}
+
+// announceSchedulePreview is the schedule line of bp announce --dry-run. It
+// reads the queue's current schedule and changes nothing.
+func (a *app) announceSchedulePreview(warm, rate int) string {
+	switch {
+	case rate == 0:
+		return fmt.Sprintf("schedule: all %d at once (--now)", warm)
+	case warm == 0:
+		return fmt.Sprintf("schedule: %d/min, nothing to send", rate)
+	}
+	now := time.Now()
+	first := now
+	if a.queue != nil {
+		first = a.queue.NextSlot(announceInterval(rate))
+	}
+	last := first.Add(time.Duration(warm-1) * announceInterval(rate))
+	if last.Sub(now) < time.Second {
+		return fmt.Sprintf("schedule: %d/min, all now", rate)
+	}
+	return fmt.Sprintf("schedule: %d/min, last at ~%s (in ~%s)", rate, last.Local().Format("15:04:05"), last.Sub(now).Round(time.Second))
 }
 
 func announcementCandidates(fleet book.Fleet, sender string) []string {
@@ -3789,12 +3963,19 @@ func (a *app) queueList(args []string) error {
 	if len(rows) == 0 {
 		fmt.Fprintln(a.out, "(message queue empty)")
 	} else {
+		now := time.Now()
 		for _, row := range rows {
 			text := []rune(row.Msg)
 			if len(text) > 60 {
 				text = text[:60]
 			}
 			fmt.Fprintf(a.out, "%s %s -> %s : %s\n", row.ID, row.From, row.To, string(text))
+			// A held announcement waits for its slot, not for the pane; any
+			// reason it carries is from a pass that released it earlier.
+			if until, held := row.HeldUntil(now); held {
+				fmt.Fprintf(a.out, "    ~ held until %s (spread announcement; a message to %s releases it earlier)\n", until.Local().Format("15:04:05"), row.To)
+				continue
+			}
 			// A waiting message says why it waits. Without this line a target
 			// blocked by an unreadable paste (or a fragment too short to identify)
 			// looks exactly like an agent that is merely working.

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"blueprint/internal/msgq"
 )
 
 // blockedQueue is the fourth watchdog on the shared beat, and it answers the one
@@ -124,13 +126,50 @@ func (s *Service) blockedQueueScan(observations []paneObservation, busy map[stri
 		if head.NextTry > 0 && time.Unix(0, int64(head.NextTry*1e9)).After(now) {
 			continue
 		}
+		// A line of held announcements waits for its slots, and a held record
+		// may carry a reason from a pass that released it earlier.
+		if allHeld(messages, now) {
+			continue
+		}
 		gathered = append(gathered, blockedObservation{
 			Session: o.Session,
 			ID:      head.ID,
 			Reason:  head.Reason,
-			Age:     now.Sub(time.Unix(0, int64(head.TS*1e9))),
+			Age:     now.Sub(waitingSince(messages, now)),
 			Count:   len(messages),
 		})
 	}
 	s.alarmFindings("blocked-queue", dueFindingsWithin(blockedQueueFindings(gathered), state.BlockedQueueReported, now, blockedQueueCooldown))
+}
+
+// allHeld reports whether every message in a line is held for a slot, in which
+// case dispatch leaves the line alone (see msgq.Message.HeldUntil).
+func allHeld(messages []msgq.Message, now time.Time) bool {
+	for _, message := range messages {
+		if _, held := message.HeldUntil(now); !held {
+			return false
+		}
+	}
+	return true
+}
+
+// waitingSince is when the head of a line became deliverable: its send time,
+// or for a spread announcement its slot, so a long hold is not mistaken for a
+// stuck queue. A head released before its slot by a later message counts from
+// that message's send time.
+func waitingSince(messages []msgq.Message, now time.Time) time.Time {
+	head := messages[0]
+	since := head.TS
+	if head.NotBefore > since {
+		since = head.NotBefore
+		if time.Unix(0, int64(since*1e9)).After(now) {
+			for _, message := range messages {
+				if _, held := message.HeldUntil(now); !held {
+					since = message.TS
+					break
+				}
+			}
+		}
+	}
+	return time.Unix(0, int64(since*1e9))
 }

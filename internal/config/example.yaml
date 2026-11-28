@@ -27,6 +27,11 @@ lifecycle:
   ephemeralDefault: true
   archiveOnClose: true
 
+# bp announce reaches this many warm agents per minute so they do not all
+# start a turn at once. 0 delivers to every warm agent at once (bp announce --now).
+announce:
+  ratePerMinute: 6
+
 # Bottom bar: list order is display order. [] hides every widget.
 # ctx: context, temp: cache estimate/measurement age, queue: waiting messages,
 # model: model/effort, quota: quota used, talk: latest-message age, clock: time.

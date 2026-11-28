@@ -324,6 +324,20 @@ windows:
   resetColor: white
 ```
 
+## Announcement rate
+
+`bp announce` delivers to warm agents at a limited rate so that they do not
+all start a turn in the same minute. The default is 6 agents per minute:
+
+```yaml
+announce:
+  ratePerMinute: 6
+```
+
+`0` delivers to every warm agent at once (the same as `bp announce --now`); a
+negative value is a configuration error. `bp announce --rate N` overrides the
+rate for one announcement.
+
 ## Other available settings
 
 | Key | Purpose |

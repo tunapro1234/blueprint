@@ -103,40 +103,54 @@ func (q *Queue) Record(id string) (Message, error) {
 // Completed records are not deduplicated: repeating a completed instruction can
 // be intentional. Transport retries use EnqueueOnce's explicit key instead.
 func (q *Queue) EnqueueUnique(to, from, text string, force bool, within time.Duration) (string, error) {
+	id, _, err := q.enqueueUnique(to, from, text, force, within, 0)
+	return id, err
+}
+
+// enqueueUnique is EnqueueUnique with an optional spread interval (see
+// EnqueueSpread). It returns the record's slot, zero for an unscheduled one.
+func (q *Queue) enqueueUnique(to, from, text string, force bool, within, spread time.Duration) (string, float64, error) {
 	text = messagetext.NeutralizeForClaude(text)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if err := os.MkdirAll(q.pending(), 0755); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	lock, err := os.OpenFile(filepath.Join(q.Root, ".enqueue-local.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer lock.Close()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	releaseRecords, err := q.lockRecords()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer releaseRecords()
 	records, _, err := q.pendingRecords()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	for _, r := range records {
 		age := q.Now().Sub(time.Unix(0, int64(r.TS*1e9)))
 		recorded := messagetext.NeutralizeForClaude(r.Msg)
 		if r.To == to && r.From == from && recorded == text && r.ForceBusy == force && age >= -time.Minute && age <= within {
-			return r.ID, nil
+			return r.ID, r.NotBefore, nil
 		}
 	}
 	options := enqueueOptions{force: force}
 	if force {
 		options.reason = forceReason
 	}
-	return q.enqueueLocked(to, from, text, options)
+	if spread > 0 {
+		options.kind, options.notBefore = KindAnnounce, nextSlot(records, q.Now(), spread)
+	}
+	id, err := q.enqueueLocked(to, from, text, options)
+	if err == nil && spread > 0 {
+		q.markSlot(options.notBefore)
+	}
+	return id, options.notBefore, err
 }

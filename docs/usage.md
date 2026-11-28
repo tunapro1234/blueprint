@@ -206,7 +206,7 @@ bp q [--retry]
 bp qcancel <channel-id>...
 bp peek work                              # bp peek <name> [n]
 bp whoami
-bp announce <message...> [--dry-run]
+bp announce [--now | --rate N] [--dry-run] [--] <message...>
 ```
 
 `bp status` lists the agents in your agent books with their live state, cache
@@ -277,9 +277,26 @@ than claiming the recipient can no longer receive it. `bp peek <name> [n]`
 prints the last `n` non-empty lines of the agent's screen (default 8).
 
 `bp announce` sends `[ANNOUNCE <sender>] <text>` to the sender's descendants
-(everyone, when the root sends it). Agents with a warm cache receive it now;
-the others find it in their next digest. It needs a verified sender;
-`--dry-run` prints the counts and the context it would cost.
+(everyone, when the root sends it). Agents with a warm cache receive it; the
+others find it in their next digest. It needs a verified sender.
+
+Warm agents are not all woken at once: each gets a slot, by default 6 per
+minute (`announce.ratePerMinute`, see [configuration.md](configuration.md)),
+and the first slot is now. The command returns after queueing and one delivery
+pass and prints `queued: N (R/min, last in ~<duration>), deferred: K`; the
+daemon delivers the rest as their slots come. A second announcement continues
+after the last slot of one still in progress. A held announcement never
+delays other traffic: a message queued for the same agent releases it, and it
+goes in send order. If an agent's cache has gone cold, or the agent closed, by
+the time its slot comes, the announcement goes to its digest instead. `bp q`
+and `bp qstat` show a held announcement and until when; `bp qcancel` withdraws
+it.
+
+`--now` delivers to every warm agent at once, as before, and prints
+`sent: X, deferred: Y`. `--rate N` sets the rate (1 or more per minute) for one
+announcement. Both are flags only before the first word of the message (a
+`--` also ends them); after it they are part of the text. `--dry-run` prints the counts, the context it would cost and the
+schedule (rate and the time of the last slot), and queues nothing.
 
 ## Running agents in tmux
 

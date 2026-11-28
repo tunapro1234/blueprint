@@ -103,6 +103,18 @@ type Message struct {
 	// unsubmitted, so a follower waits for the witness or, failing that, for
 	// forceCooldown measured from this moment.
 	ForcedAt float64 `json:"forcedAt,omitempty"`
+	// Kind marks a record that is not ordinary traffic. KindAnnounce is one
+	// target's copy of a spread announcement (bp announce): its NotBefore is a
+	// slot, and when the slot comes the target is asked again whether it is
+	// still warm (see Queue.DeferCold). Empty is an ordinary message.
+	Kind string `json:"kind,omitempty"`
+	// NotBefore is the unix time before which the record is HELD: no pass
+	// touches it and it costs no attempt. A hold never delays other traffic:
+	// when the same target has any record that is not held, the held ones are
+	// released and the line runs in ordinary send order (see HeldUntil and
+	// dispatch). Zero, and every record written before the field existed,
+	// means not held. An older bp ignores the field and delivers at once.
+	NotBefore float64 `json:"notBefore,omitempty"`
 	// wire is the body actually pasted into the pane: the raw Msg for a local
 	// caller, or the guard-framed body for a record whose Origin crossed a trust
 	// boundary. It is computed per dispatch pass by Queue.Render in
@@ -218,6 +230,15 @@ type Queue struct {
 	// owner-facing notices refuse to quote an external body raw (bp-guard D1)
 	// without msgq importing guard. A nil predicate treats every record as local.
 	FrameExternal func(Message) bool
+	// DeferCold is asked about a spread announcement (KindAnnounce) whose slot
+	// has come, before anything touches the pane. It answers true after it has
+	// moved the message to the target's offline spool because the target is no
+	// longer warm, or is closed: an announcement never wakes a cold agent, and a
+	// cache can go cold while the record waits for its slot. The record is then
+	// closed as StatusDeferredCold. An error holds the record for the next pass.
+	// msgq does not know what a cache is; the daemon and the CLI bind
+	// delivery.AnnounceDeferrer here. A nil hook pastes every due record.
+	DeferCold func(Message) (bool, error)
 	// PaneLock lets an in-process caller share its reentrant lock bookkeeping
 	// with queue dispatch. Standalone daemon queues leave it unset and use flock.
 	// Reentrancy is per process, so a caller that types from several goroutines
@@ -246,6 +267,10 @@ func (q *Queue) done() string    { return filepath.Join(q.Root, "done") }
 const (
 	// StatusUnconfirmed records an injected message without claiming delivery.
 	StatusUnconfirmed = "unconfirmed"
+	// StatusDeferredCold closes a spread announcement whose target was no longer
+	// warm when its slot came; the text went to the target's offline spool and
+	// rides its next natural turn (see Queue.DeferCold).
+	StatusDeferredCold = "deferred (target no longer warm; moved to the pending spool)"
 	// StatusHangingComposer is positive evidence that the message never left the
 	// composer. It must never be consumed as a successful delivery.
 	StatusHangingComposer = "not delivered (hanging in composer)"
@@ -404,6 +429,9 @@ type enqueueOptions struct {
 	reason    string
 	noRepaste bool
 	force     bool
+	// kind and notBefore schedule a spread announcement (see EnqueueSpread).
+	kind      string
+	notBefore float64
 }
 
 // enqueueLocked is the body of every enqueue, WITHOUT taking q.mu. It exists
@@ -434,7 +462,7 @@ func (q *Queue) enqueueLocked(to, from, text string, opts enqueueOptions) (strin
 		return "", err
 	}
 	message := Message{ID: base, To: to, From: from, Msg: text, TS: float64(now.UnixNano()) / 1e9,
-		Reason: opts.reason, NoRepaste: opts.noRepaste, ForceBusy: opts.force}
+		Reason: opts.reason, NoRepaste: opts.noRepaste, ForceBusy: opts.force, Kind: opts.kind, NotBefore: opts.notBefore}
 	if q.Sender != nil && q.Sender.Label == from {
 		evidence := *q.Sender
 		message.Sender = &evidence
@@ -644,7 +672,7 @@ func IsTerminalDelivery(status string) bool {
 	if IsVerifiedDelivery(status) || IsUnverifiedDelivery(status) || strings.HasPrefix(status, "not delivered") {
 		return true
 	}
-	for _, prefix := range []string{"failed", "canceled", "cancelled", "expired"} {
+	for _, prefix := range []string{"failed", "canceled", "cancelled", "expired", "deferred"} {
 		if strings.HasPrefix(status, prefix) {
 			return true
 		}
@@ -787,6 +815,13 @@ func (q *Queue) Status(id string) (string, error) {
 		// Legacy cleanup or failed finalization: delivery itself is already proven.
 		if message.Cleanup {
 			return fmt.Sprintf("DELIVERED (transcript), queue record will be closed: %s (%d seconds queued)", message.To, seconds), nil
+		}
+		// A held announcement is waiting for its slot, not for the pane: say
+		// when, and that other traffic to the same agent releases it earlier.
+		if until, held := message.HeldUntil(q.Now()); held {
+			wait := int(until.Sub(q.Now()).Seconds()) + 1
+			return fmt.Sprintf("PENDING (SCHEDULED): %s — announcement held until %s (in ~%ds) to spread the wake-ups; it goes earlier if another message to %s is queued (%d seconds queued)",
+				message.To, until.Local().Format("15:04:05"), wait, message.To, seconds), nil
 		}
 		// A record nobody will paste again must SAY so. Reporting it as an
 		// ordinary "PENDING" would suggest the queue is still trying, and the
@@ -1376,7 +1411,14 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 	witnessCanFindText := q.CanWitness == nil || q.CanWitness(message.Wire())
 	witnessPossible := witnessCanFindText && (q.HasTranscript == nil || q.HasTranscript(message.To))
 	knownNotDelivered := strings.HasPrefix(message.Reason, hangingPasteReason) || message.Reason == shortUnverifiedReason || strings.HasPrefix(message.Reason, damagedPasteReason)
-	if !knownNotDelivered && witnessPossible && q.Now().Sub(time.Unix(0, int64(message.TS*1e9))) < witnessWindow {
+	// The window runs from the send time. A spread announcement may have been
+	// held for its slot long after it was queued, so its window runs from the
+	// paste instead; otherwise a long hold would settle it on the next pass.
+	windowStart := message.TS
+	if message.NotBefore > 0 && message.UnverifiedAt > windowStart {
+		windowStart = message.UnverifiedAt
+	}
+	if !knownNotDelivered && witnessPossible && q.Now().Sub(time.Unix(0, int64(windowStart*1e9))) < witnessWindow {
 		return false
 	}
 	// Ask the pane what is true NOW. A notice written from the failure's own
@@ -1734,27 +1776,36 @@ func (q *Queue) DispatchTargets(ctx context.Context, target Target, targets []st
 func (q *Queue) dispatch(ctx context.Context, target Target, selected map[string]struct{}, report func(string)) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	_, err := q.dispatchPass(ctx, target, selected, report)
+	return err
+}
+
+// dispatchPass is dispatch that also reports whether the pass ran. It did not
+// when another pass held the dispatch lock or an operator action was waiting;
+// the release timer (RunReleases) uses that to try again shortly instead of
+// leaving a slot to the next periodic pass. The caller holds q.mu.
+func (q *Queue) dispatchPass(ctx context.Context, target Target, selected map[string]struct{}, report func(string)) (bool, error) {
 	if err := os.MkdirAll(q.Root, 0755); err != nil {
-		return err
+		return false, err
 	}
 	if q.operatorWaiting() {
-		return nil
+		return false, nil
 	}
 	lock, err := os.OpenFile(filepath.Join(q.Root, ".dispatch.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer lock.Close()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
 	records, bad, err := q.pendingRecords()
 	if err != nil {
-		return err
+		return true, err
 	}
 	for _, broken := range bad {
 		if report != nil {
@@ -1764,18 +1815,29 @@ func (q *Queue) dispatch(ctx context.Context, target Target, selected map[string
 	// One line per target, walked target by target: a line is a queue and the
 	// records in it are only comparable with each other.
 	targets, byTarget := lines(records)
+	now := q.Now()
 	for _, to := range targets {
 		if selected != nil {
 			if _, ok := selected[to]; !ok {
 				continue
 			}
 		}
+		// A line made only of held records waits for its first slot: nothing
+		// is probed, captured or counted. Any record that is not held releases
+		// the whole line (see releasedLine).
+		ordinary, released := releasedLine(byTarget[to], now)
+		if !released {
+			continue
+		}
 		line := &lineState{}
 		for _, rec := range byTarget[to] {
+			if !ordinary && q.deferCold(rec, line, report) {
+				continue
+			}
 			q.dispatchRecord(ctx, target, rec, line, report)
 		}
 	}
-	return q.Cleanup()
+	return true, q.Cleanup()
 }
 
 // lines groups a pass's records into one line per target — the targets in the

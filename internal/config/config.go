@@ -58,6 +58,7 @@ type Config struct {
 	Lifecycle           LifecycleConfig         `json:"lifecycle" yaml:"lifecycle"`
 	Windows             WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts      ClaudeAccountsConfig    `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Announce            AnnounceConfig          `json:"announce" yaml:"announce"`
 	// Modules records which opt-in modules are enabled (internal/modules).
 	// ModulesSet is false when the file has no modules key: an install from
 	// before modules existed, which internal/modules migrates.
@@ -78,6 +79,18 @@ type RemoteConfig struct {
 	MoshPorts string `json:"moshPorts,omitempty" yaml:"moshPorts,omitempty"`
 	Elevate   string `json:"elevate,omitempty" yaml:"elevate,omitempty"`
 }
+
+// AnnounceConfig controls bp announce. RatePerMinute spreads the deliveries to
+// warm agents so they do not all start a turn at once: absent means
+// DefaultAnnounceRate, 0 delivers to every warm agent at once (bp announce
+// --now), and a negative value is rejected.
+type AnnounceConfig struct {
+	RatePerMinute int `json:"ratePerMinute" yaml:"ratePerMinute"`
+}
+
+// DefaultAnnounceRate is how many warm agents an announcement reaches per
+// minute when the config does not say.
+const DefaultAnnounceRate = 6
 
 // LifecycleConfig controls throwaway local registrations. Both defaults are
 // enabled; users can independently keep bp run registrations persistent or
@@ -272,6 +285,7 @@ type overrides struct {
 	Lifecycle           *lifecycleOverrides      `json:"lifecycle" yaml:"lifecycle"`
 	Windows             *WindowsConfig           `json:"windows" yaml:"windows"`
 	ClaudeAccounts      *claudeAccountsOverrides `json:"claudeAccounts" yaml:"claudeAccounts"`
+	Announce            *announceOverrides       `json:"announce" yaml:"announce"`
 	Modules             *map[string]bool         `json:"modules" yaml:"modules"`
 }
 
@@ -293,6 +307,10 @@ type claudeAccountsOverrides struct {
 		Stagger          *string `json:"stagger" yaml:"stagger"`
 		SwitchOrder      *string `json:"switchOrder" yaml:"switchOrder"`
 	} `json:"backup" yaml:"backup"`
+}
+
+type announceOverrides struct {
+	RatePerMinute *int `json:"ratePerMinute" yaml:"ratePerMinute"`
 }
 
 type lifecycleOverrides struct {
@@ -442,6 +460,9 @@ func loadWithWarning(getenv func(string) string, stat func(string) (os.FileInfo,
 	if err := validateGuardHooks(result.GuardHooks); err != nil {
 		return Config{}, fmt.Errorf("parse %s: guardHooks: %w", path, err)
 	}
+	if result.Announce.RatePerMinute < 0 {
+		return Config{}, fmt.Errorf("parse %s: announce: ratePerMinute must be 0 (deliver at once) or a positive number of agents per minute", path)
+	}
 	return result, nil
 }
 
@@ -504,6 +525,7 @@ func defaults(home string, legacy bool) Config {
 			Lifecycle:        lifecycle,
 			Windows:          windows,
 			ClaudeAccounts:   DefaultClaudeAccounts(),
+			Announce:         AnnounceConfig{RatePerMinute: DefaultAnnounceRate},
 			LocalObservation: true,
 			LocalMouse:       true,
 			UpdateCheck:      true,
@@ -520,6 +542,7 @@ func defaults(home string, legacy bool) Config {
 		Lifecycle:        lifecycle,
 		Windows:          windows,
 		ClaudeAccounts:   DefaultClaudeAccounts(),
+		Announce:         AnnounceConfig{RatePerMinute: DefaultAnnounceRate},
 		LocalObservation: true,
 		LocalMouse:       true,
 		UpdateCheck:      true,
@@ -543,6 +566,9 @@ func apply(result *Config, values overrides) {
 		for name, enabled := range *values.Modules {
 			result.Modules[name] = enabled
 		}
+	}
+	if values.Announce != nil && values.Announce.RatePerMinute != nil {
+		result.Announce.RatePerMinute = *values.Announce.RatePerMinute
 	}
 	if values.Lifecycle != nil && values.Lifecycle.EphemeralDefault != nil {
 		result.Lifecycle.EphemeralDefault = *values.Lifecycle.EphemeralDefault

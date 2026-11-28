@@ -301,3 +301,54 @@ func TestSweepRunsBlockedQueueWithoutMonitor(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockedQueueAgeOfAHeldAnnouncementStartsAtItsSlot(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		slot  time.Duration // how long ago the slot came
+		alarm bool
+	}{
+		{name: "held for 40 minutes, slot 5 minutes ago", slot: 5 * time.Minute, alarm: false},
+		{name: "slot passed the threshold ago", slot: blockedQueueThreshold + time.Minute, alarm: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, queue, root := blockedService(t)
+			id := enqueueStuck(t, root, queue, "agent", "chip", 40*time.Minute, time.Time{}, now)
+			path := filepath.Join(root, "pending", id+".json")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(raw, &m); err != nil {
+				t.Fatal(err)
+			}
+			m["kind"] = msgq.KindAnnounce
+			m["notBefore"] = float64(now.Add(-tc.slot).UnixNano()) / 1e9
+			out, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, out, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			observations := []paneObservation{{Session: "agent", Open: true, IsAgent: true}}
+			state := busySanityState{}
+			service.blockedQueueScan(observations, map[string]bool{"agent": false}, &state, now)
+			if got := len(serverMainNotices(t, queue)) > 0; got != tc.alarm {
+				t.Fatalf("alarm=%v, want %v", got, tc.alarm)
+			}
+		})
+	}
+}
+
+func TestWaitingSinceOfAHeadReleasedEarly(t *testing.T) {
+	now := time.Date(2026, 11, 28, 12, 0, 0, 0, time.Local)
+	seconds := func(t time.Time) float64 { return float64(t.UnixNano()) / 1e9 }
+	held := msgq.Message{ID: "q1", Kind: msgq.KindAnnounce, TS: seconds(now.Add(-time.Hour)), NotBefore: seconds(now.Add(time.Hour))}
+	later := msgq.Message{ID: "q2", TS: seconds(now.Add(-2 * time.Minute))}
+	if got := waitingSince([]msgq.Message{held, later}, now); !got.Equal(now.Add(-2 * time.Minute)) {
+		t.Fatalf("waitingSince=%v, want the releasing message's send time", got)
+	}
+}

@@ -383,6 +383,28 @@ func RuntimeBlockProbe(paths []string) func(string, bool) string {
 	}
 }
 
+// AnnounceWarmProbe reports whether an announcement may be pasted into an agent
+// now: its session is open and its cache is estimated warm. It is the test bp
+// announce applies when it chooses between the queue and the offline spool,
+// asked again when a spread announcement's slot comes. Anything it cannot
+// establish reads as not warm, which sends the announcement to the spool.
+func AnnounceWarmProbe(paths []string) func(string) bool {
+	return func(name string) bool {
+		fleet, err := LoadFleet(Paths(paths))
+		if err != nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client := bptmux.New()
+		if !client.HasSession(ctx, name) {
+			return false
+		}
+		hint, _ := RuntimeFor(ctx, client, fleet, name).CacheHint()
+		return hint == "warm~"
+	}
+}
+
 func runtimeBlockReason(name string, fleet Fleet, state cache.State, force bool) string {
 	a := state.Activity
 	if a == nil {

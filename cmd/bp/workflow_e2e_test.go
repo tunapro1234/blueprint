@@ -385,7 +385,12 @@ func TestCompactApplyUsesReentrantQueuePaneLock(t *testing.T) {
 
 func TestWorkflowDriverConcurrentCompactsIsolatedTmux(t *testing.T) {
 	previousWait := bptmux.PaneLockWait
-	bptmux.PaneLockWait = 8 * time.Second
+	// The driver runs the two compacts one after the other, and each honest
+	// send already waits about 1 s by design (quiet window, settle, submit
+	// check), plus some 16 tmux calls that stretch under load (4.1-4.9 s
+	// measured at load 12-23). A lock wait costs a full PaneLockWait per
+	// compact, so a long wait keeps that failure far above the bound below.
+	bptmux.PaneLockWait = 20 * time.Second
 	t.Cleanup(func() { bptmux.PaneLockWait = previousWait })
 	client, _, logs := isolatedIdleAgentTmux(t, "worker-a", "worker-b")
 	queueRoot := filepath.Join(t.TempDir(), "msgq")

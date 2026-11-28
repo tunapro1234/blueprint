@@ -24,6 +24,21 @@ without that binding cannot authorize Enter or clearing. Transcript confirmation
 is terminal; it never schedules cleanup against a later user draft. A remaining
 copy is protected as input, and subsequent deliveries wait.
 
+A Claude paste that collapsed into a chip (`[Pasted text #N +K lines]`) is
+recovered the same way when the chip is all the composer holds and its line
+count is the one Claude gives the message (K line breaks; no count for a
+single-line paste), with the same session binding and an idle pane. bp presses
+Enter once and waits for the transcript, because the chip's content cannot be
+read; a second Enter the pane does not take closes the message as hanging.
+Codex and OpenCode chips are not submitted this way.
+
+A composer that is still empty right after the paste is waited for like a paste
+still arriving, within the same bound and without pressing a key. If the text or
+a chip appears, the send continues as usual. If nothing appears, the delivery is
+unverified with its own cause ("the paste never became visible ... Enter WAS NOT
+PRESSED") and the record says Enter was not pressed; a paste that shows up later
+is finished by the recovery above once the screen-settle grace has passed.
+
 Concurrent local retries of identical in-flight text share a channel. Repeating
 text after a completed delivery is treated as a new instruction. P2P retries use
 an explicit peer/channel idempotency key that survives completed delivery.

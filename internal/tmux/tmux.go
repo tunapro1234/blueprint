@@ -1103,6 +1103,7 @@ var ErrUnverified = errors.New("delivery could not be verified")
 const (
 	UnverifiedClientActive      = "screen unreadable or keyboard active in pane — Enter WAS NOT PRESSED; text may remain in the composer"
 	UnverifiedSubmitUnconfirmed = "submission from composer was unverified"
+	UnverifiedPasteNotVisible   = "the paste never became visible in the composer — Enter WAS NOT PRESSED; the text may still appear there"
 	UnverifiedComposerOwnership = "could not prove the composer text belongs to this message; no extra Enter/Tab was sent"
 )
 
@@ -1113,6 +1114,12 @@ const (
 // as "still hanging" (a delivered announcement was reported as hanging in the
 // composer this way while the target's turn had already started).
 var ErrSubmitUnconfirmed = fmt.Errorf("%w: Enter pressed on the hanging paste; the composer had not cleared yet", ErrUnverified)
+
+// ErrPasteNotVisible is checkPaste's answer for a composer that stayed EMPTY
+// for the whole fill wait after the paste. No key was pressed; the paste may be
+// late (a loaded or long-idle TUI drew it seconds later and it then hung
+// unsubmitted, 2026-11-28) or it may never have arrived.
+var ErrPasteNotVisible = fmt.Errorf("%w: %s", ErrUnverified, UnverifiedPasteNotVisible)
 
 // authExpiredMarkers are the phrases a Claude Code session renders in its status
 // footer when its credentials expired ("● Login expired · Please run /login").
@@ -1667,6 +1674,12 @@ func (c *Client) SubmitStuck(ctx context.Context, session string, texts []string
 	if verdict, _ := classifyPaste(pane, texts); verdict != pasteExact {
 		return false, nil
 	}
+	return c.pressStuckEnter(ctx, session)
+}
+
+// pressStuckEnter is SubmitStuck's single Enter and its check, shared with
+// SubmitStuckChip once each has proved the composer holds our paste.
+func (c *Client) pressStuckEnter(ctx context.Context, session string) (bool, error) {
 	target := "=" + session + ":"
 	if _, err := c.run(ctx, nil, "send-keys", "-t", target, "Enter"); err != nil {
 		return false, err
@@ -2132,6 +2145,9 @@ func (c *Client) send(ctx context.Context, session, message string, pending []st
 		return finished, fmt.Errorf("%w: %s", ErrUnverified, UnverifiedClientActive)
 	}
 	pane, ok, repairErr := c.checkPaste(ctx, target, session, message, pane)
+	if errors.Is(repairErr, ErrPasteNotVisible) {
+		return finished, repairErr
+	}
 	if repairErr != nil {
 		return finished, fmt.Errorf("mangled-paste repair stopped: %w", repairErr)
 	}
@@ -2406,11 +2422,19 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 	verdict := c.pasteIntegrity(pane, message, paneWidth)
 	// A paste still landing is given time before anything is decided about it.
 	// The wait is bounded and it presses no keys: either the composer completes,
-	// or the message is queued with nothing partial delivered.
-	for attempt := 0; verdict == pasteIncomplete && attempt < pasteFillAttempts; attempt++ {
+	// or the message is queued with nothing partial delivered. An EMPTY box is
+	// a paste not drawn yet and waits the same way: pressing Enter on it would
+	// submit nothing, and giving up at once left the paste to appear later and
+	// hang unsubmitted. A paste visible on the first capture never waits.
+	for attempt := 0; (verdict == pasteIncomplete || verdict == pasteAbsent) && attempt < pasteFillAttempts; attempt++ {
 		c.Sleep(composerSettleWindow)
 		next, ok := c.composerStable(ctx, session)
 		if !ok {
+			if verdict == pasteAbsent {
+				// Never ok=false here: the caller would read a still-empty box
+				// as proof of failure and paste again, while ours may yet appear.
+				return pane, false, ErrPasteNotVisible
+			}
 			return pane, false, nil
 		}
 		pane = next
@@ -2418,6 +2442,9 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 	}
 	if verdict == pasteIncomplete {
 		return pane, false, nil
+	}
+	if verdict == pasteAbsent {
+		return pane, false, ErrPasteNotVisible
 	}
 	if verdict == pasteMangled {
 		// LOOK TWICE before acting on bad news. A TUI may render a long paste in
@@ -2478,6 +2505,8 @@ func (c *Client) checkPaste(ctx context.Context, target, session, message, pane 
 		return next, false, nil
 	case pasteBroken:
 		return pane, false, nil
+	case pasteAbsent:
+		return pane, false, ErrPasteNotVisible
 	default:
 		return pane, true, nil
 	}
@@ -2499,6 +2528,10 @@ const (
 	// message. Never submittable: Enter would deliver the fragment and close the
 	// record as if the whole message had gone.
 	pasteIncomplete
+	// pasteAbsent: a readable, EMPTY box right after the paste. The paste has
+	// not been drawn yet (or never arrived); checkPaste waits for it like an
+	// incomplete one and presses nothing.
+	pasteAbsent
 )
 
 func (c *Client) pasteIntegrity(pane, message string, paneWidths ...int) pasteVerification {
@@ -2514,9 +2547,8 @@ func (c *Client) pasteIntegrity(pane, message string, paneWidths ...int) pasteVe
 	case got == want:
 		return pasteIntact
 	case got == "":
-		// Empty right after the paste: it may have auto-submitted, or the pane may
-		// have swallowed it. submit() already reports that honestly as unverified.
-		return pasteUnreadable
+		// Empty right after the paste: not drawn yet, or the pane swallowed it.
+		return pasteAbsent
 	case composerBoxRows(box) >= composerBoxScrollRows || top <= 1:
 		// A window onto a taller composer, not proof of anything about content.
 		return pasteUnreadable

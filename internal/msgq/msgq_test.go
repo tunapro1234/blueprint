@@ -33,6 +33,27 @@ type fakeTarget struct {
 	// sessions, when non-nil, overrides alive per session name.
 	sessions     map[string]bool
 	sessionsSeen []string
+	// chipEnters counts SubmitStuckChip's Enter presses; chipKeeps makes the
+	// chip stay on screen after them (an Enter the pane did not take).
+	chipEnters int
+	chipKeeps  bool
+}
+
+// SubmitStuckChip mirrors the real client: one Enter on an idle pane whose
+// composer holds only a chip carrying this text's line count.
+func (f *fakeTarget) SubmitStuckChip(_ context.Context, _ string, text string) (bool, error) {
+	if bptmux.Busy(f.pane) {
+		return false, bptmux.ErrBusy
+	}
+	if !bptmux.ClaudeChipFor(f.pane, text) {
+		return false, nil
+	}
+	f.chipEnters++
+	if f.chipKeeps {
+		return false, bptmux.ErrSubmitUnconfirmed
+	}
+	f.pane = composerPane("")
+	return true, nil
 }
 
 func TestRecoveryDoesNotSubmitOrClearAnActiveRemoteTurn(t *testing.T) {
@@ -2636,7 +2657,7 @@ func newBoundTestQueue(root string) *Queue {
 }
 func enqueueBoundUnverified(t *testing.T, q *Queue, to, from, text string) (string, error) {
 	t.Helper()
-	id, err := q.EnqueueUnverified(to, from, text)
+	id, err := q.EnqueueUnverified(to, from, text, nil)
 	if err != nil {
 		return id, err
 	}
@@ -2755,5 +2776,154 @@ func TestASecondUnshownEnterStillEndsAsHanging(t *testing.T) {
 	}
 	if n := senderNotices(t, q); n != 1 {
 		t.Fatalf("sender notices=%d, want 1", n)
+	}
+}
+
+// chipText is a three-line message, so Claude labels its chip "+2 lines".
+const chipText = "[lead] three-line note for the chip tests\nsecond line of the note\nthird line of the note"
+
+func chipQueue(t *testing.T, now *time.Time, chip string) (*Queue, *fakeTarget, string) {
+	t.Helper()
+	q := heldQueue(t, now)
+	id, err := enqueueBoundUnverified(t, q, "target", "sender", chipText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return q, &fakeTarget{alive: true, pane: composerPane(chip)}, id
+}
+
+func TestOwnPasteShownAsAChipGetsOneEnterAndTheWitnessCloses(t *testing.T) {
+	now := time.Date(2026, 11, 28, 18, 0, 0, 0, time.Local)
+	q, target, id := chipQueue(t, &now, "[Pasted text #21 +2 lines]")
+	dispatchOnce(t, q, target)
+	if target.chipEnters != 1 || len(target.submitted) != 0 || len(target.sent) != 0 {
+		t.Fatalf("chip enters=%d submitted=%v sent=%v, want one Enter and no paste", target.chipEnters, target.submitted, target.sent)
+	}
+	if status, done := q.Finished(id); done {
+		t.Fatalf("a chip cannot be read, only the witness may close it; closed as %q", status)
+	}
+	if record := pendingRecord(t, q, id); record.Reason != enterPendingReason {
+		t.Fatalf("record=%+v", record)
+	}
+	q.Witness = func(_, text string, _ time.Time) bool { return text == chipText }
+	now = now.Add(time.Second)
+	dispatchOnce(t, q, target)
+	if status, done := q.Finished(id); !done || status != "delivered (found in transcript)" {
+		t.Fatalf("status=%q done=%v", status, done)
+	}
+	if target.chipEnters != 1 {
+		t.Fatalf("chip enters=%d after the witness closed it", target.chipEnters)
+	}
+}
+
+func TestAChipThatIsNotProvablyOursGetsNoKey(t *testing.T) {
+	for _, tc := range []struct {
+		name, chip string
+		binding    string
+	}{
+		{name: "line count differs", chip: "[Pasted text #21 +3 lines]"},
+		{name: "single-line label", chip: "[Pasted text #21]"},
+		{name: "text next to the chip", chip: "[Pasted text #21 +2 lines] and a typed word"},
+		{name: "two chips", chip: "[Pasted text #21 +2 lines] [Pasted text #22 +2 lines]"},
+		{name: "another session", chip: "[Pasted text #21 +2 lines]", binding: "claude:other-thread:200"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 28, 18, 0, 0, 0, time.Local)
+			q, target, id := chipQueue(t, &now, tc.chip)
+			if tc.binding != "" {
+				q.Binding = func(string) string { return tc.binding }
+			}
+			dispatchOnce(t, q, target)
+			if target.chipEnters != 0 || len(target.submitted) != 0 || len(target.cleared) != 0 {
+				t.Fatalf("keys pressed: chip enters=%d submitted=%v cleared=%v", target.chipEnters, target.submitted, target.cleared)
+			}
+			if status, done := q.Finished(id); done && status == StatusHangingComposer {
+				t.Fatalf("closed as hanging on a chip it could not prove")
+			}
+		})
+	}
+}
+
+func TestAChipThatStaysAfterASecondEnterEndsAsHanging(t *testing.T) {
+	now := time.Date(2026, 11, 28, 18, 0, 0, 0, time.Local)
+	q, target, id := chipQueue(t, &now, "[Pasted text #21 +2 lines]")
+	target.chipKeeps = true
+	dispatchOnce(t, q, target)
+	if _, done := q.Finished(id); done || target.chipEnters != 1 {
+		t.Fatalf("first pass: done=%v enters=%d", done, target.chipEnters)
+	}
+	now = now.Add(screenSettleGrace + time.Second)
+	dispatchOnce(t, q, target)
+	if status, done := q.Finished(id); !done || status != StatusHangingComposer {
+		t.Fatalf("status=%q done=%v, want %q", status, done, StatusHangingComposer)
+	}
+	if target.chipEnters != 2 {
+		t.Fatalf("chip enters=%d, want 2", target.chipEnters)
+	}
+	if n := senderNotices(t, q); n != 1 {
+		t.Fatalf("sender notices=%d, want 1", n)
+	}
+}
+
+// A send that ended unverified because the paste never became visible pressed
+// no key. The record says so, and when the text (or its chip) shows up later the
+// hanging-paste recovery finishes it once the screen-settle grace is over.
+func TestAPasteThatShowsUpLateIsFinishedAfterTheGrace(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, late string
+		chip             bool
+	}{
+		{name: "verbatim text", text: witnessable, late: witnessable},
+		{name: "chip", text: chipText, late: "[Pasted text #9 +2 lines]", chip: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 28, 19, 0, 0, 0, time.Local)
+			q := heldQueue(t, &now)
+			id, err := q.Enqueue("target", "sender", tc.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := &fakeTarget{alive: true, pane: composerPane(""), sendErr: bptmux.ErrPasteNotVisible}
+			dispatchOnce(t, q, target)
+			record := pendingRecord(t, q, id)
+			if !record.NoRepaste || record.Reason != pasteNotVisibleReason || record.UnverifiedAt == 0 {
+				t.Fatalf("record=%+v", record)
+			}
+			if status, err := q.Status(id); err != nil || !strings.Contains(status, "Enter was NOT pressed") {
+				t.Fatalf("qstat=%q err=%v", status, err)
+			}
+
+			// The paste is drawn late. Inside the grace nothing is pressed.
+			target.pane, target.sendErr = composerPane(tc.late), nil
+			now = now.Add(2 * time.Second)
+			dispatchOnce(t, q, target)
+			if len(target.submitted) != 0 || target.chipEnters != 0 || target.calls != 1 {
+				t.Fatalf("inside the grace: submitted=%v chip enters=%d send calls=%d", target.submitted, target.chipEnters, target.calls)
+			}
+
+			now = now.Add(screenSettleGrace)
+			dispatchOnce(t, q, target)
+			if target.calls != 1 {
+				t.Fatalf("the message was pasted again: %d send calls", target.calls)
+			}
+			if !tc.chip {
+				if len(target.submitted) != 1 {
+					t.Fatalf("SubmitStuck presses=%v, want one", target.submitted)
+				}
+				if status, done := q.Finished(id); !done || status != "delivered (hanging paste completed)" {
+					t.Fatalf("status=%q done=%v", status, done)
+				}
+				return
+			}
+			if target.chipEnters != 1 || len(target.submitted) != 0 {
+				t.Fatalf("chip enters=%d submitted=%v, want one chip Enter", target.chipEnters, target.submitted)
+			}
+			q.Witness = func(_, text string, _ time.Time) bool { return text == chipText }
+			now = now.Add(time.Second)
+			dispatchOnce(t, q, target)
+			if status, done := q.Finished(id); !done || status != "delivered (found in transcript)" {
+				t.Fatalf("status=%q done=%v", status, done)
+			}
+		})
 	}
 }

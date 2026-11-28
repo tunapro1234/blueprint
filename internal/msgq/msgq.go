@@ -286,6 +286,10 @@ const (
 	// text reach the pane at all? — unanswered, and a sender who cannot answer it
 	// repeats itself somewhere bp cannot see.
 	unverifiedReason = "pasted; the screen could not verify it; it will not be pasted again; waiting for the transcript witness"
+	// pasteNotVisibleReason is unverifiedReason for a paste the composer never
+	// showed during the send: no Enter was pressed. The text may still appear
+	// late; if it does, the hanging-paste recovery finishes it after the grace.
+	pasteNotVisibleReason = "pasted, but it never showed in the composer, so Enter was NOT pressed; it will not be pasted again; waiting for the transcript witness"
 	// hangingPasteReason is the same record once the composer has been LOOKED at
 	// and still holds the text: the message never went in, and bp could not press
 	// Enter itself. This one names the action instead of the mechanism.
@@ -416,7 +420,9 @@ func (q *Queue) EnqueueForce(to, from, text string) (string, error) {
 // can settle it: it is marked NoRepaste, so no pass will ever paste the text a
 // second time. Without it an unverified send has no record at all — it is either
 // silently lost or silently delivered, and nobody ever learns which.
-func (q *Queue) EnqueueUnverified(to, from, text string) (string, error) {
+//
+// cause is the send error; it picks the reason the record shows in bp qstat.
+func (q *Queue) EnqueueUnverified(to, from, text string, cause error) (string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	releaseRecords, err := q.lockRecords()
@@ -424,7 +430,16 @@ func (q *Queue) EnqueueUnverified(to, from, text string) (string, error) {
 		return "", err
 	}
 	defer releaseRecords()
-	return q.enqueueLocked(to, from, text, enqueueOptions{reason: unverifiedReason, noRepaste: true})
+	return q.enqueueLocked(to, from, text, enqueueOptions{reason: unverifiedReasonFor(cause), noRepaste: true})
+}
+
+// unverifiedReasonFor names an unverified send in the record: a paste that
+// never became visible says that no Enter was pressed.
+func unverifiedReasonFor(err error) string {
+	if errors.Is(err, bptmux.ErrPasteNotVisible) {
+		return pasteNotVisibleReason
+	}
+	return unverifiedReason
 }
 
 // enqueueOptions are the bookkeeping bits an enqueue may put on the new record
@@ -1298,6 +1313,11 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 		return false, fmt.Errorf("%s", reason)
 	}
 	submitted, err := target.SubmitStuck(ctx, rec.To, []string{rec.Wire()})
+	if err == nil && !submitted {
+		// No key went in: the box does not hold the text verbatim. It may
+		// hold our paste collapsed into a chip (see submitChip).
+		err = q.submitChip(ctx, target, rec)
+	}
 	if err != nil && !errors.Is(err, bptmux.ErrSubmitUnconfirmed) {
 		return false, err
 	}
@@ -1319,6 +1339,34 @@ func (q *Queue) finishHangingPaste(ctx context.Context, target Target, rec recor
 		return false, nil
 	}
 	return true, nil
+}
+
+// chipSubmitter is the optional Target method that finishes a paste Claude
+// collapsed into a chip (tmux.Client.SubmitStuckChip).
+type chipSubmitter interface {
+	SubmitStuckChip(context.Context, string, string) (bool, error)
+}
+
+// submitChip presses Enter once on a chip that stands for this record's own
+// paste. finishHangingPaste has already required the same session as the paste
+// (recoveryBlock), no open turn and a record bp pasted itself (NoRepaste); the
+// chip must hold nothing else and carry this text's line count. A chip hides
+// its content, so the screen can never confirm it: any Enter is reported as
+// ErrSubmitUnconfirmed and only the transcript witness can close the record.
+// A text the witness cannot recognise is never submitted this way.
+func (q *Queue) submitChip(ctx context.Context, target Target, rec record) error {
+	chipper, ok := target.(chipSubmitter)
+	if !ok || !rec.NoRepaste || (q.CanWitness != nil && !q.CanWitness(rec.Wire())) {
+		return nil
+	}
+	submitted, err := chipper.SubmitStuckChip(ctx, rec.To, rec.Wire())
+	if err == nil && !submitted {
+		return nil
+	}
+	if err != nil && !errors.Is(err, bptmux.ErrSubmitUnconfirmed) {
+		return err
+	}
+	return bptmux.ErrSubmitUnconfirmed
 }
 
 func (q *Queue) clearTornPaste(ctx context.Context, target Target, rec record) (bool, error) {
@@ -1434,7 +1482,8 @@ func (q *Queue) settleUnrepasted(ctx context.Context, target Target, path string
 	hanging, torn := false, false
 	if target != nil {
 		if pane, err := target.CaptureAnsi(ctx, message.To); err == nil {
-			hanging = bptmux.ExactPaste(pane, []string{message.Wire()})
+			hanging = bptmux.ExactPaste(pane, []string{message.Wire()}) ||
+				(strings.HasPrefix(message.Reason, hangingPasteReason) && bptmux.ClaudeChipFor(pane, message.Wire()))
 			torn = bptmux.DamagedPaste(pane, []string{message.Wire()})
 		}
 	}
@@ -2095,7 +2144,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			}
 			line.block(rec.ID)
 			return
-		} else if err == nil && !rec.ForceBusy && stillHolds(pane, rec.Wire()) {
+		} else if err == nil && !rec.ForceBusy && (stillHolds(pane, rec.Wire()) || (rec.Reason == enterPendingReason && bptmux.ClaudeChipFor(pane, rec.Wire()))) {
 			// bp could not finish it (a damaged box, a busy or asking pane, a
 			// forced record) but the text IS still sitting there — so the record
 			// must say what a PERSON should do. The old wording named the
@@ -2104,6 +2153,9 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// submitted, and probot-outreach found three of these by looking at
 			// panes rather than at bp (2026-08-23). A reason that suggests no
 			// action is the silent kind of stuck.
+			//
+			// A Claude chip counts here only after bp's own Enter on it was not
+			// taken (enterPendingReason): before that it is not known to be stuck.
 			//
 			// Forced records skip this too: their held composer is the interlock
 			// doing its job, and it has its own ceiling below (holdForce). Two
@@ -2140,7 +2192,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 		// would report a proven failure as a probable delivery. (Caught by
 		// TestProvenFailureBacksOffAndStopsAtThreeAttempts, which is exactly the
 		// kind of thing a blanket assignment breaks quietly.)
-		if rec.Reason == unverifiedReason || rec.Reason == hangingPasteReason || rec.Reason == enterPendingReason || strings.HasPrefix(rec.Reason, damagedPasteReason) {
+		if rec.Reason == unverifiedReason || rec.Reason == pasteNotVisibleReason || rec.Reason == hangingPasteReason || rec.Reason == enterPendingReason || strings.HasPrefix(rec.Reason, damagedPasteReason) {
 			q.remember(rec.path, rec.Message, unverifiedGoneReason, report)
 		}
 		if !q.settleUnrepasted(ctx, target, rec.path, rec.Message, report) && rec.ForceBusy {
@@ -2372,7 +2424,7 @@ func (q *Queue) dispatchRecord(ctx context.Context, target Target, rec record, l
 			// the composer clear.
 			line.delivered = message.ID
 			if q.CanWitness != nil && q.CanWitness(message.Wire()) {
-				message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReason, 0
+				message.NoRepaste, message.Reason, message.NextTry = true, unverifiedReasonFor(err), 0
 				message.UnverifiedAt = float64(q.Now().UnixNano()) / 1e9
 				q.update(rec.path, message, report)
 				if report != nil {

@@ -2327,7 +2327,7 @@ func (a *app) flushPending(name string) error {
 		// erases the copy left behind. The sender is "bp", so nobody is notified
 		// about a digest that has no author to tell.
 		if a.queue != nil && book.CanWitness(digest) {
-			if _, enqueueErr := a.queue.EnqueueUnverified(name, "bp", digest); enqueueErr != nil {
+			if _, enqueueErr := a.queue.EnqueueUnverified(name, "bp", digest, err); enqueueErr != nil {
 				fmt.Fprintf(a.err, "WARNING: unverified digest for %s could not be recorded in the queue: %v\n", name, enqueueErr)
 			}
 		}
@@ -2637,7 +2637,7 @@ func (a *app) message(args []string) error {
 				a.reportInFlight(existing)
 				return errReported
 			}
-			if channelID, enqueueErr := a.queue.EnqueueUnverified(name, sender, message); enqueueErr == nil {
+			if channelID, enqueueErr := a.queue.EnqueueUnverified(name, sender, message, err); enqueueErr == nil {
 				// The cause travels with the message: "Enter was never pressed"
 				// and "Enter went in but nothing confirmed it" need different
 				// things from a human, and until 2026-08-23 both printed the same

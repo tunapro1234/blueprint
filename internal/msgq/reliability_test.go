@@ -15,7 +15,7 @@ import (
 func TestRecoveryMustHonorUnknownRuntime(t *testing.T) {
 	q := New(t.TempDir())
 	q.RuntimeBlock = func(string, bool) string { return "runtime unknown: conflicting thread bindings" }
-	id, err := q.EnqueueUnverified("target", "sender", stuckText)
+	id, err := q.EnqueueUnverified("target", "sender", stuckText, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestRecoveryRejectsLegacyAndChangedConversationBindings(t *testing.T) {
 			}
 			q.Binding = func(string) string { return current }
 			q.RuntimeBlock = func(string, bool) string { return "" }
-			id, err := q.EnqueueUnverified("target", "sender", stuckText)
+			id, err := q.EnqueueUnverified("target", "sender", stuckText, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -1500,6 +1500,94 @@ func TestPartialPasteThatNeverCompletesIsQueued(t *testing.T) {
 	assertNoEscape(t, h.mutations)
 }
 
+// An EMPTY composer right after the paste is a paste not drawn yet. Giving up
+// at once pressed nothing, and the paste then appeared seconds later and hung
+// unsubmitted. It is waited for like a prefix that is still arriving.
+func TestEmptyComposerAfterPasteWaitsForTheText(t *testing.T) {
+	h := &sendHarness{
+		captures: []string{
+			claudePane(emptyRow),            // gate / readyToSend pass 1
+			claudePane(emptyRow),            // readyToSend pass 2
+			claudePane(emptyRow),            // post-paste: nothing drawn yet
+			claudePane(emptyRow),            // still nothing
+			claudePane("❯ " + stuckMessage), // the paste appears
+			claudePane(emptyRow),            // Enter cleared it -> verified
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if _, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil); err != nil {
+		t.Fatalf("err=%v, want the late paste to be delivered", err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("the message was pasted more than once: %v", h.mutations)
+	}
+	if len(h.captures) != 0 {
+		t.Fatalf("%d captures left unread", len(h.captures))
+	}
+}
+
+// The same wait when Claude draws the late paste as a chip.
+func TestEmptyComposerAfterPasteWaitsForTheChip(t *testing.T) {
+	h := &sendHarness{
+		captures: []string{
+			claudePane(emptyRow),                      // gate / readyToSend pass 1
+			claudePane(emptyRow),                      // readyToSend pass 2
+			claudePane(emptyRow),                      // post-paste: nothing drawn yet
+			claudePane("❯ [Pasted text #4 +2 lines]"), // the paste appears as a chip
+			claudePane(emptyRow),                      // Enter cleared it -> verified
+		},
+		activities: []string{"target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n", "target\t900\n"},
+	}
+	if _, err := testClient(h).SendWithPending(context.Background(), "target", chipMessage, nil); err != nil {
+		t.Fatalf("err=%v, want the late chip to be delivered", err)
+	}
+	if got := countEnter(h.mutations); got != 1 {
+		t.Fatalf("expected exactly 1 Enter, got %d: %v", got, h.mutations)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("the message was pasted more than once: %v", h.mutations)
+	}
+	if len(h.captures) != 0 {
+		t.Fatalf("%d captures left unread", len(h.captures))
+	}
+}
+
+// A paste that never shows within the bound ends unverified, as before, with
+// no key pressed, and it says so: the old wording read as if Enter had gone in.
+func TestEmptyComposerForTheWholeBoundIsUnverifiedWithoutAKey(t *testing.T) {
+	captures := []string{
+		claudePane(emptyRow), // gate / readyToSend pass 1
+		claudePane(emptyRow), // readyToSend pass 2
+	}
+	activities := []string{"target\t900\n", "target\t900\n"}
+	for i := 0; i <= pasteFillAttempts; i++ {
+		captures = append(captures, claudePane(emptyRow))
+		activities = append(activities, "target\t900\n")
+	}
+	h := &sendHarness{captures: captures, activities: activities}
+	_, err := testClient(h).SendWithPending(context.Background(), "target", stuckMessage, nil)
+	if !errors.Is(err, ErrUnverified) || !errors.Is(err, ErrPasteNotVisible) || errors.Is(err, ErrNotReady) {
+		t.Fatalf("err=%v, want ErrUnverified carrying ErrPasteNotVisible", err)
+	}
+	if !strings.Contains(err.Error(), UnverifiedPasteNotVisible) || strings.Contains(err.Error(), UnverifiedSubmitUnconfirmed) {
+		t.Fatalf("err=%q does not name the invisible paste", err)
+	}
+	if countInjections(h.mutations) != 1 {
+		t.Fatalf("pasted %d times: %v", countInjections(h.mutations), h.mutations)
+	}
+	for _, m := range h.mutations {
+		if strings.HasPrefix(m, "send-keys") {
+			t.Fatalf("a key was pressed: %v", h.mutations)
+		}
+	}
+	if len(h.captures) != 0 {
+		t.Fatalf("%d captures left unread: the wait was shorter than pasteFillAttempts", len(h.captures))
+	}
+}
+
 func TestFinishStartupCommandSubmitsOnlyItsOwnCommand(t *testing.T) {
 	stuck := claudePane("❯ /remote-control")
 	empty := claudePane("❯ ")
